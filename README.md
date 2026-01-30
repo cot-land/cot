@@ -66,23 +66,25 @@ Like Node.js unified JavaScript, but:
 
 ```
 cot/
-├── src/
+├── compiler/           # Zig compiler
 │   ├── core/           # Types, errors, target config
 │   ├── frontend/       # Scanner, parser, checker, IR, lowerer
 │   ├── ssa/            # SSA infrastructure (for AOT)
-│   │   └── passes/     # Schedule, decompose, expand_calls
 │   ├── obj/            # ELF, Mach-O output (for AOT)
-│   ├── codegen/        # [FUTURE] Wasm codegen
-│   ├── dwarf.zig       # Debug info generation
-│   ├── driver.zig      # Compilation orchestration
+│   ├── codegen/        # [NEXT] Wasm codegen
 │   ├── main.zig        # Entry point
-│   └── pipeline_debug.zig
-├── audit/              # Function-by-function verification docs
-├── README.md           # This file
-├── VISION.md           # Language vision and strategy
-├── WASM_BACKEND.md     # Detailed Wasm implementation plan
-├── CLAUDE.md           # Instructions for Claude AI sessions
-└── REFACTOR_PLAN.md    # Detailed progress tracking
+│   └── driver.zig      # Compilation orchestration
+│
+├── stdlib/             # Cot standard library (written in Cot)
+├── runtime/            # Wasm runtime support (builtins)
+├── tools/              # CLI tools (fmt, lint, etc.)
+│
+├── www/                # Websites
+│   ├── land/           # cot.land - package manager
+│   └── dev/            # cot.dev - docs & playground
+│
+├── docs/               # Documentation source
+└── audit/              # Compiler verification docs
 ```
 
 ## Reference Code
@@ -104,7 +106,7 @@ cot/
 zig build test
 
 # Test specific module
-zig test src/frontend/parser.zig
+zig test compiler/frontend/parser.zig
 
 # Debug output
 COT_DEBUG=parse,lower zig build test
@@ -114,7 +116,7 @@ COT_DEBUG=parse,lower zig build test
 
 ### Phase 2: Wasm Backend
 
-1. Create `src/codegen/wasm.zig`
+1. Create `compiler/codegen/wasm.zig`
 2. Implement Wasm binary format emitter
 3. Implement IR → Wasm codegen (stack machine)
 4. Basic runtime (print, memory allocation)

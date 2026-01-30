@@ -6,7 +6,7 @@ This document details how we will implement the Wasm backend for the Cot compile
 
 ## Overview
 
-**Input:** Cot IR (from `src/frontend/ir.zig`)
+**Input:** Cot IR (from `compiler/frontend/ir.zig`)
 **Output:** WebAssembly binary (`.wasm` file)
 
 ```
@@ -41,7 +41,7 @@ A Wasm module consists of sections, each with a specific ID:
 ## File Structure
 
 ```
-src/codegen/
+compiler/codegen/
 ├── wasm.zig           # Main Wasm codegen (orchestrates everything)
 ├── wasm_encode.zig    # Binary encoding helpers (LEB128, sections)
 ├── wasm_opcodes.zig   # Wasm instruction constants
@@ -57,8 +57,8 @@ src/codegen/
 **Goal:** Emit a valid but minimal `.wasm` file
 
 **Files to create:**
-- `src/codegen/wasm_opcodes.zig` - Opcode constants
-- `src/codegen/wasm_encode.zig` - Binary encoding
+- `compiler/codegen/wasm_opcodes.zig` - Opcode constants
+- `compiler/codegen/wasm_encode.zig` - Binary encoding
 
 **Key tasks:**
 
@@ -97,7 +97,7 @@ test "emit minimal wasm module" {
 **Goal:** Translate Cot IR operations to Wasm stack instructions
 
 **File to create:**
-- `src/codegen/wasm.zig` - Main codegen
+- `compiler/codegen/wasm.zig` - Main codegen
 
 **IR to Wasm mapping:**
 

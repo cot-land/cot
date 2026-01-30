@@ -8,7 +8,7 @@ pub fn build(b: *std.Build) void {
     const exe = b.addExecutable(.{
         .name = "cot",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
+            .root_source_file = b.path("compiler/main.zig"),
             .target = target,
             .optimize = optimize,
         }),
@@ -24,7 +24,7 @@ pub fn build(b: *std.Build) void {
     // Test: zig build test
     const tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
+            .root_source_file = b.path("compiler/main.zig"),
             .target = target,
             .optimize = optimize,
         }),

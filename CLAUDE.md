@@ -95,7 +95,7 @@ AOT Compiler (future):
 
 ## Debugging
 
-**Use `pipeline_debug.zig`, NOT `std.debug.print`:**
+**Use `compiler/pipeline_debug.zig`, NOT `std.debug.print`:**
 
 ```zig
 const debug = @import("pipeline_debug.zig");
@@ -151,10 +151,10 @@ Cot uses Automatic Reference Counting:
 zig build test
 
 # Specific file
-zig test src/frontend/parser.zig
+zig test compiler/frontend/parser.zig
 
 # With debug output
-COT_DEBUG=parse zig test src/frontend/parser.zig
+COT_DEBUG=parse zig test compiler/frontend/parser.zig
 ```
 
 ---
@@ -168,6 +168,9 @@ COT_DEBUG=parse zig test src/frontend/parser.zig
 | Architecture spec | `../bootstrap-0.2/DESIGN.md` |
 | Working native codegen | `../bootstrap-0.2/src/codegen/` |
 | Cot compiler code | `../bootstrap-0.2/src/cot1/` |
+| **Zig compiler** | `./compiler/` |
+| **Cot stdlib** | `./stdlib/` |
+| **Wasm runtime** | `./runtime/` |
 | Audit documentation | `./audit/` |
 | Progress tracking | `./REFACTOR_PLAN.md` |
 | Project overview | `./README.md` |
