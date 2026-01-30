@@ -127,7 +127,9 @@ test "TestFuncBuilder diamond CFG" {
     defer builder.deinit();
 
     const diamond = try builder.createDiamondCFG();
-    try std.testing.expectEqual(@as(usize, 4), builder.func.numBlocks());
+    // numBlocks returns next_id (max ID + 1), not actual count - matches Go
+    try std.testing.expectEqual(@as(usize, 5), builder.func.numBlocks());
+    try std.testing.expectEqual(@as(usize, 4), builder.func.blocks.items.len); // actual count
     try std.testing.expectEqual(@as(usize, 2), diamond.entry.succs.len);
     try std.testing.expectEqual(@as(usize, 2), diamond.merge.preds.len);
 

@@ -1,11 +1,11 @@
 //! ABI (Application Binary Interface) - function call parameter/result passing.
 
 const std = @import("std");
-const types = @import("../frontend/types.zig");
+const types = @import("../../frontend/types.zig");
 const TypeRegistry = types.TypeRegistry;
 const TypeIndex = types.TypeIndex;
 const FuncType = types.FuncType;
-const debug = @import("../pipeline_debug.zig");
+const debug = @import("../../pipeline_debug.zig");
 
 pub const RegIndex = u8;
 pub const RegMask = u32;

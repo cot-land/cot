@@ -11,10 +11,11 @@ const lower_mod = @import("frontend/lower.zig");
 const ir_mod = @import("frontend/ir.zig");
 const ssa_builder_mod = @import("frontend/ssa_builder.zig");
 const source_mod = @import("frontend/source.zig");
-const regalloc_mod = @import("ssa/regalloc.zig");
-const stackalloc_mod = @import("ssa/stackalloc.zig");
-const expand_calls = @import("ssa/passes/expand_calls.zig");
-const decompose = @import("ssa/passes/decompose.zig");
+// Native codegen imports (AOT compiler path)
+const regalloc_mod = @import("codegen/native/regalloc.zig");
+const stackalloc_mod = @import("codegen/native/stackalloc.zig");
+const expand_calls = @import("codegen/native/expand_calls.zig");
+const decompose = @import("codegen/native/decompose.zig");
 const schedule = @import("ssa/passes/schedule.zig");
 const layout = @import("ssa/passes/layout.zig");
 const lower_wasm = @import("ssa/passes/lower_wasm.zig");

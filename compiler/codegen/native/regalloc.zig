@@ -1,14 +1,14 @@
 //! Linear scan register allocator (Go-style: liveness → allocation → shuffle).
 
 const std = @import("std");
-const types = @import("../core/types.zig");
+const types = @import("../../core/types.zig");
 const liveness = @import("liveness.zig");
-const Value = @import("value.zig").Value;
-const Block = @import("block.zig").Block;
-const Func = @import("func.zig").Func;
-const Op = @import("op.zig").Op;
-const debug = @import("../pipeline_debug.zig");
-const Target = @import("../core/target.zig").Target;
+const Value = @import("../../ssa/value.zig").Value;
+const Block = @import("../../ssa/block.zig").Block;
+const Func = @import("../../ssa/func.zig").Func;
+const Op = @import("../../ssa/op.zig").Op;
+const debug = @import("../../pipeline_debug.zig");
+const Target = @import("../../core/target.zig").Target;
 
 const ID = types.ID;
 const Pos = types.Pos;

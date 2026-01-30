@@ -210,7 +210,9 @@ test "Func block allocation" {
     defer f.deinit();
     const b1 = try f.newBlock(.plain);
     const b2 = try f.newBlock(.ret);
-    try std.testing.expectEqual(@as(usize, 2), f.numBlocks());
+    // numBlocks returns next_id (max ID + 1), not actual count - matches Go
+    try std.testing.expectEqual(@as(usize, 3), f.numBlocks());
+    try std.testing.expectEqual(@as(usize, 2), f.blocks.items.len); // actual count
     try std.testing.expectEqual(f.entry, b1);
     try std.testing.expectEqual(@as(ID, 1), b1.id);
     try std.testing.expectEqual(@as(ID, 2), b2.id);

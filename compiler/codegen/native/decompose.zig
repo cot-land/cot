@@ -11,10 +11,10 @@
 //! - ConstString "x" → StringMake(ConstPtr @str, ConstInt len)
 
 const std = @import("std");
-const Value = @import("../value.zig").Value;
-const Block = @import("../block.zig").Block;
-const Func = @import("../func.zig").Func;
-const Op = @import("../op.zig").Op;
+const Value = @import("../../ssa/value.zig").Value;
+const Block = @import("../../ssa/block.zig").Block;
+const Func = @import("../../ssa/func.zig").Func;
+const Op = @import("../../ssa/op.zig").Op;
 const types = @import("../../frontend/types.zig");
 const TypeRegistry = types.TypeRegistry;
 const debug = @import("../../pipeline_debug.zig");

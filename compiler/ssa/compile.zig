@@ -24,12 +24,14 @@ const debug = @import("../pipeline_debug.zig");
 const types = @import("../frontend/types.zig");
 const target_mod = @import("../core/target.zig");
 
-// Pass modules
-const expand_calls_mod = @import("passes/expand_calls.zig");
-const decompose_mod = @import("passes/decompose.zig");
+// SSA passes (Wasm path)
 const schedule_mod = @import("passes/schedule.zig");
-const regalloc_mod = @import("regalloc.zig");
-const stackalloc_mod = @import("stackalloc.zig");
+
+// Native codegen passes (AOT path)
+const expand_calls_mod = @import("../codegen/native/expand_calls.zig");
+const decompose_mod = @import("../codegen/native/decompose.zig");
+const regalloc_mod = @import("../codegen/native/regalloc.zig");
+const stackalloc_mod = @import("../codegen/native/stackalloc.zig");
 
 pub const RegAllocState = regalloc_mod.RegAllocState;
 pub const StackAllocResult = stackalloc_mod.StackAllocResult;

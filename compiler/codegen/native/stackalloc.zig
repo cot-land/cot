@@ -1,12 +1,12 @@
 //! Stack Allocation - assigns stack slots to spilled values with interference-based reuse.
 
 const std = @import("std");
-const Func = @import("func.zig").Func;
-const Value = @import("value.zig").Value;
-const Block = @import("block.zig").Block;
-const Op = @import("op.zig").Op;
-const ID = @import("../core/types.zig").ID;
-const debug = @import("../pipeline_debug.zig");
+const Func = @import("../../ssa/func.zig").Func;
+const Value = @import("../../ssa/value.zig").Value;
+const Block = @import("../../ssa/block.zig").Block;
+const Op = @import("../../ssa/op.zig").Op;
+const ID = @import("../../core/types.zig").ID;
+const debug = @import("../../pipeline_debug.zig");
 
 pub const FRAME_HEADER_SIZE: i32 = 16; // Saved FP + LR
 pub const SPILL_SLOT_SIZE: i32 = 8;

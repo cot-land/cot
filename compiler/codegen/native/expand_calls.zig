@@ -16,14 +16,14 @@
 //! 5. Exits - rewrite function returns for aggregate results
 
 const std = @import("std");
-const Value = @import("../value.zig").Value;
-const AuxCall = @import("../value.zig").AuxCall;
-const canSSA = @import("../value.zig").canSSA;
-const MAX_SSA_SIZE = @import("../value.zig").MAX_SSA_SIZE;
-const Block = @import("../block.zig").Block;
-const Func = @import("../func.zig").Func;
-const Op = @import("../op.zig").Op;
-const abi_mod = @import("../abi.zig");
+const Value = @import("../../ssa/value.zig").Value;
+const AuxCall = @import("../../ssa/value.zig").AuxCall;
+const canSSA = @import("../../ssa/value.zig").canSSA;
+const MAX_SSA_SIZE = @import("../../ssa/value.zig").MAX_SSA_SIZE;
+const Block = @import("../../ssa/block.zig").Block;
+const Func = @import("../../ssa/func.zig").Func;
+const Op = @import("../../ssa/op.zig").Op;
+const abi_mod = @import("abi.zig");
 const types = @import("../../frontend/types.zig");
 const TypeRegistry = types.TypeRegistry;
 const debug = @import("../../pipeline_debug.zig");

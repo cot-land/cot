@@ -27,16 +27,10 @@ pub const ssa_value = @import("ssa/value.zig");
 pub const ssa_block = @import("ssa/block.zig");
 pub const ssa_func = @import("ssa/func.zig");
 pub const ssa_dom = @import("ssa/dom.zig");
-pub const ssa_liveness = @import("ssa/liveness.zig");
 pub const ssa_test_helpers = @import("ssa/test_helpers.zig");
-pub const ssa_regalloc = @import("ssa/regalloc.zig");
-pub const ssa_stackalloc = @import("ssa/stackalloc.zig");
-pub const ssa_abi = @import("ssa/abi.zig");
 pub const ssa_debug = @import("ssa/debug.zig");
 pub const ssa_compile = @import("ssa/compile.zig");
 pub const ssa_schedule = @import("ssa/passes/schedule.zig");
-pub const ssa_decompose = @import("ssa/passes/decompose.zig");
-pub const ssa_expand_calls = @import("ssa/passes/expand_calls.zig");
 pub const ssa_lower_wasm = @import("ssa/passes/lower_wasm.zig");
 pub const ssa_layout = @import("ssa/passes/layout.zig");
 
@@ -44,10 +38,16 @@ pub const ssa_layout = @import("ssa/passes/layout.zig");
 pub const pipeline_debug = @import("pipeline_debug.zig");
 pub const driver = @import("driver.zig");
 
-// Object file generation
-pub const dwarf = @import("dwarf.zig");
-pub const macho = @import("obj/macho.zig");
-pub const elf = @import("obj/elf.zig");
+// Native codegen (AOT compiler path)
+pub const native_liveness = @import("codegen/native/liveness.zig");
+pub const native_regalloc = @import("codegen/native/regalloc.zig");
+pub const native_stackalloc = @import("codegen/native/stackalloc.zig");
+pub const native_abi = @import("codegen/native/abi.zig");
+pub const native_decompose = @import("codegen/native/decompose.zig");
+pub const native_expand_calls = @import("codegen/native/expand_calls.zig");
+pub const native_dwarf = @import("codegen/native/dwarf.zig");
+pub const native_macho = @import("codegen/native/macho.zig");
+pub const native_elf = @import("codegen/native/elf.zig");
 
 // Wasm codegen
 pub const wasm = @import("codegen/wasm.zig");
