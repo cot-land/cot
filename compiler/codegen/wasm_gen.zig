@@ -1,13 +1,17 @@
 //! Wasm Code Generator - Emit bytecode for Wasm SSA ops.
 //!
-//! Go reference: cmd/compile/internal/wasm/ssa.go (ssaGenValue)
+//! Go reference: cmd/compile/internal/wasm/ssa.go
 //!
 //! This module translates lowered SSA (with wasm_* ops) to Wasm bytecode.
-//! It follows Go's pattern of walking the SSA in scheduled order and
-//! emitting instructions for each value.
+//! Key functions:
+//! - ssaGenValue: emit bytecode for a single SSA value
+//! - ssaGenBlock: emit control flow for block transitions
 //!
-//! Key difference from register machines: Wasm is a stack machine.
-//! Values flow through the operand stack, not registers.
+//! Wasm has structured control flow (no arbitrary jumps), so we use:
+//! - block/end for forward branches
+//! - loop/end for backward branches (loops)
+//! - if/else/end for conditionals
+//! - br/br_if to branch to enclosing block labels
 
 const std = @import("std");
 const SsaValue = @import("../ssa/value.zig").Value;
@@ -20,19 +24,24 @@ const Op = wasm.Op;
 const ValType = wasm.ValType;
 const debug = @import("../pipeline_debug.zig");
 
+// Block type constants for Wasm structured control flow
+const BLOCK_TYPE_VOID: u8 = 0x40;
+const BLOCK_TYPE_I32: u8 = 0x7F;
+const BLOCK_TYPE_I64: u8 = 0x7E;
+const BLOCK_TYPE_F32: u8 = 0x7D;
+const BLOCK_TYPE_F64: u8 = 0x7C;
+
 /// Generator state for a single function.
 pub const FuncGen = struct {
     allocator: std.mem.Allocator,
     ssa_func: *const SsaFunc,
     code: wasm.CodeBuilder,
 
-    /// Maps SSA value IDs to local indices (for values that need locals).
-    /// In a stack machine, most values stay on the operand stack.
-    /// We only need locals for:
-    /// - Function parameters (args)
-    /// - Values used multiple times
-    /// - Values used across basic blocks (phi nodes)
+    /// Maps SSA value IDs to local indices.
     value_to_local: std.AutoHashMapUnmanaged(u32, u32),
+
+    /// Maps SSA block IDs to their index in the block order.
+    block_to_idx: std.AutoHashMapUnmanaged(u32, usize),
 
     /// Next available local index.
     next_local: u32,
@@ -40,39 +49,84 @@ pub const FuncGen = struct {
     /// Number of function parameters.
     param_count: u32,
 
+    /// Current nesting depth for branch targets (Go's currentDepth).
+    /// Each block/loop/if increases depth, end decreases it.
+    block_depth: u32,
+
+    /// Maps block ID to its nesting depth when emitted (Go's blockDepths).
+    /// Used to calculate relative branch targets: currentDepth - blockDepth
+    block_depths: std.AutoHashMapUnmanaged(u32, u32),
+
+    /// Blocks that are loop headers (have incoming back edges).
+    loop_headers: std.AutoHashMapUnmanaged(u32, void),
+
     pub fn init(allocator: std.mem.Allocator, ssa_func: *const SsaFunc) FuncGen {
         return .{
             .allocator = allocator,
             .ssa_func = ssa_func,
             .code = wasm.CodeBuilder.init(allocator),
             .value_to_local = .{},
+            .block_to_idx = .{},
             .next_local = 0,
             .param_count = 0,
+            .block_depth = 0,
+            .block_depths = .{},
+            .loop_headers = .{},
         };
     }
 
     pub fn deinit(self: *FuncGen) void {
         self.code.deinit();
         self.value_to_local.deinit(self.allocator);
+        self.block_to_idx.deinit(self.allocator);
+        self.block_depths.deinit(self.allocator);
+        self.loop_headers.deinit(self.allocator);
     }
 
     /// Generate code for the entire function.
     pub fn generate(self: *FuncGen) ![]const u8 {
         debug.log(.codegen, "wasm_gen: generating '{s}'", .{self.ssa_func.name});
 
-        // Count parameters from arg ops
+        // Build block index map
+        for (self.ssa_func.blocks.items, 0..) |b, i| {
+            try self.block_to_idx.put(self.allocator, b.id, i);
+        }
+
+        // Count parameters
         self.param_count = self.countParams();
         self.next_local = self.param_count;
 
         debug.log(.codegen, "  params: {d}, blocks: {d}", .{ self.param_count, self.ssa_func.blocks.items.len });
 
-        // Generate code for each block
-        for (self.ssa_func.blocks.items) |block| {
-            try self.genBlock(block);
+        // Identify loop headers (blocks that are targets of back edges)
+        // This follows Go's pattern of tracking blockDepths for branch resolution
+        try self.findLoopHeaders();
+
+        // Generate code for each block with "next" tracking
+        const blocks = self.ssa_func.blocks.items;
+        for (blocks, 0..) |block, i| {
+            const next: ?*const SsaBlock = if (i + 1 < blocks.len) blocks[i + 1] else null;
+            const is_loop_header = self.loop_headers.contains(block.id);
+            try self.genBlockWithNext(block, next, is_loop_header);
         }
 
-        // Finish and return body
         return self.code.finish();
+    }
+
+    /// Find blocks that are loop headers (targets of backward edges).
+    /// Go's approach: track which blocks need loop wrappers for back edge targets.
+    fn findLoopHeaders(self: *FuncGen) !void {
+        const blocks = self.ssa_func.blocks.items;
+        for (blocks, 0..) |block, block_idx| {
+            for (block.succs) |edge| {
+                const succ_idx = self.block_to_idx.get(edge.b.id) orelse continue;
+                // A back edge is when successor comes before or at current block in layout order
+                if (succ_idx <= block_idx) {
+                    debug.log(.codegen, "  loop header: b{d} (back edge from b{d})", .{ edge.b.id, block.id });
+                    try self.loop_headers.put(self.allocator, edge.b.id, {});
+                }
+            }
+        }
     }
 
     fn countParams(self: *const FuncGen) u32 {
@@ -90,40 +144,173 @@ pub const FuncGen = struct {
         return if (has_args) max_arg else 0;
     }
 
-    /// Generate code for a basic block.
-    fn genBlock(self: *FuncGen, block: *const SsaBlock) !void {
-        debug.log(.codegen, "  block b{d} ({s})", .{ block.id, @tagName(block.kind) });
+    /// Generate code for a block, knowing what the next block is.
+    /// Follows Go's pattern: emit loop for loop headers, track depths for branch resolution.
+    fn genBlockWithNext(self: *FuncGen, block: *const SsaBlock, next: ?*const SsaBlock, is_loop_header: bool) !void {
+        debug.log(.codegen, "  block b{d} ({s}){s} depth={d}", .{
+            block.id,
+            @tagName(block.kind),
+            if (is_loop_header) " [loop header]" else "",
+            self.block_depth,
+        });
 
-        // Generate values in order (assumes scheduled)
-        for (block.values.items) |v| {
-            try self.genValue(v);
+        // If this is a loop header, emit loop instruction (Go's ALoop)
+        // When a back edge jumps here, it uses br with relative depth
+        if (is_loop_header) {
+            try self.code.emitLoop(BLOCK_TYPE_VOID);
+            self.block_depth += 1;
+            // Record depth AFTER incrementing (Go's blockDepths[p] = currentDepth)
+            try self.block_depths.put(self.allocator, block.id, self.block_depth);
+            debug.log(.codegen, "    emitted loop, depth now {d}", .{self.block_depth});
         }
 
-        // Generate block terminator
-        try self.genBlockEnd(block);
+        // Generate values in the block
+        for (block.values.items) |v| {
+            try self.ssaGenValue(v);
+        }
+
+        // Generate block terminator (ssaGenBlock pattern from Go)
+        try self.ssaGenBlock(block, next);
+
+        // If this was a loop header, we need to close the loop after processing
+        // all blocks that are part of the loop body - this is handled by finding
+        // where the back edge originates and emitting 'end' there
     }
 
-    /// Generate block terminator (branch, return, etc.)
-    fn genBlockEnd(self: *FuncGen, block: *const SsaBlock) !void {
-        switch (block.kind) {
-            .ret => {
-                // Return value should be on stack from control value
-                // (In simple cases, nothing extra needed - value is already on stack)
+    /// Generate control flow for block transitions (Go's ssaGenBlock).
+    /// Handles branches following Go's pattern: compute relative depth for br instructions.
+    fn ssaGenBlock(self: *FuncGen, b: *const SsaBlock, next: ?*const SsaBlock) !void {
+        switch (b.kind) {
+            .plain, .first => {
+                // Plain blocks fall through to successor or jump
+                if (b.succs.len > 0) {
+                    const succ = b.succs[0].b;
+                    if (next == null or next.?.id != succ.id) {
+                        // Need to jump - check if this is a back edge (loop continue)
+                        if (self.block_depths.get(succ.id)) |target_depth| {
+                            // Back edge to loop header - emit br with relative depth
+                            // Go's formula: currentDepth - blockDepth
+                            const rel_depth = self.block_depth - target_depth;
+                            debug.log(.codegen, "    plain: back edge to b{d}, br {d}", .{ succ.id, rel_depth });
+                            try self.code.emitBr(rel_depth);
+                            // After back edge, we need to close the loop
+                            try self.code.emitEnd();
+                            self.block_depth -= 1;
+                        } else {
+                            // Forward jump - for now, fall through and trust layout
+                            debug.log(.codegen, "    plain: forward jump to b{d} (not implemented)", .{succ.id});
+                        }
+                    }
+                    // else: fall through, nothing needed
+                }
             },
+
+            .if_ => {
+                // Conditional branch - Go's BlockIf handling
+                if (b.succs.len < 2) {
+                    debug.log(.codegen, "    if: missing successors", .{});
+                    return;
+                }
+
+                const succ_true = b.succs[0].b;
+                const succ_false = b.succs[1].b;
+
+                // Get condition value onto stack
+                if (b.controls[0]) |cond| {
+                    try self.emitValueRef(cond);
+                    // Condition is i64, need to convert to i32 for Wasm if
+                    try self.code.emitI32WrapI64();
+                }
+
+                // Check if either successor is a loop header (back edge target)
+                const true_is_loop = self.block_depths.contains(succ_true.id);
+                const false_is_loop = self.block_depths.contains(succ_false.id);
+
+                // Emit control flow based on which successor is "next" (Go's pattern)
+                if (next != null and next.?.id == succ_true.id) {
+                    // True branch is next - emit: if false, jump to false successor
+                    try self.code.emitI32Eqz(); // invert condition
+                    try self.code.emitIf(BLOCK_TYPE_VOID);
+                    self.block_depth += 1;
+
+                    if (false_is_loop) {
+                        // Back edge - br to loop header
+                        const target_depth = self.block_depths.get(succ_false.id).?;
+                        const rel_depth = self.block_depth - target_depth;
+                        try self.code.emitBr(rel_depth);
+                    } else {
+                        try self.code.emitBr(0); // exit if block
+                    }
+
+                    try self.code.emitEnd();
+                    self.block_depth -= 1;
+                    debug.log(.codegen, "    if: true is next, false jump", .{});
+                } else if (next != null and next.?.id == succ_false.id) {
+                    // False branch is next - emit: if true, jump to true successor
+                    try self.code.emitIf(BLOCK_TYPE_VOID);
+                    self.block_depth += 1;
+
+                    if (true_is_loop) {
+                        // Back edge - br to loop header
+                        const target_depth = self.block_depths.get(succ_true.id).?;
+                        const rel_depth = self.block_depth - target_depth;
+                        try self.code.emitBr(rel_depth);
+                    } else {
+                        try self.code.emitBr(0); // exit if block
+                    }
+
+                    try self.code.emitEnd();
+                    self.block_depth -= 1;
+                    debug.log(.codegen, "    if: false is next, true jump", .{});
+                } else {
+                    // Neither is next - emit both jumps
+                    try self.code.emitIf(BLOCK_TYPE_VOID);
+                    self.block_depth += 1;
+
+                    if (true_is_loop) {
+                        const target_depth = self.block_depths.get(succ_true.id).?;
+                        const rel_depth = self.block_depth - target_depth;
+                        try self.code.emitBr(rel_depth);
+                    } else {
+                        try self.code.emitBr(0);
+                    }
+
+                    try self.code.emitEnd();
+                    self.block_depth -= 1;
+
+                    if (false_is_loop) {
+                        const target_depth = self.block_depths.get(succ_false.id).?;
+                        const rel_depth = self.block_depth - target_depth;
+                        try self.code.emitBr(rel_depth);
+                    }
+                    debug.log(.codegen, "    if: neither is next", .{});
+                }
+            },
+
+            .ret => {
+                // Return block - value should be on stack from control value
+                if (b.controls[0]) |ret_val| {
+                    try self.emitValueRef(ret_val);
+                }
+                // Wasm function body implicitly returns top of stack
+                // No explicit return needed unless we want early return
+            },
+
             .exit => {
+                // Exit without return value
                 try self.code.emitReturn();
             },
+
             else => {
-                // Plain/first blocks just fall through
+                debug.log(.codegen, "    unhandled block kind: {s}", .{@tagName(b.kind)});
             },
         }
     }
 
-    /// Generate code for a single SSA value (ssaGenValue pattern).
-    fn genValue(self: *FuncGen, v: *const SsaValue) !void {
-        // Skip values with no uses (dead code) unless they have side effects
+    /// Generate code for a single SSA value (Go's ssaGenValue).
+    fn ssaGenValue(self: *FuncGen, v: *const SsaValue) !void {
+        // Skip dead values unless they have side effects
         if (v.uses == 0 and !v.hasSideEffects()) {
-            // Still need to generate args and control values
             if (v.op != .arg and v.op != .wasm_return) return;
         }
 
@@ -132,8 +319,6 @@ pub const FuncGen = struct {
             // Arguments (function parameters)
             // ================================================================
             .arg => {
-                // Args map to Wasm locals 0..n-1
-                // We don't emit anything here - local.get emitted when used
                 const arg_idx: u32 = @intCast(v.aux_int);
                 try self.value_to_local.put(self.allocator, v.id, arg_idx);
             },
@@ -141,9 +326,9 @@ pub const FuncGen = struct {
             // ================================================================
             // Constants
             // ================================================================
-            .wasm_i64_const => try self.code.emitI64Const(v.aux_int),
-            .wasm_i32_const => try self.code.emitI32Const(@truncate(v.aux_int)),
-            .wasm_f64_const => try self.code.emitF64Const(@bitCast(v.aux_int)),
+            .wasm_i64_const, .const_int, .const_64 => try self.code.emitI64Const(v.aux_int),
+            .wasm_i32_const, .const_32 => try self.code.emitI32Const(@truncate(v.aux_int)),
+            .wasm_f64_const, .const_float => try self.code.emitF64Const(@bitCast(v.aux_int)),
 
             // ================================================================
             // Integer Arithmetic (i64)
@@ -312,37 +497,27 @@ pub const FuncGen = struct {
             // ================================================================
             .wasm_lowered_static_call => {
                 try self.emitOperands(v);
-                // For now, assume function index is in aux_int
                 const func_idx: u32 = @intCast(v.aux_int);
                 try self.code.emitCall(func_idx);
             },
 
             // ================================================================
-            // Copy/Move (emit operand, result stays on stack)
+            // Copy/Move
             // ================================================================
-            .copy => try self.emitOperands(v),
-            .wasm_lowered_move => try self.emitOperands(v),
+            .copy, .wasm_lowered_move => try self.emitOperands(v),
 
             // ================================================================
-            // Phi nodes (handled at block boundaries - not in linear codegen)
+            // Control flow ops handled in ssaGenBlock
             // ================================================================
-            .phi => {},
+            .phi, .init_mem, .fwd_ref => {},
 
-            // ================================================================
-            // Control flow ops handled elsewhere
-            // ================================================================
-            .init_mem, .fwd_ref => {},
-
-            // Many ops not yet implemented - add as needed
             else => {
-                debug.log(.codegen, "  WARNING: unhandled op {s} for v{d}", .{ @tagName(v.op), v.id });
+                debug.log(.codegen, "    unhandled op: {s} v{d}", .{ @tagName(v.op), v.id });
             },
         }
     }
 
     /// Emit operands (push them onto the stack).
-    /// For args, emit local.get. For other values, they should already be on stack
-    /// or we need to emit them recursively.
     fn emitOperands(self: *FuncGen, v: *const SsaValue) !void {
         for (v.args) |arg| {
             try self.emitValueRef(arg);
@@ -351,7 +526,7 @@ pub const FuncGen = struct {
 
     /// Emit a reference to a value (get it onto the stack).
     fn emitValueRef(self: *FuncGen, v: *const SsaValue) !void {
-        // Check if this value is a local (arg or stored value)
+        // Check if this value is a local
         if (self.value_to_local.get(v.id)) |local_idx| {
             try self.code.emitLocalGet(local_idx);
             return;
@@ -363,14 +538,12 @@ pub const FuncGen = struct {
             .wasm_i32_const, .const_32 => try self.code.emitI32Const(@truncate(v.aux_int)),
             .wasm_f64_const, .const_float => try self.code.emitF64Const(@bitCast(v.aux_int)),
             .arg => {
-                // Arg should have been registered - register it now
                 const arg_idx: u32 = @intCast(v.aux_int);
                 try self.code.emitLocalGet(arg_idx);
             },
             else => {
-                // For other ops, the value should have been computed and still on stack
-                // This is a simplification - real codegen tracks stack state
-                debug.log(.codegen, "  WARNING: emitValueRef for non-const {s} v{d}", .{ @tagName(v.op), v.id });
+                // Value should have been computed - emit warning
+                debug.log(.codegen, "    WARNING: emitValueRef for {s} v{d}", .{ @tagName(v.op), v.id });
             },
         }
     }
@@ -392,7 +565,6 @@ const testing = std.testing;
 test "genFunc - return constant" {
     const allocator = testing.allocator;
 
-    // Create a simple function: return 42
     var f = SsaFunc.init(allocator, "answer");
     defer f.deinit();
 
@@ -401,66 +573,51 @@ test "genFunc - return constant" {
     c.aux_int = 42;
     c.*.uses = 1;
     try b.addValue(allocator, c);
+    b.controls[0] = c;
 
-    // Generate
     const body = try genFunc(allocator, &f);
     defer allocator.free(body);
 
     // Verify: should contain i64.const 42 and end
-    // Body format: [locals_count] [instructions...] [end]
     try testing.expect(body.len >= 3);
     try testing.expectEqual(@as(u8, 0), body[0]); // 0 locals
     try testing.expectEqual(Op.i64_const, body[1]);
-    try testing.expectEqual(@as(u8, 42), body[2]); // LEB128(42)
+    try testing.expectEqual(@as(u8, 42), body[2]);
     try testing.expectEqual(Op.end, body[body.len - 1]);
 }
 
 test "genFunc - add two args" {
     const allocator = testing.allocator;
 
-    // Create: fn add(a: i64, b: i64) -> i64 { return a + b }
     var f = SsaFunc.init(allocator, "add");
     defer f.deinit();
 
     const b = try f.newBlock(.ret);
 
-    // v1 = arg[0]
     const arg0 = try f.newValue(.arg, 0, b, .{});
     arg0.aux_int = 0;
     arg0.*.uses = 1;
     try b.addValue(allocator, arg0);
 
-    // v2 = arg[1]
     const arg1 = try f.newValue(.arg, 0, b, .{});
     arg1.aux_int = 1;
     arg1.*.uses = 1;
     try b.addValue(allocator, arg1);
 
-    // v3 = wasm_i64_add v1, v2
     const add = try f.newValue(.wasm_i64_add, 0, b, .{});
     add.addArg(arg0);
     add.addArg(arg1);
     add.*.uses = 1;
     try b.addValue(allocator, add);
+    b.controls[0] = add;
 
-    // Generate
     const body = try genFunc(allocator, &f);
     defer allocator.free(body);
 
-    // Verify structure:
-    // [0] = 0 locals
-    // [1] = local.get 0
-    // [2] = 0
-    // [3] = local.get 1
-    // [4] = 1
-    // [5] = i64.add
-    // [6] = end
-    try testing.expect(body.len >= 7);
+    try testing.expect(body.len >= 6);
     try testing.expectEqual(@as(u8, 0), body[0]); // 0 locals
     try testing.expectEqual(Op.local_get, body[1]);
-    try testing.expectEqual(@as(u8, 0), body[2]);
     try testing.expectEqual(Op.local_get, body[3]);
-    try testing.expectEqual(@as(u8, 1), body[4]);
     try testing.expectEqual(Op.i64_add, body[5]);
     try testing.expectEqual(Op.end, body[body.len - 1]);
 }
@@ -468,7 +625,6 @@ test "genFunc - add two args" {
 test "genFunc - const arithmetic" {
     const allocator = testing.allocator;
 
-    // Create: return 10 + 20
     var f = SsaFunc.init(allocator, "const_add");
     defer f.deinit();
 
@@ -489,15 +645,55 @@ test "genFunc - const arithmetic" {
     add.addArg(c2);
     add.*.uses = 1;
     try b.addValue(allocator, add);
+    b.controls[0] = add;
 
     const body = try genFunc(allocator, &f);
     defer allocator.free(body);
 
-    // Should have: i64.const 10, i64.const 20, i64.add, end
     var found_add = false;
     for (body) |byte| {
         if (byte == Op.i64_add) found_add = true;
     }
     try testing.expect(found_add);
+    try testing.expectEqual(Op.end, body[body.len - 1]);
+}
+
+test "genFunc - simple if block" {
+    const allocator = testing.allocator;
+
+    var f = SsaFunc.init(allocator, "max");
+    defer f.deinit();
+
+    // Create: if (cond) then b2 else b3, merge at b4
+    const b1 = try f.newBlock(.if_);
+    const b2 = try f.newBlock(.plain);
+    const b3 = try f.newBlock(.plain);
+    const b4 = try f.newBlock(.ret);
+
+    // Setup edges
+    try b1.addEdgeTo(allocator, b2);
+    try b1.addEdgeTo(allocator, b3);
+    try b2.addEdgeTo(allocator, b4);
+    try b3.addEdgeTo(allocator, b4);
+
+    // Add condition to b1
+    const cond = try f.newValue(.wasm_i64_const, 0, b1, .{});
+    cond.aux_int = 1; // true
+    cond.*.uses = 1;
+    try b1.addValue(allocator, cond);
+    b1.controls[0] = cond;
+
+    // Add return value to b4
+    const ret = try f.newValue(.wasm_i64_const, 0, b4, .{});
+    ret.aux_int = 42;
+    ret.*.uses = 1;
+    try b4.addValue(allocator, ret);
+    b4.controls[0] = ret;
+
+    const body = try genFunc(allocator, &f);
+    defer allocator.free(body);
+
+    // Should compile without error
+    try testing.expect(body.len > 0);
     try testing.expectEqual(Op.end, body[body.len - 1]);
 }

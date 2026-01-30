@@ -234,3 +234,63 @@ test "compile void function" {
     try std.testing.expect(!result.has_errors);
     try std.testing.expect(result.wasm_bytes.len > 0);
 }
+
+test "M6: if statement" {
+    const code =
+        \\fn max(a: int, b: int) int {
+        \\    if a > b {
+        \\        return a;
+        \\    } else {
+        \\        return b;
+        \\    }
+        \\}
+    ;
+
+    var result = try compileToWasm(std.testing.allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+
+    // Verify Wasm header
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "M6: simple conditional return" {
+    const code =
+        \\fn sign(x: int) int {
+        \\    if x > 0 { return 1; }
+        \\    if x < 0 { return -1; }
+        \\    return 0;
+        \\}
+    ;
+
+    var result = try compileToWasm(std.testing.allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+}
+
+test "M7: simple while loop" {
+    const code =
+        \\fn sum_to(n: int) int {
+        \\    let i = 0;
+        \\    let total = 0;
+        \\    while i < n {
+        \\        i = i + 1;
+        \\        total = total + i;
+        \\    }
+        \\    return total;
+        \\}
+    ;
+
+    var result = try compileToWasm(std.testing.allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+
+    // Verify Wasm header
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}

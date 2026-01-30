@@ -332,6 +332,57 @@ pub const CodeBuilder = struct {
         try self.buf.append(self.allocator, Op.end);
     }
 
+    /// Emit block instruction with result type.
+    /// block_type: 0x40 = void, 0x7F = i32, 0x7E = i64, 0x7D = f32, 0x7C = f64
+    pub fn emitBlock(self: *CodeBuilder, block_type: u8) !void {
+        try self.buf.append(self.allocator, Op.block);
+        try self.buf.append(self.allocator, block_type);
+    }
+
+    /// Emit loop instruction with result type.
+    pub fn emitLoop(self: *CodeBuilder, block_type: u8) !void {
+        try self.buf.append(self.allocator, Op.loop);
+        try self.buf.append(self.allocator, block_type);
+    }
+
+    /// Emit if instruction with result type.
+    pub fn emitIf(self: *CodeBuilder, block_type: u8) !void {
+        try self.buf.append(self.allocator, Op.if_op);
+        try self.buf.append(self.allocator, block_type);
+    }
+
+    /// Emit else instruction.
+    pub fn emitElse(self: *CodeBuilder) !void {
+        try self.buf.append(self.allocator, Op.else_op);
+    }
+
+    /// Emit br instruction (unconditional branch).
+    pub fn emitBr(self: *CodeBuilder, label_idx: u32) !void {
+        try self.buf.append(self.allocator, Op.br);
+        try enc.encodeULEB128(self.writer(), label_idx);
+    }
+
+    /// Emit br_if instruction (conditional branch).
+    pub fn emitBrIf(self: *CodeBuilder, label_idx: u32) !void {
+        try self.buf.append(self.allocator, Op.br_if);
+        try enc.encodeULEB128(self.writer(), label_idx);
+    }
+
+    /// Emit unreachable instruction.
+    pub fn emitUnreachable(self: *CodeBuilder) !void {
+        try self.buf.append(self.allocator, Op.unreachable_op);
+    }
+
+    /// Emit nop instruction.
+    pub fn emitNop(self: *CodeBuilder) !void {
+        try self.buf.append(self.allocator, Op.nop);
+    }
+
+    /// Emit i32.wrap_i64 instruction.
+    pub fn emitI32WrapI64(self: *CodeBuilder) !void {
+        try self.buf.append(self.allocator, Op.i32_wrap_i64);
+    }
+
     /// Finish building and return the function body bytes.
     /// Includes local declarations (empty for now) and end opcode.
     pub fn finish(self: *CodeBuilder) ![]const u8 {

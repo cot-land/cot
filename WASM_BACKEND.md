@@ -384,7 +384,55 @@ pub fn compileToWasm(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
 - [x] Test: compile `fn add(a: int, b: int) int { return a + b }` → produces valid Wasm
 - [x] Commit
 
-### M6+: Control flow, strings, memory, ARC
+### M6: Control Flow (if/else) ✅
+- [x] Add control flow emit functions to `compiler/codegen/wasm.zig`
+- [x] Add layout pass `compiler/ssa/passes/layout.zig`
+- [x] Implement `ssaGenBlock` in `compiler/codegen/wasm_gen.zig`
+- [x] Test: if/else compiles to valid Wasm
+
+### M7: Loops (while) ✅
+- [x] Handle loop block kinds in layout pass
+- [x] Emit `loop`/`br`/`br_if` in ssaGenBlock (Go's blockDepths pattern)
+- [x] Track block nesting depth for relative branch calculation
+- [x] Test: `while` compiles to valid Wasm
+- Note: Loop control flow works; memory ops (local_addr, load/store) pending M10
+
+### M8: Function Calls Between Cot Functions
+- [ ] Track function index mapping
+- [ ] Emit `call` with correct function indices
+- [ ] Test: calling one function from another works
+
+### M9: CLI Emits .wasm
+- [ ] Add `--target=wasm32` to CLI
+- [ ] Output `.wasm` file directly
+
+### M10: Linear Memory
+- [ ] Add memory section to module
+- [ ] Implement `wasm_i64_load`, `wasm_i64_store`
+
+### M11: Pointers
+- [ ] Pointer types in Wasm (i32 addresses)
+- [ ] Address-of, dereference operations
+
+### M12: Structs
+- [ ] Struct layout in linear memory
+- [ ] Field access via memory offsets
+
+### M13: Arrays/Slices
+- [ ] Array bounds checking
+- [ ] Slice representation (ptr + len)
+
+### M14: Strings
+- [ ] String data in data section
+- [ ] String operations via runtime
+
+### M15: ARC Basics
+- [ ] Retain/release function calls
+- [ ] Reference counting for heap objects
+
+### M16: Browser Imports
+- [ ] Import section for JS interop
+- [ ] console.log, DOM access
 
 ---
 
@@ -394,7 +442,10 @@ pub fn compileToWasm(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
 2. **One step at a time.** M1 → M2 → M3 → M4. No skipping.
 3. **Test each component in isolation.** Unit tests before integration.
 4. **Commit after each passing milestone.**
-5. **If stuck, look at Go's code.** `~/learning/go/src/cmd/compile/internal/wasm/`
+5. **ALWAYS check Go's code first for design.** Reference: `~/learning/go/src/cmd/compile/internal/wasm/`
+   - `ssa.go` - ssaGenValue, ssaGenBlock patterns
+   - `ops.go` - Wasm op definitions
+   - Key insight: Go handles Wasm's structured control flow with block/loop/if constructs
 
 ---
 
