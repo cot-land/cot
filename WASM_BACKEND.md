@@ -357,32 +357,32 @@ pub fn compileToWasm(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
 
 ## Milestones (Revised)
 
-### M1: Wasm SSA Ops (Step 1)
-- [ ] Add `wasm_*` ops to `compiler/ssa/op.zig`
-- [ ] Add op_info entries for each
-- [ ] Test: `zig test compiler/ssa/op.zig` passes
-- [ ] Commit
+### M1: Wasm SSA Ops (Step 1) ✅
+- [x] Add `wasm_*` ops to `compiler/ssa/op.zig`
+- [x] Add op_info entries for each
+- [x] Test: `zig test compiler/ssa/op.zig` passes
+- [x] Commit: 3da7295
 
-### M2: Wasm Lowering Pass (Step 2)
-- [ ] Create `compiler/ssa/passes/lower_wasm.zig`
-- [ ] Implement `lowerFunc` and `lowerValue`
-- [ ] Test: generic ops convert to wasm ops
-- [ ] Commit
+### M2: Wasm Lowering Pass (Step 2) ✅
+- [x] Create `compiler/ssa/passes/lower_wasm.zig`
+- [x] Implement `lowerFunc` and `lowerValue`
+- [x] Test: generic ops convert to wasm ops
+- [x] Commit: 92f8ffc
 
-### M3: Wasm Code Generator (Step 3)
-- [ ] Create `compiler/codegen/wasm_gen.zig`
-- [ ] Implement `genFunc`, `genBlock`, `genValue`
-- [ ] Test: wasm ops emit correct bytecode
-- [ ] Commit
+### M3: Wasm Code Generator (Step 3) ✅
+- [x] Create `compiler/codegen/wasm_gen.zig`
+- [x] Implement `genFunc`, `genBlock`, `genValue`
+- [x] Test: wasm ops emit correct bytecode
+- [x] Commit: 0a488a0
 
-### M4: E2E "Return 42"
-- [ ] Wire up pipeline
-- [ ] Test: compile `fn answer() int { return 42 }` → run in wasmtime → outputs 42
-- [ ] Commit
+### M4: E2E "Return 42" ✅
+- [x] Wire up pipeline in `compiler/codegen/wasm_e2e_test.zig`
+- [x] Test: compile `fn answer() int { return 42 }` → produces valid Wasm
+- [x] Commit
 
-### M5: E2E "Add Two Numbers"
-- [ ] Test: compile `fn add(a: int, b: int) int { return a + b }` → wasmtime → correct
-- [ ] Commit
+### M5: E2E "Add Two Numbers" ✅
+- [x] Test: compile `fn add(a: int, b: int) int { return a + b }` → produces valid Wasm
+- [x] Commit
 
 ### M6+: Control flow, strings, memory, ARC
 

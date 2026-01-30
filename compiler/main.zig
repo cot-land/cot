@@ -218,6 +218,7 @@ test {
 test {
     _ = @import("frontend/e2e_test.zig");
     _ = @import("frontend/integration_test.zig");
+    _ = @import("codegen/wasm_e2e_test.zig");
 }
 
 test "main: findRuntimePath returns error when not found" {

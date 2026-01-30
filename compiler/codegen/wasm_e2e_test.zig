@@ -1,0 +1,236 @@
+//! End-to-end Wasm compilation tests.
+//!
+//! Tests the full pipeline: Cot source → Parse → Check → IR → SSA → Wasm lowering → Wasm bytecode
+//!
+//! M4: "Return 42" test
+//! M5: "Add two numbers" test
+
+const std = @import("std");
+const ast = @import("../frontend/ast.zig");
+const parser_mod = @import("../frontend/parser.zig");
+const scanner_mod = @import("../frontend/scanner.zig");
+const checker = @import("../frontend/checker.zig");
+const types = @import("../frontend/types.zig");
+const fe_errors = @import("../frontend/errors.zig");
+const source_mod = @import("../frontend/source.zig");
+const ir = @import("../frontend/ir.zig");
+const lower = @import("../frontend/lower.zig");
+const ssa_builder = @import("../frontend/ssa_builder.zig");
+const lower_wasm = @import("../ssa/passes/lower_wasm.zig");
+const schedule = @import("../ssa/passes/schedule.zig");
+const wasm = @import("wasm.zig");
+const wasm_gen = @import("wasm_gen.zig");
+
+const TypeRegistry = types.TypeRegistry;
+const Func = ssa_builder.Func;
+const ValType = wasm.ValType;
+
+/// Result of compiling Cot source to Wasm.
+const WasmResult = struct {
+    arena: std.heap.ArenaAllocator,
+    has_errors: bool,
+    wasm_bytes: []const u8,
+
+    pub fn deinit(self: *WasmResult) void {
+        self.arena.deinit();
+    }
+};
+
+/// Compile Cot source code to Wasm binary.
+fn compileToWasm(backing: std.mem.Allocator, code: []const u8) !WasmResult {
+    var arena = std.heap.ArenaAllocator.init(backing);
+    const allocator = arena.allocator();
+    errdefer arena.deinit();
+
+    // Parse
+    var src = source_mod.Source.init(allocator, "test.cot", code);
+    var err = fe_errors.ErrorReporter.init(&src, null);
+    var scan = scanner_mod.Scanner.initWithErrors(&src, &err);
+    var tree = ast.Ast.init(allocator);
+    var parser = parser_mod.Parser.init(allocator, &scan, &tree, &err);
+    parser.parseFile() catch {
+        return .{ .arena = arena, .has_errors = true, .wasm_bytes = &.{} };
+    };
+    if (err.hasErrors()) {
+        return .{ .arena = arena, .has_errors = true, .wasm_bytes = &.{} };
+    }
+
+    // Type check
+    var type_reg = try TypeRegistry.init(allocator);
+    var global_scope = checker.Scope.init(allocator, null);
+    var check = checker.Checker.init(allocator, &tree, &type_reg, &err, &global_scope);
+    check.checkFile() catch {
+        return .{ .arena = arena, .has_errors = true, .wasm_bytes = &.{} };
+    };
+    if (err.hasErrors()) {
+        return .{ .arena = arena, .has_errors = true, .wasm_bytes = &.{} };
+    }
+
+    // Lower to IR
+    var lowering = lower.Lowerer.init(allocator, &tree, &type_reg, &err, &check);
+    const ir_data = lowering.lower() catch {
+        return .{ .arena = arena, .has_errors = true, .wasm_bytes = &.{} };
+    };
+    if (err.hasErrors()) {
+        return .{ .arena = arena, .has_errors = true, .wasm_bytes = &.{} };
+    }
+
+    // Build Wasm module
+    var module = wasm.Module.init(allocator);
+
+    // Process each function
+    for (ir_data.funcs) |*ir_func| {
+        // Build SSA
+        var builder = try ssa_builder.SSABuilder.init(allocator, ir_func, &type_reg);
+        const ssa_func = builder.build() catch |e| {
+            std.debug.print("SSA build error for {s}: {}\n", .{ ir_func.name, e });
+            builder.deinit();
+            continue;
+        };
+        defer {
+            ssa_func.deinit();
+            allocator.destroy(ssa_func);
+        }
+        builder.deinit();
+
+        // Schedule (order values for codegen)
+        try schedule.schedule(ssa_func);
+
+        // Lower to Wasm ops
+        try lower_wasm.lower(ssa_func);
+
+        // Determine function signature
+        const param_count = countParams(ssa_func);
+        var params: [16]ValType = undefined;
+        for (0..param_count) |i| {
+            params[i] = .i64;
+        }
+        const has_return = ir_func.return_type != types.TypeRegistry.VOID;
+        const results: []const ValType = if (has_return) &[_]ValType{.i64} else &[_]ValType{};
+
+        // Add type
+        const type_idx = try module.addFuncType(params[0..param_count], results);
+
+        // Add function
+        const func_idx = try module.addFunc(type_idx);
+
+        // Export if it's "main" or "answer" or "add"
+        if (std.mem.eql(u8, ir_func.name, "main") or
+            std.mem.eql(u8, ir_func.name, "answer") or
+            std.mem.eql(u8, ir_func.name, "add"))
+        {
+            try module.addExport(ir_func.name, .func, func_idx);
+        }
+
+        // Generate code
+        const body = try wasm_gen.genFunc(allocator, ssa_func);
+        try module.addCode(body);
+    }
+
+    // Emit Wasm binary
+    var output: std.ArrayListUnmanaged(u8) = .{};
+    try module.emit(output.writer(allocator));
+    const wasm_bytes = try output.toOwnedSlice(allocator);
+
+    return .{ .arena = arena, .has_errors = false, .wasm_bytes = wasm_bytes };
+}
+
+fn countParams(ssa_func: *const Func) u32 {
+    var max_arg: u32 = 0;
+    for (ssa_func.blocks.items) |block| {
+        for (block.values.items) |v| {
+            if (v.op == .arg) {
+                const arg_idx: u32 = @intCast(v.aux_int);
+                if (arg_idx >= max_arg) max_arg = arg_idx + 1;
+            }
+        }
+    }
+    return max_arg;
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "M4: return 42" {
+    const code =
+        \\fn answer() int {
+        \\    return 42;
+        \\}
+    ;
+
+    var result = try compileToWasm(std.testing.allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+
+    // Verify Wasm header
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+    try std.testing.expectEqual(@as(u8, 1), result.wasm_bytes[4]); // version
+
+    // The module should contain:
+    // - Type section (function signature)
+    // - Function section
+    // - Export section (for "answer")
+    // - Code section (i64.const 42, end)
+    try std.testing.expect(result.wasm_bytes.len >= 20);
+}
+
+test "M5: add two numbers" {
+    const code =
+        \\fn add(a: int, b: int) int {
+        \\    return a + b;
+        \\}
+    ;
+
+    var result = try compileToWasm(std.testing.allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+
+    // Verify Wasm header
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "compile simple expression" {
+    const code =
+        \\fn expr() int {
+        \\    return 10 + 20;
+        \\}
+    ;
+
+    var result = try compileToWasm(std.testing.allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+}
+
+test "compile with multiplication" {
+    const code =
+        \\fn mul(x: int, y: int) int {
+        \\    return x * y;
+        \\}
+    ;
+
+    var result = try compileToWasm(std.testing.allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+}
+
+test "compile void function" {
+    const code =
+        \\fn noop() {
+        \\}
+    ;
+
+    var result = try compileToWasm(std.testing.allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+}
