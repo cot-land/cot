@@ -113,9 +113,10 @@ COT_DEBUG=parse,lower,codegen zig build test
 
 ### DO
 
+- **Write tests first** (TDD) - tests define the spec
+- Run tests after every change: `zig build test`
 - Reference `bootstrap-0.2/DESIGN.md` for architecture questions
 - Reference `bootstrap-0.2/src/` for working code examples
-- Run tests after every change: `zig build test`
 - Make incremental changes, verify each one
 - Ask user for direction when uncertain
 
@@ -146,8 +147,37 @@ Cot uses Automatic Reference Counting:
 
 ## Testing
 
+**Test-Driven Development is mandatory.** Write tests first, then implement.
+
+### Two Levels of Tests
+
+**1. Zig Compiler Tests** (testing the compiler itself)
+```zig
+// In compiler/codegen/wasm.zig
+test "emit i64.const" {
+    var buf = std.ArrayList(u8).init(testing.allocator);
+    defer buf.deinit();
+    try emitI64Const(&buf, 42);
+    try testing.expectEqualSlices(u8, &[_]u8{ 0x42, 42 }, buf.items);
+}
+```
+
+**2. Cot Language Tests** (testing the language, Zig-style inline syntax)
+```cot
+fn add(a: int, b: int) int {
+    return a + b
+}
+
+test "add works" {
+    assert(add(2, 3) == 5)
+    assert(add(-1, 1) == 0)
+}
+```
+
+### Running Tests
+
 ```bash
-# All tests
+# All compiler tests
 zig build test
 
 # Specific file
@@ -156,6 +186,12 @@ zig test compiler/frontend/parser.zig
 # With debug output
 COT_DEBUG=parse zig test compiler/frontend/parser.zig
 ```
+
+### Test Requirements
+
+- Every new function needs tests
+- Tests run before committing
+- Failing tests block progress - fix them first
 
 ---
 
