@@ -16,10 +16,15 @@ const stackalloc_mod = @import("ssa/stackalloc.zig");
 const expand_calls = @import("ssa/passes/expand_calls.zig");
 const decompose = @import("ssa/passes/decompose.zig");
 const schedule = @import("ssa/passes/schedule.zig");
+const lower_wasm = @import("ssa/passes/lower_wasm.zig");
 const target_mod = @import("core/target.zig");
 const pipeline_debug = @import("pipeline_debug.zig");
 
-// Codegen modules - will be added in Round 5
+// Wasm codegen
+const wasm = @import("codegen/wasm.zig");
+const wasm_gen = @import("codegen/wasm_gen.zig");
+
+// Native codegen modules - will be added in Round 5
 // const arm64_codegen = @import("codegen/arm64.zig");
 // const amd64_codegen = @import("codegen/amd64.zig");
 
@@ -232,7 +237,12 @@ pub const Driver = struct {
         _ = source_text;
         _ = globals;
 
-        // Process each function through SSA pipeline
+        // Wasm target: use Wasm codegen pipeline
+        if (self.target.isWasm()) {
+            return self.generateWasmCode(funcs, type_reg);
+        }
+
+        // Native target: use SSA + regalloc pipeline
         for (funcs) |*ir_func| {
             var ssa_builder = try ssa_builder_mod.SSABuilder.init(self.allocator, ir_func, type_reg);
             errdefer ssa_builder.deinit();
@@ -249,18 +259,10 @@ pub const Driver = struct {
 
             _ = try stackalloc_mod.stackalloc(ssa_func, regalloc_state.getSpillLive());
 
-            // Codegen will be added in Round 5
+            // Native codegen will be added in Round 5
             // if (self.target.arch == .amd64) {
             //     var codegen = amd64_codegen.AMD64CodeGen.init(self.allocator);
-            //     defer codegen.deinit();
-            //     codegen.setGlobals(globals);
-            //     codegen.setTypeRegistry(type_reg);
-            //     codegen.setDebugInfo(source_file, source_text);
-            //     codegen.setRegAllocState(&regalloc_state);
-            //     codegen.setFrameSize(stack_result.frame_size);
-            //     try codegen.generateBinary(ssa_func, ir_func.name);
-            // } else {
-            //     // ARM64 codegen
+            //     ...
             // }
 
             ssa_func.deinit();
@@ -268,8 +270,77 @@ pub const Driver = struct {
             ssa_builder.deinit();
         }
 
-        // Placeholder until codegen is added
+        // Placeholder until native codegen is added
         return try self.allocator.dupe(u8, "");
+    }
+
+    /// Generate WebAssembly binary.
+    fn generateWasmCode(self: *Driver, funcs: []const ir_mod.Func, type_reg: *types_mod.TypeRegistry) ![]u8 {
+        pipeline_debug.log(.codegen, "driver: generating Wasm for {d} functions", .{funcs.len});
+
+        var module = wasm.Module.init(self.allocator);
+        defer module.deinit();
+
+        // Build function name -> index mapping
+        var func_indices = wasm_gen.FuncIndexMap{};
+        defer func_indices.deinit(self.allocator);
+        for (funcs, 0..) |*ir_func, i| {
+            try func_indices.put(self.allocator, ir_func.name, @intCast(i));
+        }
+
+        // Process each function
+        for (funcs) |*ir_func| {
+            // Build SSA
+            var ssa_builder = try ssa_builder_mod.SSABuilder.init(self.allocator, ir_func, type_reg);
+            errdefer ssa_builder.deinit();
+
+            const ssa_func = try ssa_builder.build();
+            defer {
+                ssa_func.deinit();
+                self.allocator.destroy(ssa_func);
+            }
+            ssa_builder.deinit();
+
+            // Run Wasm-specific passes (no regalloc needed!)
+            try schedule.schedule(ssa_func);
+            try lower_wasm.lower(ssa_func);
+
+            // Determine function signature
+            var param_count: u32 = 0;
+            for (ssa_func.blocks.items) |block| {
+                for (block.values.items) |v| {
+                    if (v.op == .arg) {
+                        const arg_idx: u32 = @intCast(v.aux_int);
+                        if (arg_idx >= param_count) param_count = arg_idx + 1;
+                    }
+                }
+            }
+            var params: [16]wasm.ValType = undefined;
+            for (0..param_count) |i| {
+                params[i] = .i64;
+            }
+            const has_return = ir_func.return_type != types_mod.TypeRegistry.VOID;
+            const results: []const wasm.ValType = if (has_return) &[_]wasm.ValType{.i64} else &[_]wasm.ValType{};
+
+            // Add function to module
+            const type_idx = try module.addFuncType(params[0..param_count], results);
+            const func_idx = try module.addFunc(type_idx);
+
+            // Export "main" function
+            if (std.mem.eql(u8, ir_func.name, "main")) {
+                try module.addExport(ir_func.name, .func, func_idx);
+            }
+
+            // Generate code
+            const body = try wasm_gen.genFuncWithIndices(self.allocator, ssa_func, &func_indices);
+            defer self.allocator.free(body);
+            try module.addCode(body);
+        }
+
+        // Emit Wasm binary
+        var output: std.ArrayListUnmanaged(u8) = .{};
+        try module.emit(output.writer(self.allocator));
+        return output.toOwnedSlice(self.allocator);
     }
 };
 

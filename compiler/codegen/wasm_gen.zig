@@ -31,6 +31,9 @@ const BLOCK_TYPE_I64: u8 = 0x7E;
 const BLOCK_TYPE_F32: u8 = 0x7D;
 const BLOCK_TYPE_F64: u8 = 0x7C;
 
+/// Function index map type - maps function names to Wasm function indices.
+pub const FuncIndexMap = std.StringHashMapUnmanaged(u32);
+
 /// Generator state for a single function.
 pub const FuncGen = struct {
     allocator: std.mem.Allocator,
@@ -60,6 +63,9 @@ pub const FuncGen = struct {
     /// Blocks that are loop headers (have incoming back edges).
     loop_headers: std.AutoHashMapUnmanaged(u32, void),
 
+    /// Maps function names to Wasm function indices (for call resolution).
+    func_indices: ?*const FuncIndexMap,
+
     pub fn init(allocator: std.mem.Allocator, ssa_func: *const SsaFunc) FuncGen {
         return .{
             .allocator = allocator,
@@ -72,6 +78,7 @@ pub const FuncGen = struct {
             .block_depth = 0,
             .block_depths = .{},
             .loop_headers = .{},
+            .func_indices = null,
         };
     }
 
@@ -324,11 +331,12 @@ pub const FuncGen = struct {
             },
 
             // ================================================================
-            // Constants
+            // Constants - handled by emitValueRef (rematerializable)
+            // Don't emit here; they'll be emitted when referenced.
             // ================================================================
-            .wasm_i64_const, .const_int, .const_64 => try self.code.emitI64Const(v.aux_int),
-            .wasm_i32_const, .const_32 => try self.code.emitI32Const(@truncate(v.aux_int)),
-            .wasm_f64_const, .const_float => try self.code.emitF64Const(@bitCast(v.aux_int)),
+            .wasm_i64_const, .const_int, .const_64 => {},
+            .wasm_i32_const, .const_32 => {},
+            .wasm_f64_const, .const_float => {},
 
             // ================================================================
             // Integer Arithmetic (i64)
@@ -497,8 +505,27 @@ pub const FuncGen = struct {
             // ================================================================
             .wasm_lowered_static_call => {
                 try self.emitOperands(v);
-                const func_idx: u32 = @intCast(v.aux_int);
-                try self.code.emitCall(func_idx);
+                // Look up function index from aux_call.fn_name
+                if (v.aux_call) |aux_call| {
+                    if (self.func_indices) |indices| {
+                        if (indices.get(aux_call.fn_name)) |func_idx| {
+                            debug.log(.codegen, "    call {s} -> func[{d}]", .{ aux_call.fn_name, func_idx });
+                            try self.code.emitCall(func_idx);
+                        } else {
+                            debug.log(.codegen, "    WARNING: unknown function '{s}'", .{aux_call.fn_name});
+                            // Emit call 0 as fallback
+                            try self.code.emitCall(0);
+                        }
+                    } else {
+                        // No func_indices map - use aux_int as fallback
+                        const func_idx: u32 = @intCast(v.aux_int);
+                        try self.code.emitCall(func_idx);
+                    }
+                } else {
+                    // No aux_call - use aux_int as index
+                    const func_idx: u32 = @intCast(v.aux_int);
+                    try self.code.emitCall(func_idx);
+                }
             },
 
             // ================================================================
@@ -551,7 +578,17 @@ pub const FuncGen = struct {
 
 /// Generate Wasm code for an SSA function.
 pub fn genFunc(allocator: std.mem.Allocator, ssa_func: *const SsaFunc) ![]const u8 {
+    return genFuncWithIndices(allocator, ssa_func, null);
+}
+
+/// Generate Wasm code for an SSA function with function index resolution.
+pub fn genFuncWithIndices(
+    allocator: std.mem.Allocator,
+    ssa_func: *const SsaFunc,
+    func_indices: ?*const FuncIndexMap,
+) ![]const u8 {
     var gen = FuncGen.init(allocator, ssa_func);
+    gen.func_indices = func_indices;
     defer gen.deinit();
     return gen.generate();
 }

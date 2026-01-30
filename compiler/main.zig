@@ -144,19 +144,36 @@ pub fn main() !void {
     compile_driver.setTarget(compile_target);
     if (test_mode) compile_driver.setTestMode(true);
 
-    const obj_code = compile_driver.compileFile(actual_input) catch |e| {
+    const code = compile_driver.compileFile(actual_input) catch |e| {
         std.debug.print("Compilation failed: {any}\n", .{e});
         return;
     };
-    defer allocator.free(obj_code);
+    defer allocator.free(code);
 
+    // For Wasm target, output .wasm directly (no linking needed)
+    if (compile_target.isWasm()) {
+        const wasm_path = if (std.mem.endsWith(u8, output_name, ".wasm"))
+            try allocator.dupe(u8, output_name)
+        else
+            try std.fmt.allocPrint(allocator, "{s}.wasm", .{output_name});
+        defer allocator.free(wasm_path);
+
+        std.fs.cwd().writeFile(.{ .sub_path = wasm_path, .data = code }) catch |e| {
+            std.debug.print("Failed to write Wasm file: {any}\n", .{e});
+            return;
+        };
+        std.debug.print("Success: {s} ({d} bytes)\n", .{ wasm_path, code.len });
+        return;
+    }
+
+    // Native target: write object file and link
     const obj_path = if (std.mem.endsWith(u8, output_name, ".o"))
         try allocator.dupe(u8, output_name)
     else
         try std.fmt.allocPrint(allocator, "{s}.o", .{output_name});
     defer allocator.free(obj_path);
 
-    std.fs.cwd().writeFile(.{ .sub_path = obj_path, .data = obj_code }) catch |e| {
+    std.fs.cwd().writeFile(.{ .sub_path = obj_path, .data = code }) catch |e| {
         std.debug.print("Failed to write object file: {any}\n", .{e});
         return;
     };
@@ -175,6 +192,7 @@ pub fn main() !void {
         const triple: []const u8 = switch (compile_target.os) {
             .linux => if (compile_target.arch == .amd64) "x86_64-linux-gnu" else "aarch64-linux-gnu",
             .macos => if (compile_target.arch == .arm64) "aarch64-macos" else "x86_64-macos",
+            .freestanding => unreachable, // Handled above with isWasm()
         };
         try link_args.appendSlice(allocator, &.{ "zig", "cc", "-target", triple, "-o", output_name, obj_path });
     } else {
@@ -184,7 +202,7 @@ pub fn main() !void {
     if (runtime_path) |rp| try link_args.append(allocator, rp);
     if (compile_target.os == .macos) {
         try link_args.appendSlice(allocator, &.{ "-Wl,-stack_size,0x10000000", "-lSystem" });
-    } else {
+    } else if (compile_target.os == .linux) {
         try link_args.append(allocator, "-lc");
     }
 

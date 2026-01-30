@@ -397,14 +397,18 @@ pub fn compileToWasm(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
 - [x] Test: `while` compiles to valid Wasm
 - Note: Loop control flow works; memory ops (local_addr, load/store) pending M10
 
-### M8: Function Calls Between Cot Functions
-- [ ] Track function index mapping
-- [ ] Emit `call` with correct function indices
-- [ ] Test: calling one function from another works
+### M8: Function Calls Between Cot Functions ✅
+- [x] Track function index mapping (FuncIndexMap)
+- [x] Emit `call` with correct function indices via aux_call.fn_name lookup
+- [x] Test: calling one function from another works
+- [x] Test: recursive function calls work
 
-### M9: CLI Emits .wasm
-- [ ] Add `--target=wasm32` to CLI
-- [ ] Output `.wasm` file directly
+### M9: CLI Emits .wasm ✅
+- [x] Add `--target=wasm32` to CLI
+- [x] Add wasm32 to target.zig (with freestanding OS)
+- [x] Output `.wasm` file directly (no linking needed)
+- [x] Test: `fn main() int { return 42; }` compiles and runs correctly
+- Note: Functions with parameters need M10 (linear memory) for full support
 
 ### M10: Linear Memory
 - [ ] Add memory section to module

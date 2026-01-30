@@ -78,7 +78,13 @@ fn compileToWasm(backing: std.mem.Allocator, code: []const u8) !WasmResult {
     // Build Wasm module
     var module = wasm.Module.init(allocator);
 
-    // Process each function
+    // First pass: build function name -> index mapping
+    var func_indices = wasm_gen.FuncIndexMap{};
+    for (ir_data.funcs, 0..) |*ir_func, i| {
+        try func_indices.put(allocator, ir_func.name, @intCast(i));
+    }
+
+    // Second pass: process each function
     for (ir_data.funcs) |*ir_func| {
         // Build SSA
         var builder = try ssa_builder.SSABuilder.init(allocator, ir_func, &type_reg);
@@ -122,8 +128,8 @@ fn compileToWasm(backing: std.mem.Allocator, code: []const u8) !WasmResult {
             try module.addExport(ir_func.name, .func, func_idx);
         }
 
-        // Generate code
-        const body = try wasm_gen.genFunc(allocator, ssa_func);
+        // Generate code with function index resolution
+        const body = try wasm_gen.genFuncWithIndices(allocator, ssa_func, &func_indices);
         try module.addCode(body);
     }
 
@@ -293,4 +299,40 @@ test "M7: simple while loop" {
 
     // Verify Wasm header
     try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "M8: function calls between functions" {
+    const code =
+        \\fn double(x: int) int {
+        \\    return x + x;
+        \\}
+        \\
+        \\fn quadruple(x: int) int {
+        \\    return double(double(x));
+        \\}
+    ;
+
+    var result = try compileToWasm(std.testing.allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+
+    // Verify Wasm header
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "M8: recursive function call" {
+    const code =
+        \\fn factorial(n: int) int {
+        \\    if n <= 1 { return 1; }
+        \\    return n * factorial(n - 1);
+        \\}
+    ;
+
+    var result = try compileToWasm(std.testing.allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
 }
