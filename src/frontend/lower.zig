@@ -1,0 +1,2295 @@
+//! AST-to-IR lowering pass. Transforms type-checked AST into flat IR.
+
+const std = @import("std");
+const ast = @import("ast.zig");
+const ir = @import("ir.zig");
+const types = @import("types.zig");
+const source = @import("source.zig");
+const errors = @import("errors.zig");
+const checker = @import("checker.zig");
+const token = @import("token.zig");
+
+const Allocator = std.mem.Allocator;
+const Ast = ast.Ast;
+const NodeIndex = ast.NodeIndex;
+const null_node = ast.null_node;
+const TypeIndex = types.TypeIndex;
+const TypeRegistry = types.TypeRegistry;
+const Span = source.Span;
+const Pos = source.Pos;
+const ErrorReporter = errors.ErrorReporter;
+const Token = token.Token;
+
+pub const Lowerer = struct {
+    allocator: Allocator,
+    tree: *const Ast,
+    type_reg: *TypeRegistry,
+    err: *ErrorReporter,
+    builder: ir.Builder,
+    chk: *const checker.Checker,
+    current_func: ?*ir.FuncBuilder = null,
+    temp_counter: u32 = 0,
+    loop_stack: std.ArrayListUnmanaged(LoopContext),
+    defer_stack: std.ArrayListUnmanaged(NodeIndex),
+    const_values: std.StringHashMap(i64),
+    test_mode: bool = false,
+    test_names: std.ArrayListUnmanaged([]const u8),
+    test_display_names: std.ArrayListUnmanaged([]const u8),
+    current_test_name: ?[]const u8 = null,
+
+    pub const Error = error{OutOfMemory};
+
+    const LoopContext = struct {
+        cond_block: ir.BlockIndex,
+        exit_block: ir.BlockIndex,
+        defer_depth: usize,
+        label: ?[]const u8 = null,
+    };
+
+    pub fn init(allocator: Allocator, tree: *const Ast, type_reg: *TypeRegistry, err: *ErrorReporter, chk: *const checker.Checker) Lowerer {
+        return initWithBuilder(allocator, tree, type_reg, err, chk, ir.Builder.init(allocator, type_reg));
+    }
+
+    pub fn initWithBuilder(allocator: Allocator, tree: *const Ast, type_reg: *TypeRegistry, err: *ErrorReporter, chk: *const checker.Checker, builder: ir.Builder) Lowerer {
+        return .{
+            .allocator = allocator,
+            .tree = tree,
+            .type_reg = type_reg,
+            .err = err,
+            .builder = builder,
+            .chk = chk,
+            .loop_stack = .{},
+            .defer_stack = .{},
+            .const_values = std.StringHashMap(i64).init(allocator),
+            .test_names = .{},
+            .test_display_names = .{},
+        };
+    }
+
+    pub fn setTestMode(self: *Lowerer, enabled: bool) void { self.test_mode = enabled; }
+    pub fn addTestName(self: *Lowerer, name: []const u8) !void { try self.test_names.append(self.allocator, name); }
+    pub fn addTestDisplayName(self: *Lowerer, name: []const u8) !void { try self.test_display_names.append(self.allocator, name); }
+    pub fn getTestNames(self: *const Lowerer) []const []const u8 { return self.test_names.items; }
+    pub fn getTestDisplayNames(self: *const Lowerer) []const []const u8 { return self.test_display_names.items; }
+
+    pub fn deinit(self: *Lowerer) void {
+        self.loop_stack.deinit(self.allocator);
+        self.defer_stack.deinit(self.allocator);
+        self.const_values.deinit();
+        self.test_names.deinit(self.allocator);
+        self.test_display_names.deinit(self.allocator);
+        self.builder.deinit();
+    }
+
+    pub fn deinitWithoutBuilder(self: *Lowerer) void {
+        self.loop_stack.deinit(self.allocator);
+        self.defer_stack.deinit(self.allocator);
+        self.const_values.deinit();
+        self.test_names.deinit(self.allocator);
+        self.test_display_names.deinit(self.allocator);
+    }
+
+    pub fn lower(self: *Lowerer) !ir.IR {
+        try self.lowerToBuilder();
+        return try self.builder.getIR();
+    }
+
+    pub fn lowerToBuilder(self: *Lowerer) !void {
+        for (self.tree.getRootDecls()) |decl_idx| try self.lowerDecl(decl_idx);
+    }
+
+    pub fn generateTestRunner(self: *Lowerer) !void {
+        if (self.test_names.items.len == 0) return;
+        const span = Span.init(Pos.zero, Pos.zero);
+        self.builder.startFunc("main", TypeRegistry.VOID, TypeRegistry.I64, span);
+        if (self.builder.func()) |fb| {
+            self.current_func = fb;
+            const ptr_type = self.type_reg.makePointer(TypeRegistry.U8) catch TypeRegistry.VOID;
+            for (self.test_names.items, self.test_display_names.items) |test_name, display_name| {
+                const name_copy = try self.allocator.dupe(u8, display_name);
+                const str_idx = try fb.addStringLiteral(name_copy);
+                const str_slice = try fb.emitConstSlice(str_idx, span);
+                const name_ptr = try fb.emitSlicePtr(str_slice, ptr_type, span);
+                const name_len = try fb.emitSliceLen(str_slice, span);
+                var print_args = [_]ir.NodeIndex{ name_ptr, name_len };
+                _ = try fb.emitCall("__test_print_name", &print_args, false, TypeRegistry.VOID, span);
+                var no_args = [_]ir.NodeIndex{};
+                _ = try fb.emitCall(test_name, &no_args, false, TypeRegistry.VOID, span);
+                _ = try fb.emitCall("__test_pass", &no_args, false, TypeRegistry.VOID, span);
+            }
+            const zero = try fb.emitConstInt(0, TypeRegistry.I64, span);
+            _ = try fb.emitRet(zero, span);
+            self.current_func = null;
+        }
+        try self.builder.endFunc();
+    }
+
+    // ============================================================================
+    // Declaration Lowering
+    // ============================================================================
+
+    fn lowerDecl(self: *Lowerer, idx: NodeIndex) !void {
+        const node = self.tree.getNode(idx) orelse return;
+        const decl = node.asDecl() orelse return;
+        switch (decl) {
+            .fn_decl => |d| try self.lowerFnDecl(d),
+            .var_decl => |d| try self.lowerGlobalVarDecl(d),
+            .struct_decl => |d| try self.lowerStructDecl(d),
+            .impl_block => |d| try self.lowerImplBlock(d),
+            .test_decl => |d| if (self.test_mode) try self.lowerTestDecl(d),
+            .enum_decl, .union_decl, .type_alias, .import_decl, .bad_decl => {},
+        }
+    }
+
+    fn lowerFnDecl(self: *Lowerer, fn_decl: ast.FnDecl) !void {
+        if (fn_decl.is_extern) return;
+        if (self.test_mode and std.mem.eql(u8, fn_decl.name, "main")) return;
+        const return_type = if (fn_decl.return_type != null_node) self.resolveTypeNode(fn_decl.return_type) else TypeRegistry.VOID;
+        self.builder.startFunc(fn_decl.name, TypeRegistry.VOID, return_type, fn_decl.span);
+        if (self.builder.func()) |fb| {
+            self.current_func = fb;
+            self.defer_stack.clearRetainingCapacity();
+            for (fn_decl.params) |param| {
+                const param_type = self.resolveTypeNode(param.type_expr);
+                _ = try fb.addParam(param.name, param_type, self.type_reg.sizeOf(param_type));
+            }
+            if (fn_decl.body != null_node) {
+                _ = try self.lowerBlockNode(fn_decl.body);
+                if (return_type == TypeRegistry.VOID and fb.needsTerminator()) {
+                    try self.emitDeferredExprs(0);
+                    _ = try fb.emitRet(null, fn_decl.span);
+                }
+            }
+            self.current_func = null;
+        }
+        try self.builder.endFunc();
+    }
+
+    fn lowerGlobalVarDecl(self: *Lowerer, var_decl: ast.VarDecl) !void {
+        var type_idx = TypeRegistry.VOID;
+        if (var_decl.type_expr != null_node) {
+            type_idx = self.resolveTypeNode(var_decl.type_expr);
+        } else if (var_decl.value != null_node) {
+            type_idx = self.inferExprType(var_decl.value);
+        }
+        if (var_decl.is_const) {
+            if (self.chk.scope.lookup(var_decl.name)) |sym| {
+                if (sym.const_value) |value| {
+                    try self.const_values.put(var_decl.name, value);
+                    return;
+                }
+            }
+        }
+        const type_size: u32 = @intCast(self.type_reg.sizeOf(type_idx));
+        try self.builder.addGlobal(ir.Global.initWithSize(var_decl.name, type_idx, var_decl.is_const, var_decl.span, type_size));
+    }
+
+    fn lowerStructDecl(self: *Lowerer, struct_decl: ast.StructDecl) !void {
+        const struct_type_idx = self.type_reg.lookupByName(struct_decl.name) orelse TypeRegistry.VOID;
+        try self.builder.addStruct(.{ .name = struct_decl.name, .type_idx = struct_type_idx, .span = struct_decl.span });
+    }
+
+    fn lowerImplBlock(self: *Lowerer, impl_block: ast.ImplBlock) !void {
+        for (impl_block.methods) |method_idx| {
+            const node = self.tree.getNode(method_idx) orelse continue;
+            const decl = node.asDecl() orelse continue;
+            if (decl == .fn_decl) {
+                const synth_name = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ impl_block.type_name, decl.fn_decl.name });
+                try self.lowerMethodWithName(decl.fn_decl, synth_name);
+            }
+        }
+    }
+
+    fn lowerMethodWithName(self: *Lowerer, fn_decl: ast.FnDecl, synth_name: []const u8) !void {
+        const return_type = if (fn_decl.return_type != null_node) self.resolveTypeNode(fn_decl.return_type) else TypeRegistry.VOID;
+        self.builder.startFunc(synth_name, TypeRegistry.VOID, return_type, fn_decl.span);
+        if (self.builder.func()) |fb| {
+            self.current_func = fb;
+            self.defer_stack.clearRetainingCapacity();
+            for (fn_decl.params) |param| {
+                const param_type = self.resolveTypeNode(param.type_expr);
+                _ = try fb.addParam(param.name, param_type, self.type_reg.sizeOf(param_type));
+            }
+            if (fn_decl.body != null_node) {
+                _ = try self.lowerBlockNode(fn_decl.body);
+                if (return_type == TypeRegistry.VOID and fb.needsTerminator()) {
+                    try self.emitDeferredExprs(0);
+                    _ = try fb.emitRet(null, fn_decl.span);
+                }
+            }
+            self.current_func = null;
+        }
+        try self.builder.endFunc();
+    }
+
+    fn lowerTestDecl(self: *Lowerer, test_decl: ast.TestDecl) !void {
+        const test_name = try self.sanitizeTestName(test_decl.name);
+        try self.test_names.append(self.allocator, test_name);
+        try self.test_display_names.append(self.allocator, test_decl.name);
+        self.builder.startFunc(test_name, TypeRegistry.VOID, TypeRegistry.VOID, test_decl.span);
+        if (self.builder.func()) |fb| {
+            self.current_func = fb;
+            self.current_test_name = test_decl.name;
+            self.defer_stack.clearRetainingCapacity();
+            if (test_decl.body != null_node) {
+                _ = try self.lowerBlockNode(test_decl.body);
+                if (fb.needsTerminator()) {
+                    try self.emitDeferredExprs(0);
+                    _ = try fb.emitRet(null, test_decl.span);
+                }
+            }
+            self.current_test_name = null;
+            self.current_func = null;
+        }
+        try self.builder.endFunc();
+    }
+
+    fn sanitizeTestName(self: *Lowerer, name: []const u8) ![]const u8 {
+        var result = try self.allocator.alloc(u8, 5 + name.len);
+        @memcpy(result[0..5], "test_");
+        for (name, 0..) |c, i| {
+            result[5 + i] = if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9')) c else '_';
+        }
+        return result;
+    }
+
+    // ============================================================================
+    // Statement Lowering
+    // ============================================================================
+
+    fn lowerBlockNode(self: *Lowerer, idx: NodeIndex) Error!bool {
+        const node = self.tree.getNode(idx) orelse return false;
+        if (node.asStmt()) |stmt| return try self.lowerStmt(stmt);
+        if (node.asExpr()) |expr| {
+            if (expr == .block_expr) {
+                const fb = self.current_func orelse return false;
+                const scope_depth = fb.markScopeEntry();
+                var terminated = false;
+                for (expr.block_expr.stmts) |stmt_idx| {
+                    const stmt_node = self.tree.getNode(stmt_idx) orelse continue;
+                    if (stmt_node.asStmt()) |s| {
+                        if (try self.lowerStmt(s)) { terminated = true; break; }
+                    }
+                }
+                if (!terminated and expr.block_expr.expr != null_node) _ = try self.lowerExprNode(expr.block_expr.expr);
+                fb.restoreScope(scope_depth);
+                return terminated;
+            }
+            _ = try self.lowerExpr(expr);
+        }
+        return false;
+    }
+
+    fn lowerStmt(self: *Lowerer, stmt: ast.Stmt) Error!bool {
+        switch (stmt) {
+            .return_stmt => |ret| { try self.lowerReturn(ret); return true; },
+            .var_stmt => |v| { try self.lowerLocalVarDecl(v); return false; },
+            .assign_stmt => |a| { try self.lowerAssign(a); return false; },
+            .if_stmt => |i| { try self.lowerIf(i); return false; },
+            .while_stmt => |w| { try self.lowerWhile(w); return false; },
+            .for_stmt => |f| { try self.lowerFor(f); return false; },
+            .block_stmt => |block| {
+                const fb = self.current_func orelse return false;
+                const defer_depth = self.defer_stack.items.len;
+                const scope_depth = fb.markScopeEntry();
+                for (block.stmts) |stmt_idx| {
+                    const stmt_node = self.tree.getNode(stmt_idx) orelse continue;
+                    if (stmt_node.asStmt()) |s| {
+                        if (try self.lowerStmt(s)) { fb.restoreScope(scope_depth); return true; }
+                    }
+                }
+                try self.emitDeferredExprs(defer_depth);
+                fb.restoreScope(scope_depth);
+                return false;
+            },
+            .break_stmt => |bs| { try self.lowerBreak(bs.label); return true; },
+            .continue_stmt => |cs| { try self.lowerContinue(cs.label); return true; },
+            .expr_stmt => |es| { _ = try self.lowerExprNode(es.expr); return false; },
+            .defer_stmt => |ds| { try self.defer_stack.append(self.allocator, ds.expr); return false; },
+            .bad_stmt => return false,
+        }
+    }
+
+    fn lowerReturn(self: *Lowerer, ret: ast.ReturnStmt) !void {
+        const fb = self.current_func orelse return;
+        var value_node: ?ir.NodeIndex = null;
+        if (ret.value != null_node) {
+            const lowered = try self.lowerExprNode(ret.value);
+            if (lowered != ir.null_node) value_node = lowered;
+        }
+        try self.emitDeferredExprs(0);
+        _ = try fb.emitRet(value_node, ret.span);
+    }
+
+    fn emitDeferredExprs(self: *Lowerer, target_depth: usize) Error!void {
+        while (self.defer_stack.items.len > target_depth) {
+            const defer_expr = self.defer_stack.pop() orelse break;
+            _ = try self.lowerExprNode(defer_expr);
+        }
+    }
+
+    fn lowerLocalVarDecl(self: *Lowerer, var_stmt: ast.VarStmt) !void {
+        const fb = self.current_func orelse return;
+        var type_idx = TypeRegistry.VOID;
+        if (var_stmt.type_expr != null_node) {
+            type_idx = self.resolveTypeNode(var_stmt.type_expr);
+        } else if (var_stmt.value != null_node) {
+            type_idx = self.inferExprType(var_stmt.value);
+        }
+        const size = self.type_reg.sizeOf(type_idx);
+        const local_idx = try fb.addLocalWithSize(var_stmt.name, type_idx, !var_stmt.is_const, size);
+
+        if (var_stmt.value != null_node) {
+            const value_node_ast = self.tree.getNode(var_stmt.value);
+            const value_expr = if (value_node_ast) |n| n.asExpr() else null;
+
+            // Check for undefined literal - zero memory
+            const is_undefined = if (value_expr) |e| (e == .literal and e.literal.kind == .undefined_lit) else false;
+            if (is_undefined) {
+                const ptr_type = self.type_reg.makePointer(TypeRegistry.U8) catch TypeRegistry.VOID;
+                const local_addr = try fb.emitAddrLocal(local_idx, ptr_type, var_stmt.span);
+                const size_node = try fb.emitConstInt(@intCast(size), TypeRegistry.I64, var_stmt.span);
+                var args = [_]ir.NodeIndex{ local_addr, size_node };
+                _ = try fb.emitCall("memset_zero", &args, false, TypeRegistry.VOID, var_stmt.span);
+                return;
+            }
+
+            const is_array = self.type_reg.isArray(type_idx);
+            const is_struct_literal = if (value_expr) |e| e == .struct_init else false;
+
+            if (type_idx == TypeRegistry.STRING) {
+                try self.lowerStringInit(local_idx, var_stmt.value, var_stmt.span);
+            } else if (is_array) {
+                try self.lowerArrayInit(local_idx, var_stmt.value, var_stmt.span);
+            } else if (is_struct_literal) {
+                try self.lowerStructInit(local_idx, var_stmt.value, var_stmt.span);
+            } else {
+                const type_info = self.type_reg.get(type_idx);
+                const is_struct_copy = type_info == .struct_type and value_expr != null and
+                    (value_expr.? == .field_access or value_expr.? == .index or value_expr.? == .deref);
+                if (is_struct_copy) {
+                    const src_addr = try self.lowerExprNode(var_stmt.value);
+                    if (src_addr == ir.null_node) return;
+                    const ptr_type = self.type_reg.makePointer(TypeRegistry.U8) catch TypeRegistry.VOID;
+                    const dst_addr = try fb.emitAddrLocal(local_idx, ptr_type, var_stmt.span);
+                    const size_node = try fb.emitConstInt(@intCast(size), TypeRegistry.I64, var_stmt.span);
+                    var args = [_]ir.NodeIndex{ dst_addr, src_addr, size_node };
+                    _ = try fb.emitCall("memcpy", &args, false, TypeRegistry.VOID, var_stmt.span);
+                } else {
+                    const value_node = try self.lowerExprNode(var_stmt.value);
+                    if (value_node == ir.null_node) return;
+                    _ = try fb.emitStoreLocal(local_idx, value_node, var_stmt.span);
+                }
+            }
+        }
+    }
+
+    fn lowerArrayInit(self: *Lowerer, local_idx: ir.LocalIdx, value_idx: NodeIndex, span: Span) !void {
+        const fb = self.current_func orelse return;
+        const value_node = self.tree.getNode(value_idx) orelse return;
+        const value_expr = value_node.asExpr() orelse return;
+
+        switch (value_expr) {
+            .array_literal => |al| {
+                if (al.elements.len == 0) return;
+                const local = fb.locals.items[local_idx];
+                const local_type = self.type_reg.get(local.type_idx);
+                const elem_type = if (local_type == .array) local_type.array.elem else self.inferExprType(al.elements[0]);
+                const elem_size = self.type_reg.sizeOf(elem_type);
+                for (al.elements, 0..) |elem_idx, i| {
+                    const elem_node = try self.lowerExprNode(elem_idx);
+                    const idx_node = try fb.emitConstInt(@intCast(i), TypeRegistry.I64, span);
+                    _ = try fb.emitStoreIndexLocal(local_idx, idx_node, elem_node, elem_size, span);
+                }
+            },
+            .literal => |lit| {
+                if (lit.kind == .undefined_lit) {
+                    const local = fb.locals.items[local_idx];
+                    const type_size = self.type_reg.sizeOf(local.type_idx);
+                    const ptr_type = self.type_reg.makePointer(TypeRegistry.U8) catch TypeRegistry.VOID;
+                    const local_addr = try fb.emitAddrLocal(local_idx, ptr_type, span);
+                    const size_node = try fb.emitConstInt(@intCast(type_size), TypeRegistry.I64, span);
+                    var args = [_]ir.NodeIndex{ local_addr, size_node };
+                    _ = try fb.emitCall("memset_zero", &args, false, TypeRegistry.VOID, span);
+                    return;
+                }
+                const value_node_ir = try self.lowerExprNode(value_idx);
+                _ = try fb.emitStoreLocal(local_idx, value_node_ir, span);
+            },
+            else => {
+                const local = fb.locals.items[local_idx];
+                const arr_type = self.type_reg.get(local.type_idx);
+                if (arr_type == .array) {
+                    const elem_type = arr_type.array.elem;
+                    const elem_size = self.type_reg.sizeOf(elem_type);
+                    const arr_len = arr_type.array.length;
+                    if (value_expr == .ident) {
+                        if (fb.lookupLocal(value_expr.ident.name)) |src_local_idx| {
+                            for (0..arr_len) |i| {
+                                const idx_node = try fb.emitConstInt(@intCast(i), TypeRegistry.I64, span);
+                                const src_elem = try fb.emitIndexLocal(src_local_idx, idx_node, elem_size, elem_type, span);
+                                _ = try fb.emitStoreIndexLocal(local_idx, idx_node, src_elem, elem_size, span);
+                            }
+                            return;
+                        }
+                    }
+                    const src_val = try self.lowerExprNode(value_idx);
+                    for (0..arr_len) |i| {
+                        const idx_node = try fb.emitConstInt(@intCast(i), TypeRegistry.I64, span);
+                        const src_elem = try fb.emitIndexValue(src_val, idx_node, elem_size, elem_type, span);
+                        _ = try fb.emitStoreIndexLocal(local_idx, idx_node, src_elem, elem_size, span);
+                    }
+                } else {
+                    const value_node_ir = try self.lowerExprNode(value_idx);
+                    _ = try fb.emitStoreLocal(local_idx, value_node_ir, span);
+                }
+            },
+        }
+    }
+
+    fn lowerStructInit(self: *Lowerer, local_idx: ir.LocalIdx, value_idx: NodeIndex, span: Span) !void {
+        const fb = self.current_func orelse return;
+        const value_node = self.tree.getNode(value_idx) orelse return;
+        const value_expr = value_node.asExpr() orelse return;
+        if (value_expr != .struct_init) return;
+        const struct_init = value_expr.struct_init;
+        const struct_type_idx = self.type_reg.lookupByName(struct_init.type_name) orelse return;
+        const type_info = self.type_reg.get(struct_type_idx);
+        const struct_type = if (type_info == .struct_type) type_info.struct_type else return;
+
+        for (struct_init.fields) |field_init| {
+            for (struct_type.fields, 0..) |struct_field, i| {
+                if (std.mem.eql(u8, struct_field.name, field_init.name)) {
+                    const field_idx: u32 = @intCast(i);
+                    const field_offset: i64 = @intCast(struct_field.offset);
+                    const value_node_ir = try self.lowerExprNode(field_init.value);
+                    const field_type = self.type_reg.get(struct_field.type_idx);
+                    const is_string_field = struct_field.type_idx == TypeRegistry.STRING or field_type == .slice;
+                    if (is_string_field) {
+                        const ptr_type = try self.type_reg.makePointer(TypeRegistry.U8);
+                        const ptr_ir = try fb.emitSlicePtr(value_node_ir, ptr_type, span);
+                        const len_ir = try fb.emitSliceLen(value_node_ir, span);
+                        _ = try fb.emitStoreLocalField(local_idx, field_idx, field_offset, ptr_ir, span);
+                        _ = try fb.emitStoreLocalField(local_idx, field_idx + 1, field_offset + 8, len_ir, span);
+                    } else {
+                        _ = try fb.emitStoreLocalField(local_idx, field_idx, field_offset, value_node_ir, span);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    fn lowerStringInit(self: *Lowerer, local_idx: ir.LocalIdx, value_idx: NodeIndex, span: Span) !void {
+        const fb = self.current_func orelse return;
+        const str_node = try self.lowerExprNode(value_idx);
+        if (str_node == ir.null_node) return;
+        const ptr_type = self.type_reg.makePointer(TypeRegistry.U8) catch TypeRegistry.VOID;
+        const ptr_val = try fb.emitSlicePtr(str_node, ptr_type, span);
+        const len_val = try fb.emitSliceLen(str_node, span);
+        _ = try fb.emitStoreLocalField(local_idx, 0, 0, ptr_val, span);
+        _ = try fb.emitStoreLocalField(local_idx, 1, 8, len_val, span);
+    }
+
+    fn lowerAssign(self: *Lowerer, assign: ast.AssignStmt) !void {
+        const fb = self.current_func orelse return;
+        const target_node = self.tree.getNode(assign.target) orelse return;
+        const target_expr = target_node.asExpr() orelse return;
+
+        // Handle compound assignment (+=, -=, etc.)
+        const value_node = if (assign.op != .assign) blk: {
+            const target_val = try self.lowerExprNode(assign.target);
+            const rhs_val = try self.lowerExprNode(assign.value);
+            const result_type = self.inferExprType(assign.target);
+            break :blk try fb.emitBinary(tokenToBinaryOp(assign.op), target_val, rhs_val, result_type, assign.span);
+        } else try self.lowerExprNode(assign.value);
+
+        switch (target_expr) {
+            .ident => |id| {
+                if (fb.lookupLocal(id.name)) |local_idx| {
+                    _ = try fb.emitStoreLocal(local_idx, value_node, assign.span);
+                } else if (self.builder.lookupGlobal(id.name)) |g| {
+                    _ = try fb.emitGlobalStore(g.idx, id.name, value_node, assign.span);
+                }
+            },
+            .field_access => |fa| try self.lowerFieldAssign(fa, value_node, assign.span),
+            .index => |idx| try self.lowerIndexAssign(idx, value_node, assign.span),
+            .deref => |d| {
+                const ptr_node = try self.lowerExprNode(d.operand);
+                _ = try fb.emitPtrStoreValue(ptr_node, value_node, assign.span);
+            },
+            else => {},
+        }
+    }
+
+    fn lowerFieldAssign(self: *Lowerer, fa: ast.FieldAccess, value_node: ir.NodeIndex, span: Span) !void {
+        const fb = self.current_func orelse return;
+        const base_type_idx = self.inferExprType(fa.base);
+        const base_type = self.type_reg.get(base_type_idx);
+
+        const struct_type = switch (base_type) {
+            .struct_type => |st| st,
+            .pointer => |ptr| blk: {
+                const elem_type = self.type_reg.get(ptr.elem);
+                if (elem_type == .struct_type) break :blk elem_type.struct_type;
+                return;
+            },
+            else => return,
+        };
+
+        for (struct_type.fields, 0..) |field, i| {
+            if (std.mem.eql(u8, field.name, fa.field)) {
+                const field_idx: u32 = @intCast(i);
+                const field_offset: i64 = @intCast(field.offset);
+                const base_node = self.tree.getNode(fa.base) orelse return;
+                const base_expr = base_node.asExpr() orelse return;
+
+                if (base_type == .pointer) {
+                    const ptr_val = try self.lowerExprNode(fa.base);
+                    _ = try fb.emitStoreFieldValue(ptr_val, field_idx, field_offset, value_node, span);
+                } else if (base_expr == .ident) {
+                    if (fb.lookupLocal(base_expr.ident.name)) |local_idx| {
+                        _ = try fb.emitStoreLocalField(local_idx, field_idx, field_offset, value_node, span);
+                    } else if (self.builder.lookupGlobal(base_expr.ident.name)) |g| {
+                        const ptr_type = self.type_reg.makePointer(base_type_idx) catch TypeRegistry.VOID;
+                        const global_addr = try fb.emitAddrGlobal(g.idx, base_expr.ident.name, ptr_type, span);
+                        _ = try fb.emitStoreFieldValue(global_addr, field_idx, field_offset, value_node, span);
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    fn lowerIndexAssign(self: *Lowerer, idx: ast.Index, value_node: ir.NodeIndex, span: Span) !void {
+        const fb = self.current_func orelse return;
+        const base_type_idx = self.inferExprType(idx.base);
+        const base_type = self.type_reg.get(base_type_idx);
+        const elem_type: TypeIndex = switch (base_type) {
+            .array => |a| a.elem,
+            .slice => |s| s.elem,
+            else => return,
+        };
+        const elem_size = self.type_reg.sizeOf(elem_type);
+        const index_node = try self.lowerExprNode(idx.idx);
+        const base_node = self.tree.getNode(idx.base) orelse return;
+        const base_expr = base_node.asExpr() orelse return;
+
+        if (base_expr == .ident) {
+            if (fb.lookupLocal(base_expr.ident.name)) |local_idx| {
+                const local = fb.locals.items[local_idx];
+                if (self.type_reg.get(local.type_idx) == .slice) {
+                    const slice_val = try fb.emitLoadLocal(local_idx, local.type_idx, span);
+                    const ptr_type = self.type_reg.makePointer(elem_type) catch TypeRegistry.I64;
+                    const ptr_val = try fb.emitSlicePtr(slice_val, ptr_type, span);
+                    _ = try fb.emitStoreIndexValue(ptr_val, index_node, value_node, elem_size, span);
+                    return;
+                }
+                if (local.is_param and self.type_reg.isArray(local.type_idx)) {
+                    const ptr_val = try fb.emitLoadLocal(local_idx, local.type_idx, span);
+                    _ = try fb.emitStoreIndexValue(ptr_val, index_node, value_node, elem_size, span);
+                    return;
+                }
+                _ = try fb.emitStoreIndexLocal(local_idx, index_node, value_node, elem_size, span);
+                return;
+            }
+            if (self.builder.lookupGlobal(base_expr.ident.name)) |g| {
+                const ptr_type = self.type_reg.makePointer(g.global.type_idx) catch TypeRegistry.VOID;
+                const global_addr = try fb.emitAddrGlobal(g.idx, base_expr.ident.name, ptr_type, span);
+                _ = try fb.emitStoreIndexValue(global_addr, index_node, value_node, elem_size, span);
+                return;
+            }
+        }
+
+        switch (base_type) {
+            .slice => {
+                const base_val = try self.lowerExprNode(idx.base);
+                const ptr_type = self.type_reg.makePointer(elem_type) catch TypeRegistry.I64;
+                const ptr_val = try fb.emitSlicePtr(base_val, ptr_type, span);
+                _ = try fb.emitStoreIndexValue(ptr_val, index_node, value_node, elem_size, span);
+            },
+            .pointer => {
+                const base_val = try self.lowerExprNode(idx.base);
+                _ = try fb.emitStoreIndexValue(base_val, index_node, value_node, elem_size, span);
+            },
+            .array => {
+                if (base_expr == .field_access) {
+                    const array_addr = try self.lowerExprNode(idx.base);
+                    _ = try fb.emitStoreIndexValue(array_addr, index_node, value_node, elem_size, span);
+                }
+            },
+            else => {},
+        }
+    }
+
+    fn lowerIf(self: *Lowerer, if_stmt: ast.IfStmt) !void {
+        const fb = self.current_func orelse return;
+        const then_block = try fb.newBlock("then");
+        const else_block = if (if_stmt.else_branch != null_node) try fb.newBlock("else") else null;
+        const merge_block = try fb.newBlock("if.end");
+        const cond_node = try self.lowerExprNode(if_stmt.condition);
+        if (cond_node == ir.null_node) return;
+        _ = try fb.emitBranch(cond_node, then_block, else_block orelse merge_block, if_stmt.span);
+        fb.setBlock(then_block);
+        if (!try self.lowerBlockNode(if_stmt.then_branch)) _ = try fb.emitJump(merge_block, if_stmt.span);
+        if (else_block) |eb| {
+            fb.setBlock(eb);
+            if (!try self.lowerBlockNode(if_stmt.else_branch)) _ = try fb.emitJump(merge_block, if_stmt.span);
+        }
+        fb.setBlock(merge_block);
+    }
+
+    fn lowerWhile(self: *Lowerer, while_stmt: ast.WhileStmt) !void {
+        const fb = self.current_func orelse return;
+        const cond_block = try fb.newBlock("while.cond");
+        const body_block = try fb.newBlock("while.body");
+        const exit_block = try fb.newBlock("while.end");
+        _ = try fb.emitJump(cond_block, while_stmt.span);
+        fb.setBlock(cond_block);
+        const cond_node = try self.lowerExprNode(while_stmt.condition);
+        if (cond_node == ir.null_node) return;
+        _ = try fb.emitBranch(cond_node, body_block, exit_block, while_stmt.span);
+        try self.loop_stack.append(self.allocator, .{ .cond_block = cond_block, .exit_block = exit_block, .defer_depth = self.defer_stack.items.len, .label = while_stmt.label });
+        fb.setBlock(body_block);
+        if (!try self.lowerBlockNode(while_stmt.body)) _ = try fb.emitJump(cond_block, while_stmt.span);
+        _ = self.loop_stack.pop();
+        fb.setBlock(exit_block);
+    }
+
+    fn lowerFor(self: *Lowerer, for_stmt: ast.ForStmt) !void {
+        const fb = self.current_func orelse return;
+        const iter_type = self.inferExprType(for_stmt.iterable);
+        const iter_info = self.type_reg.get(iter_type);
+        const elem_type: TypeIndex = switch (iter_info) {
+            .array => |a| a.elem,
+            .slice => |s| s.elem,
+            else => return,
+        };
+        const elem_size = self.type_reg.sizeOf(elem_type);
+
+        const idx_name = try std.fmt.allocPrint(self.allocator, "__for_idx_{d}", .{self.temp_counter});
+        self.temp_counter += 1;
+        const len_name = try std.fmt.allocPrint(self.allocator, "__for_len_{d}", .{self.temp_counter});
+        self.temp_counter += 1;
+
+        const idx_local = try fb.addLocalWithSize(idx_name, TypeRegistry.I64, true, 8);
+        const zero = try fb.emitConstInt(0, TypeRegistry.I64, for_stmt.span);
+        _ = try fb.emitStoreLocal(idx_local, zero, for_stmt.span);
+
+        const len_local = try fb.addLocalWithSize(len_name, TypeRegistry.I64, false, 8);
+        switch (iter_info) {
+            .array => |a| {
+                const len_val = try fb.emitConstInt(@intCast(a.length), TypeRegistry.I64, for_stmt.span);
+                _ = try fb.emitStoreLocal(len_local, len_val, for_stmt.span);
+            },
+            .slice => {
+                const iter_node = self.tree.getNode(for_stmt.iterable) orelse return;
+                const iter_expr = iter_node.asExpr() orelse return;
+                if (iter_expr == .ident) {
+                    if (fb.lookupLocal(iter_expr.ident.name)) |slice_local| {
+                        const slice_val = try fb.emitLoadLocal(slice_local, iter_type, for_stmt.span);
+                        const len_val = try fb.emitSliceLen(slice_val, for_stmt.span);
+                        _ = try fb.emitStoreLocal(len_local, len_val, for_stmt.span);
+                    }
+                }
+            },
+            else => return,
+        }
+
+        const cond_block = try fb.newBlock("for.cond");
+        const body_block = try fb.newBlock("for.body");
+        const incr_block = try fb.newBlock("for.incr");
+        const exit_block = try fb.newBlock("for.end");
+
+        _ = try fb.emitJump(cond_block, for_stmt.span);
+        fb.setBlock(cond_block);
+        const idx_val = try fb.emitLoadLocal(idx_local, TypeRegistry.I64, for_stmt.span);
+        const len_val_cond = try fb.emitLoadLocal(len_local, TypeRegistry.I64, for_stmt.span);
+        const cond = try fb.emitBinary(.lt, idx_val, len_val_cond, TypeRegistry.BOOL, for_stmt.span);
+        _ = try fb.emitBranch(cond, body_block, exit_block, for_stmt.span);
+
+        try self.loop_stack.append(self.allocator, .{ .cond_block = incr_block, .exit_block = exit_block, .defer_depth = self.defer_stack.items.len });
+
+        fb.setBlock(body_block);
+        const binding_local = try fb.addLocalWithSize(for_stmt.binding, elem_type, false, elem_size);
+        const cur_idx = try fb.emitLoadLocal(idx_local, TypeRegistry.I64, for_stmt.span);
+
+        const elem_type_info = self.type_reg.get(elem_type);
+        const is_struct_elem = elem_type_info == .struct_type;
+
+        switch (iter_info) {
+            .array => {
+                const iter_node = self.tree.getNode(for_stmt.iterable) orelse return;
+                const iter_expr = iter_node.asExpr() orelse return;
+                if (iter_expr == .ident) {
+                    if (fb.lookupLocal(iter_expr.ident.name)) |arr_local| {
+                        if (is_struct_elem) {
+                            const u8_ptr_type = self.type_reg.makePointer(TypeRegistry.U8) catch TypeRegistry.VOID;
+                            const arr_base = try fb.emitAddrLocal(arr_local, u8_ptr_type, for_stmt.span);
+                            const src_addr = try fb.emitAddrIndex(arr_base, cur_idx, elem_size, u8_ptr_type, for_stmt.span);
+                            const dst_addr = try fb.emitAddrLocal(binding_local, u8_ptr_type, for_stmt.span);
+                            const size_node = try fb.emitConstInt(@intCast(elem_size), TypeRegistry.I64, for_stmt.span);
+                            var args = [_]ir.NodeIndex{ dst_addr, src_addr, size_node };
+                            _ = try fb.emitCall("memcpy", &args, false, TypeRegistry.VOID, for_stmt.span);
+                        } else {
+                            const elem_val = try fb.emitIndexLocal(arr_local, cur_idx, elem_size, elem_type, for_stmt.span);
+                            _ = try fb.emitStoreLocal(binding_local, elem_val, for_stmt.span);
+                        }
+                    }
+                }
+            },
+            .slice => {
+                const iter_node = self.tree.getNode(for_stmt.iterable) orelse return;
+                const iter_expr = iter_node.asExpr() orelse return;
+                if (iter_expr == .ident) {
+                    if (fb.lookupLocal(iter_expr.ident.name)) |slice_local| {
+                        const slice_val = try fb.emitLoadLocal(slice_local, iter_type, for_stmt.span);
+                        const ptr_type = self.type_reg.makePointer(elem_type) catch TypeRegistry.I64;
+                        const ptr_val = try fb.emitSlicePtr(slice_val, ptr_type, for_stmt.span);
+                        if (is_struct_elem) {
+                            const u8_ptr_type = self.type_reg.makePointer(TypeRegistry.U8) catch TypeRegistry.VOID;
+                            const src_addr = try fb.emitAddrIndex(ptr_val, cur_idx, elem_size, u8_ptr_type, for_stmt.span);
+                            const dst_addr = try fb.emitAddrLocal(binding_local, u8_ptr_type, for_stmt.span);
+                            const size_node = try fb.emitConstInt(@intCast(elem_size), TypeRegistry.I64, for_stmt.span);
+                            var args = [_]ir.NodeIndex{ dst_addr, src_addr, size_node };
+                            _ = try fb.emitCall("memcpy", &args, false, TypeRegistry.VOID, for_stmt.span);
+                        } else {
+                            const elem_val = try fb.emitIndexValue(ptr_val, cur_idx, elem_size, elem_type, for_stmt.span);
+                            _ = try fb.emitStoreLocal(binding_local, elem_val, for_stmt.span);
+                        }
+                    }
+                }
+            },
+            else => {},
+        }
+
+        if (!try self.lowerBlockNode(for_stmt.body)) _ = try fb.emitJump(incr_block, for_stmt.span);
+
+        fb.setBlock(incr_block);
+        const idx_before = try fb.emitLoadLocal(idx_local, TypeRegistry.I64, for_stmt.span);
+        const one = try fb.emitConstInt(1, TypeRegistry.I64, for_stmt.span);
+        const idx_after = try fb.emitBinary(.add, idx_before, one, TypeRegistry.I64, for_stmt.span);
+        _ = try fb.emitStoreLocal(idx_local, idx_after, for_stmt.span);
+        _ = try fb.emitJump(cond_block, for_stmt.span);
+
+        _ = self.loop_stack.pop();
+        fb.setBlock(exit_block);
+    }
+
+    fn lowerBreak(self: *Lowerer, target_label: ?[]const u8) !void {
+        const fb = self.current_func orelse return;
+        if (self.loop_stack.items.len == 0) return;
+        const ctx = if (target_label) |label| self.findLabeledLoop(label) orelse self.loop_stack.items[self.loop_stack.items.len - 1] else self.loop_stack.items[self.loop_stack.items.len - 1];
+        try self.emitDeferredExprs(ctx.defer_depth);
+        _ = try fb.emitJump(ctx.exit_block, Span.fromPos(Pos.zero));
+    }
+
+    fn lowerContinue(self: *Lowerer, target_label: ?[]const u8) !void {
+        const fb = self.current_func orelse return;
+        if (self.loop_stack.items.len == 0) return;
+        const ctx = if (target_label) |label| self.findLabeledLoop(label) orelse self.loop_stack.items[self.loop_stack.items.len - 1] else self.loop_stack.items[self.loop_stack.items.len - 1];
+        try self.emitDeferredExprs(ctx.defer_depth);
+        _ = try fb.emitJump(ctx.cond_block, Span.fromPos(Pos.zero));
+    }
+
+    fn findLabeledLoop(self: *Lowerer, target_label: []const u8) ?LoopContext {
+        var i: usize = self.loop_stack.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (self.loop_stack.items[i].label) |label| {
+                if (std.mem.eql(u8, label, target_label)) return self.loop_stack.items[i];
+            }
+        }
+        return null;
+    }
+
+    // ============================================================================
+    // Expression Lowering
+    // ============================================================================
+
+    fn lowerExprNode(self: *Lowerer, idx: NodeIndex) Error!ir.NodeIndex {
+        const node = self.tree.getNode(idx) orelse return ir.null_node;
+        const expr = node.asExpr() orelse return ir.null_node;
+        return try self.lowerExpr(expr);
+    }
+
+    fn lowerExpr(self: *Lowerer, expr: ast.Expr) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+        switch (expr) {
+            .literal => |lit| return try self.lowerLiteral(lit),
+            .ident => |id| return try self.lowerIdent(id),
+            .binary => |bin| return try self.lowerBinary(bin),
+            .unary => |un| return try self.lowerUnary(un),
+            .call => |call| return try self.lowerCall(call),
+            .paren => |p| return try self.lowerExprNode(p.inner),
+            .if_expr => |ie| return try self.lowerIfExpr(ie),
+            .addr_of => |addr| return try self.lowerAddrOf(addr),
+            .deref => |d| {
+                const ptr_node = try self.lowerExprNode(d.operand);
+                const ptr_type = self.inferExprType(d.operand);
+                const elem_type = self.type_reg.pointerElem(ptr_type);
+                return try fb.emitPtrLoadValue(ptr_node, if (elem_type == types.invalid_type) TypeRegistry.VOID else elem_type, d.span);
+            },
+            .field_access => |fa| return try self.lowerFieldAccess(fa),
+            .index => |idx| return try self.lowerIndex(idx),
+            .array_literal => |al| return try self.lowerArrayLiteral(al),
+            .slice_expr => |se| return try self.lowerSliceExpr(se),
+            .builtin_call => |bc| return try self.lowerBuiltinCall(bc),
+            .switch_expr => |se| return try self.lowerSwitchExpr(se),
+            .struct_init => |si| return try self.lowerStructInitExpr(si),
+            .block_expr => |block| {
+                const defer_depth = self.defer_stack.items.len;
+                const scope_depth = fb.markScopeEntry();
+                for (block.stmts) |stmt_idx| {
+                    const stmt_node = self.tree.getNode(stmt_idx) orelse continue;
+                    if (stmt_node.asStmt()) |s| if (try self.lowerStmt(s)) break;
+                }
+                try self.emitDeferredExprs(defer_depth);
+                var result: ir.NodeIndex = ir.null_node;
+                if (block.expr != null_node) result = try self.lowerExprNode(block.expr);
+                fb.restoreScope(scope_depth);
+                return result;
+            },
+            else => return ir.null_node,
+        }
+    }
+
+    fn lowerLiteral(self: *Lowerer, lit: ast.Literal) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+        switch (lit.kind) {
+            .int => return try fb.emitConstInt(std.fmt.parseInt(i64, lit.value, 0) catch 0, TypeRegistry.I64, lit.span),
+            .float => return try fb.emitConstFloat(std.fmt.parseFloat(f64, lit.value) catch 0.0, TypeRegistry.F64, lit.span),
+            .true_lit => return try fb.emitConstBool(true, lit.span),
+            .false_lit => return try fb.emitConstBool(false, lit.span),
+            .null_lit, .undefined_lit => return try fb.emitConstNull(TypeRegistry.UNTYPED_NULL, lit.span),
+            .string => {
+                var buf: [4096]u8 = undefined;
+                const unescaped = parseStringLiteral(lit.value, &buf);
+                const copied = try self.allocator.dupe(u8, unescaped);
+                const str_idx = try fb.addStringLiteral(copied);
+                return try fb.emitConstSlice(str_idx, lit.span);
+            },
+            .char => return try fb.emitConstInt(@intCast(parseCharLiteral(lit.value)), TypeRegistry.U8, lit.span),
+        }
+    }
+
+    fn lowerIdent(self: *Lowerer, ident: ast.Ident) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+        if (self.const_values.get(ident.name)) |value| return try fb.emitConstInt(value, TypeRegistry.I64, ident.span);
+        if (fb.lookupLocal(ident.name)) |local_idx| {
+            const local_type = fb.locals.items[local_idx].type_idx;
+            if (self.type_reg.isArray(local_type)) return try fb.emitAddrLocal(local_idx, local_type, ident.span);
+            return try fb.emitLoadLocal(local_idx, local_type, ident.span);
+        }
+        if (self.chk.scope.lookup(ident.name)) |sym| {
+            if (sym.kind == .function) return try fb.emitFuncAddr(ident.name, sym.type_idx, ident.span);
+            if (sym.kind == .constant) if (sym.const_value) |value| return try fb.emitConstInt(value, TypeRegistry.I64, ident.span);
+        }
+        if (self.builder.lookupGlobal(ident.name)) |g| return try fb.emitGlobalRef(g.idx, ident.name, g.global.type_idx, ident.span);
+        return ir.null_node;
+    }
+
+    fn lowerBinary(self: *Lowerer, bin: ast.Binary) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+        const left = try self.lowerExprNode(bin.left);
+        if (left == ir.null_node) return ir.null_node;
+        const right = try self.lowerExprNode(bin.right);
+        if (right == ir.null_node) return ir.null_node;
+        const result_type = self.inferBinaryType(bin.op, bin.left, bin.right);
+
+        if (result_type == TypeRegistry.STRING and bin.op == .add) {
+            return try fb.emit(ir.Node.init(.{ .str_concat = .{ .left = left, .right = right } }, result_type, bin.span));
+        }
+        if (bin.op == .coalesce) {
+            const left_type_idx = self.inferExprType(bin.left);
+            const left_type = self.type_reg.get(left_type_idx);
+            if (left_type == .optional) {
+                const null_val = try fb.emit(ir.Node.init(.const_null, TypeRegistry.UNTYPED_NULL, bin.span));
+                const condition = try fb.emitBinary(.ne, left, null_val, TypeRegistry.BOOL, bin.span);
+                const unwrapped = try fb.emitUnary(.optional_unwrap, left, left_type.optional.elem, bin.span);
+                return try fb.emitSelect(condition, unwrapped, right, result_type, bin.span);
+            }
+        }
+        return try fb.emitBinary(tokenToBinaryOp(bin.op), left, right, result_type, bin.span);
+    }
+
+    fn lowerUnary(self: *Lowerer, un: ast.Unary) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+        const operand = try self.lowerExprNode(un.operand);
+        if (operand == ir.null_node) return ir.null_node;
+        const operand_type_idx = self.inferExprType(un.operand);
+        const result_type = if (un.op == .question) blk: {
+            const operand_type = self.type_reg.get(operand_type_idx);
+            break :blk if (operand_type == .optional) operand_type.optional.elem else operand_type_idx;
+        } else operand_type_idx;
+        return try fb.emitUnary(tokenToUnaryOp(un.op), operand, result_type, un.span);
+    }
+
+    fn lowerAddrOf(self: *Lowerer, addr: ast.AddrOf) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+        const operand_node = self.tree.getNode(addr.operand) orelse return ir.null_node;
+        const operand_expr = operand_node.asExpr() orelse return ir.null_node;
+
+        if (operand_expr == .index) {
+            const idx = operand_expr.index;
+            const base_type_idx = self.inferExprType(idx.base);
+            const base_type = self.type_reg.get(base_type_idx);
+            const elem_type: TypeIndex = switch (base_type) {
+                .array => |a| a.elem,
+                .slice => |s| s.elem,
+                else => return ir.null_node,
+            };
+            const elem_size = self.type_reg.sizeOf(elem_type);
+            const ptr_type = self.type_reg.makePointer(elem_type) catch TypeRegistry.VOID;
+            const index_node = try self.lowerExprNode(idx.idx);
+            const base_node = self.tree.getNode(idx.base) orelse return ir.null_node;
+            const base_expr = base_node.asExpr() orelse return ir.null_node;
+            if (base_expr == .ident) {
+                if (fb.lookupLocal(base_expr.ident.name)) |local_idx| {
+                    const local_type = fb.locals.items[local_idx].type_idx;
+                    const base_ptr_type = self.type_reg.makePointer(local_type) catch TypeRegistry.VOID;
+                    const base_addr = try fb.emitAddrLocal(local_idx, base_ptr_type, addr.span);
+                    return try fb.emitAddrIndex(base_addr, index_node, elem_size, ptr_type, addr.span);
+                }
+                if (self.builder.lookupGlobal(base_expr.ident.name)) |g| {
+                    const base_ptr_type = self.type_reg.makePointer(g.global.type_idx) catch TypeRegistry.VOID;
+                    const base_addr = try fb.emitAddrGlobal(g.idx, base_expr.ident.name, base_ptr_type, addr.span);
+                    return try fb.emitAddrIndex(base_addr, index_node, elem_size, ptr_type, addr.span);
+                }
+            }
+            const base_val = try self.lowerExprNode(idx.base);
+            if (base_type == .slice) {
+                const slice_ptr_type = self.type_reg.makePointer(elem_type) catch TypeRegistry.VOID;
+                const ptr_val = try fb.emitSlicePtr(base_val, slice_ptr_type, addr.span);
+                return try fb.emitAddrIndex(ptr_val, index_node, elem_size, ptr_type, addr.span);
+            }
+            return try fb.emitAddrIndex(base_val, index_node, elem_size, ptr_type, addr.span);
+        }
+
+        if (operand_expr == .ident) {
+            if (fb.lookupLocal(operand_expr.ident.name)) |local_idx| {
+                const local_type = fb.locals.items[local_idx].type_idx;
+                return try fb.emitAddrLocal(local_idx, self.type_reg.makePointer(local_type) catch TypeRegistry.VOID, addr.span);
+            }
+            if (self.builder.lookupGlobal(operand_expr.ident.name)) |g| {
+                return try fb.emitAddrGlobal(g.idx, operand_expr.ident.name, self.type_reg.makePointer(g.global.type_idx) catch TypeRegistry.VOID, addr.span);
+            }
+        }
+
+        if (operand_expr == .field_access) {
+            const fa = operand_expr.field_access;
+            const base_node = self.tree.getNode(fa.base) orelse return ir.null_node;
+            const base_expr = base_node.asExpr() orelse return ir.null_node;
+            if (base_expr == .ident) {
+                const base_type_idx = self.inferExprType(fa.base);
+                const base_type = self.type_reg.get(base_type_idx);
+                if (base_type == .struct_type) {
+                    for (base_type.struct_type.fields) |field| {
+                        if (std.mem.eql(u8, field.name, fa.field)) {
+                            const field_ptr_type = self.type_reg.makePointer(field.type_idx) catch TypeRegistry.VOID;
+                            if (fb.lookupLocal(base_expr.ident.name)) |local_idx| {
+                                const struct_ptr_type = self.type_reg.makePointer(base_type_idx) catch TypeRegistry.VOID;
+                                const local_addr = try fb.emitAddrLocal(local_idx, struct_ptr_type, addr.span);
+                                return try fb.emitAddrOffset(local_addr, @intCast(field.offset), field_ptr_type, addr.span);
+                            }
+                            if (self.builder.lookupGlobal(base_expr.ident.name)) |g| {
+                                const struct_ptr_type = self.type_reg.makePointer(base_type_idx) catch TypeRegistry.VOID;
+                                const global_addr = try fb.emitAddrGlobal(g.idx, base_expr.ident.name, struct_ptr_type, addr.span);
+                                return try fb.emitAddrOffset(global_addr, @intCast(field.offset), field_ptr_type, addr.span);
+                            }
+                        }
+                    }
+                }
+                if (base_type == .pointer) {
+                    const elem_type = self.type_reg.get(base_type.pointer.elem);
+                    if (elem_type == .struct_type) {
+                        for (elem_type.struct_type.fields) |field| {
+                            if (std.mem.eql(u8, field.name, fa.field)) {
+                                if (fb.lookupLocal(base_expr.ident.name)) |local_idx| {
+                                    const ptr_val = try fb.emitLoadLocal(local_idx, base_type_idx, addr.span);
+                                    const field_ptr_type = self.type_reg.makePointer(field.type_idx) catch TypeRegistry.VOID;
+                                    return try fb.emitAddrOffset(ptr_val, @intCast(field.offset), field_ptr_type, addr.span);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return ir.null_node;
+    }
+
+    fn lowerFieldAccess(self: *Lowerer, fa: ast.FieldAccess) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+        const base_type_idx = self.inferExprType(fa.base);
+        const base_type = self.type_reg.get(base_type_idx);
+
+        // Enum variant
+        if (base_type == .enum_type) {
+            for (base_type.enum_type.variants) |variant| {
+                if (std.mem.eql(u8, variant.name, fa.field)) return try fb.emitConstInt(variant.value, base_type_idx, fa.span);
+            }
+            return ir.null_node;
+        }
+
+        // Slice ptr/len
+        if (base_type == .slice) {
+            const base_val = try self.lowerExprNode(fa.base);
+            if (std.mem.eql(u8, fa.field, "ptr")) return try fb.emitSlicePtr(base_val, try self.type_reg.add(.{ .pointer = .{ .elem = base_type.slice.elem } }), fa.span);
+            if (std.mem.eql(u8, fa.field, "len")) return try fb.emitSliceLen(base_val, fa.span);
+            return ir.null_node;
+        }
+
+        // String ptr/len
+        if (base_type_idx == TypeRegistry.STRING) {
+            const base_val = try self.lowerExprNode(fa.base);
+            if (std.mem.eql(u8, fa.field, "ptr")) return try fb.emitSlicePtr(base_val, try self.type_reg.add(.{ .pointer = .{ .elem = TypeRegistry.U8 } }), fa.span);
+            if (std.mem.eql(u8, fa.field, "len")) return try fb.emitSliceLen(base_val, fa.span);
+            return ir.null_node;
+        }
+
+        // Struct field
+        const struct_type = switch (base_type) {
+            .struct_type => |st| st,
+            .pointer => |ptr| blk: {
+                const elem_type = self.type_reg.get(ptr.elem);
+                if (elem_type == .struct_type) break :blk elem_type.struct_type;
+                return ir.null_node;
+            },
+            else => return ir.null_node,
+        };
+
+        var field_idx: u32 = 0;
+        var field_offset: i64 = 0;
+        var field_type: TypeIndex = TypeRegistry.VOID;
+        for (struct_type.fields, 0..) |field, i| {
+            if (std.mem.eql(u8, field.name, fa.field)) {
+                field_idx = @intCast(i);
+                field_offset = @intCast(field.offset);
+                field_type = field.type_idx;
+                break;
+            }
+        }
+
+        const base_is_pointer = base_type == .pointer;
+        const base_node = self.tree.getNode(fa.base) orelse return ir.null_node;
+        const base_expr = base_node.asExpr() orelse return ir.null_node;
+
+        if (base_expr == .ident and !base_is_pointer) {
+            if (fb.lookupLocal(base_expr.ident.name)) |local_idx| return try fb.emitFieldLocal(local_idx, field_idx, field_offset, field_type, fa.span);
+            if (self.builder.lookupGlobal(base_expr.ident.name)) |g| {
+                const ptr_type = self.type_reg.makePointer(g.global.type_idx) catch TypeRegistry.VOID;
+                const global_addr = try fb.emitAddrGlobal(g.idx, base_expr.ident.name, ptr_type, fa.span);
+                return try fb.emitFieldValue(global_addr, field_idx, field_offset, field_type, fa.span);
+            }
+        }
+
+        if (base_expr == .deref) {
+            const ptr_val = try self.lowerExprNode(base_expr.deref.operand);
+            return try fb.emitFieldValue(ptr_val, field_idx, field_offset, field_type, fa.span);
+        }
+
+        if (base_expr == .index) {
+            const idx = base_expr.index;
+            const idx_base_type_idx = self.inferExprType(idx.base);
+            const idx_base_type = self.type_reg.get(idx_base_type_idx);
+            const elem_type: TypeIndex = switch (idx_base_type) {
+                .array => |a| a.elem,
+                else => {
+                    const base_val = try self.lowerExprNode(fa.base);
+                    return try fb.emitFieldValue(base_val, field_idx, field_offset, field_type, fa.span);
+                },
+            };
+            const elem_size = self.type_reg.sizeOf(elem_type);
+            const index_node = try self.lowerExprNode(idx.idx);
+            const idx_base_node = self.tree.getNode(idx.base) orelse return ir.null_node;
+            const idx_base_expr = idx_base_node.asExpr() orelse return ir.null_node;
+            if (idx_base_expr == .ident) {
+                if (fb.lookupLocal(idx_base_expr.ident.name)) |local_idx| {
+                    const array_ptr_type = self.type_reg.makePointer(fb.locals.items[local_idx].type_idx) catch TypeRegistry.VOID;
+                    const array_addr = try fb.emitAddrLocal(local_idx, array_ptr_type, fa.span);
+                    const elem_ptr_type = self.type_reg.makePointer(elem_type) catch TypeRegistry.VOID;
+                    const elem_addr = try fb.emitAddrIndex(array_addr, index_node, elem_size, elem_ptr_type, fa.span);
+                    return try fb.emitFieldValue(elem_addr, field_idx, field_offset, field_type, fa.span);
+                }
+                if (self.builder.lookupGlobal(idx_base_expr.ident.name)) |g| {
+                    const ptr_type = self.type_reg.makePointer(g.global.type_idx) catch TypeRegistry.VOID;
+                    const global_addr = try fb.emitAddrGlobal(g.idx, idx_base_expr.ident.name, ptr_type, fa.span);
+                    const elem_ptr_type = self.type_reg.makePointer(elem_type) catch TypeRegistry.VOID;
+                    const elem_addr = try fb.emitAddrIndex(global_addr, index_node, elem_size, elem_ptr_type, fa.span);
+                    return try fb.emitFieldValue(elem_addr, field_idx, field_offset, field_type, fa.span);
+                }
+            }
+            const base_val = try self.lowerExprNode(idx.base);
+            const elem_ptr_type = self.type_reg.makePointer(elem_type) catch TypeRegistry.VOID;
+            const elem_addr = try fb.emitAddrIndex(base_val, index_node, elem_size, elem_ptr_type, fa.span);
+            return try fb.emitFieldValue(elem_addr, field_idx, field_offset, field_type, fa.span);
+        }
+
+        const base_val = try self.lowerExprNode(fa.base);
+        return try fb.emitFieldValue(base_val, field_idx, field_offset, field_type, fa.span);
+    }
+
+    fn lowerIndex(self: *Lowerer, idx: ast.Index) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+        const base_type_idx = self.inferExprType(idx.base);
+        const base_type = self.type_reg.get(base_type_idx);
+        const elem_type: TypeIndex = if (base_type_idx == TypeRegistry.STRING) TypeRegistry.U8 else switch (base_type) {
+            .array => |a| a.elem,
+            .slice => |s| s.elem,
+            else => return ir.null_node,
+        };
+        const elem_size = self.type_reg.sizeOf(elem_type);
+
+        if (base_type_idx == TypeRegistry.STRING) {
+            const index_node = try self.lowerExprNode(idx.idx);
+            const base_node = self.tree.getNode(idx.base) orelse return ir.null_node;
+            const base_expr = base_node.asExpr() orelse return ir.null_node;
+            if (base_expr == .ident) {
+                if (fb.lookupLocal(base_expr.ident.name)) |local_idx| {
+                    const str_val = try fb.emitLoadLocal(local_idx, TypeRegistry.STRING, idx.span);
+                    const ptr_type = self.type_reg.makePointer(TypeRegistry.U8) catch TypeRegistry.I64;
+                    const ptr_val = try fb.emitSlicePtr(str_val, ptr_type, idx.span);
+                    return try fb.emitIndexValue(ptr_val, index_node, elem_size, elem_type, idx.span);
+                }
+            }
+            const base_val = try self.lowerExprNode(idx.base);
+            const ptr_type = self.type_reg.makePointer(TypeRegistry.U8) catch TypeRegistry.I64;
+            const ptr_val = try fb.emitSlicePtr(base_val, ptr_type, idx.span);
+            return try fb.emitIndexValue(ptr_val, index_node, elem_size, elem_type, idx.span);
+        }
+
+        const index_node = try self.lowerExprNode(idx.idx);
+        const base_node = self.tree.getNode(idx.base) orelse return ir.null_node;
+        const base_expr = base_node.asExpr() orelse return ir.null_node;
+
+        if (base_expr == .ident) {
+            if (fb.lookupLocal(base_expr.ident.name)) |local_idx| {
+                const local = fb.locals.items[local_idx];
+                const local_type = self.type_reg.get(local.type_idx);
+                if (local_type == .slice) {
+                    const slice_val = try fb.emitLoadLocal(local_idx, local.type_idx, idx.span);
+                    const ptr_type = self.type_reg.makePointer(elem_type) catch TypeRegistry.I64;
+                    const ptr_val = try fb.emitSlicePtr(slice_val, ptr_type, idx.span);
+                    return try fb.emitIndexValue(ptr_val, index_node, elem_size, elem_type, idx.span);
+                }
+                if (local.is_param and self.type_reg.isArray(local.type_idx)) {
+                    const ptr_val = try fb.emitLoadLocal(local_idx, local.type_idx, idx.span);
+                    return try fb.emitIndexValue(ptr_val, index_node, elem_size, elem_type, idx.span);
+                }
+                return try fb.emitIndexLocal(local_idx, index_node, elem_size, elem_type, idx.span);
+            }
+            if (self.builder.lookupGlobal(base_expr.ident.name)) |g| {
+                const ptr_type = self.type_reg.makePointer(g.global.type_idx) catch TypeRegistry.VOID;
+                const global_addr = try fb.emitAddrGlobal(g.idx, base_expr.ident.name, ptr_type, idx.span);
+                return try fb.emitIndexValue(global_addr, index_node, elem_size, elem_type, idx.span);
+            }
+        }
+
+        const base_val = try self.lowerExprNode(idx.base);
+        return try fb.emitIndexValue(base_val, index_node, elem_size, elem_type, idx.span);
+    }
+
+    fn lowerArrayLiteral(self: *Lowerer, al: ast.ArrayLiteral) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+        if (al.elements.len == 0) return ir.null_node;
+        const first_elem_type = self.inferExprType(al.elements[0]);
+        const elem_size = self.type_reg.sizeOf(first_elem_type);
+        const array_type = self.type_reg.makeArray(first_elem_type, al.elements.len) catch return ir.null_node;
+        const array_size = self.type_reg.sizeOf(array_type);
+        const temp_name = try std.fmt.allocPrint(self.allocator, "__arr_{d}", .{fb.locals.items.len});
+        const local_idx = try fb.addLocalWithSize(temp_name, array_type, false, array_size);
+        for (al.elements, 0..) |elem_idx, i| {
+            const elem_node = try self.lowerExprNode(elem_idx);
+            const idx_node = try fb.emitConstInt(@intCast(i), TypeRegistry.I64, al.span);
+            _ = try fb.emitStoreIndexLocal(local_idx, idx_node, elem_node, elem_size, al.span);
+        }
+        return try fb.emitAddrLocal(local_idx, array_type, al.span);
+    }
+
+    fn lowerSliceExpr(self: *Lowerer, se: ast.SliceExpr) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+        const base_type_idx = self.inferExprType(se.base);
+        const base_type = self.type_reg.get(base_type_idx);
+        const elem_type_idx: TypeIndex = switch (base_type) {
+            .array => |a| a.elem,
+            .slice => |s| s.elem,
+            else => return ir.null_node,
+        };
+        const elem_size = self.type_reg.sizeOf(elem_type_idx);
+        const slice_type = self.type_reg.makeSlice(elem_type_idx) catch return ir.null_node;
+
+        var start_node: ?ir.NodeIndex = null;
+        if (se.start != null_node) start_node = try self.lowerExprNode(se.start);
+
+        var end_node: ?ir.NodeIndex = null;
+        if (se.end != null_node) {
+            end_node = try self.lowerExprNode(se.end);
+        } else {
+            switch (base_type) {
+                .array => |a| end_node = try fb.emitConstInt(@intCast(a.length), TypeRegistry.I64, se.span),
+                .slice => {
+                    const base_node = self.tree.getNode(se.base) orelse return ir.null_node;
+                    const base_expr = base_node.asExpr() orelse return ir.null_node;
+                    if (base_expr == .ident) {
+                        if (fb.lookupLocal(base_expr.ident.name)) |slice_local| {
+                            const slice_val = try fb.emitLoadLocal(slice_local, base_type_idx, se.span);
+                            end_node = try fb.emitSliceLen(slice_val, se.span);
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+
+        const base_node = self.tree.getNode(se.base) orelse return ir.null_node;
+        const base_expr = base_node.asExpr() orelse return ir.null_node;
+
+        if (base_expr == .ident) {
+            if (fb.lookupLocal(base_expr.ident.name)) |local_idx| {
+                const local = fb.locals.items[local_idx];
+                const local_type = self.type_reg.get(local.type_idx);
+                if (local_type == .array) {
+                    const ptr_type = self.type_reg.makePointer(elem_type_idx) catch TypeRegistry.I64;
+                    const base_addr = try fb.emitAddrLocal(local_idx, ptr_type, se.span);
+                    return try fb.emitMakeSlice(base_addr, start_node, end_node orelse return ir.null_node, elem_size, slice_type, se.span);
+                }
+                if (local_type == .slice) {
+                    const slice_val = try fb.emitLoadLocal(local_idx, local.type_idx, se.span);
+                    const ptr_type = self.type_reg.makePointer(elem_type_idx) catch TypeRegistry.I64;
+                    const ptr_val = try fb.emitSlicePtr(slice_val, ptr_type, se.span);
+                    return try fb.emitMakeSlice(ptr_val, start_node, end_node orelse return ir.null_node, elem_size, slice_type, se.span);
+                }
+            }
+        }
+
+        const base_val = try self.lowerExprNode(se.base);
+        return try fb.emitMakeSlice(base_val, start_node, end_node orelse return ir.null_node, elem_size, slice_type, se.span);
+    }
+
+    fn lowerStructInitExpr(self: *Lowerer, si: ast.StructInit) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+        const struct_type_idx = self.type_reg.lookupByName(si.type_name) orelse return ir.null_node;
+        const type_info = self.type_reg.get(struct_type_idx);
+        const struct_type = if (type_info == .struct_type) type_info.struct_type else return ir.null_node;
+        const size = self.type_reg.sizeOf(struct_type_idx);
+        const temp_idx = try fb.addLocalWithSize("__struct_tmp", struct_type_idx, true, size);
+
+        for (si.fields) |field_init| {
+            for (struct_type.fields, 0..) |struct_field, i| {
+                if (std.mem.eql(u8, struct_field.name, field_init.name)) {
+                    const field_idx: u32 = @intCast(i);
+                    const field_offset: i64 = @intCast(struct_field.offset);
+                    const value_node = try self.lowerExprNode(field_init.value);
+                    const field_type = self.type_reg.get(struct_field.type_idx);
+                    const is_string_field = struct_field.type_idx == TypeRegistry.STRING or field_type == .slice;
+                    if (is_string_field) {
+                        const ptr_type = try self.type_reg.makePointer(TypeRegistry.U8);
+                        const ptr_ir = try fb.emitSlicePtr(value_node, ptr_type, si.span);
+                        const len_ir = try fb.emitSliceLen(value_node, si.span);
+                        _ = try fb.emitStoreLocalField(temp_idx, field_idx, field_offset, ptr_ir, si.span);
+                        _ = try fb.emitStoreLocalField(temp_idx, field_idx + 1, field_offset + 8, len_ir, si.span);
+                    } else {
+                        _ = try fb.emitStoreLocalField(temp_idx, field_idx, field_offset, value_node, si.span);
+                    }
+                    break;
+                }
+            }
+        }
+        return try fb.emitLoadLocal(temp_idx, struct_type_idx, si.span);
+    }
+
+    fn lowerIfExpr(self: *Lowerer, if_expr: ast.IfExpr) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+        const cond = try self.lowerExprNode(if_expr.condition);
+        if (cond == ir.null_node) return ir.null_node;
+        const then_val = try self.lowerExprNode(if_expr.then_branch);
+        if (then_val == ir.null_node) return ir.null_node;
+        const else_val = if (if_expr.else_branch != null_node) try self.lowerExprNode(if_expr.else_branch) else ir.null_node;
+        return try fb.emitSelect(cond, then_val, else_val, self.inferExprType(if_expr.then_branch), if_expr.span);
+    }
+
+    fn lowerSwitchExpr(self: *Lowerer, se: ast.SwitchExpr) Error!ir.NodeIndex {
+        const result_type = if (se.cases.len > 0) self.inferExprType(se.cases[0].body) else if (se.else_body != null_node) self.inferExprType(se.else_body) else TypeRegistry.VOID;
+        if (result_type == TypeRegistry.VOID) return try self.lowerSwitchStatement(se);
+        return try self.lowerSwitchAsSelect(se, result_type);
+    }
+
+    fn lowerSwitchStatement(self: *Lowerer, se: ast.SwitchExpr) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+        const subject = try self.lowerExprNode(se.subject);
+        const merge_block = try fb.newBlock("switch.end");
+
+        var i: usize = 0;
+        while (i < se.cases.len) : (i += 1) {
+            const case = se.cases[i];
+            var case_cond: ir.NodeIndex = ir.null_node;
+            for (case.patterns) |pattern_idx| {
+                const pattern_val = try self.lowerExprNode(pattern_idx);
+                const pattern_cond = try fb.emitBinary(.eq, subject, pattern_val, TypeRegistry.BOOL, se.span);
+                case_cond = if (case_cond == ir.null_node) pattern_cond else try fb.emitBinary(.@"or", case_cond, pattern_cond, TypeRegistry.BOOL, se.span);
+            }
+            const case_block = try fb.newBlock("switch.case");
+            const next_block = if (i + 1 < se.cases.len) try fb.newBlock("switch.next") else if (se.else_body != null_node) try fb.newBlock("switch.else") else merge_block;
+            if (case_cond != ir.null_node) _ = try fb.emitBranch(case_cond, case_block, next_block, se.span);
+            fb.setBlock(case_block);
+            if (!try self.lowerBlockNode(case.body)) _ = try fb.emitJump(merge_block, se.span);
+            fb.setBlock(next_block);
+        }
+
+        if (se.else_body != null_node) {
+            if (!try self.lowerBlockNode(se.else_body)) _ = try fb.emitJump(merge_block, se.span);
+        }
+        fb.setBlock(merge_block);
+        return ir.null_node;
+    }
+
+    fn lowerSwitchAsSelect(self: *Lowerer, se: ast.SwitchExpr, result_type: TypeIndex) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+        const subject = try self.lowerExprNode(se.subject);
+        var result = if (se.else_body != null_node) try self.lowerExprNode(se.else_body) else try fb.emitConstNull(result_type, se.span);
+        var i: usize = se.cases.len;
+        while (i > 0) {
+            i -= 1;
+            const case = se.cases[i];
+            var case_cond: ir.NodeIndex = ir.null_node;
+            for (case.patterns) |pattern_idx| {
+                const pattern_val = try self.lowerExprNode(pattern_idx);
+                const pattern_cond = try fb.emitBinary(.eq, subject, pattern_val, TypeRegistry.BOOL, se.span);
+                case_cond = if (case_cond == ir.null_node) pattern_cond else try fb.emitBinary(.@"or", case_cond, pattern_cond, TypeRegistry.BOOL, se.span);
+            }
+            const case_val = try self.lowerExprNode(case.body);
+            result = try fb.emitSelect(case_cond, case_val, result, result_type, se.span);
+        }
+        return result;
+    }
+
+    fn lowerCall(self: *Lowerer, call: ast.Call) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+        const callee_node = self.tree.getNode(call.callee) orelse return ir.null_node;
+        const callee_expr = callee_node.asExpr() orelse return ir.null_node;
+
+        // Method call (Type.method or value.method)
+        if (callee_expr == .field_access) {
+            const fa = callee_expr.field_access;
+            if (fa.base != null_node) {
+                const base_type_idx = self.inferExprType(fa.base);
+                const base_type = self.type_reg.get(base_type_idx);
+                const type_name: ?[]const u8 = switch (base_type) {
+                    .struct_type => |s| s.name,
+                    .pointer => |p| blk: {
+                        const elem = self.type_reg.get(p.elem);
+                        if (elem == .struct_type) break :blk elem.struct_type.name;
+                        break :blk null;
+                    },
+                    else => null,
+                };
+                if (type_name) |name| {
+                    if (self.chk.lookupMethod(name, fa.field)) |method_info| {
+                        return try self.lowerMethodCall(call, fa, method_info);
+                    }
+                }
+            }
+        }
+
+        // Check for builtins
+        if (callee_expr == .ident) {
+            const name = callee_expr.ident.name;
+            if (std.mem.eql(u8, name, "len")) return try self.lowerBuiltinLen(call);
+            if (std.mem.eql(u8, name, "print")) return try self.lowerBuiltinPrint(call, false, 1);
+            if (std.mem.eql(u8, name, "println")) return try self.lowerBuiltinPrint(call, true, 1);
+            if (std.mem.eql(u8, name, "eprint")) return try self.lowerBuiltinPrint(call, false, 2);
+            if (std.mem.eql(u8, name, "eprintln")) return try self.lowerBuiltinPrint(call, true, 2);
+            if (std.mem.eql(u8, name, "__string_make")) return try self.lowerBuiltinStringMake(call);
+        }
+
+        // Regular function call
+        var args = std.ArrayListUnmanaged(ir.NodeIndex){};
+        defer args.deinit(self.allocator);
+
+        // Get function type for parameter checking
+        const func_type_idx = self.inferExprType(call.callee);
+        const func_type_info = self.type_reg.get(func_type_idx);
+        const param_types: ?[]const types.FuncParam = if (func_type_info == .func) func_type_info.func.params else null;
+
+        for (call.args, 0..) |arg_idx, arg_i| {
+            const ast_node = self.tree.getNode(arg_idx) orelse continue;
+            const ast_expr = ast_node.asExpr() orelse continue;
+            var arg_node: ir.NodeIndex = ir.null_node;
+
+            // Check if string literal passed to pointer param
+            if (ast_expr == .literal and ast_expr.literal.kind == .string) {
+                var param_is_pointer = false;
+                if (param_types) |params| {
+                    if (arg_i < params.len) {
+                        const param_type = self.type_reg.get(params[arg_i].type_idx);
+                        param_is_pointer = (param_type == .pointer);
+                    }
+                }
+                if (param_is_pointer) {
+                    const str_node = try self.lowerLiteral(ast_expr.literal);
+                    arg_node = try fb.emitSlicePtr(str_node, TypeRegistry.I64, call.span);
+                } else {
+                    arg_node = try self.lowerLiteral(ast_expr.literal);
+                }
+            } else {
+                arg_node = try self.lowerExprNode(arg_idx);
+            }
+            if (arg_node == ir.null_node) continue;
+            try args.append(self.allocator, arg_node);
+        }
+
+        const return_type = if (func_type_info == .func) func_type_info.func.return_type else TypeRegistry.VOID;
+        const func_name = if (callee_expr == .ident) callee_expr.ident.name else "";
+        const is_indirect = callee_expr != .ident;
+
+        if (is_indirect) {
+            const func_ptr = try self.lowerExprNode(call.callee);
+            return try fb.emitIndirectCall(func_ptr, args.items, return_type, call.span);
+        }
+        return try fb.emitCall(func_name, args.items, false, return_type, call.span);
+    }
+
+    fn lowerMethodCall(self: *Lowerer, call: ast.Call, fa: ast.FieldAccess, method_info: types.MethodInfo) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+        var args = std.ArrayListUnmanaged(ir.NodeIndex){};
+        defer args.deinit(self.allocator);
+
+        const base_type_idx = self.inferExprType(fa.base);
+        const base_type = self.type_reg.get(base_type_idx);
+
+        // Prepare receiver
+        const receiver_val = blk: {
+            if (method_info.receiver_is_ptr) {
+                if (base_type == .pointer) {
+                    break :blk try self.lowerExprNode(fa.base);
+                } else {
+                    const base_node = self.tree.getNode(fa.base) orelse return ir.null_node;
+                    const base_expr = base_node.asExpr() orelse return ir.null_node;
+                    if (base_expr == .ident) {
+                        if (fb.lookupLocal(base_expr.ident.name)) |local_idx| {
+                            break :blk try fb.emitAddrLocal(local_idx, base_type_idx, fa.span);
+                        }
+                        if (self.builder.lookupGlobal(base_expr.ident.name)) |g| {
+                            const ptr_type = self.type_reg.makePointer(base_type_idx) catch base_type_idx;
+                            break :blk try fb.emitAddrGlobal(g.idx, base_expr.ident.name, ptr_type, fa.span);
+                        }
+                    }
+                    break :blk try self.lowerExprNode(fa.base);
+                }
+            } else {
+                if (base_type == .pointer) {
+                    const ptr_val = try self.lowerExprNode(fa.base);
+                    break :blk try fb.emitPtrLoadValue(ptr_val, base_type_idx, fa.span);
+                } else {
+                    break :blk try self.lowerExprNode(fa.base);
+                }
+            }
+        };
+
+        if (receiver_val == ir.null_node) return ir.null_node;
+        try args.append(self.allocator, receiver_val);
+
+        // Get param types for string->ptr coercion
+        const func_type_for_params = self.type_reg.get(method_info.func_type);
+        var param_types: ?[]const types.FuncParam = null;
+        if (func_type_for_params == .func) param_types = func_type_for_params.func.params;
+
+        for (call.args, 0..) |arg_idx, arg_i| {
+            const ast_node = self.tree.getNode(arg_idx) orelse continue;
+            const ast_expr = ast_node.asExpr() orelse continue;
+            var arg_node: ir.NodeIndex = ir.null_node;
+
+            if (ast_expr == .literal and ast_expr.literal.kind == .string) {
+                var param_is_pointer = false;
+                if (param_types) |params| {
+                    const param_idx = arg_i + 1;
+                    if (param_idx < params.len) {
+                        const param_type = self.type_reg.get(params[param_idx].type_idx);
+                        param_is_pointer = (param_type == .pointer);
+                    }
+                }
+                if (param_is_pointer) {
+                    const str_node = try self.lowerLiteral(ast_expr.literal);
+                    arg_node = try fb.emitSlicePtr(str_node, TypeRegistry.I64, call.span);
+                } else {
+                    arg_node = try self.lowerLiteral(ast_expr.literal);
+                }
+            } else {
+                arg_node = try self.lowerExprNode(arg_idx);
+            }
+            if (arg_node == ir.null_node) continue;
+            try args.append(self.allocator, arg_node);
+        }
+
+        const func_type = self.type_reg.get(method_info.func_type);
+        const return_type = if (func_type == .func) func_type.func.return_type else TypeRegistry.VOID;
+        return try fb.emitCall(method_info.func_name, args.items, false, return_type, call.span);
+    }
+
+    fn lowerBuiltinLen(self: *Lowerer, call: ast.Call) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+        if (call.args.len != 1) return ir.null_node;
+        const arg_idx = call.args[0];
+        const arg_node = self.tree.getNode(arg_idx) orelse return ir.null_node;
+        const arg_expr = arg_node.asExpr() orelse return ir.null_node;
+
+        if (arg_expr == .literal and arg_expr.literal.kind == .string) {
+            var buf: [4096]u8 = undefined;
+            const unescaped = parseStringLiteral(arg_expr.literal.value, &buf);
+            return try fb.emitConstInt(@intCast(unescaped.len), TypeRegistry.INT, call.span);
+        }
+
+        if (arg_expr == .ident) {
+            if (fb.lookupLocal(arg_expr.ident.name)) |local_idx| {
+                const local_type_idx = fb.locals.items[local_idx].type_idx;
+                const local_type = self.type_reg.get(local_type_idx);
+                if (local_type_idx == TypeRegistry.STRING) return try fb.emitFieldLocal(local_idx, 1, 8, TypeRegistry.I64, call.span);
+                if (local_type == .slice) {
+                    const slice_val = try fb.emitLoadLocal(local_idx, local_type_idx, call.span);
+                    return try fb.emitSliceLen(slice_val, call.span);
+                }
+                if (local_type == .array) return try fb.emitConstInt(@intCast(local_type.array.length), TypeRegistry.INT, call.span);
+            }
+        }
+
+        if (arg_expr == .field_access) {
+            const arg_type = self.inferExprType(arg_idx);
+            if (arg_type == TypeRegistry.STRING) {
+                const str_val = try self.lowerFieldAccess(arg_expr.field_access);
+                return try fb.emitSliceLen(str_val, call.span);
+            }
+        }
+
+        const arg_type = self.inferExprType(arg_idx);
+        if (arg_type == TypeRegistry.STRING) {
+            const str_val = try self.lowerExprNode(arg_idx);
+            return try fb.emitSliceLen(str_val, call.span);
+        }
+        return ir.null_node;
+    }
+
+    fn lowerBuiltinStringMake(self: *Lowerer, call: ast.Call) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+        if (call.args.len != 2) return ir.null_node;
+        const ptr_val = try self.lowerExprNode(call.args[0]);
+        const len_val = try self.lowerExprNode(call.args[1]);
+        return try fb.emit(ir.Node.init(.{ .string_header = .{ .ptr = ptr_val, .len = len_val } }, TypeRegistry.STRING, call.span));
+    }
+
+    fn lowerBuiltinPrint(self: *Lowerer, call: ast.Call, is_println: bool, fd: i32) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+        if (call.args.len != 1) return ir.null_node;
+        const arg_type = self.inferExprType(call.args[0]);
+        const ptr_type = try self.type_reg.makePointer(TypeRegistry.U8);
+        const type_info = self.type_reg.get(arg_type);
+        const is_integer = type_info == .enum_type or arg_type == TypeRegistry.I8 or arg_type == TypeRegistry.I16 or arg_type == TypeRegistry.I32 or arg_type == TypeRegistry.I64 or arg_type == TypeRegistry.INT or arg_type == TypeRegistry.U8 or arg_type == TypeRegistry.U16 or arg_type == TypeRegistry.U32 or arg_type == TypeRegistry.U64 or arg_type == TypeRegistry.UNTYPED_INT;
+
+        if (is_integer) {
+            const int_val = try self.lowerExprNode(call.args[0]);
+            var print_args = [_]ir.NodeIndex{int_val};
+            _ = try fb.emitCall(if (fd == 2) "__eprint_int" else "__print_int", &print_args, false, TypeRegistry.VOID, call.span);
+        } else {
+            const str_val = try self.lowerExprNode(call.args[0]);
+            const ptr_val = try fb.emitSlicePtr(str_val, ptr_type, call.span);
+            const len_val = try fb.emitSliceLen(str_val, call.span);
+            const fd_val = try fb.emitConstInt(fd, TypeRegistry.I32, call.span);
+            var write_args = [_]ir.NodeIndex{ fd_val, ptr_val, len_val };
+            _ = try fb.emitCall("write", &write_args, false, TypeRegistry.I64, call.span);
+        }
+
+        if (is_println) {
+            const nl_idx = try fb.addStringLiteral("\n");
+            const nl_str = try fb.emit(ir.Node.init(.{ .const_slice = .{ .string_index = nl_idx } }, TypeRegistry.STRING, call.span));
+            const nl_ptr = try fb.emitSlicePtr(nl_str, ptr_type, call.span);
+            const nl_len = try fb.emitConstInt(1, TypeRegistry.I64, call.span);
+            const fd_val = try fb.emitConstInt(fd, TypeRegistry.I32, call.span);
+            var nl_args = [_]ir.NodeIndex{ fd_val, nl_ptr, nl_len };
+            _ = try fb.emitCall("write", &nl_args, false, TypeRegistry.I64, call.span);
+        }
+        return ir.null_node;
+    }
+
+    fn lowerBuiltinCall(self: *Lowerer, bc: ast.BuiltinCall) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+        if (std.mem.eql(u8, bc.name, "sizeOf")) {
+            const type_idx = self.resolveTypeNode(bc.type_arg);
+            return try fb.emitConstInt(@intCast(self.type_reg.sizeOf(type_idx)), TypeRegistry.I64, bc.span);
+        }
+        if (std.mem.eql(u8, bc.name, "alignOf")) {
+            const type_idx = self.resolveTypeNode(bc.type_arg);
+            return try fb.emitConstInt(@intCast(self.type_reg.alignOf(type_idx)), TypeRegistry.I64, bc.span);
+        }
+        if (std.mem.eql(u8, bc.name, "intCast")) {
+            const target_type = self.resolveTypeNode(bc.type_arg);
+            const value = try self.lowerExprNode(bc.args[0]);
+            return try fb.emitIntCast(value, target_type, bc.span);
+        }
+        if (std.mem.eql(u8, bc.name, "ptrCast")) {
+            const target_type = self.resolveTypeNode(bc.type_arg);
+            const value = try self.lowerExprNode(bc.args[0]);
+            return try fb.emitPtrCast(value, target_type, bc.span);
+        }
+        if (std.mem.eql(u8, bc.name, "intToPtr")) {
+            const target_type = self.resolveTypeNode(bc.type_arg);
+            const value = try self.lowerExprNode(bc.args[0]);
+            return try fb.emitIntToPtr(value, target_type, bc.span);
+        }
+        if (std.mem.eql(u8, bc.name, "ptrToInt")) {
+            const value = try self.lowerExprNode(bc.args[0]);
+            return try fb.emitPtrToInt(value, TypeRegistry.I64, bc.span);
+        }
+        if (std.mem.eql(u8, bc.name, "string")) {
+            const ptr_val = try self.lowerExprNode(bc.args[0]);
+            const len_val = try self.lowerExprNode(bc.args[1]);
+            return try fb.emit(ir.Node.init(.{ .string_header = .{ .ptr = ptr_val, .len = len_val } }, TypeRegistry.STRING, bc.span));
+        }
+        if (std.mem.eql(u8, bc.name, "assert")) {
+            const cond = try self.lowerExprNode(bc.args[0]);
+            const then_block = try fb.newBlock("assert.ok");
+            const fail_block = try fb.newBlock("assert.fail");
+            _ = try fb.emitBranch(cond, then_block, fail_block, bc.span);
+            fb.setBlock(fail_block);
+            const msg = if (self.current_test_name) |name| try std.fmt.allocPrint(self.allocator, "assertion failed in test \"{s}\"\n", .{name}) else "assertion failed\n";
+            const msg_copy = try self.allocator.dupe(u8, msg);
+            const msg_idx = try fb.addStringLiteral(msg_copy);
+            const msg_str = try fb.emitConstSlice(msg_idx, bc.span);
+            const ptr_type = try self.type_reg.makePointer(TypeRegistry.U8);
+            const msg_ptr = try fb.emitSlicePtr(msg_str, ptr_type, bc.span);
+            const msg_len = try fb.emitSliceLen(msg_str, bc.span);
+            const fd_val = try fb.emitConstInt(2, TypeRegistry.I32, bc.span);
+            var write_args = [_]ir.NodeIndex{ fd_val, msg_ptr, msg_len };
+            _ = try fb.emitCall("write", &write_args, false, TypeRegistry.I64, bc.span);
+            const exit_code = try fb.emitConstInt(1, TypeRegistry.I32, bc.span);
+            var exit_args = [_]ir.NodeIndex{exit_code};
+            _ = try fb.emitCall("exit", &exit_args, false, TypeRegistry.VOID, bc.span);
+            _ = try fb.emitJump(then_block, bc.span);
+            fb.setBlock(then_block);
+            return ir.null_node;
+        }
+        return ir.null_node;
+    }
+
+    // ============================================================================
+    // Type Utilities
+    // ============================================================================
+
+    fn resolveTypeNode(self: *Lowerer, idx: NodeIndex) TypeIndex {
+        const node = self.tree.getNode(idx) orelse return TypeRegistry.VOID;
+        const expr = node.asExpr() orelse return TypeRegistry.VOID;
+        if (expr != .type_expr) return TypeRegistry.VOID;
+        const te = expr.type_expr;
+
+        switch (te.kind) {
+            .named => |name| {
+                if (std.mem.eql(u8, name, "void")) return TypeRegistry.VOID;
+                if (std.mem.eql(u8, name, "bool")) return TypeRegistry.BOOL;
+                if (std.mem.eql(u8, name, "i8")) return TypeRegistry.I8;
+                if (std.mem.eql(u8, name, "i16")) return TypeRegistry.I16;
+                if (std.mem.eql(u8, name, "i32")) return TypeRegistry.I32;
+                if (std.mem.eql(u8, name, "i64")) return TypeRegistry.I64;
+                if (std.mem.eql(u8, name, "int")) return TypeRegistry.INT;
+                if (std.mem.eql(u8, name, "u8")) return TypeRegistry.U8;
+                if (std.mem.eql(u8, name, "u16")) return TypeRegistry.U16;
+                if (std.mem.eql(u8, name, "u32")) return TypeRegistry.U32;
+                if (std.mem.eql(u8, name, "u64")) return TypeRegistry.U64;
+                if (std.mem.eql(u8, name, "f32")) return TypeRegistry.F32;
+                if (std.mem.eql(u8, name, "f64")) return TypeRegistry.F64;
+                if (std.mem.eql(u8, name, "string")) return TypeRegistry.STRING;
+                return self.type_reg.lookupByName(name) orelse TypeRegistry.VOID;
+            },
+            .pointer => |inner| {
+                const elem = self.resolveTypeNode(inner);
+                return self.type_reg.makePointer(elem) catch TypeRegistry.VOID;
+            },
+            .array => |arr| {
+                const elem = self.resolveTypeNode(arr.elem);
+                const size_node = self.tree.getNode(arr.size) orelse return TypeRegistry.VOID;
+                const size_expr = size_node.asExpr() orelse return TypeRegistry.VOID;
+                if (size_expr != .literal) return TypeRegistry.VOID;
+                const len = std.fmt.parseInt(usize, size_expr.literal.value, 10) catch return TypeRegistry.VOID;
+                return self.type_reg.makeArray(elem, len) catch TypeRegistry.VOID;
+            },
+            .slice => |inner| {
+                const elem = self.resolveTypeNode(inner);
+                return self.type_reg.makeSlice(elem) catch TypeRegistry.VOID;
+            },
+            .optional => |inner| {
+                const elem = self.resolveTypeNode(inner);
+                return self.type_reg.makeOptional(elem) catch TypeRegistry.VOID;
+            },
+            .function => |fn_type| {
+                var param_types = std.ArrayListUnmanaged(types.FuncParam){};
+                defer param_types.deinit(self.allocator);
+                for (fn_type.params) |param_idx| {
+                    const param_type = self.resolveTypeNode(param_idx);
+                    param_types.append(self.allocator, .{ .name = "", .type_idx = param_type }) catch return TypeRegistry.VOID;
+                }
+                const ret_type = self.resolveTypeNode(fn_type.ret);
+                return self.type_reg.makeFunc(param_types.items, ret_type) catch TypeRegistry.VOID;
+            },
+            else => return TypeRegistry.VOID,
+        }
+    }
+
+    fn inferExprType(self: *Lowerer, idx: NodeIndex) TypeIndex {
+        return self.chk.expr_types.get(idx) orelse TypeRegistry.VOID;
+    }
+
+    fn inferBinaryType(self: *Lowerer, op: Token, left: NodeIndex, right: NodeIndex) TypeIndex {
+        _ = right;
+        return switch (op) {
+            .eql, .neq, .lss, .leq, .gtr, .geq => TypeRegistry.BOOL,
+            else => self.inferExprType(left),
+        };
+    }
+};
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+fn tokenToBinaryOp(tok: Token) ir.BinaryOp {
+    return switch (tok) {
+        .add, .add_assign => .add,
+        .sub, .sub_assign => .sub,
+        .mul, .mul_assign => .mul,
+        .quo, .quo_assign => .div,
+        .rem, .rem_assign => .mod,
+        .eql => .eq,
+        .neq => .ne,
+        .lss => .lt,
+        .leq => .le,
+        .gtr => .gt,
+        .geq => .ge,
+        .land, .kw_and => .@"and",
+        .lor, .kw_or => .@"or",
+        .@"and", .and_assign => .bit_and,
+        .@"or", .or_assign => .bit_or,
+        .xor, .xor_assign => .bit_xor,
+        .shl => .shl,
+        .shr => .shr,
+        else => .add,
+    };
+}
+
+fn tokenToUnaryOp(tok: Token) ir.UnaryOp {
+    return switch (tok) {
+        .sub => .neg,
+        .lnot, .kw_not => .not,
+        .not => .bit_not,
+        .question => .optional_unwrap,
+        else => .neg,
+    };
+}
+
+fn parseCharLiteral(text: []const u8) u8 {
+    if (text.len < 3 or text[0] != '\'' or text[text.len - 1] != '\'') return 0;
+    const inner = text[1 .. text.len - 1];
+    if (inner.len == 0) return 0;
+    if (inner[0] != '\\') return inner[0];
+    if (inner.len < 2) return 0;
+    return switch (inner[1]) {
+        'n' => '\n',
+        't' => '\t',
+        'r' => '\r',
+        '\\' => '\\',
+        '\'' => '\'',
+        '"' => '"',
+        '0' => 0,
+        'x' => if (inner.len >= 4) std.fmt.parseInt(u8, inner[2..4], 16) catch 0 else 0,
+        else => inner[1],
+    };
+}
+
+fn parseStringLiteral(text: []const u8, out_buf: []u8) []const u8 {
+    if (text.len < 2 or text[0] != '"' or text[text.len - 1] != '"') return text;
+    const inner = text[1 .. text.len - 1];
+    var out_idx: usize = 0;
+    var i: usize = 0;
+    while (i < inner.len and out_idx < out_buf.len) {
+        if (inner[i] == '\\' and i + 1 < inner.len) {
+            const escaped = switch (inner[i + 1]) {
+                'n' => '\n',
+                't' => '\t',
+                'r' => '\r',
+                '\\' => '\\',
+                '"' => '"',
+                '\'' => '\'',
+                '0' => @as(u8, 0),
+                'x' => blk: {
+                    if (i + 3 < inner.len) {
+                        const val = std.fmt.parseInt(u8, inner[i + 2 .. i + 4], 16) catch 0;
+                        i += 2;
+                        break :blk val;
+                    }
+                    break :blk inner[i + 1];
+                },
+                else => inner[i + 1],
+            };
+            out_buf[out_idx] = escaped;
+            out_idx += 1;
+            i += 2;
+        } else {
+            out_buf[out_idx] = inner[i];
+            out_idx += 1;
+            i += 1;
+        }
+    }
+    return out_buf[0..out_idx];
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "Lowerer basic init" {
+    const allocator = std.testing.allocator;
+    var tree = ast.Ast.init(allocator);
+    defer tree.deinit();
+    var type_reg = try TypeRegistry.init(allocator);
+    defer type_reg.deinit();
+    var src = source.Source.init(allocator, "test.cot", "");
+    defer src.deinit();
+    var err = ErrorReporter.init(&src, null);
+    var scope = checker.Scope.init(allocator, null);
+    defer scope.deinit();
+    var chk = checker.Checker.init(allocator, &tree, &type_reg, &err, &scope);
+    defer chk.deinit();
+    var lowerer = Lowerer.init(allocator, &tree, &type_reg, &err, &chk);
+    defer lowerer.deinit();
+    var ir_result = try lowerer.lower();
+    defer ir_result.deinit();
+    try std.testing.expectEqual(@as(usize, 0), ir_result.funcs.len);
+}
+
+// Full pipeline helper for end-to-end tests
+const scanner_mod = @import("scanner.zig");
+const parser_mod = @import("parser.zig");
+
+const TestResult = struct {
+    ir_data: ir.IR,
+    type_reg: TypeRegistry,
+    has_errors: bool,
+    arena: std.heap.ArenaAllocator,
+
+    pub fn deinit(self: *TestResult) void {
+        self.arena.deinit();
+    }
+};
+
+fn testPipeline(backing: std.mem.Allocator, code: []const u8) !TestResult {
+    var arena = std.heap.ArenaAllocator.init(backing);
+    errdefer arena.deinit();
+    const allocator = arena.allocator();
+
+    var src = source.Source.init(allocator, "test.cot", code);
+    var err = ErrorReporter.init(&src, null);
+    var scan = scanner_mod.Scanner.initWithErrors(&src, &err);
+    var tree = ast.Ast.init(allocator);
+
+    var parser = parser_mod.Parser.init(allocator, &scan, &tree, &err);
+    parser.parseFile() catch |e| {
+        std.debug.print("Parse error: {}\n", .{e});
+        return error.ParseFailed;
+    };
+    if (err.hasErrors()) return error.ParseErrors;
+
+    var type_reg = try TypeRegistry.init(allocator);
+    var global_scope = checker.Scope.init(allocator, null);
+    var chk = checker.Checker.init(allocator, &tree, &type_reg, &err, &global_scope);
+
+    chk.checkFile() catch |e| {
+        std.debug.print("Check error: {}\n", .{e});
+        return error.CheckFailed;
+    };
+    if (err.hasErrors()) return error.CheckErrors;
+
+    var lowerer = Lowerer.init(allocator, &tree, &type_reg, &err, &chk);
+    const ir_data = try lowerer.lower();
+    return .{ .ir_data = ir_data, .type_reg = type_reg, .has_errors = err.hasErrors(), .arena = arena };
+}
+
+test "E2E: function returning constant" {
+    const allocator = std.testing.allocator;
+    const code = "fn answer() i64 { return 42 }";
+    var result = try testPipeline(allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expectEqual(@as(usize, 1), result.ir_data.funcs.len);
+    const func = &result.ir_data.funcs[0];
+    try std.testing.expectEqualStrings("answer", func.name);
+
+    // Verify we have a return node with const_int 42
+    var found_const = false;
+    var found_ret = false;
+    for (func.nodes) |node| {
+        if (node.data == .const_int and node.data.const_int.value == 42) found_const = true;
+        if (node.data == .ret) found_ret = true;
+    }
+    try std.testing.expect(found_const);
+    try std.testing.expect(found_ret);
+}
+
+test "E2E: function with parameters and binary op" {
+    const allocator = std.testing.allocator;
+    const code = "fn add(a: i64, b: i64) i64 { return a + b }";
+    var result = try testPipeline(allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    const func = &result.ir_data.funcs[0];
+    try std.testing.expectEqualStrings("add", func.name);
+    try std.testing.expectEqual(@as(usize, 2), func.params.len);
+
+    // Verify binary add operation exists
+    var found_add = false;
+    for (func.nodes) |node| {
+        if (node.data == .binary and node.data.binary.op == .add) found_add = true;
+    }
+    try std.testing.expect(found_add);
+}
+
+test "E2E: variable declaration and assignment" {
+    const allocator = std.testing.allocator;
+    const code =
+        \\fn test_var() i64 {
+        \\    var x = 10
+        \\    x = x + 5
+        \\    return x
+        \\}
+    ;
+    var result = try testPipeline(allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    const func = &result.ir_data.funcs[0];
+
+    // Should have local for x
+    try std.testing.expect(func.locals.len >= 1);
+
+    // Verify store_local exists (for assignment)
+    var found_store = false;
+    for (func.nodes) |node| {
+        if (node.data == .store_local) found_store = true;
+    }
+    try std.testing.expect(found_store);
+}
+
+test "E2E: if-else statement" {
+    const allocator = std.testing.allocator;
+    const code =
+        \\fn max(a: i64, b: i64) i64 {
+        \\    if a > b {
+        \\        return a
+        \\    } else {
+        \\        return b
+        \\    }
+        \\}
+    ;
+    var result = try testPipeline(allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    const func = &result.ir_data.funcs[0];
+
+    // Should have branch node for if-else
+    var found_branch = false;
+    var found_gt = false;
+    for (func.nodes) |node| {
+        if (node.data == .branch) found_branch = true;
+        if (node.data == .binary and node.data.binary.op == .gt) found_gt = true;
+    }
+    try std.testing.expect(found_branch);
+    try std.testing.expect(found_gt);
+
+    // Should have multiple blocks (entry, then, else, potentially merge)
+    try std.testing.expect(func.blocks.len >= 3);
+}
+
+test "E2E: while loop" {
+    const allocator = std.testing.allocator;
+    const code =
+        \\fn sum_to(n: i64) i64 {
+        \\    var total = 0
+        \\    var i = 0
+        \\    while i < n {
+        \\        total = total + i
+        \\        i = i + 1
+        \\    }
+        \\    return total
+        \\}
+    ;
+    var result = try testPipeline(allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    const func = &result.ir_data.funcs[0];
+
+    // While loop creates branch and jump nodes
+    var found_branch = false;
+    var found_jump = false;
+    for (func.nodes) |node| {
+        if (node.data == .branch) found_branch = true;
+        if (node.data == .jump) found_jump = true;
+    }
+    try std.testing.expect(found_branch);
+    try std.testing.expect(found_jump);
+
+    // Should have loop blocks
+    try std.testing.expect(func.blocks.len >= 3);
+}
+
+test "E2E: comparison operators" {
+    const allocator = std.testing.allocator;
+    const code =
+        \\fn test_cmp(a: i64, b: i64) bool {
+        \\    return a <= b
+        \\}
+    ;
+    var result = try testPipeline(allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    const func = &result.ir_data.funcs[0];
+
+    var found_le = false;
+    for (func.nodes) |node| {
+        if (node.data == .binary and node.data.binary.op == .le) found_le = true;
+    }
+    try std.testing.expect(found_le);
+}
+
+test "E2E: unary negation" {
+    const allocator = std.testing.allocator;
+    const code = "fn negate(x: i64) i64 { return -x }";
+    var result = try testPipeline(allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    const func = &result.ir_data.funcs[0];
+
+    var found_neg = false;
+    for (func.nodes) |node| {
+        if (node.data == .unary and node.data.unary.op == .neg) found_neg = true;
+    }
+    try std.testing.expect(found_neg);
+}
+
+test "E2E: multiple functions" {
+    const allocator = std.testing.allocator;
+    const code =
+        \\fn foo() i64 { return 1 }
+        \\fn bar() i64 { return 2 }
+        \\fn baz() i64 { return foo() + bar() }
+    ;
+    var result = try testPipeline(allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expectEqual(@as(usize, 3), result.ir_data.funcs.len);
+
+    // Verify function calls in baz
+    const baz_func = &result.ir_data.funcs[2];
+    var call_count: usize = 0;
+    for (baz_func.nodes) |node| {
+        if (node.data == .call) call_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), call_count);
+}
+
+test "E2E: struct definition and access" {
+    const allocator = std.testing.allocator;
+    const code =
+        \\struct Point { x: i64, y: i64 }
+        \\fn get_x(p: Point) i64 { return p.x }
+    ;
+    var result = try testPipeline(allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expectEqual(@as(usize, 1), result.ir_data.funcs.len);
+
+    // Verify struct type was registered
+    try std.testing.expect(result.type_reg.lookupByName("Point") != null);
+}
+
+test "E2E: boolean operations" {
+    const allocator = std.testing.allocator;
+    const code =
+        \\fn test_and(a: bool, b: bool) bool { return a and b }
+        \\fn test_or(a: bool, b: bool) bool { return a or b }
+        \\fn test_not(a: bool) bool { return not a }
+    ;
+    var result = try testPipeline(allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expectEqual(@as(usize, 3), result.ir_data.funcs.len);
+}
+
+test "E2E: nested if statements" {
+    const allocator = std.testing.allocator;
+    const code =
+        \\fn classify(x: i64) i64 {
+        \\    if x < 0 {
+        \\        return -1
+        \\    } else {
+        \\        if x > 0 {
+        \\            return 1
+        \\        } else {
+        \\            return 0
+        \\        }
+        \\    }
+        \\}
+    ;
+    var result = try testPipeline(allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    const func = &result.ir_data.funcs[0];
+
+    // Count branch nodes - should have at least 2 for nested if
+    var branch_count: usize = 0;
+    for (func.nodes) |node| {
+        if (node.data == .branch) branch_count += 1;
+    }
+    try std.testing.expect(branch_count >= 2);
+}
+
+test "E2E: recursive function" {
+    const allocator = std.testing.allocator;
+    const code =
+        \\fn factorial(n: i64) i64 {
+        \\    if n <= 1 {
+        \\        return 1
+        \\    } else {
+        \\        return n * factorial(n - 1)
+        \\    }
+        \\}
+    ;
+    var result = try testPipeline(allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    const func = &result.ir_data.funcs[0];
+    try std.testing.expectEqualStrings("factorial", func.name);
+
+    // Should have recursive call to itself
+    var found_recursive_call = false;
+    for (func.nodes) |node| {
+        if (node.data == .call and std.mem.eql(u8, node.data.call.func_name, "factorial")) {
+            found_recursive_call = true;
+        }
+    }
+    try std.testing.expect(found_recursive_call);
+}
+
+test "E2E: bitwise operators" {
+    const allocator = std.testing.allocator;
+    const code =
+        \\fn test_bits(a: i64, b: i64) i64 {
+        \\    return (a & b) | (a ^ b)
+        \\}
+    ;
+    var result = try testPipeline(allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    const func = &result.ir_data.funcs[0];
+
+    var found_and = false;
+    var found_or = false;
+    var found_xor = false;
+    for (func.nodes) |node| {
+        if (node.data == .binary) {
+            switch (node.data.binary.op) {
+                .bit_and => found_and = true,
+                .bit_or => found_or = true,
+                .bit_xor => found_xor = true,
+                else => {},
+            }
+        }
+    }
+    try std.testing.expect(found_and);
+    try std.testing.expect(found_or);
+    try std.testing.expect(found_xor);
+}
+
+test "E2E: const declaration" {
+    const allocator = std.testing.allocator;
+    const code =
+        \\fn test_const() i64 {
+        \\    const x = 42
+        \\    return x
+        \\}
+    ;
+    var result = try testPipeline(allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    const func = &result.ir_data.funcs[0];
+
+    // Should have local for x (const locals still get created)
+    try std.testing.expect(func.locals.len >= 1);
+}
+
+test "E2E: multiple statements in block" {
+    const allocator = std.testing.allocator;
+    const code =
+        \\fn multi() i64 {
+        \\    var a = 1
+        \\    var b = 2
+        \\    var c = 3
+        \\    return a + b + c
+        \\}
+    ;
+    var result = try testPipeline(allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    const func = &result.ir_data.funcs[0];
+
+    // Should have 3 locals
+    try std.testing.expectEqual(@as(usize, 3), func.locals.len);
+}
+
+test "E2E: expression as statement" {
+    const allocator = std.testing.allocator;
+    const code =
+        \\fn side_effect(x: i64) i64 {
+        \\    x + 1
+        \\    return x
+        \\}
+    ;
+    var result = try testPipeline(allocator, code);
+    defer result.deinit();
+
+    // Expression statements are valid
+    try std.testing.expect(!result.has_errors);
+}
+
+test "E2E: void function" {
+    const allocator = std.testing.allocator;
+    const code = "fn do_nothing() void { return }";
+    var result = try testPipeline(allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    const func = &result.ir_data.funcs[0];
+    try std.testing.expectEqualStrings("do_nothing", func.name);
+}
+
+test "E2E: enum definition" {
+    const allocator = std.testing.allocator;
+    const code =
+        \\enum Color { red, green, blue }
+        \\fn get_red() Color { return Color.red }
+    ;
+    var result = try testPipeline(allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.type_reg.lookupByName("Color") != null);
+}

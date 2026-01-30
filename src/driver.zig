@@ -1,0 +1,302 @@
+//! Compilation Driver - Orchestrates the full pipeline from source to object code.
+
+const std = @import("std");
+const scanner_mod = @import("frontend/scanner.zig");
+const ast_mod = @import("frontend/ast.zig");
+const parser_mod = @import("frontend/parser.zig");
+const errors_mod = @import("frontend/errors.zig");
+const types_mod = @import("frontend/types.zig");
+const checker_mod = @import("frontend/checker.zig");
+const lower_mod = @import("frontend/lower.zig");
+const ir_mod = @import("frontend/ir.zig");
+const ssa_builder_mod = @import("frontend/ssa_builder.zig");
+const source_mod = @import("frontend/source.zig");
+const regalloc_mod = @import("ssa/regalloc.zig");
+const stackalloc_mod = @import("ssa/stackalloc.zig");
+const expand_calls = @import("ssa/passes/expand_calls.zig");
+const decompose = @import("ssa/passes/decompose.zig");
+const schedule = @import("ssa/passes/schedule.zig");
+const target_mod = @import("core/target.zig");
+const pipeline_debug = @import("pipeline_debug.zig");
+
+// Codegen modules - will be added in Round 5
+// const arm64_codegen = @import("codegen/arm64.zig");
+// const amd64_codegen = @import("codegen/amd64.zig");
+
+const Allocator = std.mem.Allocator;
+const Target = target_mod.Target;
+
+const ParsedFile = struct {
+    path: []const u8,
+    source_text: []const u8,
+    source: source_mod.Source,
+    tree: ast_mod.Ast,
+};
+
+pub const Driver = struct {
+    allocator: Allocator,
+    target: Target = Target.native(),
+    test_mode: bool = false,
+
+    pub fn init(allocator: Allocator) Driver {
+        return .{ .allocator = allocator };
+    }
+
+    pub fn setTarget(self: *Driver, t: Target) void {
+        self.target = t;
+    }
+
+    pub fn setTestMode(self: *Driver, enabled: bool) void {
+        self.test_mode = enabled;
+    }
+
+    /// Compile source code to machine code (single file, no imports).
+    pub fn compileSource(self: *Driver, source_text: []const u8) ![]u8 {
+        var src = source_mod.Source.init(self.allocator, "<input>", source_text);
+        defer src.deinit();
+        var err_reporter = errors_mod.ErrorReporter.init(&src, null);
+
+        // Parse
+        var tree = ast_mod.Ast.init(self.allocator);
+        defer tree.deinit();
+        var scan = scanner_mod.Scanner.initWithErrors(&src, &err_reporter);
+        var parser = parser_mod.Parser.init(self.allocator, &scan, &tree, &err_reporter);
+        try parser.parseFile();
+        if (err_reporter.hasErrors()) return error.ParseError;
+
+        // Type check
+        var type_reg = try types_mod.TypeRegistry.init(self.allocator);
+        defer type_reg.deinit();
+        var global_scope = checker_mod.Scope.init(self.allocator, null);
+        defer global_scope.deinit();
+        var chk = checker_mod.Checker.init(self.allocator, &tree, &type_reg, &err_reporter, &global_scope);
+        defer chk.deinit();
+        try chk.checkFile();
+        if (err_reporter.hasErrors()) return error.TypeCheckError;
+
+        // Lower to IR
+        var lowerer = lower_mod.Lowerer.init(self.allocator, &tree, &type_reg, &err_reporter, &chk);
+        defer lowerer.deinit();
+        var ir_result = try lowerer.lower();
+        defer ir_result.deinit();
+        if (err_reporter.hasErrors()) return error.LowerError;
+
+        return self.generateCode(ir_result.funcs, ir_result.globals, &type_reg, "<input>", source_text);
+    }
+
+    /// Compile a source file (supports imports).
+    pub fn compileFile(self: *Driver, path: []const u8) ![]u8 {
+        var seen_files = std.StringHashMap(void).init(self.allocator);
+        defer seen_files.deinit();
+
+        // Phase 1: Parse all files recursively
+        var parsed_files = std.ArrayListUnmanaged(ParsedFile){};
+        defer {
+            for (parsed_files.items) |*pf| {
+                pf.tree.deinit();
+                pf.source.deinit();
+                self.allocator.free(pf.source_text);
+                self.allocator.free(pf.path);
+            }
+            parsed_files.deinit(self.allocator);
+        }
+        try self.parseFileRecursive(path, &parsed_files, &seen_files);
+
+        // Phase 2: Type check all files with shared symbol table
+        var type_reg = try types_mod.TypeRegistry.init(self.allocator);
+        defer type_reg.deinit();
+        var global_scope = checker_mod.Scope.init(self.allocator, null);
+        defer global_scope.deinit();
+
+        var checkers = std.ArrayListUnmanaged(checker_mod.Checker){};
+        defer {
+            for (checkers.items) |*chk| chk.deinit();
+            checkers.deinit(self.allocator);
+        }
+
+        for (parsed_files.items) |*pf| {
+            var err_reporter = errors_mod.ErrorReporter.init(&pf.source, null);
+            var chk = checker_mod.Checker.init(self.allocator, &pf.tree, &type_reg, &err_reporter, &global_scope);
+            chk.checkFile() catch |e| {
+                chk.deinit();
+                return e;
+            };
+            if (err_reporter.hasErrors()) {
+                chk.deinit();
+                return error.TypeCheckError;
+            }
+            try checkers.append(self.allocator, chk);
+        }
+
+        // Phase 3: Lower all files to IR with shared builder
+        var shared_builder = ir_mod.Builder.init(self.allocator, &type_reg);
+        defer shared_builder.deinit();
+
+        var all_test_names = std.ArrayListUnmanaged([]const u8){};
+        defer all_test_names.deinit(self.allocator);
+        var all_test_display_names = std.ArrayListUnmanaged([]const u8){};
+        defer all_test_display_names.deinit(self.allocator);
+
+        for (parsed_files.items, 0..) |*pf, i| {
+            var lower_err = errors_mod.ErrorReporter.init(&pf.source, null);
+            var lowerer = lower_mod.Lowerer.initWithBuilder(self.allocator, &pf.tree, &type_reg, &lower_err, &checkers.items[i], shared_builder);
+            if (self.test_mode) lowerer.setTestMode(true);
+
+            lowerer.lowerToBuilder() catch |e| {
+                lowerer.deinitWithoutBuilder();
+                return e;
+            };
+            if (lower_err.hasErrors()) {
+                lowerer.deinitWithoutBuilder();
+                return error.LowerError;
+            }
+
+            if (self.test_mode) {
+                for (lowerer.getTestNames()) |n| try all_test_names.append(self.allocator, n);
+                for (lowerer.getTestDisplayNames()) |n| try all_test_display_names.append(self.allocator, n);
+            }
+            shared_builder = lowerer.builder;
+            lowerer.deinitWithoutBuilder();
+        }
+
+        // Generate test runner if in test mode
+        if (self.test_mode and all_test_names.items.len > 0) {
+            var dummy_err = errors_mod.ErrorReporter.init(&parsed_files.items[0].source, null);
+            var runner = lower_mod.Lowerer.initWithBuilder(self.allocator, &parsed_files.items[0].tree, &type_reg, &dummy_err, &checkers.items[0], shared_builder);
+            for (all_test_names.items) |n| try runner.addTestName(n);
+            for (all_test_display_names.items) |n| try runner.addTestDisplayName(n);
+            try runner.generateTestRunner();
+            shared_builder = runner.builder;
+            runner.deinitWithoutBuilder();
+        }
+
+        var final_ir = try shared_builder.getIR();
+        defer final_ir.deinit();
+
+        const main_file = if (parsed_files.items.len > 0) parsed_files.items[parsed_files.items.len - 1] else ParsedFile{
+            .path = path,
+            .source_text = "",
+            .source = undefined,
+            .tree = undefined,
+        };
+        return self.generateCode(final_ir.funcs, final_ir.globals, &type_reg, main_file.path, main_file.source_text);
+    }
+
+    fn normalizePath(self: *Driver, path: []const u8) ![]const u8 {
+        return std.fs.cwd().realpathAlloc(self.allocator, path) catch try self.allocator.dupe(u8, path);
+    }
+
+    fn parseFileRecursive(self: *Driver, path: []const u8, parsed_files: *std.ArrayListUnmanaged(ParsedFile), seen_files: *std.StringHashMap(void)) !void {
+        const canonical_path = try self.normalizePath(path);
+        defer self.allocator.free(canonical_path);
+
+        if (seen_files.contains(canonical_path)) return;
+
+        const path_copy = try self.allocator.dupe(u8, canonical_path);
+        errdefer self.allocator.free(path_copy);
+        try seen_files.put(path_copy, {});
+
+        const source_text = std.fs.cwd().readFileAlloc(self.allocator, canonical_path, 1024 * 1024) catch |e| {
+            std.debug.print("Failed to read file: {s}: {any}\n", .{ canonical_path, e });
+            return e;
+        };
+        errdefer self.allocator.free(source_text);
+
+        var src = source_mod.Source.init(self.allocator, canonical_path, source_text);
+        errdefer src.deinit();
+        var err_reporter = errors_mod.ErrorReporter.init(&src, null);
+
+        var tree = ast_mod.Ast.init(self.allocator);
+        errdefer tree.deinit();
+        var scan = scanner_mod.Scanner.initWithErrors(&src, &err_reporter);
+        var parser = parser_mod.Parser.init(self.allocator, &scan, &tree, &err_reporter);
+        try parser.parseFile();
+        if (err_reporter.hasErrors()) return error.ParseError;
+
+        // Parse imports first (dependencies before dependents)
+        const imports = try tree.getImports(self.allocator);
+        defer self.allocator.free(imports);
+        const file_dir = std.fs.path.dirname(canonical_path) orelse ".";
+        for (imports) |import_path| {
+            const full_path = try std.fs.path.join(self.allocator, &.{ file_dir, import_path });
+            defer self.allocator.free(full_path);
+            try self.parseFileRecursive(full_path, parsed_files, seen_files);
+        }
+
+        try parsed_files.append(self.allocator, .{ .path = path_copy, .source_text = source_text, .source = src, .tree = tree });
+    }
+
+    /// Unified code generation for all architectures.
+    fn generateCode(self: *Driver, funcs: []const ir_mod.Func, globals: []const ir_mod.Global, type_reg: *types_mod.TypeRegistry, source_file: []const u8, source_text: []const u8) ![]u8 {
+        _ = source_file;
+        _ = source_text;
+        _ = globals;
+
+        // Process each function through SSA pipeline
+        for (funcs) |*ir_func| {
+            var ssa_builder = try ssa_builder_mod.SSABuilder.init(self.allocator, ir_func, type_reg);
+            errdefer ssa_builder.deinit();
+
+            const ssa_func = try ssa_builder.build();
+
+            // Run SSA passes
+            try expand_calls.expandCalls(ssa_func, type_reg);
+            try decompose.decompose(ssa_func, type_reg);
+            try schedule.schedule(ssa_func);
+
+            var regalloc_state = try regalloc_mod.regalloc(self.allocator, ssa_func, self.target);
+            defer regalloc_state.deinit();
+
+            _ = try stackalloc_mod.stackalloc(ssa_func, regalloc_state.getSpillLive());
+
+            // Codegen will be added in Round 5
+            // if (self.target.arch == .amd64) {
+            //     var codegen = amd64_codegen.AMD64CodeGen.init(self.allocator);
+            //     defer codegen.deinit();
+            //     codegen.setGlobals(globals);
+            //     codegen.setTypeRegistry(type_reg);
+            //     codegen.setDebugInfo(source_file, source_text);
+            //     codegen.setRegAllocState(&regalloc_state);
+            //     codegen.setFrameSize(stack_result.frame_size);
+            //     try codegen.generateBinary(ssa_func, ir_func.name);
+            // } else {
+            //     // ARM64 codegen
+            // }
+
+            ssa_func.deinit();
+            self.allocator.destroy(ssa_func);
+            ssa_builder.deinit();
+        }
+
+        // Placeholder until codegen is added
+        return try self.allocator.dupe(u8, "");
+    }
+};
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "Driver: init and set target" {
+    const allocator = std.testing.allocator;
+    var driver = Driver.init(allocator);
+    driver.setTarget(.{ .arch = .amd64, .os = .linux });
+    try std.testing.expectEqual(target_mod.Arch.amd64, driver.target.arch);
+    try std.testing.expectEqual(target_mod.Os.linux, driver.target.os);
+}
+
+test "Driver: test mode toggle" {
+    const allocator = std.testing.allocator;
+    var driver = Driver.init(allocator);
+    try std.testing.expect(!driver.test_mode);
+    driver.setTestMode(true);
+    try std.testing.expect(driver.test_mode);
+}
+
+test "Driver: normalizePath returns copy on error" {
+    const allocator = std.testing.allocator;
+    var driver = Driver.init(allocator);
+    const result = try driver.normalizePath("nonexistent_file_12345.zig");
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("nonexistent_file_12345.zig", result);
+}
