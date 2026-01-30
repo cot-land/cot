@@ -37,6 +37,7 @@ pub const ssa_compile = @import("ssa/compile.zig");
 pub const ssa_schedule = @import("ssa/passes/schedule.zig");
 pub const ssa_decompose = @import("ssa/passes/decompose.zig");
 pub const ssa_expand_calls = @import("ssa/passes/expand_calls.zig");
+pub const ssa_lower_wasm = @import("ssa/passes/lower_wasm.zig");
 
 // Debug and pipeline
 pub const pipeline_debug = @import("pipeline_debug.zig");
