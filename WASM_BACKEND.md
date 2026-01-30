@@ -1,476 +1,408 @@
 # Wasm Backend Implementation Plan
 
+## Architecture (Go's Approach)
+
+Go's Wasm backend uses SSA with Wasm-specific ops:
+
+```
+Cot Source → Frontend → IR → SSA (generic ops) → SSA (wasm ops) → Wasm bytecode
+                                      ↓                 ↓
+                               compiler/ssa/      compiler/ssa/passes/
+                               op.zig             lower_wasm.zig
+                                                        ↓
+                                              compiler/codegen/
+                                              wasm_gen.zig
+```
+
+**Go's pattern:**
+1. Generic SSA ops (`add`, `mul`, `load`) defined in `op.zig` - DONE
+2. Wasm-specific SSA ops (`wasm_i64_add`, `wasm_i64_const`) - TODO
+3. Lowering pass converts generic → Wasm ops - TODO
+4. `ssaGenValue` emits Wasm bytecode for each Wasm op - TODO
+
+---
+
 ## Status
 
-| Milestone | Status | Tests |
-|-----------|--------|-------|
-| M1: Binary Encoding | DONE | 14 tests |
-| M2: Module Builder | DONE | 5 tests |
-| M3: E2E Return 42 | TODO | 0 tests |
-| M4: E2E Add Function | TODO | 0 tests |
-| M5: Control Flow | TODO | 0 tests |
-| M6: Strings | TODO | 0 tests |
-| M7: Memory/ARC | TODO | 0 tests |
+| Component | Status | Location |
+|-----------|--------|----------|
+| SSA infrastructure | DONE | `compiler/ssa/` |
+| Generic ops (add, sub, etc.) | DONE | `compiler/ssa/op.zig` |
+| ARM64 ops | DONE | `compiler/ssa/op.zig` |
+| AMD64 ops | DONE | `compiler/ssa/op.zig` |
+| **Wasm ops** | TODO | `compiler/ssa/op.zig` |
+| **Wasm lowering pass** | TODO | `compiler/ssa/passes/lower_wasm.zig` |
+| Wasm binary encoding | DONE | `compiler/codegen/wasm_encode.zig` |
+| Wasm opcodes | DONE | `compiler/codegen/wasm_opcodes.zig` |
+| Module builder | DONE | `compiler/codegen/wasm.zig` |
+| **Wasm codegen (ssaGenValue)** | TODO | `compiler/codegen/wasm_gen.zig` |
 
 ---
 
-## Architecture (Based on Go's Wasm Backend)
+## Step 1: Add Wasm SSA Ops to op.zig
 
-Go's Wasm backend (`cmd/compile/internal/wasm/ssa.go`) teaches us:
+**File:** `compiler/ssa/op.zig`
 
-1. **Clear separation**: `ssaGenValue` handles each SSA op, `ssaGenBlock` handles control flow
-2. **Helper functions**: `getValue64()` pushes operand to stack, `setReg()` stores result
-3. **Type-driven dispatch**: Switch on operation type, emit corresponding Wasm instructions
+**Add after AMD64 ops (around line 115):**
 
-**Cot's architecture:**
+```zig
+// === Wasm-Specific ===
+// Constants
+wasm_i64_const, wasm_f64_const, wasm_f32_const,
 
+// Integer arithmetic
+wasm_i64_add, wasm_i64_sub, wasm_i64_mul, wasm_i64_div_s, wasm_i64_div_u,
+wasm_i64_rem_s, wasm_i64_rem_u,
+
+// Integer bitwise
+wasm_i64_and, wasm_i64_or, wasm_i64_xor, wasm_i64_shl, wasm_i64_shr_s, wasm_i64_shr_u,
+wasm_i64_clz, wasm_i64_ctz, wasm_i64_popcnt, wasm_i64_rotl, wasm_i64_rotr,
+
+// Integer comparison
+wasm_i64_eqz, wasm_i64_eq, wasm_i64_ne,
+wasm_i64_lt_s, wasm_i64_lt_u, wasm_i64_gt_s, wasm_i64_gt_u,
+wasm_i64_le_s, wasm_i64_le_u, wasm_i64_ge_s, wasm_i64_ge_u,
+
+// Float arithmetic
+wasm_f64_add, wasm_f64_sub, wasm_f64_mul, wasm_f64_div,
+wasm_f64_neg, wasm_f64_abs, wasm_f64_sqrt, wasm_f64_ceil, wasm_f64_floor,
+
+// Float comparison
+wasm_f64_eq, wasm_f64_ne, wasm_f64_lt, wasm_f64_gt, wasm_f64_le, wasm_f64_ge,
+
+// Conversions
+wasm_i64_trunc_f64_s, wasm_i64_trunc_f64_u,
+wasm_f64_convert_i64_s, wasm_f64_convert_i64_u,
+wasm_i64_extend_i32_s, wasm_i64_extend_i32_u,
+wasm_i32_wrap_i64,
+
+// Memory
+wasm_i64_load, wasm_i64_store, wasm_i32_load, wasm_i32_store,
+wasm_f64_load, wasm_f64_store,
+wasm_i64_load8_s, wasm_i64_load8_u, wasm_i64_load16_s, wasm_i64_load16_u,
+wasm_i64_load32_s, wasm_i64_load32_u,
+wasm_i64_store8, wasm_i64_store16, wasm_i64_store32,
+
+// Variables
+wasm_local_get, wasm_local_set, wasm_local_tee,
+wasm_global_get, wasm_global_set,
+
+// Control flow
+wasm_call, wasm_call_indirect,
+wasm_drop, wasm_select,
+
+// Lowered operations (like Go's OpWasmLowered*)
+wasm_lowered_move, wasm_lowered_zero,
+wasm_lowered_nil_check,
+wasm_lowered_static_call, wasm_lowered_closure_call,
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  compiler/codegen/                                          │
-├─────────────────────────────────────────────────────────────┤
-│  wasm_opcodes.zig    │ Wasm instruction constants (DONE)    │
-│  wasm_encode.zig     │ LEB128, section encoding (DONE)      │
-│  wasm.zig            │ Module/CodeBuilder (DONE)            │
-│  wasm_codegen.zig    │ IR → Wasm translation (TODO)         │
-└─────────────────────────────────────────────────────────────┘
+
+**Add to op_info_table:**
+
+```zig
+// Wasm ops
+table[@intFromEnum(Op.wasm_i64_const)] = .{ .name = "WasmI64Const", .aux_type = .int64, .rematerializable = true, .generic = false };
+table[@intFromEnum(Op.wasm_i64_add)] = .{ .name = "WasmI64Add", .arg_len = 2, .commutative = true, .generic = false };
+table[@intFromEnum(Op.wasm_i64_sub)] = .{ .name = "WasmI64Sub", .arg_len = 2, .generic = false };
+// ... etc for all wasm ops
 ```
 
-**Key insight from Go**: The codegen walks the IR, and for each node:
-1. Recursively emit operands (pushes values to Wasm stack)
-2. Emit the operation (consumes stack values, produces result)
-3. Store result if needed (to Wasm local)
+**Test:** `zig test compiler/ssa/op.zig` passes
 
 ---
 
-## Milestone 3: E2E "Return 42"
+## Step 2: Create Wasm Lowering Pass
 
-**Goal:** Compile Cot source `fn answer() int { return 42 }` to working Wasm.
+**File:** `compiler/ssa/passes/lower_wasm.zig`
 
-### Step 3.1: Install wasmtime
-
-```bash
-brew install wasmtime
-```
-
-**Verify:** `wasmtime --version` works.
-
-### Step 3.2: Write the E2E test FIRST
-
-**File:** `compiler/codegen/wasm_codegen_test.zig`
+**Purpose:** Convert generic SSA ops to Wasm-specific ops (like Go's `lower` pass)
 
 ```zig
-const std = @import("std");
-const wasm_codegen = @import("wasm_codegen.zig");
-
-test "e2e: return 42" {
-    const source = "fn answer() int { return 42 }";
-
-    // Compile to Wasm bytes
-    const wasm_bytes = try wasm_codegen.compileSource(std.testing.allocator, source);
-    defer std.testing.allocator.free(wasm_bytes);
-
-    // Write to temp file
-    const tmp_path = "/tmp/test_return42.wasm";
-    try std.fs.cwd().writeFile(tmp_path, wasm_bytes);
-
-    // Run with wasmtime
-    const result = try std.process.Child.run(.{
-        .allocator = std.testing.allocator,
-        .argv = &[_][]const u8{ "wasmtime", tmp_path, "--invoke", "answer" },
-    });
-    defer std.testing.allocator.free(result.stdout);
-    defer std.testing.allocator.free(result.stderr);
-
-    // Verify output
-    try std.testing.expectEqualStrings("42\n", result.stdout);
-}
-```
-
-**This test will FAIL initially. That's correct. Now implement to make it pass.**
-
-### Step 3.3: Create wasm_codegen.zig
-
-**File:** `compiler/codegen/wasm_codegen.zig`
-
-**Structure (follow Go's pattern):**
-
-```zig
-//! IR to WebAssembly code generator.
-//! Follows Go's wasm/ssa.go architecture.
+//! Wasm lowering pass - converts generic SSA ops to Wasm-specific ops.
+//! Based on Go's cmd/compile/internal/ssa/lower*.go
 
 const std = @import("std");
-const wasm = @import("wasm.zig");
-const ir = @import("../frontend/ir.zig");
-const parser = @import("../frontend/parser.zig");
-const checker = @import("../frontend/checker.zig");
-const lower = @import("../frontend/lower.zig");
-const types = @import("../frontend/types.zig");
+const ssa = @import("../func.zig");
+const op = @import("../op.zig");
+const value = @import("../value.zig");
 
-/// Compile Cot source code to Wasm binary.
-pub fn compileSource(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
-    // 1. Parse
-    var p = parser.Parser.init(allocator, source, "test.cot");
-    const ast = try p.parse();
-
-    // 2. Type check
-    var type_reg = try types.TypeRegistry.init(allocator);
-    defer type_reg.deinit();
-    var c = checker.Checker.init(allocator, &type_reg);
-    try c.check(ast);
-
-    // 3. Lower to IR
-    var l = lower.Lowerer.init(allocator, &type_reg);
-    const ir_funcs = try l.lower(ast);
-
-    // 4. Generate Wasm
-    return try compileModule(allocator, ir_funcs, &type_reg);
-}
-
-/// Compile IR functions to Wasm module.
-pub fn compileModule(
-    allocator: std.mem.Allocator,
-    funcs: []const ir.Func,
-    type_reg: *const types.TypeRegistry,
-) ![]u8 {
-    var module = wasm.Module.init(allocator);
-    defer module.deinit();
-
-    for (funcs) |*func| {
-        try compileFunc(&module, func, type_reg);
+/// Lower a function's generic ops to Wasm ops.
+pub fn lowerFunc(func: *ssa.Func) !void {
+    for (func.blocks.items) |*block| {
+        for (block.values.items) |*val| {
+            try lowerValue(func, val);
+        }
     }
-
-    var output: std.ArrayListUnmanaged(u8) = .{};
-    try module.emit(output.writer(allocator));
-    return output.toOwnedSlice(allocator);
 }
 
-/// Compile a single IR function to Wasm.
-fn compileFunc(
-    module: *wasm.Module,
-    func: *const ir.Func,
-    type_reg: *const types.TypeRegistry,
-) !void {
-    // 1. Build Wasm function type
-    const params = try buildParamTypes(module.allocator, func);
-    const results = try buildResultTypes(module.allocator, func);
-    const type_idx = try module.addFuncType(params, results);
+fn lowerValue(func: *ssa.Func, val: *value.Value) !void {
+    switch (val.op) {
+        // Constants
+        .const_int, .const_64 => val.op = .wasm_i64_const,
+        .const_float => val.op = .wasm_f64_const,
 
-    // 2. Add function to module
-    const func_idx = try module.addFunc(type_idx);
+        // Arithmetic
+        .add, .add64 => val.op = .wasm_i64_add,
+        .sub, .sub64 => val.op = .wasm_i64_sub,
+        .mul, .mul64 => val.op = .wasm_i64_mul,
+        .div => val.op = .wasm_i64_div_s,
+        .udiv => val.op = .wasm_i64_div_u,
+        .mod => val.op = .wasm_i64_rem_s,
+        .umod => val.op = .wasm_i64_rem_u,
 
-    // 3. Export if public (for now, export all)
-    try module.addExport(func.name, .func, func_idx);
+        // Bitwise
+        .and_, .and64 => val.op = .wasm_i64_and,
+        .or_, .or64 => val.op = .wasm_i64_or,
+        .xor, .xor64 => val.op = .wasm_i64_xor,
+        .shl, .shl64 => val.op = .wasm_i64_shl,
+        .shr, .shr64 => val.op = .wasm_i64_shr_u,
+        .sar, .sar64 => val.op = .wasm_i64_shr_s,
 
-    // 4. Generate function body
+        // Comparisons
+        .eq, .eq64 => val.op = .wasm_i64_eq,
+        .ne, .ne64 => val.op = .wasm_i64_ne,
+        .lt, .lt64 => val.op = .wasm_i64_lt_s,
+        .le, .le64 => val.op = .wasm_i64_le_s,
+        .gt, .gt64 => val.op = .wasm_i64_gt_s,
+        .ge, .ge64 => val.op = .wasm_i64_ge_s,
+        .ult => val.op = .wasm_i64_lt_u,
+        .ule => val.op = .wasm_i64_le_u,
+        .ugt => val.op = .wasm_i64_gt_u,
+        .uge => val.op = .wasm_i64_ge_u,
+
+        // Float
+        .add64f => val.op = .wasm_f64_add,
+        .sub64f => val.op = .wasm_f64_sub,
+        .mul64f => val.op = .wasm_f64_mul,
+        .div64f => val.op = .wasm_f64_div,
+        .neg64f => val.op = .wasm_f64_neg,
+
+        // Memory
+        .load, .load64 => val.op = .wasm_i64_load,
+        .store, .store64 => val.op = .wasm_i64_store,
+
+        // Function calls
+        .static_call => val.op = .wasm_lowered_static_call,
+        .call => val.op = .wasm_call,
+
+        // Already Wasm-specific or control flow - leave unchanged
+        else => {},
+    }
+    _ = func;
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "lower add to wasm_i64_add" {
+    // Create a simple function with add op
+    // Verify it gets lowered to wasm_i64_add
+}
+
+test "lower const_int to wasm_i64_const" {
+    // ...
+}
+```
+
+**Test:** `zig test compiler/ssa/passes/lower_wasm.zig` passes
+
+---
+
+## Step 3: Create Wasm Code Generator
+
+**File:** `compiler/codegen/wasm_gen.zig`
+
+**Purpose:** Emit Wasm bytecode for each Wasm SSA op (like Go's `ssaGenValue`)
+
+```zig
+//! Wasm code generator - emits bytecode for Wasm SSA ops.
+//! Based on Go's cmd/compile/internal/wasm/ssa.go
+
+const std = @import("std");
+const ssa = @import("../ssa/func.zig");
+const op = @import("../ssa/op.zig");
+const value = @import("../ssa/value.zig");
+const wasm = @import("wasm.zig");
+
+/// Generate Wasm code for an SSA function.
+pub fn genFunc(func: *const ssa.Func, module: *wasm.Module) !void {
     var code = wasm.CodeBuilder.init(module.allocator);
     defer code.deinit();
 
-    try emitFuncBody(&code, func, type_reg);
+    // Generate code for each block
+    for (func.blocks.items) |block| {
+        try genBlock(func, block, &code);
+    }
 
     const body = try code.finish();
     defer module.allocator.free(body);
     try module.addCode(body);
 }
 
-/// Emit function body by walking IR nodes.
-fn emitFuncBody(
-    code: *wasm.CodeBuilder,
-    func: *const ir.Func,
-    type_reg: *const types.TypeRegistry,
-) !void {
-    // Walk blocks in order
-    for (func.blocks) |block| {
-        for (block.nodes) |node_idx| {
-            try emitNode(code, func.getNode(node_idx), func, type_reg);
-        }
+fn genBlock(func: *const ssa.Func, block: *const ssa.Block, code: *wasm.CodeBuilder) !void {
+    for (block.values.items) |val| {
+        try genValue(func, val, code);
     }
+    _ = func;
 }
 
-/// Emit a single IR node (like Go's ssaGenValue).
-fn emitNode(
-    code: *wasm.CodeBuilder,
-    node: *const ir.Node,
-    func: *const ir.Func,
-    type_reg: *const types.TypeRegistry,
-) !void {
-    switch (node.data) {
-        .const_int => |ci| try code.emitI64Const(ci.value),
-        .ret => |r| {
-            if (r.value) |val_idx| {
-                try emitNode(code, func.getNode(val_idx), func, type_reg);
-            }
-            // Implicit return at function end - no explicit return needed
-        },
-        else => {},
-    }
-}
+/// Generate Wasm code for a single SSA value (like Go's ssaGenValue).
+fn genValue(func: *const ssa.Func, val: *const value.Value, code: *wasm.CodeBuilder) !void {
+    switch (val.op) {
+        // Constants
+        .wasm_i64_const => try code.emitI64Const(val.aux_int),
+        .wasm_f64_const => try code.emitF64Const(val.aux_float),
 
-fn buildParamTypes(allocator: std.mem.Allocator, func: *const ir.Func) ![]const wasm.ValType {
-    var params: std.ArrayListUnmanaged(wasm.ValType) = .{};
-    for (func.params) |param| {
-        try params.append(allocator, cotTypeToWasm(param.type_idx));
-    }
-    return params.toOwnedSlice(allocator);
-}
+        // Arithmetic (2 args, already on stack from recursive calls)
+        .wasm_i64_add => try code.emitI64Add(),
+        .wasm_i64_sub => try code.emitI64Sub(),
+        .wasm_i64_mul => try code.emitI64Mul(),
+        .wasm_i64_div_s => try code.emitI64DivS(),
+        .wasm_i64_rem_s => try code.emitI64RemS(),
 
-fn buildResultTypes(allocator: std.mem.Allocator, func: *const ir.Func) ![]const wasm.ValType {
-    if (func.return_type == types.TypeRegistry.VOID) {
-        return &[_]wasm.ValType{};
-    }
-    var results: std.ArrayListUnmanaged(wasm.ValType) = .{};
-    try results.append(allocator, cotTypeToWasm(func.return_type));
-    return results.toOwnedSlice(allocator);
-}
+        // Bitwise
+        .wasm_i64_and => try code.emitI64And(),
+        .wasm_i64_or => try code.emitI64Or(),
+        .wasm_i64_xor => try code.emitI64Xor(),
+        .wasm_i64_shl => try code.emitI64Shl(),
+        .wasm_i64_shr_s => try code.emitI64ShrS(),
 
-fn cotTypeToWasm(type_idx: types.TypeIndex) wasm.ValType {
-    return switch (type_idx) {
-        types.TypeRegistry.BOOL => .i32,
-        types.TypeRegistry.I32, types.TypeRegistry.U32 => .i32,
-        types.TypeRegistry.I64, types.TypeRegistry.U64 => .i64,
-        types.TypeRegistry.F32 => .f32,
-        types.TypeRegistry.F64 => .f64,
-        else => .i64, // Default for int, pointers, etc.
-    };
-}
-```
+        // Comparisons
+        .wasm_i64_eq => try code.emitI64Eq(),
+        .wasm_i64_ne => try code.emitI64Ne(),
+        .wasm_i64_lt_s => try code.emitI64LtS(),
+        .wasm_i64_le_s => try code.emitI64LeS(),
+        .wasm_i64_gt_s => try code.emitI64GtS(),
+        .wasm_i64_ge_s => try code.emitI64GeS(),
+        .wasm_i64_eqz => try code.emitI64Eqz(),
 
-### Step 3.4: Success Criteria
+        // Float
+        .wasm_f64_add => try code.emitF64Add(),
+        .wasm_f64_sub => try code.emitF64Sub(),
+        .wasm_f64_mul => try code.emitF64Mul(),
+        .wasm_f64_div => try code.emitF64Div(),
+        .wasm_f64_neg => try code.emitF64Neg(),
 
-**STOP when:**
-- [ ] `zig test compiler/codegen/wasm_codegen_test.zig` passes
-- [ ] `wasmtime /tmp/test_return42.wasm --invoke answer` outputs `42`
+        // Variables
+        .wasm_local_get => try code.emitLocalGet(@intCast(val.aux_int)),
+        .wasm_local_set => try code.emitLocalSet(@intCast(val.aux_int)),
 
-**DO NOT proceed to Milestone 4 until M3 is complete.**
+        // Function calls
+        .wasm_call => try code.emitCall(@intCast(val.aux_int)),
 
----
-
-## Milestone 4: E2E "Add Two Numbers"
-
-**Goal:** Compile `fn add(a: int, b: int) int { return a + b }` to working Wasm.
-
-### Step 4.1: Write the E2E test FIRST
-
-```zig
-test "e2e: add two numbers" {
-    const source = "fn add(a: int, b: int) int { return a + b }";
-
-    const wasm_bytes = try wasm_codegen.compileSource(std.testing.allocator, source);
-    defer std.testing.allocator.free(wasm_bytes);
-
-    try std.fs.cwd().writeFile("/tmp/test_add.wasm", wasm_bytes);
-
-    // wasmtime run /tmp/test_add.wasm --invoke add 3 5
-    const result = try std.process.Child.run(.{
-        .allocator = std.testing.allocator,
-        .argv = &[_][]const u8{ "wasmtime", "/tmp/test_add.wasm", "--invoke", "add", "3", "5" },
-    });
-    defer std.testing.allocator.free(result.stdout);
-    defer std.testing.allocator.free(result.stderr);
-
-    try std.testing.expectEqualStrings("8\n", result.stdout);
-}
-```
-
-### Step 4.2: Add to emitNode
-
-```zig
-fn emitNode(...) !void {
-    switch (node.data) {
-        .const_int => |ci| try code.emitI64Const(ci.value),
-
-        .load_local, .local_ref => |lr| try code.emitLocalGet(lr.local_idx),
-
-        .binary => |bin| {
-            // Emit left operand (pushes to stack)
-            try emitNode(code, func.getNode(bin.left), func, type_reg);
-            // Emit right operand (pushes to stack)
-            try emitNode(code, func.getNode(bin.right), func, type_reg);
-            // Emit operation (consumes two, produces one)
-            try emitBinaryOp(code, bin.op, isFloat(node.type_idx));
-        },
-
-        .ret => |r| {
-            if (r.value) |val_idx| {
-                try emitNode(code, func.getNode(val_idx), func, type_reg);
-            }
-        },
+        // Memory - TODO
+        .wasm_i64_load, .wasm_i64_store => {},
 
         else => {},
     }
+    _ = func;
 }
 
-fn emitBinaryOp(code: *wasm.CodeBuilder, op: ir.BinaryOp, is_float: bool) !void {
-    if (is_float) {
-        switch (op) {
-            .add => try code.emitF64Add(),
-            .sub => try code.emitF64Sub(),
-            .mul => try code.emitF64Mul(),
-            .div => try code.emitF64Div(),
-            else => {},
-        }
-    } else {
-        switch (op) {
-            .add => try code.emitI64Add(),
-            .sub => try code.emitI64Sub(),
-            .mul => try code.emitI64Mul(),
-            .div => try code.emitI64DivS(),
-            .mod => try code.emitI64RemS(),
-            else => {},
-        }
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "genValue wasm_i64_const" {
+    const allocator = std.testing.allocator;
+    var code = wasm.CodeBuilder.init(allocator);
+    defer code.deinit();
+
+    var val = value.Value{ .op = .wasm_i64_const, .aux_int = 42 };
+    try genValue(undefined, &val, &code);
+
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x42, 42 }, code.buf.items);
+}
+
+test "genValue wasm_i64_add" {
+    // ...
+}
+```
+
+**Test:** `zig test compiler/codegen/wasm_gen.zig` passes
+
+---
+
+## Step 4: Wire Up the Pipeline
+
+**File:** `compiler/driver.zig` (or new `compiler/codegen/wasm_driver.zig`)
+
+```zig
+pub fn compileToWasm(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
+    // 1. Frontend: source → IR
+    const ir_funcs = try frontend.compile(allocator, source);
+
+    // 2. Build SSA
+    var ssa_funcs = try ssa.buildFromIR(allocator, ir_funcs);
+
+    // 3. Lower to Wasm ops
+    for (ssa_funcs) |*func| {
+        try lower_wasm.lowerFunc(func);
     }
+
+    // 4. Generate Wasm
+    var module = wasm.Module.init(allocator);
+    for (ssa_funcs) |*func| {
+        try wasm_gen.genFunc(func, &module);
+    }
+
+    // 5. Emit binary
+    var output: std.ArrayListUnmanaged(u8) = .{};
+    try module.emit(output.writer(allocator));
+    return output.toOwnedSlice(allocator);
 }
 ```
 
-### Step 4.3: Success Criteria
+---
 
-**STOP when:**
-- [ ] `zig test compiler/codegen/wasm_codegen_test.zig` passes (both tests)
-- [ ] `wasmtime /tmp/test_add.wasm --invoke add 3 5` outputs `8`
-- [ ] `wasmtime /tmp/test_add.wasm --invoke add 100 200` outputs `300`
+## Milestones (Revised)
+
+### M1: Wasm SSA Ops (Step 1)
+- [ ] Add `wasm_*` ops to `compiler/ssa/op.zig`
+- [ ] Add op_info entries for each
+- [ ] Test: `zig test compiler/ssa/op.zig` passes
+- [ ] Commit
+
+### M2: Wasm Lowering Pass (Step 2)
+- [ ] Create `compiler/ssa/passes/lower_wasm.zig`
+- [ ] Implement `lowerFunc` and `lowerValue`
+- [ ] Test: generic ops convert to wasm ops
+- [ ] Commit
+
+### M3: Wasm Code Generator (Step 3)
+- [ ] Create `compiler/codegen/wasm_gen.zig`
+- [ ] Implement `genFunc`, `genBlock`, `genValue`
+- [ ] Test: wasm ops emit correct bytecode
+- [ ] Commit
+
+### M4: E2E "Return 42"
+- [ ] Wire up pipeline
+- [ ] Test: compile `fn answer() int { return 42 }` → run in wasmtime → outputs 42
+- [ ] Commit
+
+### M5: E2E "Add Two Numbers"
+- [ ] Test: compile `fn add(a: int, b: int) int { return a + b }` → wasmtime → correct
+- [ ] Commit
+
+### M6+: Control flow, strings, memory, ARC
 
 ---
 
-## Milestone 5: Control Flow
+## Rules
 
-**Goal:** Compile functions with if/else and loops.
-
-### Step 5.1: Write tests FIRST
-
-```zig
-test "e2e: absolute value" {
-    const source =
-        \\fn abs(x: int) int {
-        \\    if (x < 0) { return -x }
-        \\    return x
-        \\}
-    ;
-    // ... test abs(-5) == 5, abs(5) == 5
-}
-
-test "e2e: factorial" {
-    const source =
-        \\fn factorial(n: int) int {
-        \\    var result: int = 1
-        \\    var i: int = 1
-        \\    while (i <= n) {
-        \\        result = result * i
-        \\        i = i + 1
-        \\    }
-        \\    return result
-        \\}
-    ;
-    // ... test factorial(5) == 120
-}
-```
-
-### Step 5.2: Control Flow Strategy
-
-**Wasm has structured control flow.** No arbitrary gotos.
-
-**IR `branch` → Wasm `if`/`else`/`end`:**
-```
-IR:                         Wasm:
-branch cond, then, else  →  (if (result i64)
-                              (then ...)
-                              (else ...))
-```
-
-**IR loops → Wasm `loop`/`block`/`br`:**
-```
-IR:                         Wasm:
-loop_header:              →  (block $exit
-  branch cond, body, exit     (loop $loop
-body:                           ;; condition
-  ...                           br_if $exit
-  jump loop_header              ;; body
-exit:                           br $loop))
-```
-
-### Step 5.3: Implementation
-
-Add to `emitNode`:
-- `branch` → `if`/`else`/`end`
-- `jump` → `br`
-- Handle block structure
-
-**This is the hardest part.** Take it slow. One test at a time.
+1. **Follow Go's pattern exactly.** We have Go-style SSA. Use it.
+2. **One step at a time.** M1 → M2 → M3 → M4. No skipping.
+3. **Test each component in isolation.** Unit tests before integration.
+4. **Commit after each passing milestone.**
+5. **If stuck, look at Go's code.** `~/learning/go/src/cmd/compile/internal/wasm/`
 
 ---
 
-## Milestone 6: Strings
+## Reference Files
 
-**Goal:** Compile programs with string literals.
-
-### Step 6.1: Tests FIRST
-
-```zig
-test "e2e: hello world" {
-    const source =
-        \\fn main() {
-        \\    print("Hello, World!")
-        \\}
-    ;
-    // Run and verify stdout contains "Hello, World!"
-}
-```
-
-### Step 6.2: Implementation
-
-1. **Data section**: String literals go in Wasm data section
-2. **Import print**: `(import "env" "print" (func $print (param i32 i32)))`
-3. **String representation**: `{ ptr: i32, len: i32 }`
-
----
-
-## Milestone 7: Memory and ARC
-
-**Goal:** Dynamic memory allocation with automatic reference counting.
-
-### Step 7.1: Tests FIRST
-
-```zig
-test "e2e: dynamic string" {
-    const source =
-        \\fn greet(name: string) string {
-        \\    return "Hello, " + name + "!"
-        \\}
-    ;
-    // Test that memory is properly allocated and freed
-}
-```
-
-### Step 7.2: Implementation
-
-1. **Memory section**: Declare linear memory
-2. **Allocator**: Bump allocator or free list
-3. **ARC runtime**: `cot_retain`, `cot_release`
-4. **Compiler inserts calls**: At function entry/exit, assignments
-
----
-
-## Rules for Implementation
-
-1. **Write test FIRST.** Test must fail before implementing.
-2. **One milestone at a time.** Do not start M4 until M3 passes.
-3. **Run tests after every change.** `zig test compiler/codegen/wasm_codegen_test.zig`
-4. **Commit after each passing test.** Small, incremental commits.
-5. **If stuck, ask.** Don't spiral. Don't hack. Ask for direction.
-
----
-
-## Files to Create (Summary)
-
-| Milestone | File | Purpose |
-|-----------|------|---------|
-| M3 | `compiler/codegen/wasm_codegen.zig` | IR → Wasm translation |
-| M3 | `compiler/codegen/wasm_codegen_test.zig` | E2E tests |
-| M6 | Update `wasm.zig` | Data section support |
-| M7 | `runtime/wasm_runtime.zig` | ARC functions in Wasm |
-
----
-
-## Reference
-
-- Go's Wasm backend: `~/learning/go/src/cmd/compile/internal/wasm/ssa.go`
-- Wasm spec: https://webassembly.github.io/spec/core/
-- `bootstrap-0.2/DESIGN.md` - Overall architecture
+| Our File | Go Equivalent | Purpose |
+|----------|---------------|---------|
+| `compiler/ssa/op.zig` | `cmd/compile/internal/ssa/op.go` | SSA operations |
+| `compiler/ssa/passes/lower_wasm.zig` | `cmd/compile/internal/ssa/lower*.go` | Generic → target lowering |
+| `compiler/codegen/wasm_gen.zig` | `cmd/compile/internal/wasm/ssa.go` | SSA → Wasm bytecode |
+| `compiler/codegen/wasm.zig` | N/A (Go uses obj/wasm) | Module builder |
