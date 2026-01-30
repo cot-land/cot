@@ -52,6 +52,7 @@ pub const elf = @import("obj/elf.zig");
 pub const wasm = @import("codegen/wasm.zig");
 pub const wasm_opcodes = @import("codegen/wasm_opcodes.zig");
 pub const wasm_encode = @import("codegen/wasm_encode.zig");
+pub const wasm_gen = @import("codegen/wasm_gen.zig");
 
 const Target = core_target.Target;
 const Driver = driver.Driver;
