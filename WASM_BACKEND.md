@@ -446,9 +446,15 @@ pub fn compileToWasm(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
 - [x] Tests: slice_make/ptr/len, bounds_check, array access
 - Go reference: rewriteWasm.go - IsInBounds → i64.lt_u
 
-### M14: Strings
-- [ ] String data in data section
-- [ ] String operations via runtime
+### M14: Strings ✅
+- [x] Global section support (for SP and future globals)
+- [x] Data section support (for string literals)
+- [x] `string_make(ptr, len)`: construct string from components
+- [x] `string_ptr(str)`: extract pointer component
+- [x] `string_len(str)`: extract length component
+- [x] `const_string`: string literal with data section offset
+- [x] Tests: string_make/ptr/len, const_string, global section, data section
+- Go reference: genericOps.go StringMake/StringPtr/StringLen, cmd/link/internal/wasm/asm.go writeDataSec
 
 ### M15: ARC Basics
 - [ ] Retain/release function calls

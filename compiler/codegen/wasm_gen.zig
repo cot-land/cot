@@ -678,6 +678,73 @@ pub const FuncGen = struct {
                 }
             },
 
+            // ================================================================
+            // String Operations (M14)
+            // Go reference: genericOps.go - StringMake, StringPtr, StringLen
+            // Strings are (ptr, len) tuples, same as slices in Wasm
+            // ================================================================
+
+            // string_ptr: extract pointer from string
+            // Go: StringPtr(StringMake ptr _) => ptr
+            .string_ptr => {
+                const str = v.args[0];
+                if (str.op == .string_make and str.args.len >= 1) {
+                    // String was made inline - get the ptr component
+                    try self.getValue32(str.args[0]);
+                } else if (str.op == .const_string) {
+                    // Constant string - ptr is the data offset stored in aux_int
+                    try self.code.emitI32Const(@truncate(str.aux_int));
+                } else {
+                    // String from local/parameter - stored as (ptr, len) in memory
+                    // Load ptr from offset 0
+                    try self.getValue32(str);
+                    try self.code.emitI64Load(3, 0);
+                    try self.code.emitI32WrapI64();
+                }
+            },
+
+            // string_len: extract length from string
+            // Go: StringLen(StringMake _ len) => len
+            .string_len => {
+                const str = v.args[0];
+                if (str.op == .string_make and str.args.len >= 2) {
+                    // String was made inline - get the len component
+                    try self.getValue64(str.args[1]);
+                } else if (str.op == .const_string) {
+                    // Constant string - len is stored in aux field
+                    // aux_int holds offset, we need to get len from aux.string
+                    const len: i64 = switch (str.aux) {
+                        .string => |s| @intCast(s.len),
+                        else => 0,
+                    };
+                    try self.code.emitI64Const(len);
+                } else {
+                    // String from local/parameter - stored as (ptr, len) in memory
+                    // Load len from offset 8 (after ptr)
+                    try self.getValue32(str);
+                    try self.code.emitI64Load(3, 8);
+                }
+            },
+
+            // string_make: construct a string from (ptr, len)
+            // Go: OpStringMake - virtual op, aggregates components
+            .string_make => {
+                // String components are accessed via string_ptr/string_len
+                // If needed to store, caller handles it
+                if (v.args.len >= 2) {
+                    try self.getValue32(v.args[0]); // ptr
+                    try self.getValue64(v.args[1]); // len
+                }
+            },
+
+            // const_string: string literal
+            // The string data is in the data section at offset v.aux_int
+            // We emit the pointer as i32.const offset
+            .const_string => {
+                // aux_int contains the offset in the data section
+                try self.code.emitI32Const(@truncate(v.aux_int));
+            },
+
             // Loads (Go lines 379-382)
             .wasm_i64_load => {
                 try self.getValue32(v.args[0]);
@@ -880,6 +947,8 @@ pub const FuncGen = struct {
         return switch (v.op) {
             // Address computations produce i32 (Wasm uses 32-bit linear memory)
             .local_addr, .off_ptr, .add_ptr, .sub_ptr => true,
+            // String/slice pointers produce i32
+            .string_ptr, .slice_ptr, .const_string => true,
             // i32 operations
             .wasm_i32_const, .const_32, .wasm_i32_load => true,
             // Comparisons produce i32
@@ -1694,4 +1763,191 @@ test "genFunc - array element access via add_ptr" {
     }
     try testing.expect(found_i32_add);
     try testing.expect(found_i64_load);
+}
+
+// ============================================================================
+// M14: String Operations Tests
+// Go reference: genericOps.go - StringMake, StringPtr, StringLen
+// ============================================================================
+
+test "genFunc - string_make and string_ptr extraction" {
+    // Test string creation and pointer extraction
+    // string_make(ptr, len) creates string, string_ptr extracts ptr
+    const allocator = testing.allocator;
+
+    var f = SsaFunc.init(allocator, "test_string_ptr");
+    defer f.deinit();
+
+    const b = try f.newBlock(.ret);
+
+    // Create a pointer (local_addr of slot 0)
+    const ptr = try f.newValue(.local_addr, 0, b, .{});
+    ptr.aux_int = 0;
+    ptr.*.uses = 1;
+    try b.addValue(allocator, ptr);
+
+    // Create a length
+    const len = try f.newValue(.wasm_i64_const, 0, b, .{});
+    len.aux_int = 5; // "hello" length
+    len.*.uses = 1;
+    try b.addValue(allocator, len);
+
+    // string_make(ptr, len)
+    const str = try f.newValue(.string_make, 0, b, .{});
+    str.addArg(ptr);
+    str.addArg(len);
+    str.*.uses = 1;
+    try b.addValue(allocator, str);
+
+    // string_ptr(str) - should get the ptr back
+    const extracted_ptr = try f.newValue(.string_ptr, 0, b, .{});
+    extracted_ptr.addArg(str);
+    extracted_ptr.*.uses = 1;
+    try b.addValue(allocator, extracted_ptr);
+
+    // Load from the extracted pointer (to verify it's an address)
+    const load = try f.newValue(.wasm_i64_load, 0, b, .{});
+    load.addArg(extracted_ptr);
+    load.aux_int = 0;
+    load.*.uses = 1;
+    try b.addValue(allocator, load);
+    b.controls[0] = load;
+
+    const body = try genFunc(allocator, &f);
+    defer allocator.free(body);
+
+    // Should contain global.get (for local_addr) and i64.load
+    try testing.expect(body.len >= 5);
+    var found_global_get = false;
+    var found_i64_load = false;
+    for (body) |byte| {
+        if (byte == Op.global_get) found_global_get = true;
+        if (byte == Op.i64_load) found_i64_load = true;
+    }
+    try testing.expect(found_global_get);
+    try testing.expect(found_i64_load);
+}
+
+test "genFunc - string_len extraction" {
+    // Test length extraction from string
+    const allocator = testing.allocator;
+
+    var f = SsaFunc.init(allocator, "test_string_len");
+    defer f.deinit();
+
+    const b = try f.newBlock(.ret);
+
+    // Create a pointer
+    const ptr = try f.newValue(.local_addr, 0, b, .{});
+    ptr.aux_int = 0;
+    ptr.*.uses = 1;
+    try b.addValue(allocator, ptr);
+
+    // Create a length = 13 ("hello, world!")
+    const len = try f.newValue(.wasm_i64_const, 0, b, .{});
+    len.aux_int = 13;
+    len.*.uses = 1;
+    try b.addValue(allocator, len);
+
+    // string_make(ptr, len)
+    const str = try f.newValue(.string_make, 0, b, .{});
+    str.addArg(ptr);
+    str.addArg(len);
+    str.*.uses = 1;
+    try b.addValue(allocator, str);
+
+    // string_len(str) - should get 13
+    const extracted_len = try f.newValue(.string_len, 0, b, .{});
+    extracted_len.addArg(str);
+    extracted_len.*.uses = 1;
+    try b.addValue(allocator, extracted_len);
+    b.controls[0] = extracted_len;
+
+    const body = try genFunc(allocator, &f);
+    defer allocator.free(body);
+
+    // Should contain i64.const 13
+    try testing.expect(body.len >= 3);
+    var found_i64_const = false;
+    for (body) |byte| {
+        if (byte == Op.i64_const) found_i64_const = true;
+    }
+    try testing.expect(found_i64_const);
+}
+
+test "genFunc - const_string emits i32.const pointer" {
+    // Test constant string generates i32.const with data offset
+    const allocator = testing.allocator;
+
+    var f = SsaFunc.init(allocator, "test_const_string");
+    defer f.deinit();
+
+    const b = try f.newBlock(.ret);
+
+    // const_string with offset 1024 (simulating data section offset)
+    const str = try f.newValue(.const_string, 0, b, .{});
+    str.aux_int = 1024; // offset in data section
+    str.aux = .{ .string = "hello" };
+    str.*.uses = 1;
+    try b.addValue(allocator, str);
+
+    // string_ptr to get the pointer
+    const ptr = try f.newValue(.string_ptr, 0, b, .{});
+    ptr.addArg(str);
+    ptr.*.uses = 1;
+    try b.addValue(allocator, ptr);
+
+    // Wrap as i64 for return (since return expects i64)
+    // In practice we'd return the pointer, but for this test we verify i32.const is emitted
+    const extend = try f.newValue(.wasm_i64_const, 0, b, .{});
+    extend.aux_int = 0; // dummy
+    extend.*.uses = 1;
+    try b.addValue(allocator, extend);
+    b.controls[0] = extend;
+
+    const body = try genFunc(allocator, &f);
+    defer allocator.free(body);
+
+    // Should contain i32.const (for the string pointer offset)
+    try testing.expect(body.len >= 3);
+    var found_i32_const = false;
+    for (body) |byte| {
+        if (byte == Op.i32_const) found_i32_const = true;
+    }
+    try testing.expect(found_i32_const);
+}
+
+test "genFunc - string_len from const_string" {
+    // Test getting length from constant string
+    const allocator = testing.allocator;
+
+    var f = SsaFunc.init(allocator, "test_const_string_len");
+    defer f.deinit();
+
+    const b = try f.newBlock(.ret);
+
+    // const_string "hello" (length 5)
+    const str = try f.newValue(.const_string, 0, b, .{});
+    str.aux_int = 0; // offset
+    str.aux = .{ .string = "hello" };
+    str.*.uses = 1;
+    try b.addValue(allocator, str);
+
+    // string_len - should emit i64.const 5
+    const len = try f.newValue(.string_len, 0, b, .{});
+    len.addArg(str);
+    len.*.uses = 1;
+    try b.addValue(allocator, len);
+    b.controls[0] = len;
+
+    const body = try genFunc(allocator, &f);
+    defer allocator.free(body);
+
+    // Should contain i64.const
+    try testing.expect(body.len >= 3);
+    var found_i64_const = false;
+    for (body) |byte| {
+        if (byte == Op.i64_const) found_i64_const = true;
+    }
+    try testing.expect(found_i64_const);
 }

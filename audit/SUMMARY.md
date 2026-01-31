@@ -4,7 +4,7 @@
 
 All compiler files have been ported and refactored to 0.3.
 
-**Tests: 389/411 passed, 22 skipped (native)**
+**Tests: 396/418 passed, 22 skipped (native)**
 
 ---
 

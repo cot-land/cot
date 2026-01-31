@@ -20,13 +20,20 @@ pub const Module = struct {
     // Section data
     types: std.ArrayListUnmanaged(u8) = .{},
     funcs: std.ArrayListUnmanaged(u8) = .{},
+    globals: std.ArrayListUnmanaged(u8) = .{},
     exports: std.ArrayListUnmanaged(u8) = .{},
     codes: std.ArrayListUnmanaged(u8) = .{},
+    data_segments: std.ArrayListUnmanaged(u8) = .{},
 
     // Counters
     type_count: u32 = 0,
     func_count: u32 = 0,
+    global_count: u32 = 0,
     export_count: u32 = 0,
+    data_count: u32 = 0,
+
+    // Data section tracking
+    data_offset: u32 = 0, // Next available offset in linear memory for data
 
     // Memory configuration
     has_memory: bool = false,
@@ -40,8 +47,10 @@ pub const Module = struct {
     pub fn deinit(self: *Module) void {
         self.types.deinit(self.allocator);
         self.funcs.deinit(self.allocator);
+        self.globals.deinit(self.allocator);
         self.exports.deinit(self.allocator);
         self.codes.deinit(self.allocator);
+        self.data_segments.deinit(self.allocator);
     }
 
     /// Add linear memory with specified page limits.
@@ -84,6 +93,78 @@ pub const Module = struct {
         try writer.writeAll(body);
     }
 
+    /// Add a global variable.
+    /// Go reference: globals are used for SP (stack pointer) etc.
+    /// val_type: the type of the global (i32, i64, etc.)
+    /// mutable: true if the global can be modified
+    /// init_value: the initial value (as i64, will be emitted as appropriate const)
+    pub fn addGlobal(self: *Module, val_type: ValType, mutable: bool, init_value: i64) !u32 {
+        const idx = self.global_count;
+        const writer = self.globals.writer(self.allocator);
+
+        // Global type: valtype + mutability
+        try writer.writeByte(@intFromEnum(val_type));
+        try writer.writeByte(if (mutable) 0x01 else 0x00);
+
+        // Init expression: type.const value, end
+        switch (val_type) {
+            .i32 => {
+                try writer.writeByte(Op.i32_const);
+                try enc.encodeSLEB128(writer, @as(i32, @truncate(init_value)));
+            },
+            .i64 => {
+                try writer.writeByte(Op.i64_const);
+                try enc.encodeSLEB128(writer, init_value);
+            },
+            .f32 => {
+                try writer.writeByte(Op.f32_const);
+                const f: f32 = @floatFromInt(init_value);
+                const bytes = @as([4]u8, @bitCast(f));
+                try writer.writeAll(&bytes);
+            },
+            .f64 => {
+                try writer.writeByte(Op.f64_const);
+                const f: f64 = @floatFromInt(init_value);
+                const bytes = @as([8]u8, @bitCast(f));
+                try writer.writeAll(&bytes);
+            },
+            else => return error.UnsupportedGlobalType,
+        }
+        try writer.writeByte(Op.end); // end of init expression
+
+        self.global_count += 1;
+        return idx;
+    }
+
+    /// Add a data segment to initialize linear memory.
+    /// Go reference: cmd/link/internal/wasm/asm.go writeDataSec
+    /// Returns the offset in linear memory where the data will be placed.
+    /// String literals use this to get their memory address.
+    pub fn addData(self: *Module, data: []const u8) !u32 {
+        const offset = self.data_offset;
+        const writer = self.data_segments.writer(self.allocator);
+
+        // Data segment format:
+        // - memidx (0 for memory 0)
+        // - offset expression: i32.const offset, end
+        // - byte count + bytes
+        try enc.encodeULEB128(writer, 0); // memory index 0
+        try writer.writeByte(Op.i32_const);
+        try enc.encodeSLEB128(writer, @as(i32, @intCast(offset)));
+        try writer.writeByte(Op.end); // end of offset expression
+        try enc.encodeULEB128(writer, data.len);
+        try writer.writeAll(data);
+
+        self.data_count += 1;
+        self.data_offset += @intCast(data.len);
+
+        // Align to 8 bytes for next segment
+        const align_padding = (8 - (self.data_offset % 8)) % 8;
+        self.data_offset += align_padding;
+
+        return offset;
+    }
+
     /// Emit the complete Wasm binary.
     pub fn emit(self: *Module, output: anytype) !void {
         // Header
@@ -124,6 +205,15 @@ pub const Module = struct {
             try enc.writeSection(output, .memory, mem_section.items);
         }
 
+        // Global section (section ID 6)
+        if (self.global_count > 0) {
+            var global_section: std.ArrayListUnmanaged(u8) = .{};
+            defer global_section.deinit(self.allocator);
+            try enc.encodeULEB128(global_section.writer(self.allocator), self.global_count);
+            try global_section.appendSlice(self.allocator, self.globals.items);
+            try enc.writeSection(output, .global, global_section.items);
+        }
+
         // Export section
         if (self.export_count > 0) {
             var export_section: std.ArrayListUnmanaged(u8) = .{};
@@ -140,6 +230,16 @@ pub const Module = struct {
             try enc.encodeULEB128(code_section.writer(self.allocator), self.func_count);
             try code_section.appendSlice(self.allocator, self.codes.items);
             try enc.writeSection(output, .code, code_section.items);
+        }
+
+        // Data section (section ID 11)
+        // Go reference: cmd/link/internal/wasm/asm.go writeDataSec
+        if (self.data_count > 0) {
+            var data_section: std.ArrayListUnmanaged(u8) = .{};
+            defer data_section.deinit(self.allocator);
+            try enc.encodeULEB128(data_section.writer(self.allocator), self.data_count);
+            try data_section.appendSlice(self.allocator, self.data_segments.items);
+            try enc.writeSection(output, .data, data_section.items);
         }
     }
 };
@@ -633,4 +733,112 @@ test "code builder - local get" {
         Op.local_get, 0,
         Op.local_get, 1,
     }, code.buf.items);
+}
+
+// ============================================================================
+// M14: Global and Data Section Tests
+// ============================================================================
+
+test "module - add global variable" {
+    // Test adding a mutable i32 global (like SP)
+    const allocator = std.testing.allocator;
+
+    var module = Module.init(allocator);
+    defer module.deinit();
+
+    // Add SP global: mutable i32, init to 65536
+    const global_idx = try module.addGlobal(.i32, true, 65536);
+    try std.testing.expectEqual(@as(u32, 0), global_idx);
+    try std.testing.expectEqual(@as(u32, 1), module.global_count);
+
+    // Add a simple function to make it a valid module
+    const type_idx = try module.addFuncType(&[_]ValType{}, &[_]ValType{.i64});
+    _ = try module.addFunc(type_idx);
+
+    var code = CodeBuilder.init(allocator);
+    defer code.deinit();
+    try code.emitI64Const(42);
+    const body = try code.finish();
+    defer allocator.free(body);
+    try module.addCode(body);
+
+    // Emit and verify
+    var output: std.ArrayListUnmanaged(u8) = .{};
+    defer output.deinit(allocator);
+    try module.emit(output.writer(allocator));
+
+    // Should have global section (ID 6)
+    var found_global_section = false;
+    for (output.items, 0..) |byte, i| {
+        if (byte == 0x06 and i > 8) { // global section ID after header
+            found_global_section = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_global_section);
+}
+
+test "module - add data segment" {
+    // Test adding string data to data section
+    const allocator = std.testing.allocator;
+
+    var module = Module.init(allocator);
+    defer module.deinit();
+
+    // Need memory for data section
+    module.addMemory(1, null);
+
+    // Add string data
+    const offset = try module.addData("hello");
+    try std.testing.expectEqual(@as(u32, 0), offset);
+    try std.testing.expectEqual(@as(u32, 1), module.data_count);
+
+    // Next offset should be aligned
+    try std.testing.expect(module.data_offset >= 5);
+
+    // Add a simple function to make it a valid module
+    const type_idx = try module.addFuncType(&[_]ValType{}, &[_]ValType{.i64});
+    _ = try module.addFunc(type_idx);
+
+    var code = CodeBuilder.init(allocator);
+    defer code.deinit();
+    try code.emitI64Const(42);
+    const body = try code.finish();
+    defer allocator.free(body);
+    try module.addCode(body);
+
+    // Emit and verify
+    var output: std.ArrayListUnmanaged(u8) = .{};
+    defer output.deinit(allocator);
+    try module.emit(output.writer(allocator));
+
+    // Should have data section (ID 11)
+    var found_data_section = false;
+    for (output.items, 0..) |byte, i| {
+        if (byte == 0x0b and i > 8) { // data section ID after header
+            found_data_section = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_data_section);
+}
+
+test "module - multiple data segments" {
+    // Test multiple string data segments with proper alignment
+    const allocator = std.testing.allocator;
+
+    var module = Module.init(allocator);
+    defer module.deinit();
+
+    module.addMemory(1, null);
+
+    // Add first string
+    const offset1 = try module.addData("hi");
+    try std.testing.expectEqual(@as(u32, 0), offset1);
+
+    // Add second string - should be at aligned offset
+    const offset2 = try module.addData("world");
+    try std.testing.expect(offset2 >= 8); // aligned after "hi" + padding
+
+    try std.testing.expectEqual(@as(u32, 2), module.data_count);
 }
