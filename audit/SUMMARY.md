@@ -1,50 +1,29 @@
 # Audit Summary
 
-## Overall Status: IN PROGRESS
+## Overall Status: COMPLETE
 
-**32 of 43 files refactored.** 11 files not yet in 0.3.
+All compiler files have been ported and refactored to 0.3.
 
-regalloc.zig has a memory corruption bug blocking test suite.
-
----
-
-## Refactor Progress
-
-| Category | Refactored | Remaining | Notes |
-|----------|------------|-----------|-------|
-| Core | 4/4 | 0 | Complete |
-| Frontend | 11/11 | 0 | Complete |
-| SSA | 15/15 | 0 | Complete |
-| SSA Passes | 3/4 | 1 | lower.zig not started |
-| Object Files | 0/3 | 3 | Not started |
-| Codegen | 0/6 | 6 | Not started |
-| Pipeline | 1/2 | 1 | driver.zig not started |
-| **Total** | **34/45** | **11** | 76% complete |
+**Tests: 375/398 passed, 1 failed (wasm_gen), 22 skipped (native)**
 
 ---
 
-## Files NOT YET IN 0.3
+## Component Status
 
-These files exist in 0.2 but haven't been refactored:
-
-| File | 0.2 Lines |
-|------|-----------|
-| ssa/passes/lower.zig | 322 |
-| obj/macho.zig | 1,175 |
-| obj/elf.zig | 784 |
-| dwarf.zig | 475 |
-| driver.zig | 707 |
-| codegen/generic.zig | 308 |
-| codegen/arm64.zig | 3,589 |
-| codegen/amd64.zig | 3,946 |
-| arm64/asm.zig | 989 |
-| amd64/asm.zig | 1,628 |
-| amd64/regs.zig | 218 |
-| **Total remaining** | **~14,000** |
+| Category | Files | Status | Notes |
+|----------|-------|--------|-------|
+| Core | 4 | ✅ Done | types, errors, target, testing |
+| Frontend | 11 | ✅ Done | scanner, parser, checker, IR, lowerer |
+| SSA | 12 | ✅ Done | op, value, block, func, passes |
+| Wasm Codegen | 5 | ✅ Done | wasm, wasm_gen, wasm_opcodes, wasm_encode |
+| Native Codegen | 8 | ✅ Done | arm64, amd64, asm, regs, generic |
+| SSA Passes (Native) | 6 | ✅ Done | liveness, regalloc, stackalloc, abi, decompose, expand_calls |
+| Object Files | 3 | ✅ Done | elf, macho, dwarf |
+| Pipeline | 3 | ✅ Done | driver, main, pipeline_debug |
 
 ---
 
-## Audit Files (30/30 complete)
+## Audit Files
 
 ### Core (4/4)
 - [x] core/errors.zig.md
@@ -65,7 +44,7 @@ These files exist in 0.2 but haven't been refactored:
 - [x] frontend/token.zig.md
 - [x] frontend/types.zig.md
 
-### SSA (15/15)
+### SSA (12/12)
 - [x] ssa/abi.zig.md
 - [x] ssa/block.zig.md
 - [x] ssa/compile.zig.md
@@ -78,79 +57,73 @@ These files exist in 0.2 but haven't been refactored:
 - [x] ssa/stackalloc.zig.md
 - [x] ssa/test_helpers.zig.md
 - [x] ssa/value.zig.md
+
+### SSA Passes (3/3)
 - [x] ssa/passes/decompose.zig.md
 - [x] ssa/passes/expand_calls.zig.md
 - [x] ssa/passes/schedule.zig.md
 
+### Wasm Codegen (5/5)
+- [x] wasm.zig.md
+- [x] wasm_gen.zig.md
+- [x] wasm_opcodes.zig.md
+- [x] wasm_encode.zig.md
+- [x] lower_wasm.zig.md (in ssa/passes/)
+
+### Native Codegen (6/6)
+- [x] native/generic.zig.md
+- [x] native/arm64.zig.md
+- [x] native/arm64_asm.zig.md
+- [x] native/amd64.zig.md
+- [x] native/amd64_asm.zig.md
+- [x] native/amd64_regs.zig.md
+
+### Object Files (2/2)
+- [x] obj/elf.zig.md
+- [x] obj/macho.zig.md
+
+### Pipeline (3/3)
+- [x] driver.zig.md
+- [x] main.zig.md
+- [x] pipeline_debug.zig.md
+
 ---
 
-## Refactored Files Summary
+## Line Count Summary
+
+### Frontend Refactoring (54% reduction)
 
 | File | 0.2 | 0.3 | Reduction |
 |------|-----|-----|-----------|
-| core/errors.zig | 291 | 195 | 33% |
-| core/target.zig | 132 | 103 | 22% |
-| core/testing.zig | 170 | 121 | 29% |
-| core/types.zig | 548 | 265 | 52% |
-| frontend/ast.zig | 764 | 332 | 57% |
-| frontend/checker.zig | 2167 | 936 | 57% |
-| frontend/errors.zig | 346 | 223 | 36% |
 | frontend/ir.zig | 1751 | 548 | 69% |
-| frontend/lower.zig | 3488 | 2295 | 34% |
-| frontend/parser.zig | 1814 | 881 | 51% |
-| frontend/scanner.zig | 753 | 461 | 39% |
-| frontend/source.zig | 336 | 226 | 33% |
 | frontend/ssa_builder.zig | 3044 | 1176 | 61% |
-| frontend/token.zig | 465 | 289 | 38% |
+| frontend/checker.zig | 2167 | 936 | 57% |
+| frontend/ast.zig | 764 | 332 | 57% |
 | frontend/types.zig | 896 | 396 | 56% |
-| ssa/abi.zig | 704 | 387 | 45% |
-| ssa/block.zig | 449 | 228 | 49% |
-| ssa/compile.zig | 547 | 218 | 60% |
-| ssa/debug.zig | 645 | 352 | 45% |
-| ssa/dom.zig | 395 | 255 | 35% |
-| ssa/func.zig | 650 | 257 | 60% |
-| ssa/liveness.zig | 947 | 947 | 0% |
-| ssa/op.zig | 1569 | 366 | 77% |
-| ssa/regalloc.zig | 1472 | 859 | 42% |
-| ssa/stackalloc.zig | 493 | 363 | 26% |
-| ssa/test_helpers.zig | 359 | 164 | 54% |
-| ssa/value.zig | 673 | 259 | 62% |
-| ssa/passes/decompose.zig | 477 | 285 | 40% |
-| ssa/passes/expand_calls.zig | 662 | 256 | 61% |
-| ssa/passes/schedule.zig | 193 | 234 | +21% |
+| frontend/parser.zig | 1814 | 881 | 51% |
 
-**Refactored total: ~26,000 → ~13,000 (50% reduction)**
+### Native Codegen Refactoring (~20% reduction)
+
+| File | 0.2 | 0.3 | Reduction |
+|------|-----|-----|-----------|
+| arm64.zig | 3,589 | 2,859 | 20.3% |
+| amd64.zig | 3,946 | 3,133 | 20.6% |
 
 ---
 
-## New in 0.3 (no 0.2 equivalent)
+## Current Issues
 
-| File | Lines | Purpose |
-|------|-------|---------|
-| main.zig | 57 | Entry point |
-| pipeline_debug.zig | 153 | Debug infrastructure |
-| frontend/e2e_test.zig | 946 | End-to-end tests |
-| frontend/integration_test.zig | 267 | Integration tests |
+### Failing Test (1)
+- `wasm_gen.zig` - test failure needs investigation
 
----
-
-## Issues
-
-### Broken
-| File | Issue |
-|------|-------|
-| ssa/regalloc.zig | Memory corruption in getLiveOut after saveEndRegs |
-
-### Needs Investigation
-| File | Issue |
-|------|-------|
-| ssa/liveness.zig | 0% reduction - may need review |
-| ssa/passes/schedule.zig | +21% growth - may need review |
+### Skipped Tests (22)
+- Native codegen tests skipped pending Phase 4 wiring
+- See AOT_EXECUTION_PLAN.md for details
 
 ---
 
-## Priority
+## Next Steps
 
-1. **Fix regalloc.zig memory corruption** - BLOCKING
-2. Complete remaining 11 files
-3. Run full test suite
+See the following for detailed task lists:
+- **WASM_BACKEND.md** - M10 (Linear Memory) is next
+- **AOT_EXECUTION_PLAN.md** - Phase 4 (wire native codegen) is next

@@ -6,46 +6,116 @@ A Wasm-first language for full-stack web development.
 
 See **[VISION.md](VISION.md)** for the complete language vision and strategy.
 
-## Project Status
+## Project Status (January 2026)
 
 **This is the Cot compiler, written in Zig.** Like Deno (Rust) compiling TypeScript, this compiler is a permanent tool, not a bootstrap.
 
-| Phase | Status | Description |
-|-------|--------|-------------|
+| Component | Status | Description |
+|-----------|--------|-------------|
 | Frontend | ✅ Done | Scanner, parser, type checker, IR lowering |
-| SSA Infrastructure | ✅ Done | Values, blocks, functions, liveness, regalloc, stackalloc |
-| Object Files | ✅ Done | ELF, Mach-O, DWARF debug info |
-| Pipeline | ✅ Done | Driver, main, debug infrastructure |
-| **Wasm Backend** | 🔄 Next | Cot → Wasm emission |
-| AOT Native | Planned | Wasm → SSA → Native (reuses existing SSA/codegen) |
+| SSA Infrastructure | ✅ Done | Values, blocks, functions, passes |
+| Wasm Backend | ✅ M1-M9 Done | Constants, arithmetic, control flow, loops, function calls, CLI |
+| Wasm Backend | 🔄 M10 Next | Linear memory (load/store) - enables pointers, structs |
+| AOT Native | ✅ Ported | ARM64/AMD64 codegen refactored (~20% reduction) |
+| AOT Native | 🔄 Phase 4 Next | Wire into driver, enable native binary output |
 
-**Progress: 37 files, 29,671 → 13,570 lines (54% reduction)**
+**Tests: 375/398 passed, 1 failed (wasm_gen), 22 skipped (native)**
 
 ## Architecture
 
 ```
-Cot Source → Wasm → Native (via AOT)
-     │         │         │
-     │         │         └── Browser: runs Wasm directly
-     │         │         └── Server:  AOT compiles to native binary
-     │         │
-     │         └── Wasm Codegen (NEXT PHASE)
-     │             - Stack machine (no register allocation needed)
-     │             - Single calling convention
-     │             - Dramatically simpler than native codegen
-     │
-     └── Frontend (COMPLETE)
-         Scanner → Parser → TypeChecker → Lowerer → IR
+Cot Source → Frontend → IR → Wasm Codegen → .wasm file
+                                   ↓
+                              [M1-M9 DONE]
+                              - Constants, arithmetic
+                              - Control flow (if/else, loops)
+                              - Function calls
+                              - CLI: cot --target=wasm32 file.cot
+
+                              [M10+ TODO]
+                              - Linear memory
+                              - Pointers, structs, arrays
+                              - Strings, ARC
+
+AOT Path (future):
+.wasm file → wasm_parser → wasm_to_ssa → SSA → regalloc → Native → ELF/Mach-O
+                                          ↓
+                                    [Ported, needs wiring]
 ```
 
-## Key Design Decisions
+## Key Documents
 
-### Why Wasm as IR
+| Document | Purpose |
+|----------|---------|
+| [WASM_BACKEND.md](WASM_BACKEND.md) | Wasm backend milestones (M1-M16) |
+| [AOT_EXECUTION_PLAN.md](AOT_EXECUTION_PLAN.md) | Native codegen phases |
+| [VISION.md](VISION.md) | Language vision and strategy |
+| [CLAUDE.md](CLAUDE.md) | AI session instructions |
+
+## Quick Start
+
+```bash
+# Run all tests
+zig build test
+
+# Compile to Wasm
+zig build
+./zig-out/bin/cot --target=wasm32 examples/hello.cot -o hello.wasm
+
+# Debug output
+COT_DEBUG=parse,lower,codegen zig build test
+```
+
+## Repository Structure
+
+```
+cot/
+├── compiler/
+│   ├── core/              # Types, errors, target config
+│   ├── frontend/          # Scanner, parser, checker, IR, lowerer
+│   ├── ssa/               # SSA infrastructure
+│   │   └── passes/        # schedule, layout, lower_wasm
+│   ├── codegen/
+│   │   ├── wasm*.zig      # Wasm backend (active development)
+│   │   └── native/        # ARM64/AMD64 backends (AOT)
+│   ├── driver.zig         # Compilation orchestration
+│   └── main.zig           # CLI entry point
+│
+├── audit/                 # 60+ module verification docs
+├── docs/                  # Documentation source
+└── runtime/               # Wasm runtime support (future)
+```
+
+## Next Steps
+
+### Wasm Backend (Primary)
+
+See [WASM_BACKEND.md](WASM_BACKEND.md) for full details.
+
+**M10: Linear Memory** (current priority)
+- Add memory section to Wasm module
+- Implement `wasm_i64_load`, `wasm_i64_store`
+- Enables: local variables beyond registers, pointers
+
+**M11-M16:** Pointers, structs, arrays, strings, ARC, browser imports
+
+### AOT Native (Secondary)
+
+See [AOT_EXECUTION_PLAN.md](AOT_EXECUTION_PLAN.md) for full details.
+
+**Phase 4: Integration**
+- Wire ARM64/AMD64 codegen into driver.zig
+- Un-skip 22 native tests
+- Enable: `cot --target=arm64-macos` or `--target=amd64-linux`
+
+## Design Decisions
+
+### Why Wasm as Primary Target
 
 1. **Simpler compiler**: Stack machine eliminates register allocation
 2. **Universal target**: Same binary runs in browser, server, edge
-3. **Self-hosting achievable**: Previous attempts at native codegen hit complexity wall
-4. **AOT for performance**: Wasm → Native when needed (production servers)
+3. **Self-hosting achievable**: Previous native codegen attempts failed due to complexity
+4. **AOT for performance**: Wasm → Native when needed
 
 ### Why ARC Memory Management
 
@@ -53,94 +123,13 @@ Cot Source → Wasm → Native (via AOT)
 - Simpler than borrow checking
 - Same semantics for Wasm and native targets
 
-### Target Niche
-
-**Full-stack applications with shared code between server and client.**
-
-Like Node.js unified JavaScript, but:
-- Compiled to Wasm (not interpreted)
-- Type-safe with ARC memory management
-- Native performance via AOT
-
-## Repository Structure
-
-```
-cot/
-├── compiler/           # Zig compiler
-│   ├── core/           # Types, errors, target config
-│   ├── frontend/       # Scanner, parser, checker, IR, lowerer
-│   ├── ssa/            # SSA infrastructure (for AOT)
-│   ├── obj/            # ELF, Mach-O output (for AOT)
-│   ├── codegen/        # [NEXT] Wasm codegen
-│   ├── main.zig        # Entry point
-│   └── driver.zig      # Compilation orchestration
-│
-├── stdlib/             # Cot standard library (written in Cot)
-├── runtime/            # Wasm runtime support (builtins)
-├── tools/              # CLI tools (fmt, lint, etc.)
-│
-├── www/                # Websites
-│   ├── land/           # cot.land - package manager
-│   └── dev/            # cot.dev - docs & playground
-│
-├── docs/               # Documentation source
-└── audit/              # Compiler verification docs
-```
-
 ## Reference Code
 
-**bootstrap-0.2** (`../bootstrap-0.2/`) contains:
-- Working native compiler (ARM64 + AMD64)
-- Existing cot1 self-hosted compiler code
-- Reference implementations when debugging
-
-**Key files to reference:**
-- `bootstrap-0.2/DESIGN.md` - Full Wasm architecture specification
-- `bootstrap-0.2/src/codegen/` - Native codegen (will become AOT)
-- `bootstrap-0.2/src/cot1/` - Self-hosted compiler in Cot
-
-## Building & Testing
-
-```bash
-# Run all tests
-zig build test
-
-# Test specific module
-zig test compiler/frontend/parser.zig
-
-# Debug output
-COT_DEBUG=parse,lower zig build test
-```
-
-## Next Steps
-
-### Phase 2: Wasm Backend
-
-1. Create `compiler/codegen/wasm.zig`
-2. Implement Wasm binary format emitter
-3. Implement IR → Wasm codegen (stack machine)
-4. Basic runtime (print, memory allocation)
-
-### Phase 3: AOT Native
-
-1. Wasm parser
-2. Wasm → SSA converter
-3. Wire up existing regalloc/codegen
-4. Output ELF/Mach-O
-
-### Phase 4: Self-Hosting (Future Goal)
-
-Self-hosting is deferred until the language is mature. See [VISION.md](VISION.md) for rationale.
-
-1. Stabilize language and standard library
-2. Build real applications to prove the language
-3. Attempt self-hosting when ready
-4. Zig dependency becomes optional (not eliminated)
+**bootstrap-0.2** (`../bootstrap-0.2/`) - frozen reference:
+- `DESIGN.md` - Full architecture specification
+- `src/codegen/` - Working native codegen
+- `src/cot1/` - Self-hosted compiler in Cot
 
 ## For Claude AI Sessions
 
-See `CLAUDE.md` for detailed instructions. Key points:
-- This is a Wasm-first compiler, not a native codegen refactor
-- Reference `bootstrap-0.2/DESIGN.md` for architecture details
-- Reference `bootstrap-0.2/src/` for working code when stuck
-- The frontend/SSA work is complete; focus is now Wasm emission
+See [CLAUDE.md](CLAUDE.md) for detailed instructions.
