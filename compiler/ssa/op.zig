@@ -71,6 +71,9 @@ pub const Op = enum(u16) {
     // === Safety Checks ===
     nil_check, is_non_nil, is_nil, bounds_check, slice_bounds,
 
+    // === ARC (Reference Counting) ===
+    retain, release,
+
     // === Atomics ===
     atomic_load32, atomic_load64, atomic_store32, atomic_store64,
     atomic_add32, atomic_add64, atomic_cas32, atomic_cas64, atomic_exchange32, atomic_exchange64,
@@ -199,6 +202,9 @@ pub const Op = enum(u16) {
     wasm_lowered_move, wasm_lowered_zero,
     wasm_lowered_nil_check,
     wasm_lowered_static_call, wasm_lowered_closure_call, wasm_lowered_inter_call,
+
+    // ARC runtime calls
+    wasm_lowered_retain, wasm_lowered_release,
 
     pub fn info(self: Op) OpInfo { return op_info_table[@intFromEnum(self)]; }
     pub fn isCall(self: Op) bool { return self.info().call; }
@@ -367,6 +373,10 @@ const op_info_table = blk: {
     // Register allocation
     table[@intFromEnum(Op.store_reg)] = .{ .name = "StoreReg", .arg_len = 1 };
     table[@intFromEnum(Op.load_reg)] = .{ .name = "LoadReg", .arg_len = 0 };
+
+    // ARC ops (generic - 1 arg: pointer to ARC object)
+    table[@intFromEnum(Op.retain)] = .{ .name = "Retain", .arg_len = 1, .has_side_effects = true };
+    table[@intFromEnum(Op.release)] = .{ .name = "Release", .arg_len = 1, .has_side_effects = true };
 
     // Move
     table[@intFromEnum(Op.move)] = .{ .name = "Move", .arg_len = 3, .aux_type = .int64, .writes_memory = true, .has_side_effects = true };
@@ -582,6 +592,10 @@ const op_info_table = blk: {
     table[@intFromEnum(Op.wasm_lowered_static_call)] = .{ .name = "WasmLoweredStaticCall", .generic = false, .arg_len = -1, .aux_type = .call, .call = true, .has_side_effects = true };
     table[@intFromEnum(Op.wasm_lowered_closure_call)] = .{ .name = "WasmLoweredClosureCall", .generic = false, .arg_len = -1, .aux_type = .call, .call = true, .has_side_effects = true };
     table[@intFromEnum(Op.wasm_lowered_inter_call)] = .{ .name = "WasmLoweredInterCall", .generic = false, .arg_len = -1, .aux_type = .call, .call = true, .has_side_effects = true };
+
+    // Wasm ARC ops (lowered - call runtime functions)
+    table[@intFromEnum(Op.wasm_lowered_retain)] = .{ .name = "WasmLoweredRetain", .generic = false, .arg_len = 1, .has_side_effects = true, .call = true };
+    table[@intFromEnum(Op.wasm_lowered_release)] = .{ .name = "WasmLoweredRelease", .generic = false, .arg_len = 1, .has_side_effects = true, .call = true };
 
     break :blk table;
 };

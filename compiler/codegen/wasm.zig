@@ -252,6 +252,7 @@ pub const CodeBuilder = struct {
     allocator: std.mem.Allocator,
     buf: std.ArrayListUnmanaged(u8) = .{},
     local_count: u32 = 0,
+    local_types: std.ArrayListUnmanaged(ValType) = .{},
 
     pub fn init(allocator: std.mem.Allocator) CodeBuilder {
         return .{ .allocator = allocator };
@@ -259,6 +260,18 @@ pub const CodeBuilder = struct {
 
     pub fn deinit(self: *CodeBuilder) void {
         self.buf.deinit(self.allocator);
+        self.local_types.deinit(self.allocator);
+    }
+
+    /// Declare locals with specified types (beyond function parameters).
+    /// Returns the starting local index for the declared locals.
+    pub fn declareLocals(self: *CodeBuilder, types: []const ValType) !u32 {
+        const start_idx = self.local_count;
+        for (types) |t| {
+            try self.local_types.append(self.allocator, t);
+            self.local_count += 1;
+        }
+        return start_idx;
     }
 
     fn writer(self: *CodeBuilder) std.ArrayListUnmanaged(u8).Writer {
@@ -484,6 +497,27 @@ pub const CodeBuilder = struct {
         try self.buf.append(self.allocator, Op.i32_sub);
     }
 
+    /// Emit i32.mul instruction.
+    pub fn emitI32Mul(self: *CodeBuilder) !void {
+        try self.buf.append(self.allocator, Op.i32_mul);
+    }
+
+    /// Emit i32.and instruction.
+    pub fn emitI32And(self: *CodeBuilder) !void {
+        try self.buf.append(self.allocator, Op.i32_and);
+    }
+
+    /// Emit i32.or instruction.
+    pub fn emitI32Or(self: *CodeBuilder) !void {
+        try self.buf.append(self.allocator, Op.i32_or);
+    }
+
+    /// Emit local.tee instruction.
+    pub fn emitLocalTee(self: *CodeBuilder, idx: u32) !void {
+        try self.buf.append(self.allocator, Op.local_tee);
+        try enc.encodeULEB128(self.writer(), idx);
+    }
+
     /// Emit call instruction.
     pub fn emitCall(self: *CodeBuilder, func_idx: u32) !void {
         try self.buf.append(self.allocator, Op.call);
@@ -587,6 +621,7 @@ pub const CodeBuilder = struct {
     }
 
     /// Set the number of locals (beyond parameters).
+    /// All locals will be i64 type. For mixed types, use declareLocals instead.
     pub fn setLocalCount(self: *CodeBuilder, count: u32) void {
         self.local_count = count;
     }
@@ -598,8 +633,33 @@ pub const CodeBuilder = struct {
         errdefer body.deinit(self.allocator);
 
         // Local declarations
-        if (self.local_count > 0) {
-            // One entry: count of i64 locals
+        if (self.local_types.items.len > 0) {
+            // Group consecutive locals by type for compact encoding
+            var groups: std.ArrayListUnmanaged(struct { count: u32, val_type: ValType }) = .{};
+            defer groups.deinit(self.allocator);
+
+            var current_type = self.local_types.items[0];
+            var current_count: u32 = 1;
+
+            for (self.local_types.items[1..]) |t| {
+                if (t == current_type) {
+                    current_count += 1;
+                } else {
+                    try groups.append(self.allocator, .{ .count = current_count, .val_type = current_type });
+                    current_type = t;
+                    current_count = 1;
+                }
+            }
+            try groups.append(self.allocator, .{ .count = current_count, .val_type = current_type });
+
+            // Encode groups
+            try enc.encodeULEB128(body.writer(self.allocator), @intCast(groups.items.len));
+            for (groups.items) |g| {
+                try enc.encodeULEB128(body.writer(self.allocator), g.count);
+                try body.append(self.allocator, @intFromEnum(g.val_type));
+            }
+        } else if (self.local_count > 0) {
+            // Fallback for setLocalCount (all i64)
             try enc.encodeULEB128(body.writer(self.allocator), 1); // 1 local type group
             try enc.encodeULEB128(body.writer(self.allocator), self.local_count); // count
             try body.append(self.allocator, @intFromEnum(ValType.i64)); // type

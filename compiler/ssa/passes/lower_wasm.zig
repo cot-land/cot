@@ -184,6 +184,12 @@ fn lowerValue(v: *Value) bool {
         .zero => .wasm_lowered_zero,
 
         // ====================================================================
+        // ARC (Reference Counting)
+        // ====================================================================
+        .retain => .wasm_lowered_retain,
+        .release => .wasm_lowered_release,
+
+        // ====================================================================
         // Control Flow & Structural - already target-independent, leave as-is
         // ====================================================================
         .phi, .copy, .fwd_ref, .arg,
@@ -245,6 +251,7 @@ fn lowerValue(v: *Value) bool {
         .wasm_unreachable, .wasm_nop, .wasm_return,
         .wasm_lowered_move, .wasm_lowered_zero, .wasm_lowered_nil_check,
         .wasm_lowered_static_call, .wasm_lowered_closure_call, .wasm_lowered_inter_call,
+        .wasm_lowered_retain, .wasm_lowered_release,
         => null,
 
         // ARM64/AMD64 ops - should not appear in Wasm lowering
