@@ -16,6 +16,14 @@ const regalloc_mod = @import("codegen/native/regalloc.zig");
 const stackalloc_mod = @import("codegen/native/stackalloc.zig");
 const expand_calls = @import("codegen/native/expand_calls.zig");
 const decompose = @import("codegen/native/decompose.zig");
+const wasm_parser = @import("codegen/native/wasm_parser.zig");
+const wasm_to_ssa = @import("codegen/native/wasm_to_ssa.zig");
+const generic_codegen = @import("codegen/native/generic.zig");
+const arm64_codegen = @import("codegen/native/arm64.zig");
+const amd64_codegen = @import("codegen/native/amd64.zig");
+const macho = @import("codegen/native/macho.zig");
+const elf = @import("codegen/native/elf.zig");
+const dwarf = @import("codegen/native/dwarf.zig");
 const schedule = @import("ssa/passes/schedule.zig");
 const layout = @import("ssa/passes/layout.zig");
 const lower_wasm = @import("ssa/passes/lower_wasm.zig");
@@ -245,14 +253,36 @@ pub const Driver = struct {
             return self.generateWasmCode(funcs, type_reg);
         }
 
-        // Native target: use SSA + regalloc pipeline
-        for (funcs) |*ir_func| {
-            var ssa_builder = try ssa_builder_mod.SSABuilder.init(self.allocator, ir_func, type_reg);
-            errdefer ssa_builder.deinit();
+        // Native target: AOT compilation path (Wasm → SSA → Native)
+        // Step 1: Generate Wasm bytecode first
+        const wasm_bytes = try self.generateWasmCode(funcs, type_reg);
+        defer self.allocator.free(wasm_bytes);
 
-            const ssa_func = try ssa_builder.build();
+        pipeline_debug.log(.codegen, "driver: AOT compiling {d} bytes of Wasm to native", .{wasm_bytes.len});
 
-            // Run SSA passes
+        // Step 2: Parse Wasm binary
+        var wasm_module = try wasm_parser.parse(self.allocator, wasm_bytes);
+        defer wasm_module.deinit();
+
+        pipeline_debug.log(.codegen, "driver: parsed {d} functions from Wasm", .{wasm_module.code.len});
+
+        // Step 3: Convert each Wasm function to SSA and process
+        var converter = wasm_to_ssa.WasmToSSA.init(self.allocator, &wasm_module);
+        defer converter.deinit();
+
+        for (0..wasm_module.code.len) |func_idx| {
+            const ssa_func = converter.convert(func_idx) catch |e| {
+                pipeline_debug.log(.codegen, "driver: failed to convert function {d}: {any}", .{ func_idx, e });
+                continue; // Skip functions that fail to convert
+            };
+            defer {
+                ssa_func.deinit();
+                self.allocator.destroy(ssa_func);
+            }
+
+            pipeline_debug.log(.codegen, "driver: converted function {d} to SSA", .{func_idx});
+
+            // Run SSA passes for native codegen
             try expand_calls.expandCalls(ssa_func, type_reg);
             try decompose.decompose(ssa_func, type_reg);
             try schedule.schedule(ssa_func);
@@ -262,18 +292,26 @@ pub const Driver = struct {
 
             _ = try stackalloc_mod.stackalloc(ssa_func, regalloc_state.getSpillLive());
 
-            // Native codegen will be added in Round 5
-            // if (self.target.arch == .amd64) {
-            //     var codegen = amd64_codegen.AMD64CodeGen.init(self.allocator);
-            //     ...
-            // }
+            // Use generic codegen to produce pseudo-assembly (validates pipeline)
+            // Real ARM64/AMD64 codegen will replace this once ported
+            var codegen = generic_codegen.GenericCodeGen.init(self.allocator);
+            defer codegen.deinit();
 
-            ssa_func.deinit();
-            self.allocator.destroy(ssa_func);
-            ssa_builder.deinit();
+            var pseudo_asm: std.ArrayListUnmanaged(u8) = .{};
+            defer pseudo_asm.deinit(self.allocator);
+
+            codegen.generate(ssa_func, pseudo_asm.writer(self.allocator)) catch |e| {
+                pipeline_debug.log(.codegen, "driver: generic codegen failed: {any}", .{e});
+                continue;
+            };
+
+            pipeline_debug.log(.codegen, "driver: generated {d} bytes of pseudo-asm for function {d}", .{
+                pseudo_asm.items.len,
+                func_idx,
+            });
         }
 
-        // Placeholder until native codegen is added
+        // Return empty for now - real native codegen will return ELF/Mach-O bytes
         return try self.allocator.dupe(u8, "");
     }
 
