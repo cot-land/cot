@@ -615,6 +615,69 @@ pub const FuncGen = struct {
                 try self.code.emitI32Sub();
             },
 
+            // ================================================================
+            // Slice/Array Operations (M13)
+            // Go reference: rewriteWasm.go - IsInBounds → i64.lt_u
+            // ================================================================
+
+            // slice_ptr: extract pointer from slice
+            // A slice is conceptually (ptr, len). slice_ptr gets the first component.
+            // If the slice was created by slice_make, we get the first arg.
+            .slice_ptr => {
+                const slice = v.args[0];
+                if (slice.op == .slice_make and slice.args.len >= 1) {
+                    // Slice was made inline - get the ptr component
+                    try self.getValue32(slice.args[0]);
+                } else {
+                    // Slice from local/parameter - stored as (ptr, len) in memory
+                    // Load ptr from offset 0
+                    try self.getValue32(slice);
+                    try self.code.emitI64Load(3, 0);
+                    try self.code.emitI32WrapI64();
+                }
+            },
+
+            // slice_len: extract length from slice
+            // Gets the second component (length) from a slice value.
+            .slice_len => {
+                const slice = v.args[0];
+                if (slice.op == .slice_make and slice.args.len >= 2) {
+                    // Slice was made inline - get the len component
+                    try self.getValue64(slice.args[1]);
+                } else {
+                    // Slice from local/parameter - stored as (ptr, len) in memory
+                    // Load len from offset 8 (after ptr)
+                    try self.getValue32(slice);
+                    try self.code.emitI64Load(3, 8);
+                }
+            },
+
+            // slice_make: construct a slice from (ptr, len)
+            // This is a virtual op - the slice is represented by its components.
+            // We just generate both values to the stack.
+            .slice_make => {
+                // Slice components are accessed via slice_ptr/slice_len
+                // If needed to store, caller handles it
+                if (v.args.len >= 2) {
+                    try self.getValue32(v.args[0]); // ptr
+                    try self.getValue64(v.args[1]); // len
+                }
+            },
+
+            // bounds_check: verify index < length, trap if out of bounds
+            // Go: IsInBounds(idx, len) → i64.lt_u
+            // Pattern: if (idx >= len) unreachable
+            .bounds_check => {
+                if (v.args.len >= 2) {
+                    try self.getValue64(v.args[0]); // index
+                    try self.getValue64(v.args[1]); // length
+                    try self.code.emitI64GeU(); // idx >= len (unsigned)
+                    try self.code.emitIf(0x40); // if (out of bounds)
+                    try self.code.emitUnreachable(); // trap
+                    try self.code.emitEnd();
+                }
+            },
+
             // Loads (Go lines 379-382)
             .wasm_i64_load => {
                 try self.getValue32(v.args[0]);
@@ -1416,4 +1479,219 @@ test "genFunc - multi-field struct access" {
     }
     try testing.expectEqual(@as(u32, 2), load_count);
     try testing.expect(found_add);
+}
+
+// ============================================================================
+// M13: Array/Slice Operations Tests
+// Go reference: rewriteWasm.go - IsInBounds → i64.lt_u
+// ============================================================================
+
+test "genFunc - slice_make and slice_ptr extraction" {
+    // Test slice creation and pointer extraction
+    // slice_make(ptr, len) creates slice, slice_ptr extracts ptr
+    const allocator = testing.allocator;
+
+    var f = SsaFunc.init(allocator, "test_slice_ptr");
+    defer f.deinit();
+
+    const b = try f.newBlock(.ret);
+
+    // Create a pointer (local_addr of slot 0)
+    const ptr = try f.newValue(.local_addr, 0, b, .{});
+    ptr.aux_int = 0;
+    ptr.*.uses = 1;
+    try b.addValue(allocator, ptr);
+
+    // Create a length
+    const len = try f.newValue(.wasm_i64_const, 0, b, .{});
+    len.aux_int = 10;
+    len.*.uses = 1;
+    try b.addValue(allocator, len);
+
+    // slice_make(ptr, len)
+    const slice = try f.newValue(.slice_make, 0, b, .{});
+    slice.addArg(ptr);
+    slice.addArg(len);
+    slice.*.uses = 1;
+    try b.addValue(allocator, slice);
+
+    // slice_ptr(slice) - should get the ptr back
+    const extracted_ptr = try f.newValue(.slice_ptr, 0, b, .{});
+    extracted_ptr.addArg(slice);
+    extracted_ptr.*.uses = 1;
+    try b.addValue(allocator, extracted_ptr);
+
+    // Load from the extracted pointer
+    const load = try f.newValue(.wasm_i64_load, 0, b, .{});
+    load.addArg(extracted_ptr);
+    load.aux_int = 0;
+    load.*.uses = 1;
+    try b.addValue(allocator, load);
+    b.controls[0] = load;
+
+    const body = try genFunc(allocator, &f);
+    defer allocator.free(body);
+
+    // Should contain global.get (for local_addr) and i64.load
+    try testing.expect(body.len >= 5);
+    var found_global_get = false;
+    var found_i64_load = false;
+    for (body) |byte| {
+        if (byte == Op.global_get) found_global_get = true;
+        if (byte == Op.i64_load) found_i64_load = true;
+    }
+    try testing.expect(found_global_get);
+    try testing.expect(found_i64_load);
+}
+
+test "genFunc - slice_len extraction" {
+    // Test length extraction from slice
+    const allocator = testing.allocator;
+
+    var f = SsaFunc.init(allocator, "test_slice_len");
+    defer f.deinit();
+
+    const b = try f.newBlock(.ret);
+
+    // Create a pointer
+    const ptr = try f.newValue(.local_addr, 0, b, .{});
+    ptr.aux_int = 0;
+    ptr.*.uses = 1;
+    try b.addValue(allocator, ptr);
+
+    // Create a length = 42
+    const len = try f.newValue(.wasm_i64_const, 0, b, .{});
+    len.aux_int = 42;
+    len.*.uses = 1;
+    try b.addValue(allocator, len);
+
+    // slice_make(ptr, len)
+    const slice = try f.newValue(.slice_make, 0, b, .{});
+    slice.addArg(ptr);
+    slice.addArg(len);
+    slice.*.uses = 1;
+    try b.addValue(allocator, slice);
+
+    // slice_len(slice) - should get 42
+    const extracted_len = try f.newValue(.slice_len, 0, b, .{});
+    extracted_len.addArg(slice);
+    extracted_len.*.uses = 1;
+    try b.addValue(allocator, extracted_len);
+    b.controls[0] = extracted_len;
+
+    const body = try genFunc(allocator, &f);
+    defer allocator.free(body);
+
+    // Should contain i64.const 42
+    try testing.expect(body.len >= 3);
+    var found_i64_const = false;
+    for (body) |byte| {
+        if (byte == Op.i64_const) found_i64_const = true;
+    }
+    try testing.expect(found_i64_const);
+}
+
+test "genFunc - bounds_check emits trap on out of bounds" {
+    // Test bounds checking: if (idx >= len) unreachable
+    // Go pattern: IsInBounds → i64.lt_u
+    const allocator = testing.allocator;
+
+    var f = SsaFunc.init(allocator, "test_bounds_check");
+    defer f.deinit();
+
+    const b = try f.newBlock(.ret);
+
+    // Index value
+    const idx = try f.newValue(.wasm_i64_const, 0, b, .{});
+    idx.aux_int = 5;
+    idx.*.uses = 1;
+    try b.addValue(allocator, idx);
+
+    // Length value
+    const len = try f.newValue(.wasm_i64_const, 0, b, .{});
+    len.aux_int = 10;
+    len.*.uses = 1;
+    try b.addValue(allocator, len);
+
+    // bounds_check(idx, len) - should emit: if (idx >= len) unreachable
+    const check = try f.newValue(.bounds_check, 0, b, .{});
+    check.addArg(idx);
+    check.addArg(len);
+    try b.addValue(allocator, check);
+
+    // Return something
+    const ret = try f.newValue(.wasm_i64_const, 0, b, .{});
+    ret.aux_int = 0;
+    ret.*.uses = 1;
+    try b.addValue(allocator, ret);
+    b.controls[0] = ret;
+
+    const body = try genFunc(allocator, &f);
+    defer allocator.free(body);
+
+    // Should contain: i64.ge_u, if, unreachable, end
+    try testing.expect(body.len >= 6);
+    var found_ge_u = false;
+    var found_if = false;
+    var found_unreachable = false;
+    for (body) |byte| {
+        if (byte == Op.i64_ge_u) found_ge_u = true;
+        if (byte == Op.if_op) found_if = true;
+        if (byte == Op.unreachable_op) found_unreachable = true;
+    }
+    try testing.expect(found_ge_u);
+    try testing.expect(found_if);
+    try testing.expect(found_unreachable);
+}
+
+test "genFunc - array element access via add_ptr" {
+    // Test array element access: arr[i] = *(arr + i * sizeof(elem))
+    // Pattern: local_addr + add_ptr(base, offset) + load
+    const allocator = testing.allocator;
+
+    var f = SsaFunc.init(allocator, "test_array_access");
+    defer f.deinit();
+
+    const b = try f.newBlock(.ret);
+
+    // Array base address (slot 0)
+    const base = try f.newValue(.local_addr, 0, b, .{});
+    base.aux_int = 0;
+    base.*.uses = 1;
+    try b.addValue(allocator, base);
+
+    // Index * 8 (for i64 elements)
+    const offset = try f.newValue(.wasm_i32_const, 0, b, .{});
+    offset.aux_int = 16; // accessing arr[2] (offset = 2 * 8)
+    offset.*.uses = 1;
+    try b.addValue(allocator, offset);
+
+    // add_ptr: base + offset
+    const elem_addr = try f.newValue(.add_ptr, 0, b, .{});
+    elem_addr.addArg(base);
+    elem_addr.addArg(offset);
+    elem_addr.*.uses = 1;
+    try b.addValue(allocator, elem_addr);
+
+    // Load element
+    const load = try f.newValue(.wasm_i64_load, 0, b, .{});
+    load.addArg(elem_addr);
+    load.aux_int = 0;
+    load.*.uses = 1;
+    try b.addValue(allocator, load);
+    b.controls[0] = load;
+
+    const body = try genFunc(allocator, &f);
+    defer allocator.free(body);
+
+    // Should have i32.add (for pointer arithmetic) and i64.load
+    try testing.expect(body.len >= 6);
+    var found_i32_add = false;
+    var found_i64_load = false;
+    for (body) |byte| {
+        if (byte == Op.i32_add) found_i32_add = true;
+        if (byte == Op.i64_load) found_i64_load = true;
+    }
+    try testing.expect(found_i32_add);
+    try testing.expect(found_i64_load);
 }

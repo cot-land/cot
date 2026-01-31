@@ -4,7 +4,7 @@
 
 All compiler files have been ported and refactored to 0.3.
 
-**Tests: 385/407 passed, 22 skipped (native)**
+**Tests: 389/411 passed, 22 skipped (native)**
 
 ---
 
@@ -122,5 +122,5 @@ All compiler files have been ported and refactored to 0.3.
 ## Next Steps
 
 See the following for detailed task lists:
-- **WASM_BACKEND.md** - M13 (Arrays/Slices) is next
+- **WASM_BACKEND.md** - M14 (Strings) is next
 - **AOT_EXECUTION_PLAN.md** - Phase 4 (wire native codegen) is next

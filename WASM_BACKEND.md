@@ -436,9 +436,15 @@ pub fn compileToWasm(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
 - [x] Tests: field read, field write, multi-field access
 - Go reference: rewrite.go rewriteStructLoad/rewriteStructStore
 
-### M13: Arrays/Slices
-- [ ] Array bounds checking
-- [ ] Slice representation (ptr + len)
+### M13: Arrays/Slices ✅
+- [x] `slice_make(ptr, len)`: construct slice from components
+- [x] `slice_ptr(slice)`: extract pointer component
+- [x] `slice_len(slice)`: extract length component
+- [x] `bounds_check(idx, len)`: emit `if (idx >= len) unreachable`
+- [x] Array element access via `add_ptr(base, offset)`
+- [x] Added unsigned comparisons: i64.lt_u, i64.le_u, i64.gt_u, i64.ge_u
+- [x] Tests: slice_make/ptr/len, bounds_check, array access
+- Go reference: rewriteWasm.go - IsInBounds → i64.lt_u
 
 ### M14: Strings
 - [ ] String data in data section

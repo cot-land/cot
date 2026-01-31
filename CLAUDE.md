@@ -23,8 +23,9 @@
 | M10 | ✅ Done | Linear memory (load/store, SP global, frame allocation) |
 | M11 | ✅ Done | Pointers (off_ptr, add_ptr, sub_ptr) |
 | M12 | ✅ Done | Structs (field read/write via off_ptr) |
-| **M13** | 🔄 **Next** | Arrays/Slices (bounds checking) |
-| M14-M16 | TODO | Strings, ARC, browser imports |
+| M13 | ✅ Done | Arrays/Slices (bounds check, slice_ptr/len) |
+| **M14** | 🔄 **Next** | Strings (data section, string ops) |
+| M15-M16 | TODO | ARC, browser imports |
 
 ### AOT Native Progress
 
@@ -35,7 +36,7 @@
 
 ### Test Status
 
-**385/407 passed, 22 skipped (native tests)**
+**389/411 passed, 22 skipped (native tests)**
 
 ---
 

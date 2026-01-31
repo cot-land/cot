@@ -256,6 +256,27 @@ pub const CodeBuilder = struct {
         try self.buf.append(self.allocator, Op.i64_ge_s);
     }
 
+    // Unsigned comparisons (for bounds checking - Go: IsInBounds → i64.lt_u)
+    /// Emit i64.lt_u instruction.
+    pub fn emitI64LtU(self: *CodeBuilder) !void {
+        try self.buf.append(self.allocator, Op.i64_lt_u);
+    }
+
+    /// Emit i64.le_u instruction.
+    pub fn emitI64LeU(self: *CodeBuilder) !void {
+        try self.buf.append(self.allocator, Op.i64_le_u);
+    }
+
+    /// Emit i64.gt_u instruction.
+    pub fn emitI64GtU(self: *CodeBuilder) !void {
+        try self.buf.append(self.allocator, Op.i64_gt_u);
+    }
+
+    /// Emit i64.ge_u instruction.
+    pub fn emitI64GeU(self: *CodeBuilder) !void {
+        try self.buf.append(self.allocator, Op.i64_ge_u);
+    }
+
     /// Emit i64.and instruction.
     pub fn emitI64And(self: *CodeBuilder) !void {
         try self.buf.append(self.allocator, Op.i64_and);
