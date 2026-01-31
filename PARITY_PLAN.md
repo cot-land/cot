@@ -6,6 +6,27 @@ Reference: `~/learning/go/src/cmd/compile/internal/`
 
 ---
 
+## Native AOT Status
+
+**Status: ✅ WORKING** (as of 2026-01-31)
+
+The AOT pipeline now produces working native binaries:
+
+```bash
+# Compile Cot → Wasm → SSA → Native
+./zig-out/bin/cot hello.cot --target=arm64-macos -o hello
+./hello
+echo $?  # Exit code from main()
+```
+
+Verified working:
+- Simple returns (`return 42` → exit code 42)
+- Arithmetic expressions (`10 + 5 * 2` → exit code 20)
+- Local variables
+- Control flow (if/else, while)
+
+---
+
 ## Phase 1: Control Flow Completeness
 
 ### P1.1: Break Statement

@@ -16,58 +16,109 @@ See **[VISION.md](VISION.md)** for the complete language vision and strategy.
 | SSA Infrastructure | ✅ Done | Values, blocks, functions, passes |
 | Wasm Backend | ✅ M1-M14 Done | Constants, arithmetic, control flow, loops, calls, memory, pointers, structs, slices, strings |
 | Wasm Backend | 🔄 M15 Next | ARC basics (retain/release) |
-| AOT Native | ✅ Ported | ARM64/AMD64 codegen refactored (~20% reduction) |
-| AOT Native | 🔄 Phase 4 Next | Wire into driver, enable native binary output |
+| Native AOT | ✅ Working | Wasm → SSA → ARM64/AMD64 → executable |
 
-**Tests: 396/418 passed, 22 skipped (native)**
+**Tests: 412/434 passed**
+
+## Quick Start
+
+### Compile to Wasm (Primary Target)
+```bash
+# Build the compiler
+zig build
+
+# Compile to WebAssembly
+./zig-out/bin/cot hello.cot -o hello.wasm
+
+# Run with wasmtime
+wasmtime hello.wasm
+```
+
+### Compile to Native (AOT)
+```bash
+# Compile to native ARM64 (macOS)
+./zig-out/bin/cot hello.cot --target=arm64-macos -o hello
+./hello
+
+# Compile to native AMD64 (Linux)
+./zig-out/bin/cot hello.cot --target=amd64-linux -o hello
+./hello
+
+# The AOT path: Cot → Wasm → SSA → Native → Executable
+```
+
+### Run Tests
+```bash
+# All tests
+zig build test
+
+# With debug output
+COT_DEBUG=parse,codegen zig build test
+```
 
 ## Architecture
 
 ```
-Cot Source → Frontend → IR → Wasm Codegen → .wasm file
-                                   ↓
-                              [M1-M14 DONE]
-                              - Constants, arithmetic
-                              - Control flow (if/else, loops)
-                              - Function calls
-                              - Linear memory (load/store)
-                              - Pointers (off_ptr, add_ptr, sub_ptr)
-                              - Structs (field read/write)
-                              - Arrays/slices (bounds check, ptr+len)
-                              - Strings (data section, string ops)
-                              - CLI: cot --target=wasm32 file.cot
+                      ┌─────────────────────────────────────┐
+                      │         Cot Source Code             │
+                      └─────────────────────────────────────┘
+                                       │
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              FRONTEND                                        │
+│  Scanner → Parser → Type Checker → IR Lowerer → SSA Builder                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                       │
+                    ┌──────────────────┴──────────────────┐
+                    │                                      │
+                    ▼                                      ▼
+┌─────────────────────────────────┐    ┌─────────────────────────────────────┐
+│      WASM BACKEND (Primary)     │    │       NATIVE AOT (Performance)      │
+│                                 │    │                                     │
+│  SSA → lower_wasm → wasm_gen    │    │  Wasm → wasm_parser → wasm_to_ssa   │
+│            │                    │    │           │                         │
+│            ▼                    │    │           ▼                         │
+│      .wasm binary               │    │  SSA → regalloc → ARM64/AMD64       │
+│                                 │    │           │                         │
+│  Runs in: Browser, Node,        │    │           ▼                         │
+│           Deno, wasmtime        │    │  Mach-O / ELF executable            │
+└─────────────────────────────────┘    └─────────────────────────────────────┘
+```
 
-                              [M15+ TODO]
-                              - ARC (retain/release)
+## Example
 
-AOT Path (future):
-.wasm file → wasm_parser → wasm_to_ssa → SSA → regalloc → Native → ELF/Mach-O
-                                          ↓
-                                    [Ported, needs wiring]
+```cot
+// hello.cot
+fn main() int {
+    let x: int = 10;
+    let y: int = 5;
+    return x + y * 2;  // Returns 20
+}
+```
+
+```bash
+# Wasm target (default)
+$ ./zig-out/bin/cot hello.cot -o hello.wasm
+$ wasmtime hello.wasm
+$ echo $?
+20
+
+# Native target
+$ ./zig-out/bin/cot hello.cot --target=arm64-macos -o hello
+$ ./hello
+$ echo $?
+20
 ```
 
 ## Key Documents
 
 | Document | Purpose |
 |----------|---------|
-| [WASM_BACKEND.md](WASM_BACKEND.md) | Wasm backend milestones (M1-M16) |
-| [AOT_EXECUTION_PLAN.md](AOT_EXECUTION_PLAN.md) | Native codegen phases |
 | [VISION.md](VISION.md) | Language vision and strategy |
+| [TESTING.md](TESTING.md) | Testing strategy and test organization |
+| [WASM_BACKEND.md](WASM_BACKEND.md) | Wasm backend milestones (M1-M16) |
+| [PARITY_PLAN.md](PARITY_PLAN.md) | Feature parity tracking with bootstrap-0.2 |
 | [CLAUDE.md](CLAUDE.md) | AI session instructions |
-
-## Quick Start
-
-```bash
-# Run all tests
-zig build test
-
-# Compile to Wasm
-zig build
-./zig-out/bin/cot --target=wasm32 examples/hello.cot -o hello.wasm
-
-# Debug output
-COT_DEBUG=parse,lower,codegen zig build test
-```
 
 ## Repository Structure
 
@@ -79,37 +130,26 @@ cot/
 │   ├── ssa/               # SSA infrastructure
 │   │   └── passes/        # schedule, layout, lower_wasm
 │   ├── codegen/
-│   │   ├── wasm*.zig      # Wasm backend (active development)
+│   │   ├── wasm*.zig      # Wasm backend
 │   │   └── native/        # ARM64/AMD64 backends (AOT)
 │   ├── driver.zig         # Compilation orchestration
 │   └── main.zig           # CLI entry point
 │
+├── test/                  # Test cases and harnesses
+│   ├── cases/             # .cot test files
+│   └── browser/           # Browser test harness
+│
 ├── audit/                 # 60+ module verification docs
-├── docs/                  # Documentation source
-└── runtime/               # Wasm runtime support (future)
+└── docs/                  # Documentation source
 ```
 
-## Next Steps
+## Compilation Targets
 
-### Wasm Backend (Primary)
-
-See [WASM_BACKEND.md](WASM_BACKEND.md) for full details.
-
-**M10: Linear Memory** (current priority)
-- Add memory section to Wasm module
-- Implement `wasm_i64_load`, `wasm_i64_store`
-- Enables: local variables beyond registers, pointers
-
-**M11-M16:** Pointers, structs, arrays, strings, ARC, browser imports
-
-### AOT Native (Secondary)
-
-See [AOT_EXECUTION_PLAN.md](AOT_EXECUTION_PLAN.md) for full details.
-
-**Phase 4: Integration**
-- Wire ARM64/AMD64 codegen into driver.zig
-- Un-skip 22 native tests
-- Enable: `cot --target=arm64-macos` or `--target=amd64-linux`
+| Target | Flag | Output | Use Case |
+|--------|------|--------|----------|
+| Wasm32 | `--target=wasm32` (default) | `.wasm` | Browser, serverless, portable |
+| ARM64 macOS | `--target=arm64-macos` | executable | Native performance on Apple Silicon |
+| AMD64 Linux | `--target=amd64-linux` | executable | Native performance on x86-64 |
 
 ## Design Decisions
 
@@ -126,12 +166,40 @@ See [AOT_EXECUTION_PLAN.md](AOT_EXECUTION_PLAN.md) for full details.
 - Simpler than borrow checking
 - Same semantics for Wasm and native targets
 
+## Current Capabilities
+
+### Working
+- ✅ Functions (parameters, return values, recursion)
+- ✅ Variables (let, const)
+- ✅ Arithmetic (+, -, *, /, %)
+- ✅ Comparisons (==, !=, <, <=, >, >=)
+- ✅ Control flow (if/else, while, break, continue)
+- ✅ Structs (field access, nested)
+- ✅ Pointers (address-of, dereference)
+- ✅ Arrays and slices
+- ✅ Strings (literals, length)
+- ✅ Native AOT compilation
+
+### In Progress
+- 🔄 ARC (retain/release)
+- 🔄 Browser imports (console.log, fetch)
+
+### Planned
+- ⬜ Enums
+- ⬜ Defer
+- ⬜ Closures
+- ⬜ Generics
+
 ## Reference Code
 
 **bootstrap-0.2** (`../bootstrap-0.2/`) - frozen reference:
 - `DESIGN.md` - Full architecture specification
 - `src/codegen/` - Working native codegen
 - `src/cot1/` - Self-hosted compiler in Cot
+
+**wasmtime** (`~/learning/wasmtime/`) - Wasm runtime reference:
+- `cranelift/` - Wasm → native code generation
+- Shows industry patterns for Wasm→SSA→Native
 
 ## For Claude AI Sessions
 
