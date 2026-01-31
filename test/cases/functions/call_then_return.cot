@@ -1,0 +1,9 @@
+// EXPECT: exit_code=10
+fn double(x: int) int {
+    return x * 2;
+}
+
+fn main() int {
+    let result: int = double(5);
+    return result;
+}

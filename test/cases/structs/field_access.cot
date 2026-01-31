@@ -1,0 +1,10 @@
+// EXPECT: exit_code=42
+struct Data {
+    value: int,
+    flag: int,
+}
+
+fn main() int {
+    let d: Data = Data { value: 42, flag: 1 };
+    return d.value;
+}

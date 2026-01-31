@@ -1,0 +1,19 @@
+// EXPECT: exit_code=1
+// isEven(4) -> isOdd(3) -> isEven(2) -> isOdd(1) -> isEven(0) = 1
+fn isEven(n: int) int {
+    if (n == 0) {
+        return 1;
+    }
+    return isOdd(n - 1);
+}
+
+fn isOdd(n: int) int {
+    if (n == 0) {
+        return 0;
+    }
+    return isEven(n - 1);
+}
+
+fn main() int {
+    return isEven(4);
+}

@@ -1,0 +1,10 @@
+// EXPECT: exit_code=15
+struct Point {
+    x: int,
+    y: int,
+}
+
+fn main() int {
+    let p: Point = Point { x: 5, y: 10 };
+    return p.x + p.y;
+}

@@ -1,0 +1,14 @@
+// EXPECT: exit_code=3
+fn main() int {
+    let x: int = 10;
+    let y: int = 20;
+    if (x < y) {
+        if (x < 15) {
+            return 3;
+        } else {
+            return 2;
+        }
+    } else {
+        return 1;
+    }
+}

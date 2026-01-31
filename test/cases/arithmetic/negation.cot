@@ -1,0 +1,5 @@
+// EXPECT: exit_code=248
+// Tests: -8 as unsigned byte = 256 - 8 = 248
+fn main() int {
+    return -8;
+}

@@ -1,0 +1,14 @@
+// EXPECT: exit_code=26
+struct Point {
+    x: int,
+    y: int,
+}
+
+fn manhattan(p: Point) int {
+    return p.x + p.y;
+}
+
+fn main() int {
+    let pt: Point = Point { x: 10, y: 16 };
+    return manhattan(pt);
+}

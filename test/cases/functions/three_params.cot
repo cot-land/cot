@@ -1,0 +1,8 @@
+// EXPECT: exit_code=14
+fn sum3(a: int, b: int, c: int) int {
+    return a + b + c;
+}
+
+fn main() int {
+    return sum3(2, 5, 7);
+}

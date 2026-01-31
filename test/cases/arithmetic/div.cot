@@ -1,0 +1,4 @@
+// EXPECT: exit_code=5
+fn main() int {
+    return 20 / 4;
+}

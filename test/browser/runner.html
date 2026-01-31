@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cot Wasm Test Runner</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #e0e0e0;
+        }
+        h1 {
+            color: #4a9eff;
+            border-bottom: 2px solid #333;
+            padding-bottom: 10px;
+        }
+        .summary {
+            font-size: 1.2em;
+            margin: 20px 0;
+            padding: 15px;
+            background: #2a2a2a;
+            border-radius: 8px;
+        }
+        .passed { color: #4caf50; }
+        .failed { color: #f44336; }
+        .test-result {
+            padding: 8px 12px;
+            margin: 4px 0;
+            border-radius: 4px;
+            font-family: monospace;
+        }
+        .test-result.pass {
+            background: #1b3d1b;
+            border-left: 4px solid #4caf50;
+        }
+        .test-result.fail {
+            background: #3d1b1b;
+            border-left: 4px solid #f44336;
+        }
+        #progress {
+            margin: 20px 0;
+        }
+        progress {
+            width: 100%;
+            height: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Cot Wasm Test Runner</h1>
+    <div id="progress">
+        <progress id="progressBar" value="0" max="100"></progress>
+        <div id="progressText">Loading tests...</div>
+    </div>
+    <div id="summary" class="summary"></div>
+    <div id="results"></div>
+    <script type="module" src="harness.js"></script>
+</body>
+</html>

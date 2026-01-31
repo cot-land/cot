@@ -1,0 +1,12 @@
+// EXPECT: exit_code=1
+// Simple recursive function that hits base case immediately
+fn countdown(n: int) int {
+    if (n <= 0) {
+        return 1;
+    }
+    return countdown(n - 1);
+}
+
+fn main() int {
+    return countdown(0);
+}

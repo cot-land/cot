@@ -1,0 +1,5 @@
+// EXPECT: exit_code=20
+// Tests: (2 + 3) * 4 = 5 * 4 = 20 (parens override precedence)
+fn main() int {
+    return (2 + 3) * 4;
+}

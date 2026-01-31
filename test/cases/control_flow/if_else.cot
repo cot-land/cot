@@ -1,0 +1,8 @@
+// EXPECT: exit_code=20
+fn main() int {
+    if (5 > 10) {
+        return 10;
+    } else {
+        return 20;
+    }
+}

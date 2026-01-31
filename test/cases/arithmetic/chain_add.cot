@@ -1,0 +1,4 @@
+// EXPECT: exit_code=15
+fn main() int {
+    return 1 + 2 + 3 + 4 + 5;
+}
