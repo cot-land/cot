@@ -21,8 +21,9 @@
 | M6-M7 | ✅ Done | Control flow (if/else, loops) |
 | M8-M9 | ✅ Done | Function calls, CLI outputs .wasm |
 | M10 | ✅ Done | Linear memory (load/store, SP global, frame allocation) |
-| **M11** | 🔄 **Next** | Pointers (address-of, dereference) |
-| M12-M16 | TODO | Structs, arrays, strings, ARC |
+| M11 | ✅ Done | Pointers (off_ptr, add_ptr, sub_ptr) |
+| **M12** | 🔄 **Next** | Structs (layout, field access) |
+| M13-M16 | TODO | Arrays, strings, ARC |
 
 ### AOT Native Progress
 
@@ -33,7 +34,7 @@
 
 ### Test Status
 
-**379/401 passed, 22 skipped (native tests)**
+**382/404 passed, 22 skipped (native tests)**
 
 ---
 

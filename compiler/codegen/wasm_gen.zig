@@ -583,6 +583,38 @@ pub const FuncGen = struct {
                 }
             },
 
+            // ================================================================
+            // Pointer Arithmetic (M11)
+            // Go reference: OpOffPtr → OpWasmI64AddConst (rewriteWasm.go:415)
+            // ================================================================
+
+            // off_ptr: base + constant offset
+            // Go: OpWasmI64AddConst - getValue64(base), i64Const(offset), i64.add
+            .off_ptr => {
+                try self.getValue32(v.args[0]); // base pointer (i32)
+                const offset: i32 = @truncate(v.aux_int);
+                if (offset != 0) {
+                    try self.code.emitI32Const(offset);
+                    try self.code.emitI32Add();
+                }
+            },
+
+            // add_ptr: base + variable offset
+            // Used for array indexing: base + (index * element_size)
+            .add_ptr => {
+                try self.getValue32(v.args[0]); // base pointer (i32)
+                try self.getValue32(v.args[1]); // offset (i32)
+                try self.code.emitI32Add();
+            },
+
+            // sub_ptr: base - variable offset
+            // Used for pointer difference calculations
+            .sub_ptr => {
+                try self.getValue32(v.args[0]); // base pointer (i32)
+                try self.getValue32(v.args[1]); // offset (i32)
+                try self.code.emitI32Sub();
+            },
+
             // Loads (Go lines 379-382)
             .wasm_i64_load => {
                 try self.getValue32(v.args[0]);
@@ -783,8 +815,8 @@ pub const FuncGen = struct {
     fn producesI32(self: *const FuncGen, v: *const SsaValue) bool {
         _ = self;
         return switch (v.op) {
-            // Address computations produce i32
-            .local_addr => true,
+            // Address computations produce i32 (Wasm uses 32-bit linear memory)
+            .local_addr, .off_ptr, .add_ptr, .sub_ptr => true,
             // i32 operations
             .wasm_i32_const, .const_32, .wasm_i32_load => true,
             // Comparisons produce i32
@@ -1057,4 +1089,153 @@ test "genFunc - frame size computed from local_addr slots" {
     try testing.expect(body.len >= 8);
     try testing.expectEqual(Op.global_get, body[1]);
     try testing.expectEqual(Op.end, body[body.len - 1]);
+}
+
+// ============================================================================
+// M11: Pointer Operations Tests
+// Go reference: OpOffPtr → OpWasmI64AddConst (rewriteWasm.go:415)
+// ============================================================================
+
+test "genFunc - off_ptr adds constant offset to pointer" {
+    // off_ptr: base + aux_int (constant offset)
+    // Used for struct field access: &s.field = &s + field_offset
+    const allocator = testing.allocator;
+
+    var f = SsaFunc.init(allocator, "test_off_ptr");
+    defer f.deinit();
+
+    const b = try f.newBlock(.ret);
+
+    // Base address from local_addr slot 0
+    const base = try f.newValue(.local_addr, 0, b, .{});
+    base.aux_int = 0;
+    base.*.uses = 1;
+    try b.addValue(allocator, base);
+
+    // off_ptr: base + 16 (access field at offset 16)
+    const ptr = try f.newValue(.off_ptr, 0, b, .{});
+    ptr.addArg(base);
+    ptr.aux_int = 16; // constant offset
+    ptr.*.uses = 1;
+    try b.addValue(allocator, ptr);
+
+    // Load from offset pointer
+    const load = try f.newValue(.wasm_i64_load, 0, b, .{});
+    load.addArg(ptr);
+    load.aux_int = 0;
+    load.*.uses = 1;
+    try b.addValue(allocator, load);
+    b.controls[0] = load;
+
+    const body = try genFunc(allocator, &f);
+    defer allocator.free(body);
+
+    // Should contain: global.get (SP), i32.const 16, i32.add, i64.load
+    try testing.expect(body.len >= 8);
+    var found_i32_add = false;
+    var found_i64_load = false;
+    for (body) |byte| {
+        if (byte == Op.i32_add) found_i32_add = true;
+        if (byte == Op.i64_load) found_i64_load = true;
+    }
+    try testing.expect(found_i32_add);
+    try testing.expect(found_i64_load);
+}
+
+test "genFunc - add_ptr adds variable offset to pointer" {
+    // add_ptr: base + offset (variable offset)
+    // Used for array indexing: &arr[i] = arr + (i * element_size)
+    const allocator = testing.allocator;
+
+    var f = SsaFunc.init(allocator, "test_add_ptr");
+    defer f.deinit();
+
+    const b = try f.newBlock(.ret);
+
+    // Base address from local_addr slot 0
+    const base = try f.newValue(.local_addr, 0, b, .{});
+    base.aux_int = 0;
+    base.*.uses = 1;
+    try b.addValue(allocator, base);
+
+    // Variable offset (e.g., index * 8)
+    const offset = try f.newValue(.wasm_i32_const, 0, b, .{});
+    offset.aux_int = 24; // offset value
+    offset.*.uses = 1;
+    try b.addValue(allocator, offset);
+
+    // add_ptr: base + offset
+    const ptr = try f.newValue(.add_ptr, 0, b, .{});
+    ptr.addArg(base);
+    ptr.addArg(offset);
+    ptr.*.uses = 1;
+    try b.addValue(allocator, ptr);
+
+    // Load from computed pointer
+    const load = try f.newValue(.wasm_i64_load, 0, b, .{});
+    load.addArg(ptr);
+    load.aux_int = 0;
+    load.*.uses = 1;
+    try b.addValue(allocator, load);
+    b.controls[0] = load;
+
+    const body = try genFunc(allocator, &f);
+    defer allocator.free(body);
+
+    // Should contain i32.add for pointer arithmetic
+    try testing.expect(body.len >= 8);
+    var found_i32_add = false;
+    for (body) |byte| {
+        if (byte == Op.i32_add) found_i32_add = true;
+    }
+    try testing.expect(found_i32_add);
+}
+
+test "genFunc - sub_ptr subtracts variable offset from pointer" {
+    // sub_ptr: base - offset (variable offset)
+    // Used for pointer difference or backward indexing
+    const allocator = testing.allocator;
+
+    var f = SsaFunc.init(allocator, "test_sub_ptr");
+    defer f.deinit();
+
+    const b = try f.newBlock(.ret);
+
+    // Base address from local_addr slot 1 (offset 8)
+    const base = try f.newValue(.local_addr, 0, b, .{});
+    base.aux_int = 1;
+    base.*.uses = 1;
+    try b.addValue(allocator, base);
+
+    // Variable offset to subtract
+    const offset = try f.newValue(.wasm_i32_const, 0, b, .{});
+    offset.aux_int = 8;
+    offset.*.uses = 1;
+    try b.addValue(allocator, offset);
+
+    // sub_ptr: base - offset
+    const ptr = try f.newValue(.sub_ptr, 0, b, .{});
+    ptr.addArg(base);
+    ptr.addArg(offset);
+    ptr.*.uses = 1;
+    try b.addValue(allocator, ptr);
+
+    // Load from computed pointer
+    const load = try f.newValue(.wasm_i64_load, 0, b, .{});
+    load.addArg(ptr);
+    load.aux_int = 0;
+    load.*.uses = 1;
+    try b.addValue(allocator, load);
+    b.controls[0] = load;
+
+    const body = try genFunc(allocator, &f);
+    defer allocator.free(body);
+
+    // Should contain i32.sub for pointer arithmetic
+    try testing.expect(body.len >= 8);
+    var found_i32_sub = false;
+    for (body) |byte| {
+        if (byte == Op.i32_sub) found_i32_sub = true;
+    }
+    try testing.expect(found_i32_sub);
 }

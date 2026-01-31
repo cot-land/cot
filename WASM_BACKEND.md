@@ -420,9 +420,13 @@ pub fn compileToWasm(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
 - [x] Tests: local_addr, store+load round-trip, frame size
 - Go reference: wasm/ssa.go lines 280-284 (stores), 379-382 (loads)
 
-### M11: Pointers
-- [ ] Pointer types in Wasm (i32 addresses)
-- [ ] Address-of, dereference operations
+### M11: Pointers ✅
+- [x] `off_ptr`: base + constant offset (struct field access)
+- [x] `add_ptr`: base + variable offset (array indexing)
+- [x] `sub_ptr`: base - variable offset (pointer difference)
+- [x] All pointer ops produce i32 (Wasm linear memory addresses)
+- [x] Tests: off_ptr, add_ptr, sub_ptr with load verification
+- Go reference: OpOffPtr → OpWasmI64AddConst (rewriteWasm.go:415)
 
 ### M12: Structs
 - [ ] Struct layout in linear memory
