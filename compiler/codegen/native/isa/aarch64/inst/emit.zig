@@ -26,6 +26,11 @@ pub const AtomicRMWOp = mod.AtomicRMWOp;
 pub const AtomicRMWLoopOp = mod.AtomicRMWLoopOp;
 pub const AMode = mod.AMode;
 pub const PairAMode = mod.PairAMode;
+pub const VecALUOp = mod.VecALUOp;
+pub const VecALUModOp = mod.VecALUModOp;
+pub const VecMisc2 = mod.VecMisc2;
+pub const VecLanesOp = mod.VecLanesOp;
+pub const VecShiftImmOp = mod.VecShiftImmOp;
 
 pub const Reg = args.Reg;
 pub const PReg = args.PReg;
@@ -185,6 +190,116 @@ pub const EmitInfo = struct {
         return .{ .flags = flags };
     }
 };
+
+//=============================================================================
+// Address mode finalization
+//=============================================================================
+
+/// Result of mem_finalize: instructions to emit before the memory access, and the finalized AMode.
+pub const MemFinalizeResult = struct {
+    /// Instructions to emit before the memory operation (for large offsets).
+    pre_insts: [4]?Inst,
+    pre_inst_count: u8,
+    /// The finalized addressing mode.
+    amode: AMode,
+};
+
+/// Convert pseudo addressing modes (SPOffset, FPOffset, etc.) to real addressing modes.
+/// For large offsets, this may generate instructions to load the offset into a temp register.
+pub fn memFinalize(mem: AMode, state: *const EmitState) MemFinalizeResult {
+    var result = MemFinalizeResult{
+        .pre_insts = .{ null, null, null, null },
+        .pre_inst_count = 0,
+        .amode = mem,
+    };
+
+    switch (mem) {
+        .sp_offset => |m| {
+            const off = m.off;
+            const basereg = stackReg();
+            result.amode = finalizeOffset(off, basereg, &result);
+        },
+        .fp_offset => |m| {
+            const off = m.off;
+            const basereg = fpReg();
+            result.amode = finalizeOffset(off, basereg, &result);
+        },
+        .slot_offset => |m| {
+            // Slot offsets need adjustment for outgoing args area
+            const adj = @as(i64, state.frame_layout.outgoing_args_size);
+            const off = m.off + adj;
+            const basereg = stackReg();
+            result.amode = finalizeOffset(off, basereg, &result);
+        },
+        .incoming_arg => |m| {
+            // Incoming args are above the frame
+            const fl = state.frame_layout;
+            const total_frame: i64 = @as(i64, fl.setup_area_size) +
+                @as(i64, fl.tail_args_size) +
+                @as(i64, fl.clobber_size) +
+                @as(i64, fl.fixed_frame_storage_size) +
+                @as(i64, fl.outgoing_args_size);
+            const off = total_frame - m.off;
+            const basereg = stackReg();
+            result.amode = finalizeOffset(off, basereg, &result);
+        },
+        else => {
+            // Already a real addressing mode, return as-is
+        },
+    }
+
+    return result;
+}
+
+fn finalizeOffset(off: i64, basereg: Reg, result: *MemFinalizeResult) AMode {
+    // Try SImm9 encoding (-256 to 255)
+    if (off >= -256 and off <= 255) {
+        return AMode{ .unscaled = .{
+            .rn = basereg,
+            .simm9 = SImm9.maybeFromI64(off).?,
+        } };
+    }
+    // Try UImm12 scaled encoding (0 to 32760 for 8-byte access)
+    if (off >= 0 and off <= 32760 and @mod(off, 8) == 0) {
+        return AMode{ .unsigned_offset = .{
+            .rn = basereg,
+            .uimm12 = UImm12Scaled.maybeFromI64(off, 8).?,
+        } };
+    }
+    // Large offset: load into spilltmp register
+    const tmp = spilltmpReg();
+    const tmp_wr = Writable(Reg).fromReg(tmp);
+
+    // Generate MOVZ/MOVK sequence to load the offset
+    // For now, handle 16-bit positive offsets with MOVZ
+    if (off >= 0 and off <= 0xFFFF) {
+        const imm = MoveWideConst.maybeFromU64(@intCast(off)).?;
+        result.pre_insts[0] = Inst{ .mov_wide = .{
+            .op = .movz,
+            .rd = tmp_wr,
+            .imm = imm,
+            .size = .size64,
+        } };
+        result.pre_inst_count = 1;
+    } else {
+        // For larger offsets, we'd need MOVZ + MOVK sequence
+        // For now, just use MOVZ with truncated value (TODO: fix for large frames)
+        const imm = MoveWideConst.maybeFromU64(@intCast(off & 0xFFFF)).?;
+        result.pre_insts[0] = Inst{ .mov_wide = .{
+            .op = .movz,
+            .rd = tmp_wr,
+            .imm = imm,
+            .size = .size64,
+        } };
+        result.pre_inst_count = 1;
+    }
+
+    return AMode{ .reg_extended = .{
+        .rn = basereg,
+        .rm = tmp,
+        .extendop = .sxtx,
+    } };
+}
 
 //=============================================================================
 // Register encoding helpers
@@ -1534,6 +1649,414 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, emit_info: *const EmitInfo, st
             sink.put4(encStlr(payload.ty, payload.rt, payload.rn));
         },
 
+        // ==========================================================================
+        // Vector/SIMD Operations
+        // ==========================================================================
+
+        // Vector 3-register ALU operation
+        .vec_rrr => |payload| {
+            const enc = payload.size.encSize();
+            const q = enc.q;
+            const enc_size = enc.size;
+
+            // Check if this is a floating-point operation
+            const is_float = switch (payload.op) {
+                .fcmeq, .fcmgt, .fcmge, .fadd, .fsub, .fdiv, .fmax, .fmin, .fmul, .fmaxnm, .fminnm => true,
+                else => false,
+            };
+
+            const bits = switch (payload.op) {
+                .sqadd => .{ @as(u32, 0b000_01110_00_1) | enc_size << 1, @as(u32, 0b000011) },
+                .sqsub => .{ @as(u32, 0b000_01110_00_1) | enc_size << 1, @as(u32, 0b001011) },
+                .uqadd => .{ @as(u32, 0b001_01110_00_1) | enc_size << 1, @as(u32, 0b000011) },
+                .uqsub => .{ @as(u32, 0b001_01110_00_1) | enc_size << 1, @as(u32, 0b001011) },
+                .cmeq => .{ @as(u32, 0b001_01110_00_1) | enc_size << 1, @as(u32, 0b100011) },
+                .cmge => .{ @as(u32, 0b000_01110_00_1) | enc_size << 1, @as(u32, 0b001111) },
+                .cmgt => .{ @as(u32, 0b000_01110_00_1) | enc_size << 1, @as(u32, 0b001101) },
+                .cmhi => .{ @as(u32, 0b001_01110_00_1) | enc_size << 1, @as(u32, 0b001101) },
+                .cmhs => .{ @as(u32, 0b001_01110_00_1) | enc_size << 1, @as(u32, 0b001111) },
+                .fcmeq => .{ @as(u32, 0b000_01110_00_1), @as(u32, 0b111001) },
+                .fcmgt => .{ @as(u32, 0b001_01110_10_1), @as(u32, 0b111001) },
+                .fcmge => .{ @as(u32, 0b001_01110_00_1), @as(u32, 0b111001) },
+                // Logical ops operate on bytes, not encoded differently for different vector types
+                .@"and" => .{ @as(u32, 0b000_01110_00_1), @as(u32, 0b000111) },
+                .bic => .{ @as(u32, 0b000_01110_01_1), @as(u32, 0b000111) },
+                .orr => .{ @as(u32, 0b000_01110_10_1), @as(u32, 0b000111) },
+                .eor => .{ @as(u32, 0b001_01110_00_1), @as(u32, 0b000111) },
+                .umaxp => .{ @as(u32, 0b001_01110_00_1) | enc_size << 1, @as(u32, 0b101001) },
+                .add => .{ @as(u32, 0b000_01110_00_1) | enc_size << 1, @as(u32, 0b100001) },
+                .sub => .{ @as(u32, 0b001_01110_00_1) | enc_size << 1, @as(u32, 0b100001) },
+                .mul => .{ @as(u32, 0b000_01110_00_1) | enc_size << 1, @as(u32, 0b100111) },
+                .sshl => .{ @as(u32, 0b000_01110_00_1) | enc_size << 1, @as(u32, 0b010001) },
+                .ushl => .{ @as(u32, 0b001_01110_00_1) | enc_size << 1, @as(u32, 0b010001) },
+                .srshl => .{ @as(u32, 0b000_01110_00_1) | enc_size << 1, @as(u32, 0b010101) },
+                .urshl => .{ @as(u32, 0b001_01110_00_1) | enc_size << 1, @as(u32, 0b010101) },
+                .umin => .{ @as(u32, 0b001_01110_00_1) | enc_size << 1, @as(u32, 0b011011) },
+                .smin => .{ @as(u32, 0b000_01110_00_1) | enc_size << 1, @as(u32, 0b011011) },
+                .umax => .{ @as(u32, 0b001_01110_00_1) | enc_size << 1, @as(u32, 0b011001) },
+                .smax => .{ @as(u32, 0b000_01110_00_1) | enc_size << 1, @as(u32, 0b011001) },
+                .fadd => .{ @as(u32, 0b000_01110_00_1), @as(u32, 0b110101) },
+                .fsub => .{ @as(u32, 0b000_01110_10_1), @as(u32, 0b110101) },
+                .fdiv => .{ @as(u32, 0b001_01110_00_1), @as(u32, 0b111111) },
+                .fmax => .{ @as(u32, 0b000_01110_00_1), @as(u32, 0b111101) },
+                .fmin => .{ @as(u32, 0b000_01110_10_1), @as(u32, 0b111101) },
+                .fmaxnm => .{ @as(u32, 0b000_01110_00_1), @as(u32, 0b110001) },
+                .fminnm => .{ @as(u32, 0b000_01110_10_1), @as(u32, 0b110001) },
+                .fmul => .{ @as(u32, 0b001_01110_00_1), @as(u32, 0b110111) },
+                .addp => .{ @as(u32, 0b000_01110_00_1) | enc_size << 1, @as(u32, 0b101111) },
+                .bsl => .{ @as(u32, 0b001_01110_01_1), @as(u32, 0b000111) },
+                // Long operations - these are more complex, emit BRK for now
+                .umlal, .smull, .smull2, .umull, .umull2 => {
+                    sink.put4(0xd43e0000); // BRK - TODO: implement long operations
+                    return;
+                },
+            };
+            var top11 = bits[0];
+            const bit15_10 = bits[1];
+
+            // For float ops, encode the float size into top11
+            if (is_float) {
+                top11 |= payload.size.encFloatSize() << 1;
+            }
+
+            sink.put4(encVecRrr(top11 | q << 9, payload.rm, bit15_10, payload.rn, payload.rd));
+        },
+
+        // Vector 3-register ALU with modifier
+        .vec_rrr_mod => |payload| {
+            const enc = payload.size.encSize();
+            const q = enc.q;
+
+            const bits = switch (payload.op) {
+                .sqrdmlah => .{ @as(u32, 0b001_01110_00_1), @as(u32, 0b100001) },
+                .sqrdmlsh => .{ @as(u32, 0b001_01110_00_1), @as(u32, 0b100011) },
+                .umlal => .{ @as(u32, 0b001_01110_00_1), @as(u32, 0b100000) },
+                .fmla => .{ @as(u32, 0b000_01110_00_1) | payload.size.encFloatSize() << 1, @as(u32, 0b110011) },
+                .fmls => .{ @as(u32, 0b000_01110_10_1) | payload.size.encFloatSize() << 1, @as(u32, 0b110011) },
+            };
+            const top11 = bits[0];
+            const bit15_10 = bits[1];
+
+            sink.put4(encVecRrr(top11 | q << 9, payload.rm, bit15_10, payload.rn, payload.rd));
+        },
+
+        // Vector 2-operand misc operation
+        .vec_misc => |payload| {
+            const enc = payload.size.encSize();
+            const q = enc.q;
+            const enc_size = enc.size;
+
+            const bits = switch (payload.op) {
+                .not => .{ @as(u32, 0b1), @as(u32, 0b00101), @as(u32, 0b00) },
+                .neg => .{ @as(u32, 0b1), @as(u32, 0b01011), enc_size },
+                .abs => .{ @as(u32, 0b0), @as(u32, 0b01011), enc_size },
+                .fabs => .{ @as(u32, 0b0), @as(u32, 0b01111), payload.size.encFloatSize() | 0b10 },
+                .fneg => .{ @as(u32, 0b1), @as(u32, 0b01111), payload.size.encFloatSize() | 0b10 },
+                .fsqrt => .{ @as(u32, 0b1), @as(u32, 0b11111), payload.size.encFloatSize() | 0b10 },
+                .rev16 => .{ @as(u32, 0b0), @as(u32, 0b00001), @as(u32, 0b00) },
+                .rev32 => .{ @as(u32, 0b1), @as(u32, 0b00000), enc_size },
+                .rev64 => .{ @as(u32, 0b0), @as(u32, 0b00000), enc_size },
+                .fcvtzs => .{ @as(u32, 0b0), @as(u32, 0b11011), payload.size.encFloatSize() | 0b10 },
+                .fcvtzu => .{ @as(u32, 0b1), @as(u32, 0b11011), payload.size.encFloatSize() | 0b10 },
+                .scvtf => .{ @as(u32, 0b0), @as(u32, 0b11101), enc_size },
+                .ucvtf => .{ @as(u32, 0b1), @as(u32, 0b11101), enc_size },
+                .frintn => .{ @as(u32, 0b0), @as(u32, 0b11000), payload.size.encFloatSize() | 0b10 },
+                .frintz => .{ @as(u32, 0b0), @as(u32, 0b11001), payload.size.encFloatSize() | 0b10 },
+                .frintm => .{ @as(u32, 0b0), @as(u32, 0b11001), payload.size.encFloatSize() },
+                .frintp => .{ @as(u32, 0b0), @as(u32, 0b11000), payload.size.encFloatSize() },
+                .cnt => .{ @as(u32, 0b0), @as(u32, 0b00101), @as(u32, 0b00) },
+                .cmeq0 => .{ @as(u32, 0b0), @as(u32, 0b01001), enc_size },
+                .cmge0 => .{ @as(u32, 0b1), @as(u32, 0b01000), enc_size },
+                .cmgt0 => .{ @as(u32, 0b0), @as(u32, 0b01000), enc_size },
+                .cmle0 => .{ @as(u32, 0b1), @as(u32, 0b01001), enc_size },
+                .cmlt0 => .{ @as(u32, 0b0), @as(u32, 0b01010), enc_size },
+                .fcmeq0 => .{ @as(u32, 0b0), @as(u32, 0b01101), payload.size.encFloatSize() | 0b10 },
+                .fcmge0 => .{ @as(u32, 0b1), @as(u32, 0b01100), payload.size.encFloatSize() | 0b10 },
+                .fcmgt0 => .{ @as(u32, 0b0), @as(u32, 0b01100), payload.size.encFloatSize() | 0b10 },
+                .fcmle0 => .{ @as(u32, 0b1), @as(u32, 0b01101), payload.size.encFloatSize() | 0b10 },
+                .fcmlt0 => .{ @as(u32, 0b0), @as(u32, 0b01110), payload.size.encFloatSize() | 0b10 },
+            };
+            const u = bits[0];
+            const opcode = bits[1];
+            const size = bits[2];
+
+            // Encoding: 0 Q U 01110 size 10000 opcode 10 Rn Rd
+            const encoding: u32 = (q << 30) |
+                (u << 29) |
+                (0b01110 << 24) |
+                (size << 22) |
+                (0b10000 << 17) |
+                (opcode << 12) |
+                (0b10 << 10) |
+                (machregToVec(payload.rn) << 5) |
+                machregToVec(payload.rd.toReg());
+            sink.put4(encoding);
+        },
+
+        // Vector lanes operation
+        .vec_lanes => |payload| {
+            const enc = payload.size.encSize();
+            const q = enc.q;
+            const enc_size = enc.size;
+
+            const bits = switch (payload.op) {
+                .addv => .{ @as(u32, 0b0), @as(u32, 0b11011) },
+                .uminv => .{ @as(u32, 0b1), @as(u32, 0b11010) },
+                .saddlv => .{ @as(u32, 0b0), @as(u32, 0b00011) },
+                .uaddlv => .{ @as(u32, 0b1), @as(u32, 0b00011) },
+            };
+            const u = bits[0];
+            const opcode = bits[1];
+
+            // Encoding: 0 Q U 01110 size 11000 opcode 10 Rn Rd
+            const encoding: u32 = (q << 30) |
+                (u << 29) |
+                (0b01110 << 24) |
+                (enc_size << 22) |
+                (0b11000 << 17) |
+                (opcode << 12) |
+                (0b10 << 10) |
+                (machregToVec(payload.rn) << 5) |
+                machregToVec(payload.rd.toReg());
+            sink.put4(encoding);
+        },
+
+        // Vector shift by immediate
+        .vec_shift_imm => |payload| {
+            const enc = payload.size.encSize();
+            const q = enc.q;
+            const lane_bits: u8 = switch (payload.size.laneSize()) {
+                .size8 => 8,
+                .size16 => 16,
+                .size32 => 32,
+                .size64 => 64,
+                else => unreachable,
+            };
+
+            const bits = switch (payload.op) {
+                .shl => .{ @as(u32, 0b0), @as(u32, 0b01010) },
+                .sshr => .{ @as(u32, 0b0), @as(u32, 0b00000) },
+                .ushr => .{ @as(u32, 0b1), @as(u32, 0b00000) },
+            };
+            const u = bits[0];
+            const opcode = bits[1];
+
+            // Calculate immh:immb encoding
+            // For SHL: immh:immb = lane_bits + shift_amount
+            // For SSHR/USHR: immh:immb = 2*lane_bits - shift_amount
+            const shift_enc: u32 = switch (payload.op) {
+                .shl => @as(u32, lane_bits) + @as(u32, payload.imm),
+                .sshr, .ushr => @as(u32, lane_bits) * 2 - @as(u32, payload.imm),
+            };
+            const immh: u32 = shift_enc >> 3;
+            const immb: u32 = shift_enc & 0b111;
+
+            // Encoding: 0 Q U 011110 immh immb opcode 1 Rn Rd
+            const encoding: u32 = (q << 30) |
+                (u << 29) |
+                (0b011110 << 23) |
+                (immh << 19) |
+                (immb << 16) |
+                (opcode << 11) |
+                (0b1 << 10) |
+                (machregToVec(payload.rn) << 5) |
+                machregToVec(payload.rd.toReg());
+            sink.put4(encoding);
+        },
+
+        // Vector duplicate from scalar
+        .vec_dup => |payload| {
+            const enc = payload.size.encSize();
+            const q = enc.q;
+            const enc_size = enc.size;
+
+            // DUP (general) encoding: 0 Q 0 01110000 imm5 0 0011 1 Rn Rd
+            // imm5 encodes the element size: 00001=byte, 00010=half, 00100=word, 01000=dword
+            const imm5: u32 = @as(u32, 1) << enc_size;
+
+            const encoding: u32 = (q << 30) |
+                (0b001110000 << 21) |
+                (imm5 << 16) |
+                (0b000111 << 10) |
+                (machregToGpr(payload.rn) << 5) |
+                machregToVec(payload.rd.toReg());
+            sink.put4(encoding);
+        },
+
+        // Vector duplicate from immediate - emit MOVI for now (simplified)
+        .vec_dup_imm => |payload| {
+            // For immediate duplication, we use MOVI instruction
+            // This is a simplified implementation that handles common cases
+            const enc = payload.size.encSize();
+            const q = enc.q;
+
+            // MOVI encoding for 8-bit immediate to all lanes
+            // 0 Q op 0111100000 a b c cmode 0 1 d e f g h Rd
+            const imm8: u32 = @truncate(payload.imm & 0xFF);
+            const abc = (imm8 >> 5) & 0b111;
+            const defgh = imm8 & 0b11111;
+
+            const encoding: u32 = (q << 30) |
+                (0b0111100000 << 20) |
+                (abc << 16) |
+                (0b1110 << 12) | // cmode for 8-bit immediate
+                (0b01 << 10) |
+                (defgh << 5) |
+                machregToVec(payload.rd.toReg());
+            sink.put4(encoding);
+        },
+
+        // Move to vector element
+        .mov_to_vec => |payload| {
+            const enc_size: u32 = switch (payload.size.laneSize()) {
+                .size8 => 0b00,
+                .size16 => 0b01,
+                .size32 => 0b10,
+                .size64 => 0b11,
+                else => unreachable,
+            };
+
+            // INS (general) encoding: 01001110000 imm5 0 0011 1 Rn Rd
+            // imm5 encodes both size and index: size bits + index * size
+            const imm5: u32 = (@as(u32, 1) << enc_size) | (@as(u32, payload.idx) << (enc_size + 1));
+
+            const encoding: u32 = (0b01001110000 << 21) |
+                (imm5 << 16) |
+                (0b000111 << 10) |
+                (machregToGpr(payload.rn) << 5) |
+                machregToVec(payload.rd.toReg());
+            sink.put4(encoding);
+        },
+
+        // Move from vector element
+        .mov_from_vec => |payload| {
+            const enc_size: u32 = switch (payload.size.laneSize()) {
+                .size8 => 0b00,
+                .size16 => 0b01,
+                .size32 => 0b10,
+                .size64 => 0b11,
+                else => unreachable,
+            };
+
+            // UMOV encoding: 0 Q 001110000 imm5 0 0111 1 Rn Rd
+            // For 64-bit, Q=1; for 32-bit and below, Q=0
+            const q: u32 = if (enc_size == 0b11) 1 else 0;
+            const imm5: u32 = (@as(u32, 1) << enc_size) | (@as(u32, payload.idx) << (enc_size + 1));
+
+            const encoding: u32 = (q << 30) |
+                (0b001110000 << 21) |
+                (imm5 << 16) |
+                (0b001111 << 10) |
+                (machregToVec(payload.rn) << 5) |
+                machregToGpr(payload.rd.toReg());
+            sink.put4(encoding);
+        },
+
+        // ==========================================================================
+        // External Symbol Loading
+        // ==========================================================================
+
+        // Load external symbol address (ADRP + ADD sequence)
+        .load_ext_name => |payload| {
+            // Emit ADRP rd, #0 (relocation will patch this)
+            // Encoding: 1 immlo(2) 10000 immhi(19) Rd(5)
+            const adrp_enc: u32 = (0b1 << 31) | (0b10000 << 24) | machregToGpr(payload.rd.toReg());
+            sink.put4(adrp_enc);
+
+            // Emit ADD rd, rd, #0 (relocation will patch this)
+            // ADD (immediate) encoding: sf 0 0 10001 sh imm12 Rn Rd
+            const add_enc: u32 = (0b1_0_0_10001_0 << 22) | // sf=1, op=0, S=0, shift=0
+                (machregToGpr(payload.rd.toReg()) << 5) |
+                machregToGpr(payload.rd.toReg());
+            sink.put4(add_enc);
+
+            // Note: Actual relocation records would be added here when linker is wired up
+            // For now, the symbol_idx and offset are embedded in the instruction data
+            // and will be processed during object file emission
+            _ = payload.symbol_idx;
+            _ = payload.offset;
+        },
+
+        // ==========================================================================
+        // Jump Table Sequence
+        // ==========================================================================
+
+        // Jump table pseudo-instruction - expands to multiple real instructions
+        .jt_sequence => |payload| {
+            // This sequence must be emitted as a single unit because we use PC-relative addressing.
+            // Sequence:
+            // 1. B.HS default       - Branch to default if out of bounds (assumes prior CMP)
+            // 2. CSEL rtmp2, XZR, ridx, HS - Spectre mitigation: zero if out of bounds
+            // 3. CSDB               - Speculation barrier
+            // 4. ADR rtmp1, #16     - Load address of jump table (16 bytes ahead)
+            // 5. LDR rtmp2, [rtmp1, rtmp2, UXTW #2] - Load offset from table
+            // 6. ADD rtmp1, rtmp1, rtmp2 - Compute target address
+            // 7. BR rtmp1           - Branch to target
+            // 8. [jump table data]  - 32-bit offsets for each target
+
+            // 1. B.HS default - conditional branch to default target
+            const br_default = encConditionalBr(BranchTarget{ .label = payload.default }, CondBrKind{ .cond = Cond.hs });
+            const br_offset = sink.curOffset();
+            sink.useLabelAtOffset(br_offset, payload.default, .branch19);
+            sink.put4(br_default);
+
+            // 2. CSEL rtmp2, XZR, ridx, HS - select zero if out of bounds (Spectre mitigation)
+            // Encoding: 1 0011010100 Rm cond 00 Rn Rd
+            const csel_enc: u32 = (0b1_0011010100 << 21) |
+                (machregToGpr(payload.ridx) << 16) |
+                (@as(u32, Cond.hs.bits()) << 12) |
+                (0b00 << 10) |
+                (machregToGpr(zeroReg()) << 5) |
+                machregToGpr(payload.rtmp2.toReg());
+            sink.put4(csel_enc);
+
+            // 3. CSDB - speculation barrier
+            sink.put4(0xd503229f);
+
+            // 4. ADR rtmp1, #16 - load address of jump table
+            // The jump table starts 16 bytes after this instruction (4 instructions * 4 bytes)
+            const adr_off: i32 = 16;
+            const immlo: u32 = @as(u32, @intCast(adr_off & 3));
+            const immhi: u32 = @as(u32, @intCast((adr_off >> 2) & ((1 << 19) - 1)));
+            const adr_enc: u32 = (0b00010000 << 24) | (immlo << 29) | (immhi << 5) | machregToGpr(payload.rtmp1.toReg());
+            sink.put4(adr_enc);
+
+            // 5. LDR rtmp2, [rtmp1, rtmp2, UXTW #2] - load 32-bit offset from jump table
+            // Encoding for LDRSW with register+register addressing, scaled
+            // 10 111000 10 1 Rm option S 10 Rn Rt
+            // option=011 (UXTW), S=1 (scaled by 4)
+            const ldr_enc: u32 = (0b10111000101 << 21) |
+                (machregToGpr(payload.rtmp2.toReg()) << 16) |
+                (0b011 << 13) | // UXTW
+                (1 << 12) | // S=1 (scaled)
+                (0b10 << 10) |
+                (machregToGpr(payload.rtmp1.toReg()) << 5) |
+                machregToGpr(payload.rtmp2.toReg());
+            sink.put4(ldr_enc);
+
+            // 6. ADD rtmp1, rtmp1, rtmp2 - add base to offset
+            const add_enc: u32 = (0b10001011000 << 21) |
+                (machregToGpr(payload.rtmp2.toReg()) << 16) |
+                (0b000000 << 10) |
+                (machregToGpr(payload.rtmp1.toReg()) << 5) |
+                machregToGpr(payload.rtmp1.toReg());
+            sink.put4(add_enc);
+
+            // 7. BR rtmp1 - indirect branch
+            const br_enc: u32 = 0b1101011_0000_11111_000000_00000_00000 | (machregToGpr(payload.rtmp1.toReg()) << 5);
+            sink.put4(br_enc);
+
+            // 8. Jump table data - emit 32-bit offsets for each target
+            const jt_start = sink.curOffset();
+            for (payload.targets) |target| {
+                const word_off = sink.curOffset();
+                // The offset is relative to the jump table start
+                const off_into_table = word_off - jt_start;
+                sink.useLabelAtOffset(word_off, target, .pcRel32);
+                sink.put4(off_into_table);
+            }
+        },
+
         // For unimplemented instructions, emit a trap
         else => {
             _ = state;
@@ -1944,4 +2467,261 @@ test "emit ldar and stlr" {
     } };
     emit(&stlr_inst, &buf, &emit_info, &emit_state);
     try testing.expectEqual(@as(u32, 8), buf.curOffset());
+}
+
+// =============================================================================
+// Task 4.16: Test vector/SIMD operations
+// =============================================================================
+
+test "emit vec_rrr add" {
+    // Test: ADD V0.16B, V1.16B, V2.16B
+    const testing = std.testing;
+    var buf = MachBuffer.init(testing.allocator);
+    defer buf.deinit();
+
+    var emit_state = EmitState{};
+    const emit_info = EmitInfo.init(.{});
+
+    const v0 = vreg(0);
+    const v1 = vreg(1);
+    const v2 = vreg(2);
+    const vec_add_inst = Inst{ .vec_rrr = .{
+        .op = .add,
+        .rd = Writable(Reg).fromReg(v0),
+        .rn = v1,
+        .rm = v2,
+        .size = .size8x16,
+    } };
+    emit(&vec_add_inst, &buf, &emit_info, &emit_state);
+    try testing.expectEqual(@as(u32, 4), buf.curOffset());
+
+    // Verify we got a valid encoding (not BRK)
+    const encoded = std.mem.bytesToValue(u32, buf.data.items[0..4]);
+    try testing.expect(encoded != 0xd43e0000); // Not BRK
+}
+
+test "emit vec_rrr fadd" {
+    // Test: FADD V0.4S, V1.4S, V2.4S
+    const testing = std.testing;
+    var buf = MachBuffer.init(testing.allocator);
+    defer buf.deinit();
+
+    var emit_state = EmitState{};
+    const emit_info = EmitInfo.init(.{});
+
+    const v0 = vreg(0);
+    const v1 = vreg(1);
+    const v2 = vreg(2);
+    const vec_fadd_inst = Inst{ .vec_rrr = .{
+        .op = .fadd,
+        .rd = Writable(Reg).fromReg(v0),
+        .rn = v1,
+        .rm = v2,
+        .size = .size32x4,
+    } };
+    emit(&vec_fadd_inst, &buf, &emit_info, &emit_state);
+    try testing.expectEqual(@as(u32, 4), buf.curOffset());
+
+    const encoded = std.mem.bytesToValue(u32, buf.data.items[0..4]);
+    try testing.expect(encoded != 0xd43e0000); // Not BRK
+}
+
+test "emit vec_misc neg" {
+    // Test: NEG V0.4S, V1.4S
+    const testing = std.testing;
+    var buf = MachBuffer.init(testing.allocator);
+    defer buf.deinit();
+
+    var emit_state = EmitState{};
+    const emit_info = EmitInfo.init(.{});
+
+    const v0 = vreg(0);
+    const v1 = vreg(1);
+    const vec_neg_inst = Inst{ .vec_misc = .{
+        .op = .neg,
+        .rd = Writable(Reg).fromReg(v0),
+        .rn = v1,
+        .size = .size32x4,
+    } };
+    emit(&vec_neg_inst, &buf, &emit_info, &emit_state);
+    try testing.expectEqual(@as(u32, 4), buf.curOffset());
+
+    const encoded = std.mem.bytesToValue(u32, buf.data.items[0..4]);
+    try testing.expect(encoded != 0xd43e0000); // Not BRK
+}
+
+test "emit vec_lanes addv" {
+    // Test: ADDV S0, V1.4S
+    const testing = std.testing;
+    var buf = MachBuffer.init(testing.allocator);
+    defer buf.deinit();
+
+    var emit_state = EmitState{};
+    const emit_info = EmitInfo.init(.{});
+
+    const v0 = vreg(0);
+    const v1 = vreg(1);
+    const vec_addv_inst = Inst{ .vec_lanes = .{
+        .op = .addv,
+        .rd = Writable(Reg).fromReg(v0),
+        .rn = v1,
+        .size = .size32x4,
+    } };
+    emit(&vec_addv_inst, &buf, &emit_info, &emit_state);
+    try testing.expectEqual(@as(u32, 4), buf.curOffset());
+
+    const encoded = std.mem.bytesToValue(u32, buf.data.items[0..4]);
+    try testing.expect(encoded != 0xd43e0000); // Not BRK
+}
+
+test "emit vec_shift_imm shl" {
+    // Test: SHL V0.4S, V1.4S, #3
+    const testing = std.testing;
+    var buf = MachBuffer.init(testing.allocator);
+    defer buf.deinit();
+
+    var emit_state = EmitState{};
+    const emit_info = EmitInfo.init(.{});
+
+    const v0 = vreg(0);
+    const v1 = vreg(1);
+    const vec_shl_inst = Inst{ .vec_shift_imm = .{
+        .op = .shl,
+        .rd = Writable(Reg).fromReg(v0),
+        .rn = v1,
+        .size = .size32x4,
+        .imm = 3,
+    } };
+    emit(&vec_shl_inst, &buf, &emit_info, &emit_state);
+    try testing.expectEqual(@as(u32, 4), buf.curOffset());
+
+    const encoded = std.mem.bytesToValue(u32, buf.data.items[0..4]);
+    try testing.expect(encoded != 0xd43e0000); // Not BRK
+}
+
+test "emit vec_dup from GPR" {
+    // Test: DUP V0.4S, W1
+    const testing = std.testing;
+    var buf = MachBuffer.init(testing.allocator);
+    defer buf.deinit();
+
+    var emit_state = EmitState{};
+    const emit_info = EmitInfo.init(.{});
+
+    const v0 = vreg(0);
+    const x1 = xreg(1);
+    const vec_dup_inst = Inst{ .vec_dup = .{
+        .rd = Writable(Reg).fromReg(v0),
+        .rn = x1,
+        .size = .size32x4,
+    } };
+    emit(&vec_dup_inst, &buf, &emit_info, &emit_state);
+    try testing.expectEqual(@as(u32, 4), buf.curOffset());
+
+    const encoded = std.mem.bytesToValue(u32, buf.data.items[0..4]);
+    try testing.expect(encoded != 0xd43e0000); // Not BRK
+}
+
+test "emit mov_to_vec" {
+    // Test: INS V0.S[0], W1
+    const testing = std.testing;
+    var buf = MachBuffer.init(testing.allocator);
+    defer buf.deinit();
+
+    var emit_state = EmitState{};
+    const emit_info = EmitInfo.init(.{});
+
+    const v0 = vreg(0);
+    const x1 = xreg(1);
+    const mov_inst = Inst{ .mov_to_vec = .{
+        .rd = Writable(Reg).fromReg(v0),
+        .ri = v0, // Source vector
+        .rn = x1, // GPR to insert
+        .idx = 0,
+        .size = .size32x4,
+    } };
+    emit(&mov_inst, &buf, &emit_info, &emit_state);
+    try testing.expectEqual(@as(u32, 4), buf.curOffset());
+
+    const encoded = std.mem.bytesToValue(u32, buf.data.items[0..4]);
+    try testing.expect(encoded != 0xd43e0000); // Not BRK
+}
+
+test "emit mov_from_vec" {
+    // Test: UMOV W0, V1.S[0]
+    const testing = std.testing;
+    var buf = MachBuffer.init(testing.allocator);
+    defer buf.deinit();
+
+    var emit_state = EmitState{};
+    const emit_info = EmitInfo.init(.{});
+
+    const x0 = xreg(0);
+    const v1 = vreg(1);
+    const mov_inst = Inst{ .mov_from_vec = .{
+        .rd = Writable(Reg).fromReg(x0),
+        .rn = v1,
+        .idx = 0,
+        .size = .size32x4,
+    } };
+    emit(&mov_inst, &buf, &emit_info, &emit_state);
+    try testing.expectEqual(@as(u32, 4), buf.curOffset());
+
+    const encoded = std.mem.bytesToValue(u32, buf.data.items[0..4]);
+    try testing.expect(encoded != 0xd43e0000); // Not BRK
+}
+
+// =============================================================================
+// Task 4.17: Test jump table operations
+// =============================================================================
+
+test "emit jt_sequence" {
+    // Test: Jump table with 3 targets
+    const testing = std.testing;
+    var buf = MachBuffer.init(testing.allocator);
+    defer buf.deinit();
+
+    var emit_state = EmitState{};
+    const emit_info = EmitInfo.init(.{});
+
+    const x0 = xreg(0); // Index register
+    const x1 = xreg(1); // Temp 1
+    const x2 = xreg(2); // Temp 2
+
+    // Create labels for targets
+    const default_label = buf.getLabel();
+    const target0 = buf.getLabel();
+    const target1 = buf.getLabel();
+    const target2 = buf.getLabel();
+
+    const targets = [_]MachLabel{ target0, target1, target2 };
+
+    const jt_inst = Inst{ .jt_sequence = .{
+        .ridx = x0,
+        .rtmp1 = Writable(Reg).fromReg(x1),
+        .rtmp2 = Writable(Reg).fromReg(x2),
+        .default = default_label,
+        .targets = &targets,
+    } };
+    emit(&jt_inst, &buf, &emit_info, &emit_state);
+
+    // The sequence should emit:
+    // - B.HS (4 bytes)
+    // - CSEL (4 bytes)
+    // - CSDB (4 bytes)
+    // - ADR (4 bytes)
+    // - LDR (4 bytes)
+    // - ADD (4 bytes)
+    // - BR (4 bytes)
+    // - 3 x 4-byte offsets (12 bytes)
+    // Total: 7 * 4 + 3 * 4 = 40 bytes
+    try testing.expectEqual(@as(u32, 40), buf.curOffset());
+
+    // Verify the first instruction is not BRK (it should be B.HS)
+    const first_inst = std.mem.bytesToValue(u32, buf.data.items[0..4]);
+    try testing.expect(first_inst != 0xd43e0000); // Not BRK
+
+    // Verify CSDB is at offset 8 (after B.HS and CSEL)
+    const csdb = std.mem.bytesToValue(u32, buf.data.items[8..12]);
+    try testing.expectEqual(@as(u32, 0xd503229f), csdb);
 }

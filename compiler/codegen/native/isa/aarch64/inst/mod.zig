@@ -892,6 +892,22 @@ pub const Inst = union(enum) {
         targets: []const MachLabel,
     },
 
+    /// Jump table sequence pseudo-instruction.
+    /// Expands to: bounds check, Spectre mitigation, table lookup, indirect branch, and table data.
+    /// This must be emitted as a single unit - regalloc cannot insert spills/reloads in the middle.
+    jt_sequence: struct {
+        /// Index register (must be bounds-checked before this instruction).
+        ridx: Reg,
+        /// Temporary register 1 (for address computation).
+        rtmp1: Writable(Reg),
+        /// Temporary register 2 (for value loading).
+        rtmp2: Writable(Reg),
+        /// Default/out-of-bounds branch target.
+        default: MachLabel,
+        /// Table of branch targets (one per case).
+        targets: []const MachLabel,
+    },
+
     // Software breakpoint.
     brk,
 
@@ -932,6 +948,17 @@ pub const Inst = union(enum) {
     load_addr: struct {
         rd: Writable(Reg),
         mem: AMode,
+    },
+
+    /// Load address of external symbol.
+    /// Emits: adrp rd, X; add rd, rd, :lo12:X
+    /// Relocation will be handled during linking.
+    load_ext_name: struct {
+        rd: Writable(Reg),
+        /// Symbol index (references external symbol table).
+        symbol_idx: u32,
+        /// Offset from symbol.
+        offset: i64,
     },
 
     // Branch target identification.
@@ -1136,6 +1163,85 @@ pub const Inst = union(enum) {
         rt: Reg,
         rn: Reg,
         ty: Type,
+    },
+
+    // ==========================================================================
+    // Vector/SIMD Operations
+    // ==========================================================================
+
+    /// Vector 3-register ALU operation (ADD, SUB, MUL, AND, ORR, EOR, etc.)
+    vec_rrr: struct {
+        op: VecALUOp,
+        rd: Writable(Reg),
+        rn: Reg,
+        rm: Reg,
+        size: VectorSize,
+    },
+
+    /// Vector 3-register ALU with modifier (SQRDMLAH, UMLAL, FMLA, etc.)
+    vec_rrr_mod: struct {
+        op: VecALUModOp,
+        rd: Writable(Reg),
+        ri: Reg, // Input that rd is modified from
+        rn: Reg,
+        rm: Reg,
+        size: VectorSize,
+    },
+
+    /// Vector 2-operand misc operation (NOT, NEG, ABS, etc.)
+    vec_misc: struct {
+        op: VecMisc2,
+        rd: Writable(Reg),
+        rn: Reg,
+        size: VectorSize,
+    },
+
+    /// Vector lanes operation (ADDV, UMINV, etc.)
+    vec_lanes: struct {
+        op: VecLanesOp,
+        rd: Writable(Reg),
+        rn: Reg,
+        size: VectorSize,
+    },
+
+    /// Vector shift by immediate
+    vec_shift_imm: struct {
+        op: VecShiftImmOp,
+        rd: Writable(Reg),
+        rn: Reg,
+        size: VectorSize,
+        imm: u8,
+    },
+
+    /// Vector duplicate from scalar
+    vec_dup: struct {
+        rd: Writable(Reg),
+        rn: Reg,
+        size: VectorSize,
+    },
+
+    /// Vector duplicate from immediate
+    vec_dup_imm: struct {
+        rd: Writable(Reg),
+        imm: u64,
+        size: VectorSize,
+    },
+
+    /// Move to vector element
+    mov_to_vec: struct {
+        rd: Writable(Reg),
+        ri: Reg, // Source vector
+        rn: Reg, // GPR to insert
+        idx: u8,
+        size: VectorSize,
+    },
+
+    /// Move from vector element
+    mov_from_vec: struct {
+        rd: Writable(Reg),
+        rn: Reg, // Source vector
+        idx: u8,
+        size: VectorSize,
     },
 
     /// Generic constructor for a load (zero-extending where appropriate).
