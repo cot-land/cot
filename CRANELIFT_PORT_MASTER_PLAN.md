@@ -601,7 +601,7 @@ pub enum RegClass { Int, Float, Vector }
 - [x] **3.13** Create `audit/clif/machinst/blockorder.zig.md`
 - [x] **3.14** Port `lower.rs` → `lower.zig` (8 tests)
 - [x] **3.15** Create `audit/clif/machinst/lower.zig.md`
-- [ ] **3.16** Commit: "Port Cranelift machine instruction framework"
+- [x] **3.16** Commit: "Port Cranelift machine instruction framework"
 
 ---
 
@@ -648,9 +648,9 @@ pub enum RegClass { Int, Float, Vector }
 
 ### 4.5 Phase 4 Task Checklist
 
-- [ ] **4.1** Create `compiler/codegen/native/isa/aarch64/` directory
-- [ ] **4.2** Port `inst.rs` → `inst.zig`
-- [ ] **4.3** Create `audit/clif/isa/aarch64/inst.zig.md`
+- [x] **4.1** Create `compiler/codegen/native/isa/aarch64/` directory
+- [x] **4.2** Port `inst/` → `inst/` (args.zig, imms.zig, regs.zig, mod.zig - 3,027 LOC, 25 tests)
+- [x] **4.3** Create `audit/clif/isa/aarch64/inst.md`
 - [ ] **4.4** Port `lower.rs` → `lower.zig`
 - [ ] **4.5** Create `audit/clif/isa/aarch64/lower.zig.md`
 - [ ] **4.6** Port `emit.rs` → `emit.zig`
@@ -823,13 +823,13 @@ const regalloc = @import("codegen/native/regalloc/regalloc.zig");
 | 0: Removal | ✅ Complete | 28/28 |
 | 1: CLIF IR | ✅ Complete | 18/18 |
 | 2: Wasm Translation | ✅ Complete | 16/17 |
-| 3: MachInst | 🔄 In Progress | 15/16 |
-| 4: ARM64 | Not Started | 0/14 |
+| 3: MachInst | ✅ Complete | 16/16 |
+| 4: ARM64 | 🔄 In Progress | 3/14 |
 | 5: x86-64 | Not Started | 0/13 |
 | 6: Regalloc | Not Started | 0/11 |
 | 7: Integration | Not Started | 0/12 |
 | 8: Self-Hosting | Not Started | 0/4 |
-| **TOTAL** | | **77/133** |
+| **TOTAL** | | **81/133** |
 
 ### Estimated LOC
 
