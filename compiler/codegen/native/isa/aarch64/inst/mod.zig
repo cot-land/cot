@@ -1060,6 +1060,84 @@ pub const Inst = union(enum) {
         rn: Reg,
     },
 
+    // ==========================================================================
+    // Atomic Operations
+    // ==========================================================================
+
+    /// Atomic read-modify-write using LSE atomics (ARMv8.1+).
+    /// Uses ldaddal, ldclral, ldeoral, ldsetal, ldsmaxal, ldumaxal, ldsminal, lduminal, swpal.
+    atomic_rmw: struct {
+        op: AtomicRMWOp,
+        rs: Reg, // Value to combine with memory
+        rt: Writable(Reg), // Destination for old value
+        rn: Reg, // Address
+        ty: Type, // I8, I16, I32, I64
+    },
+
+    /// Atomic read-modify-write loop (for systems without LSE).
+    /// Uses ldaxr/stlxr loop with ALU operation.
+    atomic_rmw_loop: struct {
+        op: AtomicRMWLoopOp,
+        addr: Reg, // Fixed to X25
+        operand: Reg, // Fixed to X26
+        oldval: Writable(Reg), // Fixed to X27
+        scratch1: Writable(Reg), // Fixed to X24
+        scratch2: Writable(Reg), // Fixed to X28
+        ty: Type,
+        flags: MemFlags,
+    },
+
+    /// Atomic compare-and-swap using LSE atomics (ARMv8.1+).
+    /// Uses CASAL instruction.
+    atomic_cas: struct {
+        rd: Writable(Reg), // Destination (reuses rs)
+        rs: Reg, // Expected value
+        rt: Reg, // New value
+        rn: Reg, // Address
+        ty: Type,
+    },
+
+    /// Atomic compare-and-swap loop (for systems without LSE).
+    /// Uses ldaxr/stlxr loop.
+    atomic_cas_loop: struct {
+        addr: Reg, // Fixed to X25
+        expected: Reg, // Fixed to X26
+        replacement: Reg, // Fixed to X28
+        oldval: Writable(Reg), // Fixed to X27
+        scratch: Writable(Reg), // Fixed to X24
+        ty: Type,
+        flags: MemFlags,
+    },
+
+    /// Load-acquire exclusive register.
+    ldaxr: struct {
+        rt: Writable(Reg),
+        rn: Reg,
+        ty: Type,
+    },
+
+    /// Store-release exclusive register.
+    stlxr: struct {
+        rs: Writable(Reg), // Status (0 = success)
+        rt: Reg, // Value to store
+        rn: Reg, // Address
+        ty: Type,
+    },
+
+    /// Load-acquire register.
+    ldar: struct {
+        rt: Writable(Reg),
+        rn: Reg,
+        ty: Type,
+    },
+
+    /// Store-release register.
+    stlr: struct {
+        rt: Reg,
+        rn: Reg,
+        ty: Type,
+    },
+
     /// Generic constructor for a load (zero-extending where appropriate).
     pub fn genLoad(into_reg: Writable(Reg), mem: AMode, ty: Type, flags: MemFlags) Inst {
         return switch (ty.kind) {

@@ -22,6 +22,8 @@ pub const FpuRoundMode = mod.FpuRoundMode;
 pub const FpuToIntOp = mod.FpuToIntOp;
 pub const IntToFpuOp = mod.IntToFpuOp;
 pub const MoveWideOp = mod.MoveWideOp;
+pub const AtomicRMWOp = mod.AtomicRMWOp;
+pub const AtomicRMWLoopOp = mod.AtomicRMWLoopOp;
 pub const AMode = mod.AMode;
 pub const PairAMode = mod.PairAMode;
 
@@ -40,6 +42,7 @@ pub const MachLabel = args.MachLabel;
 pub const MemLabel = args.MemLabel;
 pub const TestBitAndBranchKind = args.TestBitAndBranchKind;
 pub const BranchTargetType = args.BranchTargetType;
+pub const Type = args.Type;
 
 pub const Imm12 = imms.Imm12;
 pub const ImmLogic = imms.ImmLogic;
@@ -551,6 +554,122 @@ fn emitFpuLoadStore(sink: *MachBuffer, op: u32, rd: Reg, mem: AMode, is_load: bo
             @panic("Pseudo addressing mode not resolved before emission");
         },
     }
+}
+
+//=============================================================================
+// Atomic instruction encoding helpers
+//=============================================================================
+
+/// Encode an atomic read-modify-write instruction using LSE atomics.
+/// This encodes LDADDAL, LDCLRAL, LDEORAL, LDSETAL, LDSMAXAL, LDUMAXAL, LDSMINAL, LDUMINAL, SWPAL.
+fn encAtomicRmw(ty: Type, op: AtomicRMWOp, rs: Reg, rt: Writable(Reg), rn: Reg) u32 {
+    std.debug.assert(machregToGpr(rt.toReg()) != 31);
+    const sz: u32 = switch (ty.kind) {
+        .int64 => 0b11,
+        .int32 => 0b10,
+        .int16 => 0b01,
+        .int8 => 0b00,
+        else => unreachable,
+    };
+    const bit15: u32 = switch (op) {
+        .swp => 0b1,
+        else => 0b0,
+    };
+    const op_bits: u32 = switch (op) {
+        .add => 0b000,
+        .clr => 0b001,
+        .eor => 0b010,
+        .set => 0b011,
+        .smax => 0b100,
+        .smin => 0b101,
+        .umax => 0b110,
+        .umin => 0b111,
+        .swp => 0b000,
+    };
+    return 0b00_111_000_111_00000_0_000_00_00000_00000 |
+        (sz << 30) |
+        (machregToGpr(rs) << 16) |
+        (bit15 << 15) |
+        (op_bits << 12) |
+        (machregToGpr(rn) << 5) |
+        machregToGpr(rt.toReg());
+}
+
+/// Encode LDAR (load-acquire register).
+fn encLdar(ty: Type, rt: Writable(Reg), rn: Reg) u32 {
+    const sz: u32 = switch (ty.kind) {
+        .int64 => 0b11,
+        .int32 => 0b10,
+        .int16 => 0b01,
+        .int8 => 0b00,
+        else => unreachable,
+    };
+    return 0b00_001000_1_1_0_11111_1_11111_00000_00000 |
+        (sz << 30) |
+        (machregToGpr(rn) << 5) |
+        machregToGpr(rt.toReg());
+}
+
+/// Encode STLR (store-release register).
+fn encStlr(ty: Type, rt: Reg, rn: Reg) u32 {
+    const sz: u32 = switch (ty.kind) {
+        .int64 => 0b11,
+        .int32 => 0b10,
+        .int16 => 0b01,
+        .int8 => 0b00,
+        else => unreachable,
+    };
+    return 0b00_001000_100_11111_1_11111_00000_00000 |
+        (sz << 30) |
+        (machregToGpr(rn) << 5) |
+        machregToGpr(rt);
+}
+
+/// Encode LDAXR (load-acquire exclusive register).
+fn encLdaxr(ty: Type, rt: Writable(Reg), rn: Reg) u32 {
+    const sz: u32 = switch (ty.kind) {
+        .int64 => 0b11,
+        .int32 => 0b10,
+        .int16 => 0b01,
+        .int8 => 0b00,
+        else => unreachable,
+    };
+    return 0b00_001000_0_1_0_11111_1_11111_00000_00000 |
+        (sz << 30) |
+        (machregToGpr(rn) << 5) |
+        machregToGpr(rt.toReg());
+}
+
+/// Encode STLXR (store-release exclusive register).
+fn encStlxr(ty: Type, rs: Writable(Reg), rt: Reg, rn: Reg) u32 {
+    const sz: u32 = switch (ty.kind) {
+        .int64 => 0b11,
+        .int32 => 0b10,
+        .int16 => 0b01,
+        .int8 => 0b00,
+        else => unreachable,
+    };
+    return 0b00_001000_000_00000_1_11111_00000_00000 |
+        (sz << 30) |
+        (machregToGpr(rs.toReg()) << 16) |
+        (machregToGpr(rn) << 5) |
+        machregToGpr(rt);
+}
+
+/// Encode CAS (compare-and-swap) instruction.
+fn encCas(ty: Type, rs: Writable(Reg), rt: Reg, rn: Reg) u32 {
+    const sz: u32 = switch (ty.kind) {
+        .int64 => 0b11,
+        .int32 => 0b10,
+        .int16 => 0b01,
+        .int8 => 0b00,
+        else => unreachable,
+    };
+    return 0b00_0010001_1_1_00000_1_11111_00000_00000 |
+        (sz << 30) |
+        (machregToGpr(rs.toReg()) << 16) |
+        (machregToGpr(rn) << 5) |
+        machregToGpr(rt);
 }
 
 //=============================================================================
@@ -1359,6 +1478,62 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, emit_info: *const EmitInfo, st
             sink.put4(0b1101011_0001_11111_000000_00000_00000 | (machregToGpr(payload.rn) << 5));
         },
 
+        // ==========================================================================
+        // Atomic Operations
+        // ==========================================================================
+
+        // Atomic RMW using LSE atomics
+        .atomic_rmw => |payload| {
+            sink.put4(encAtomicRmw(payload.ty, payload.op, payload.rs, payload.rt, payload.rn));
+        },
+
+        // Atomic RMW loop (for systems without LSE) - complex pseudo-instruction
+        .atomic_rmw_loop => |payload| {
+            // This is a complex pseudo-instruction that expands to multiple instructions.
+            // The loop structure is:
+            //   loop:
+            //     ldaxr oldval, [addr]
+            //     <alu operation>
+            //     stlxr scratch, newval, [addr]
+            //     cbnz scratch, loop
+            _ = payload;
+            _ = state;
+            @panic("atomic_rmw_loop emission not yet implemented - requires loop expansion");
+        },
+
+        // Atomic CAS using LSE atomics
+        .atomic_cas => |payload| {
+            sink.put4(encCas(payload.ty, payload.rd, payload.rt, payload.rn));
+        },
+
+        // Atomic CAS loop (for systems without LSE) - complex pseudo-instruction
+        .atomic_cas_loop => |payload| {
+            // This is a complex pseudo-instruction that expands to multiple instructions.
+            _ = payload;
+            _ = state;
+            @panic("atomic_cas_loop emission not yet implemented - requires loop expansion");
+        },
+
+        // Load-acquire exclusive register
+        .ldaxr => |payload| {
+            sink.put4(encLdaxr(payload.ty, payload.rt, payload.rn));
+        },
+
+        // Store-release exclusive register
+        .stlxr => |payload| {
+            sink.put4(encStlxr(payload.ty, payload.rs, payload.rt, payload.rn));
+        },
+
+        // Load-acquire register
+        .ldar => |payload| {
+            sink.put4(encLdar(payload.ty, payload.rt, payload.rn));
+        },
+
+        // Store-release register
+        .stlr => |payload| {
+            sink.put4(encStlr(payload.ty, payload.rt, payload.rn));
+        },
+
         // For unimplemented instructions, emit a trap
         else => {
             _ = state;
@@ -1654,5 +1829,119 @@ test "emit stack frame setup" {
         .flags = MemFlags{},
     } };
     emit(&ldp_inst, &buf, &emit_info, &emit_state);
+    try testing.expectEqual(@as(u32, 8), buf.curOffset());
+}
+
+// =============================================================================
+// Task 4.15: Test atomic operations
+// =============================================================================
+
+test "emit atomic rmw (LSE)" {
+    // Test: LDADDAL X1, X0, [X2] (atomic add)
+    const testing = std.testing;
+    var buf = MachBuffer.init(testing.allocator);
+    defer buf.deinit();
+
+    var emit_state = EmitState{};
+    const emit_info = EmitInfo.init(.{});
+
+    const x0 = xreg(0);
+    const x1 = xreg(1);
+    const x2 = xreg(2);
+    const atomic_add = Inst{ .atomic_rmw = .{
+        .op = .add,
+        .rs = x1,
+        .rt = Writable(Reg).fromReg(x0),
+        .rn = x2,
+        .ty = Type.i64,
+    } };
+    emit(&atomic_add, &buf, &emit_info, &emit_state);
+    try testing.expectEqual(@as(u32, 4), buf.curOffset());
+}
+
+test "emit atomic cas (LSE)" {
+    // Test: CASAL X1, X2, [X0] (compare and swap)
+    const testing = std.testing;
+    var buf = MachBuffer.init(testing.allocator);
+    defer buf.deinit();
+
+    var emit_state = EmitState{};
+    const emit_info = EmitInfo.init(.{});
+
+    const x0 = xreg(0);
+    const x1 = xreg(1);
+    const x2 = xreg(2);
+    const atomic_cas = Inst{ .atomic_cas = .{
+        .rd = Writable(Reg).fromReg(x1),
+        .rs = x1,
+        .rt = x2,
+        .rn = x0,
+        .ty = Type.i64,
+    } };
+    emit(&atomic_cas, &buf, &emit_info, &emit_state);
+    try testing.expectEqual(@as(u32, 4), buf.curOffset());
+}
+
+test "emit ldaxr and stlxr" {
+    // Test exclusive load/store for atomic loop
+    const testing = std.testing;
+    var buf = MachBuffer.init(testing.allocator);
+    defer buf.deinit();
+
+    var emit_state = EmitState{};
+    const emit_info = EmitInfo.init(.{});
+
+    const x0 = xreg(0);
+    const x1 = xreg(1);
+    const x2 = xreg(2);
+
+    // LDAXR X0, [X2]
+    const ldaxr_inst = Inst{ .ldaxr = .{
+        .rt = Writable(Reg).fromReg(x0),
+        .rn = x2,
+        .ty = Type.i64,
+    } };
+    emit(&ldaxr_inst, &buf, &emit_info, &emit_state);
+    try testing.expectEqual(@as(u32, 4), buf.curOffset());
+
+    // STLXR W1, X0, [X2]
+    const stlxr_inst = Inst{ .stlxr = .{
+        .rs = Writable(Reg).fromReg(x1),
+        .rt = x0,
+        .rn = x2,
+        .ty = Type.i64,
+    } };
+    emit(&stlxr_inst, &buf, &emit_info, &emit_state);
+    try testing.expectEqual(@as(u32, 8), buf.curOffset());
+}
+
+test "emit ldar and stlr" {
+    // Test acquire/release load/store
+    const testing = std.testing;
+    var buf = MachBuffer.init(testing.allocator);
+    defer buf.deinit();
+
+    var emit_state = EmitState{};
+    const emit_info = EmitInfo.init(.{});
+
+    const x0 = xreg(0);
+    const x2 = xreg(2);
+
+    // LDAR X0, [X2]
+    const ldar_inst = Inst{ .ldar = .{
+        .rt = Writable(Reg).fromReg(x0),
+        .rn = x2,
+        .ty = Type.i64,
+    } };
+    emit(&ldar_inst, &buf, &emit_info, &emit_state);
+    try testing.expectEqual(@as(u32, 4), buf.curOffset());
+
+    // STLR X0, [X2]
+    const stlr_inst = Inst{ .stlr = .{
+        .rt = x0,
+        .rn = x2,
+        .ty = Type.i64,
+    } };
+    emit(&stlr_inst, &buf, &emit_info, &emit_state);
     try testing.expectEqual(@as(u32, 8), buf.curOffset());
 }
