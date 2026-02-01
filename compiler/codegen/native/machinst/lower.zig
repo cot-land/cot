@@ -22,6 +22,9 @@ const vcode_mod = @import("vcode.zig");
 const abi_mod = @import("abi.zig");
 const blockorder_mod = @import("blockorder.zig");
 
+// Import CLIF IR types from the real implementation
+const clif = @import("../../../ir/clif/mod.zig");
+
 // Re-export key types from reg module
 pub const VReg = reg_mod.VReg;
 pub const Reg = reg_mod.Reg;
@@ -62,67 +65,31 @@ pub const SigSet = abi_mod.SigSet;
 pub const SmallInstVec = abi_mod.SmallInstVec;
 
 // =============================================================================
-// CLIF IR Type Stubs
-// These match the interfaces from compiler/ir/clif/ but are defined here
-// to keep machinst self-contained. In production, these would be imported.
+// CLIF IR Types
+// Imported from compiler/ir/clif/. Entity types (Block, Value, Inst) are now
+// the real types from the CLIF IR module.
 // =============================================================================
 
 /// An opaque reference to a basic block.
-pub const Block = struct {
-    index: u32,
-
-    pub const RESERVED: Block = .{ .index = std.math.maxInt(u32) };
-
-    pub fn fromIndex(idx: u32) Block {
-        return .{ .index = idx };
-    }
-
-    pub fn asU32(self: Block) u32 {
-        return self.index;
-    }
-
-    pub fn eql(self: Block, other: Block) bool {
-        return self.index == other.index;
-    }
-};
+pub const Block = clif.Block;
 
 /// An opaque reference to an SSA value.
-pub const Value = struct {
-    index: u32,
-
-    pub const RESERVED: Value = .{ .index = std.math.maxInt(u32) };
-
-    pub fn fromIndex(idx: u32) Value {
-        return .{ .index = idx };
-    }
-
-    pub fn asU32(self: Value) u32 {
-        return self.index;
-    }
-
-    pub fn eql(self: Value, other: Value) bool {
-        return self.index == other.index;
-    }
-};
+pub const Value = clif.Value;
 
 /// An opaque reference to an instruction.
-pub const Inst = struct {
-    index: u32,
+pub const Inst = clif.Inst;
 
-    pub const RESERVED: Inst = .{ .index = std.math.maxInt(u32) };
+/// Stack slot reference.
+pub const StackSlot = clif.StackSlot;
 
-    pub fn fromIndex(idx: u32) Inst {
-        return .{ .index = idx };
-    }
+/// Function reference.
+pub const FuncRef = clif.FuncRef;
 
-    pub fn asU32(self: Inst) u32 {
-        return self.index;
-    }
+/// Signature reference.
+pub const SigRef = clif.SigRef;
 
-    pub fn eql(self: Inst, other: Inst) bool {
-        return self.index == other.index;
-    }
-};
+/// Jump table reference.
+pub const JumpTable = clif.JumpTable;
 
 /// Reference to a global value.
 pub const GlobalValue = struct {
@@ -324,29 +291,8 @@ pub const InstructionData = struct {
     }
 };
 
-pub const Opcode = enum {
-    nop,
-    iconst,
-    iadd,
-    isub,
-    imul,
-    load,
-    store,
-    jump,
-    brif,
-    br_table,
-    return_,
-    call,
-    call_indirect,
-    // ... more opcodes as needed
-
-    pub fn isBranch(self: Opcode) bool {
-        return switch (self) {
-            .jump, .brif, .br_table, .return_ => true,
-            else => false,
-        };
-    }
-};
+/// Instruction opcode - imported from clif.
+pub const Opcode = clif.Opcode;
 
 pub const JumpTableData = struct {};
 pub const ExceptionTableData = struct {};
@@ -389,16 +335,17 @@ pub const AbiParam = struct {
     purpose: ArgumentPurpose,
 };
 
-pub const CallConv = enum {
-    fast,
-    system_v,
-    windows_fastcall,
-    apple_aarch64,
+/// Calling convention - imported from clif.
+pub const CallConv = clif.CallConv;
 
-    pub fn exceptionPayloadTypes(_: CallConv, _: Type) []const Type {
-        return &[_]Type{};
-    }
-};
+/// Integer condition code - imported from clif.
+pub const IntCC = clif.IntCC;
+
+/// Float condition code - imported from clif.
+pub const FloatCC = clif.FloatCC;
+
+/// Trap code - imported from clif.
+pub const TrapCode = clif.TrapCode;
 
 pub const ValueLabelAssignments = struct {};
 pub const ValueLabelStart = struct {

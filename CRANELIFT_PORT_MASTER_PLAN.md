@@ -657,7 +657,7 @@ pub enum RegClass { Int, Float, Vector }
 - [x] **4.7** Update `audit/clif/isa/aarch64/inst.md` with emit coverage ✅ COMPLETE
 - [x] **4.8** Port `abi.rs` → `abi.zig` ✅ COMPLETE (1,700+ LOC, 8 tests - ABIMachineSpec, frame layout, clobber sets)
 - [x] **4.9** Create `audit/clif/isa/aarch64/abi.zig.md` ✅ COMPLETE
-- [ ] **4.10** Integration with machinst framework (stub types → real types)
+- [x] **4.10** Integration with machinst framework (stub types → real types) ✅ COMPLETE
 - [ ] **4.11** Test simple programs on ARM64
 - [ ] **4.12** Test control flow on ARM64
 - [ ] **4.13** Test function calls on ARM64
@@ -1088,12 +1088,12 @@ const regalloc = @import("codegen/native/regalloc/regalloc.zig");
 | 1: CLIF IR | ✅ Complete | 18/18 |
 | 2: Wasm Translation | ✅ Complete | 16/17 |
 | 3: MachInst | ✅ Complete | 16/16 |
-| 4: ARM64 | 🔄 In Progress | 5/14 |
+| 4: ARM64 | 🔄 In Progress | 10/14 |
 | 5: x86-64 | 🟡 Ready to Start | 0/16 |
 | 6: Regalloc | Not Started | 0/11 |
 | 7: Integration | Not Started | 0/12 |
 | 8: Self-Hosting | Not Started | 0/4 |
-| **TOTAL** | | **83/136** |
+| **TOTAL** | | **88/136** |
 
 ### Parallel Work Opportunity
 

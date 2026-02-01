@@ -358,6 +358,31 @@ pub const BlockData = struct {
 };
 
 // ============================================================================
+// Instruction Data (simplified storage for DFG)
+// ============================================================================
+
+/// Opcode - instruction operation type.
+/// This is a simplified version for DFG; full opcodes are in instructions.zig.
+pub const Opcode = @import("instructions.zig").Opcode;
+
+/// Simplified instruction data storage for the DFG.
+/// Full InstructionData with all formats is in builder.zig.
+pub const InstData = struct {
+    /// Instruction opcode.
+    opcode: Opcode,
+    /// Instruction arguments (input values).
+    args: ValueList,
+    /// Controlling type variable (for polymorphic instructions).
+    ctrl_type: Type,
+
+    pub const EMPTY: InstData = .{
+        .opcode = .nop,
+        .args = ValueList.EMPTY,
+        .ctrl_type = Type.INVALID,
+    };
+};
+
+// ============================================================================
 // Data Flow Graph
 // Port of cranelift/codegen/src/ir/dfg.rs DataFlowGraph
 // ============================================================================
@@ -372,6 +397,9 @@ pub const DataFlowGraph = struct {
 
     /// Storage for blocks.
     blocks: std.ArrayListUnmanaged(BlockData),
+
+    /// Storage for instruction data (opcode, args).
+    insts: std.ArrayListUnmanaged(InstData),
 
     /// Storage for instruction results (value lists per instruction).
     results: std.ArrayListUnmanaged(ValueList),
@@ -389,6 +417,7 @@ pub const DataFlowGraph = struct {
             .allocator = allocator,
             .values = .{},
             .blocks = .{},
+            .insts = .{},
             .results = .{},
             .value_lists = ValueListPool.init(allocator),
             .inst_count = 0,
@@ -398,6 +427,7 @@ pub const DataFlowGraph = struct {
     pub fn deinit(self: *Self) void {
         self.values.deinit(self.allocator);
         self.blocks.deinit(self.allocator);
+        self.insts.deinit(self.allocator);
         self.results.deinit(self.allocator);
         self.value_lists.deinit();
     }
@@ -405,17 +435,46 @@ pub const DataFlowGraph = struct {
     pub fn clear(self: *Self) void {
         self.values.clearRetainingCapacity();
         self.blocks.clearRetainingCapacity();
+        self.insts.clearRetainingCapacity();
         self.results.clearRetainingCapacity();
         self.value_lists.clear();
         self.inst_count = 0;
     }
 
-    /// Create a new instruction ID.
-    /// Note: Instruction data storage is handled separately by the builder.
+    /// Create a new instruction ID and reserve storage.
     pub fn makeInst(self: *Self) Inst {
         const index = self.inst_count;
         self.inst_count += 1;
+        // Ensure storage
+        while (self.insts.items.len <= index) {
+            self.insts.append(self.allocator, InstData.EMPTY) catch unreachable;
+        }
         return Inst.fromIndex(index);
+    }
+
+    /// Create a new instruction with data.
+    pub fn makeInstWithData(self: *Self, data: InstData) !Inst {
+        const index = self.inst_count;
+        self.inst_count += 1;
+        while (self.insts.items.len < index) {
+            try self.insts.append(self.allocator, InstData.EMPTY);
+        }
+        try self.insts.append(self.allocator, data);
+        return Inst.fromIndex(index);
+    }
+
+    /// Set the instruction data for an existing instruction.
+    pub fn setInstData(self: *Self, inst: Inst, data: InstData) !void {
+        while (self.insts.items.len <= inst.index) {
+            try self.insts.append(self.allocator, InstData.EMPTY);
+        }
+        self.insts.items[inst.index] = data;
+    }
+
+    /// Get the instruction data.
+    pub fn getInstData(self: *const Self, inst: Inst) InstData {
+        if (inst.index >= self.insts.items.len) return InstData.EMPTY;
+        return self.insts.items[inst.index];
     }
 
     // ------------------------------------------------------------------------
@@ -550,6 +609,52 @@ pub const DataFlowGraph = struct {
     /// Get the number of results.
     pub fn numResults(self: *const Self, inst: Inst) usize {
         return self.instResults(inst).len;
+    }
+
+    // ------------------------------------------------------------------------
+    // Instruction data queries (for machinst integration)
+    // ------------------------------------------------------------------------
+
+    /// Get the instruction opcode.
+    pub fn instOpcode(self: *const Self, inst: Inst) Opcode {
+        return self.getInstData(inst).opcode;
+    }
+
+    /// Get the instruction arguments (input values).
+    pub fn instArgs(self: *const Self, inst: Inst) []const Value {
+        const data = self.getInstData(inst);
+        return self.value_lists.getSlice(data.args);
+    }
+
+    /// Get the instruction input values (alias for instArgs).
+    pub fn instValues(self: *const Self, inst: Inst) []const Value {
+        return self.instArgs(inst);
+    }
+
+    /// Get the controlling type for a polymorphic instruction.
+    pub fn ctrlType(self: *const Self, inst: Inst) Type {
+        return self.getInstData(inst).ctrl_type;
+    }
+
+    // ------------------------------------------------------------------------
+    // Value queries (for machinst integration)
+    // ------------------------------------------------------------------------
+
+    /// Get the number of values.
+    pub fn numValues(self: *const Self) usize {
+        return self.values.items.len;
+    }
+
+    /// Check if a value is "real" (not the reserved sentinel).
+    pub fn valueIsReal(self: *const Self, v: Value) bool {
+        return v.index != Value.RESERVED.index and self.valueIsValid(v);
+    }
+
+    /// Display an instruction for debugging.
+    pub fn displayInst(self: *const Self, inst: Inst) []const u8 {
+        _ = self;
+        _ = inst;
+        return "<inst>";
     }
 };
 

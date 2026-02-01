@@ -76,6 +76,22 @@ pub const InputSourceInst = lower.InputSourceInst;
 pub const NonRegInput = lower.NonRegInput;
 pub const RelocDistance = lower.RelocDistance;
 pub const ValueRegs = lower.ValueRegs;
+pub const InstOutput = lower.InstOutput;
+
+// Re-export CLIF IR types from lower.zig (which imports from compiler/ir/clif/)
+pub const Block = lower.Block;
+pub const Value = lower.Value;
+pub const Inst = lower.Inst;
+pub const StackSlot = lower.StackSlot;
+pub const FuncRef = lower.FuncRef;
+pub const SigRef = lower.SigRef;
+pub const JumpTable = lower.JumpTable;
+pub const Opcode = lower.Opcode;
+pub const IntCC = lower.IntCC;
+pub const FloatCC = lower.FloatCC;
+pub const TrapCode = lower.TrapCode;
+pub const InstructionData = lower.InstructionData;
+pub const ClifType = lower.Type;
 
 // Additional types that may be used by backends
 pub const MemFlags = struct {

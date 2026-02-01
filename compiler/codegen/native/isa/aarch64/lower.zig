@@ -38,252 +38,47 @@ const VReg = regs.VReg;
 const Writable = regs.Writable;
 const zeroReg = regs.zeroReg;
 
+// Import CLIF IR types from machinst (which imports from compiler/ir/clif/)
+const machinst = @import("../../machinst/mod.zig");
+const lower_mod = machinst.lower;
+
 // =============================================================================
-// Stub types for CLIF IR
-// These match the interfaces from machinst/lower.zig to keep this module
-// self-contained. In the full integration, these would come from the machinst
-// lowering framework.
+// CLIF IR Types
+// Imported from machinst which imports from compiler/ir/clif/.
 // =============================================================================
 
 /// Opcode for CLIF instructions.
-pub const Opcode = enum {
-    nop,
-    iconst,
-    iadd,
-    isub,
-    ineg,
-    imul,
-    udiv,
-    sdiv,
-    urem,
-    srem,
-    band,
-    bor,
-    bxor,
-    bnot,
-    ishl,
-    ushr,
-    sshr,
-    rotl,
-    rotr,
-    icmp,
-    f32const,
-    f64const,
-    fadd,
-    fsub,
-    fmul,
-    fdiv,
-    fneg,
-    fabs,
-    sqrt,
-    fcmp,
-    uextend,
-    sextend,
-    ireduce,
-    fcvt_to_sint,
-    fcvt_to_uint,
-    fcvt_from_sint,
-    fcvt_from_uint,
-    fpromote,
-    fdemote,
-    load,
-    store,
-    select,
-    copy,
-    @"return",
-    jump,
-    brif,
-    br_table,
-    call,
-    call_indirect,
-    trap,
-    trapnz,
-    trapz,
-    func_addr,
-    stack_load,
-    stack_store,
-
-    pub fn isBranch(self: Opcode) bool {
-        return switch (self) {
-            .jump, .brif, .br_table, .@"return" => true,
-            else => false,
-        };
-    }
-};
+pub const Opcode = lower_mod.Opcode;
 
 /// Integer condition codes.
-pub const IntCC = enum {
-    eq,
-    ne,
-    slt,
-    sge,
-    sgt,
-    sle,
-    ult,
-    uge,
-    ugt,
-    ule,
-};
+pub const IntCC = lower_mod.IntCC;
 
 /// Floating point condition codes.
-pub const FloatCC = enum {
-    ord,
-    uno,
-    eq,
-    ne,
-    one,
-    ueq,
-    lt,
-    le,
-    gt,
-    ge,
-    ult,
-    ule,
-    ugt,
-    uge,
-};
+pub const FloatCC = lower_mod.FloatCC;
 
 /// CLIF instruction reference.
-pub const ClifInst = struct {
-    index: u32,
-
-    pub fn fromIndex(idx: u32) ClifInst {
-        return .{ .index = idx };
-    }
-};
+pub const ClifInst = lower_mod.Inst;
 
 /// CLIF value reference.
-pub const Value = struct {
-    index: u32,
-
-    pub fn fromIndex(idx: u32) Value {
-        return .{ .index = idx };
-    }
-};
+pub const Value = lower_mod.Value;
 
 /// Block index for lowered blocks.
-pub const BlockIndex = struct {
-    idx: u32,
-
-    pub fn new(idx: usize) BlockIndex {
-        return .{ .idx = @intCast(idx) };
-    }
-
-    pub fn index(self: BlockIndex) usize {
-        return self.idx;
-    }
-};
-
-/// Instruction data stub.
-pub const InstructionData = struct {
-    opcode: Opcode,
-    args: []const Value,
-    results: []const Value,
-};
+pub const BlockIndex = lower_mod.BlockIndex;
 
 /// Value registers - multiple registers for a single value.
-pub fn ValueRegs(comptime R: type) type {
-    return struct {
-        regs_array: [2]R,
-        len: u8,
-
-        const Self = @This();
-
-        pub fn invalid() Self {
-            return .{
-                .regs_array = .{ R.invalid(), R.invalid() },
-                .len = 0,
-            };
-        }
-
-        pub fn one(r: R) Self {
-            return .{
-                .regs_array = .{ r, R.invalid() },
-                .len = 1,
-            };
-        }
-
-        pub fn two(r1: R, r2: R) Self {
-            return .{
-                .regs_array = .{ r1, r2 },
-                .len = 2,
-            };
-        }
-
-        pub fn regs(self: *const Self) []const R {
-            return self.regs_array[0..self.len];
-        }
-
-        pub fn isValid(self: Self) bool {
-            return self.len > 0;
-        }
-
-        pub fn isInvalid(self: Self) bool {
-            return self.len == 0;
-        }
-
-        pub fn length(self: Self) usize {
-            return self.len;
-        }
-
-        pub fn onlyReg(self: Self) ?R {
-            if (self.len == 1) return self.regs_array[0];
-            return null;
-        }
-    };
-}
+pub const ValueRegs = lower_mod.ValueRegs;
 
 /// Instruction output - vector of value register sets.
-pub const InstOutput = std.BoundedArray(ValueRegs(Reg), 2);
+pub const InstOutput = lower_mod.InstOutput;
 
 /// Non-register input information.
-pub const NonRegInput = struct {
-    constant: ?u64,
-};
+pub const NonRegInput = lower_mod.NonRegInput;
 
-/// CLIF type stub.
-pub const ClifType = struct {
-    kind: enum {
-        i8,
-        i16,
-        i32,
-        i64,
-        f32,
-        f64,
-        invalid,
-    },
+/// CLIF type - using the real Type from clif.
+pub const ClifType = lower_mod.Type;
 
-    pub fn bits(self: ClifType) u16 {
-        return switch (self.kind) {
-            .i8 => 8,
-            .i16 => 16,
-            .i32 => 32,
-            .i64 => 64,
-            .f32 => 32,
-            .f64 => 64,
-            .invalid => 0,
-        };
-    }
-
-    pub fn int8() ClifType {
-        return .{ .kind = .i8 };
-    }
-    pub fn int16() ClifType {
-        return .{ .kind = .i16 };
-    }
-    pub fn int32() ClifType {
-        return .{ .kind = .i32 };
-    }
-    pub fn int64() ClifType {
-        return .{ .kind = .i64 };
-    }
-    pub fn float32() ClifType {
-        return .{ .kind = .f32 };
-    }
-    pub fn float64() ClifType {
-        return .{ .kind = .f64 };
-    }
-};
+/// Instruction data from machinst.
+pub const InstructionData = lower_mod.InstructionData;
 
 // =============================================================================
 // Lower context stub
@@ -302,12 +97,12 @@ pub const LowerCtx = struct {
 
     /// Get the type of an output.
     pub fn outputTy(_: *LowerCtx, _: ClifInst, _: usize) ClifType {
-        return ClifType.int64();
+        return ClifType.I64;
     }
 
     /// Get the type of an input.
     pub fn inputTy(_: *LowerCtx, _: ClifInst, _: usize) ClifType {
-        return ClifType.int64();
+        return ClifType.I64;
     }
 
     /// Put an input value into registers.
@@ -319,7 +114,7 @@ pub const LowerCtx = struct {
 
     /// Get input as source or constant.
     pub fn getInputAsSourceOrConst(_: *LowerCtx, _: ClifInst, _: usize) NonRegInput {
-        return .{ .constant = null };
+        return .{ .inst = .none, .constant = null };
     }
 
     /// Allocate a temporary register.
@@ -1207,7 +1002,7 @@ pub const AArch64LowerBackend = struct {
         const lhs_reg = lhs.onlyReg() orelse return null;
         const rhs_reg = rhs.onlyReg() orelse return null;
 
-        const dst = ctx.allocTmp(ClifType.int8()) catch return null;
+        const dst = ctx.allocTmp(ClifType.I8) catch return null;
         const dst_reg = dst.onlyReg() orelse return null;
 
         // Compare (sets flags)
@@ -1362,7 +1157,7 @@ pub const AArch64LowerBackend = struct {
         const lhs_reg = lhs.onlyReg() orelse return null;
         const rhs_reg = rhs.onlyReg() orelse return null;
 
-        const dst = ctx.allocTmp(ClifType.int8()) catch return null;
+        const dst = ctx.allocTmp(ClifType.I8) catch return null;
         const dst_reg = dst.onlyReg() orelse return null;
 
         // FPU compare
@@ -1850,7 +1645,7 @@ pub const AArch64LowerBackend = struct {
         _ = self;
         _ = ir_inst;
 
-        const dst = ctx.allocTmp(ClifType.int64()) catch return null;
+        const dst = ctx.allocTmp(ClifType.I64) catch return null;
         const dst_reg = dst.onlyReg() orelse return null;
 
         // TODO: Load actual function address
@@ -2025,17 +1820,17 @@ test "AArch64LowerBackend basic" {
 test "operandSizeFromType" {
     const testing = std.testing;
 
-    try testing.expectEqual(OperandSize.size32, operandSizeFromType(ClifType.int8()).?);
-    try testing.expectEqual(OperandSize.size32, operandSizeFromType(ClifType.int16()).?);
-    try testing.expectEqual(OperandSize.size32, operandSizeFromType(ClifType.int32()).?);
-    try testing.expectEqual(OperandSize.size64, operandSizeFromType(ClifType.int64()).?);
+    try testing.expectEqual(OperandSize.size32, operandSizeFromType(ClifType.I8).?);
+    try testing.expectEqual(OperandSize.size32, operandSizeFromType(ClifType.I16).?);
+    try testing.expectEqual(OperandSize.size32, operandSizeFromType(ClifType.I32).?);
+    try testing.expectEqual(OperandSize.size64, operandSizeFromType(ClifType.I64).?);
 }
 
 test "scalarSizeFromType" {
     const testing = std.testing;
 
-    try testing.expectEqual(ScalarSize.size32, scalarSizeFromType(ClifType.float32()).?);
-    try testing.expectEqual(ScalarSize.size64, scalarSizeFromType(ClifType.float64()).?);
+    try testing.expectEqual(ScalarSize.size32, scalarSizeFromType(ClifType.F32).?);
+    try testing.expectEqual(ScalarSize.size64, scalarSizeFromType(ClifType.F64).?);
 }
 
 test "condFromIntCC" {
