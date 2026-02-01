@@ -265,6 +265,46 @@ pub const TypeRegistry = struct {
 
     pub fn alignOf(self: *const TypeRegistry, idx: TypeIndex) u32 { return self.alignmentOf(idx); }
 
+    /// Returns true if the type is "trivial" (doesn't need ARC).
+    /// Copies Swift's TypeLowering::isTrivial() pattern.
+    /// Trivial types: primitives, raw pointers, void
+    /// Non-trivial types: heap-allocated objects (require retain/release)
+    ///
+    /// Reference: swift/lib/SIL/TypeLowering.cpp
+    pub fn isTrivial(self: *const TypeRegistry, idx: TypeIndex) bool {
+        const t = self.get(idx);
+        return switch (t) {
+            // All basic types are trivial (primitives, void)
+            .basic => true,
+            // Raw pointers are trivial (no ownership)
+            .pointer => true,
+            // Functions are trivial (just code pointers)
+            .func => true,
+            // Enums with trivial backing type are trivial
+            .enum_type => |e| self.isTrivial(e.backing_type),
+            // Arrays/slices of trivial elements are trivial
+            .array => |a| self.isTrivial(a.elem),
+            .slice => |s| self.isTrivial(s.elem),
+            // Optionals of trivial types are trivial
+            .optional => |o| self.isTrivial(o.elem),
+            .error_union => |e| self.isTrivial(e.elem),
+            // Struct types: check if they have a heap flag
+            // For now, all structs are stack-allocated (trivial)
+            // When M18 adds heap allocation, this will check for heap objects
+            .struct_type => true,
+            // Collections are non-trivial (heap-allocated)
+            .map, .list => false,
+            // Union types are trivial for now
+            .union_type => true,
+        };
+    }
+
+    /// Returns true if the type needs ARC (opposite of isTrivial).
+    /// Reference: Swift's ManagedValue pattern
+    pub fn needsARC(self: *const TypeRegistry, idx: TypeIndex) bool {
+        return !self.isTrivial(idx);
+    }
+
     pub fn equal(self: *const TypeRegistry, a: TypeIndex, b: TypeIndex) bool {
         if (a == b) return true;
         if (a == invalid_type or b == invalid_type) return false;
@@ -393,4 +433,37 @@ test "TypeRegistry sizeOf" {
 
 test "invalid_type" {
     try std.testing.expectEqual(std.math.maxInt(u32), invalid_type);
+}
+
+test "isTrivial for ARC" {
+    var reg = try TypeRegistry.init(std.testing.allocator);
+    defer reg.deinit();
+
+    // Basic types are trivial
+    try std.testing.expect(reg.isTrivial(TypeRegistry.I64));
+    try std.testing.expect(reg.isTrivial(TypeRegistry.F64));
+    try std.testing.expect(reg.isTrivial(TypeRegistry.BOOL));
+    try std.testing.expect(reg.isTrivial(TypeRegistry.VOID));
+
+    // Pointers are trivial (raw, no ownership)
+    const ptr_i32 = try reg.makePointer(TypeRegistry.I32);
+    try std.testing.expect(reg.isTrivial(ptr_i32));
+
+    // Arrays of trivial elements are trivial
+    const arr_i64 = try reg.makeArray(TypeRegistry.I64, 10);
+    try std.testing.expect(reg.isTrivial(arr_i64));
+
+    // Slices of trivial elements are trivial
+    const slice_i64 = try reg.makeSlice(TypeRegistry.I64);
+    try std.testing.expect(reg.isTrivial(slice_i64));
+
+    // Lists are non-trivial (heap-allocated)
+    const list_i64 = try reg.makeList(TypeRegistry.I64);
+    try std.testing.expect(!reg.isTrivial(list_i64));
+    try std.testing.expect(reg.needsARC(list_i64));
+
+    // Maps are non-trivial (heap-allocated)
+    const map_i64_i64 = try reg.makeMap(TypeRegistry.I64, TypeRegistry.I64);
+    try std.testing.expect(!reg.isTrivial(map_i64_i64));
+    try std.testing.expect(reg.needsARC(map_i64_i64));
 }

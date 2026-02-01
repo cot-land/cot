@@ -319,7 +319,7 @@ pub const Checker = struct {
             .switch_expr => |se| self.checkSwitchExpr(se),
             .block_expr => |b| self.checkBlock(b),
             .struct_init => |si| self.checkStructInit(si),
-            .new_expr => |ne| self.resolveTypeExpr(ne.type_node),
+            .new_expr => |ne| self.checkNewExpr(ne),
             .builtin_call => |bc| self.checkBuiltinCall(bc),
             .string_interp => |si| self.checkStringInterp(si),
             .addr_of => |ao| self.checkAddrOf(ao),
@@ -604,6 +604,36 @@ pub const Checker = struct {
             if (!found) self.err.errorWithCode(fi.span.start, .e301, "unknown field");
         }
         return struct_type_idx;
+    }
+
+    /// Check heap allocation expression: new Type { field: value, ... }
+    /// Returns a pointer type to the struct.
+    /// Reference: Go's walkNew (walk/builtin.go:601-616)
+    fn checkNewExpr(self: *Checker, ne: ast.NewExpr) CheckError!TypeIndex {
+        const struct_type_idx = self.types.lookupByName(ne.type_name) orelse {
+            self.err.errorWithCode(ne.span.start, .e301, "undefined type");
+            return invalid_type;
+        };
+        const struct_type = self.types.get(struct_type_idx);
+        if (struct_type != .struct_type) {
+            self.err.errorWithCode(ne.span.start, .e300, "new requires a struct type");
+            return invalid_type;
+        }
+        // Validate field initializers (same as StructInit)
+        for (ne.fields) |fi| {
+            var found = false;
+            for (struct_type.struct_type.fields) |sf| if (std.mem.eql(u8, sf.name, fi.name)) {
+                found = true;
+                const vt = try self.checkExpr(fi.value);
+                if (!self.types.isAssignable(vt, sf.type_idx)) {
+                    self.err.errorWithCode(fi.span.start, .e300, "type mismatch in field");
+                }
+                break;
+            };
+            if (!found) self.err.errorWithCode(fi.span.start, .e301, "unknown field");
+        }
+        // Return pointer to struct (heap-allocated object)
+        return self.types.makePointer(struct_type_idx) catch invalid_type;
     }
 
     fn checkArrayLiteral(self: *Checker, al: ast.ArrayLiteral) CheckError!TypeIndex {

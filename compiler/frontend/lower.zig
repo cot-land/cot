@@ -837,6 +837,7 @@ pub const Lowerer = struct {
             .builtin_call => |bc| return try self.lowerBuiltinCall(bc),
             .switch_expr => |se| return try self.lowerSwitchExpr(se),
             .struct_init => |si| return try self.lowerStructInitExpr(si),
+            .new_expr => |ne| return try self.lowerNewExpr(ne),
             .block_expr => |block| {
                 const defer_depth = self.defer_stack.items.len;
                 const scope_depth = fb.markScopeEntry();
@@ -1297,6 +1298,69 @@ pub const Lowerer = struct {
             }
         }
         return try fb.emitLoadLocal(temp_idx, struct_type_idx, si.span);
+    }
+
+    /// Lower heap allocation expression: new Type { field: value, ... }
+    /// Emits cot_alloc call and initializes fields.
+    /// Reference: Go's walkNew (walk/builtin.go:601-616)
+    fn lowerNewExpr(self: *Lowerer, ne: ast.NewExpr) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+
+        // Lookup the struct type
+        const struct_type_idx = self.type_reg.lookupByName(ne.type_name) orelse return ir.null_node;
+        const type_info = self.type_reg.get(struct_type_idx);
+        const struct_type = if (type_info == .struct_type) type_info.struct_type else return ir.null_node;
+
+        // Calculate size including heap object header (12 bytes for 32-bit Wasm)
+        // Header: metadata ptr (4), refcount (8) = 12 bytes
+        const HEAP_HEADER_SIZE: u32 = 12;
+        const payload_size = self.type_reg.sizeOf(struct_type_idx);
+        const total_size = HEAP_HEADER_SIZE + payload_size;
+
+        // Call cot_alloc(size) -> ptr to user data (after header)
+        const size_node = try fb.emitConstInt(@intCast(total_size), TypeRegistry.I64, ne.span);
+        var alloc_args = [_]ir.NodeIndex{size_node};
+        const ptr_type = try self.type_reg.makePointer(struct_type_idx);
+        const alloc_result = try fb.emitCall("cot_alloc", &alloc_args, false, ptr_type, ne.span);
+
+        // Store pointer in a temp so we can access it multiple times
+        const temp_idx = try fb.addLocalWithSize("__new_ptr", ptr_type, true, 8);
+        _ = try fb.emitStoreLocal(temp_idx, alloc_result, ne.span);
+        const ptr_node = try fb.emitLoadLocal(temp_idx, ptr_type, ne.span);
+
+        // Initialize fields using ptr stores
+        for (ne.fields) |field_init| {
+            for (struct_type.fields, 0..) |struct_field, i| {
+                if (std.mem.eql(u8, struct_field.name, field_init.name)) {
+                    const field_offset: i64 = @intCast(struct_field.offset);
+                    const value_node = try self.lowerExprNode(field_init.value);
+                    const field_type = self.type_reg.get(struct_field.type_idx);
+                    const is_string_field = struct_field.type_idx == TypeRegistry.STRING or field_type == .slice;
+
+                    if (is_string_field) {
+                        // String/slice fields: store ptr and len
+                        const u8_ptr_type = try self.type_reg.makePointer(TypeRegistry.U8);
+                        const ptr_ir = try fb.emitSlicePtr(value_node, u8_ptr_type, ne.span);
+                        const len_ir = try fb.emitSliceLen(value_node, ne.span);
+                        // Store ptr at offset
+                        const ptr_addr = try fb.emitAddrOffset(ptr_node, field_offset, ptr_type, ne.span);
+                        _ = try fb.emitPtrStoreValue(ptr_addr, ptr_ir, ne.span);
+                        // Store len at offset+8
+                        const len_addr = try fb.emitAddrOffset(ptr_node, field_offset + 8, ptr_type, ne.span);
+                        _ = try fb.emitPtrStoreValue(len_addr, len_ir, ne.span);
+                    } else {
+                        // Simple field: store value at offset
+                        const field_addr = try fb.emitAddrOffset(ptr_node, field_offset, ptr_type, ne.span);
+                        _ = try fb.emitPtrStoreValue(field_addr, value_node, ne.span);
+                    }
+                    _ = i;
+                    break;
+                }
+            }
+        }
+
+        // Return the pointer to the allocated object
+        return try fb.emitLoadLocal(temp_idx, ptr_type, ne.span);
     }
 
     fn lowerIfExpr(self: *Lowerer, if_expr: ast.IfExpr) Error!ir.NodeIndex {

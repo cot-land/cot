@@ -358,14 +358,15 @@ pub const Driver = struct {
         var linker = wasm.Linker.init(self.allocator);
         defer linker.deinit();
 
-        // Configure memory (1 page = 64KB minimum)
-        linker.setMemory(1, null);
+        // Configure memory (2 pages = 128KB minimum)
+        // Page 0-1 for stack (grows down from 64KB), Page 1+ for heap
+        linker.setMemory(2, null);
 
         // ====================================================================
-        // Add ARC runtime functions first (they get indices 0, 1)
+        // Add ARC runtime functions first (they get indices 0, 1, 2)
         // ====================================================================
         const arc_funcs = try arc.addToLinker(self.allocator, &linker);
-        const arc_func_count: u32 = 2; // retain and release
+        const arc_func_count: u32 = 3; // alloc, retain, and release
 
         // Build function name -> index mapping
         // ARC functions come first, then user functions
@@ -373,6 +374,7 @@ pub const Driver = struct {
         defer func_indices.deinit(self.allocator);
 
         // Add ARC function names to index map
+        try func_indices.put(self.allocator, arc.ALLOC_NAME, arc_funcs.alloc_idx);
         try func_indices.put(self.allocator, arc.RETAIN_NAME, arc_funcs.retain_idx);
         try func_indices.put(self.allocator, arc.RELEASE_NAME, arc_funcs.release_idx);
 

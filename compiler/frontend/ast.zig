@@ -99,7 +99,13 @@ pub const SwitchCase = struct { patterns: []const NodeIndex, capture: []const u8
 pub const BlockExpr = struct { stmts: []const NodeIndex, expr: NodeIndex, span: Span };
 pub const StructInit = struct { type_name: []const u8, fields: []const FieldInit, span: Span };
 pub const FieldInit = struct { name: []const u8, value: NodeIndex, span: Span };
-pub const NewExpr = struct { type_node: NodeIndex, span: Span };
+/// Heap allocation expression: new Type { field: value, ... }
+/// Reference: Go's walkNew (walk/builtin.go:601-616)
+pub const NewExpr = struct {
+    type_name: []const u8,
+    fields: []const FieldInit,
+    span: Span,
+};
 pub const BuiltinCall = struct { name: []const u8, type_arg: NodeIndex, args: [2]NodeIndex, span: Span };
 pub const StringSegment = union(enum) { text: []const u8, expr: NodeIndex };
 pub const StringInterp = struct { segments: []const StringSegment, span: Span };

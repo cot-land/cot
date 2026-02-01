@@ -58,6 +58,14 @@ pub const WasmImport = struct {
     type_idx: u32, // Function type index
 };
 
+/// Global variable definition
+pub const WasmGlobal = struct {
+    val_type: c.ValType,
+    mutable: bool,
+    init_i32: i32 = 0,
+    init_i64: i64 = 0,
+};
+
 /// Module linker state
 pub const Linker = struct {
     allocator: std.mem.Allocator,
@@ -68,6 +76,9 @@ pub const Linker = struct {
 
     // Import section (Go: hostImports in asm.go)
     imports: std.ArrayListUnmanaged(WasmImport) = .{},
+
+    // Global section
+    globals: std.ArrayListUnmanaged(WasmGlobal) = .{},
 
     // Functions
     funcs: std.ArrayListUnmanaged(WasmFunc) = .{},
@@ -89,6 +100,7 @@ pub const Linker = struct {
         }
         self.funcs.deinit(self.allocator);
         self.imports.deinit(self.allocator);
+        self.globals.deinit(self.allocator);
         self.types.deinit(self.allocator);
         self.type_storage.deinit(self.allocator);
         self.data_segments.deinit(self.allocator);
@@ -134,6 +146,14 @@ pub const Linker = struct {
     /// Get the number of imports (for offsetting native function indices)
     pub fn numImports(self: *const Linker) u32 {
         return @intCast(self.imports.items.len);
+    }
+
+    /// Add a global variable
+    /// Returns the global's index
+    pub fn addGlobal(self: *Linker, global: WasmGlobal) !u32 {
+        const idx: u32 = @intCast(self.globals.items.len);
+        try self.globals.append(self.allocator, global);
+        return idx;
     }
 
     /// Add a function
@@ -264,26 +284,33 @@ pub const Linker = struct {
         // Global Section (Go: asm.go writeGlobalSec)
         // ====================================================================
         // Go defines 8 globals: SP(i32), CTXT(i64), g(i64), RET0-3(i64), PAUSE(i32)
-        // For Cot, we start with just SP
+        // Cot uses: SP(i32), heap_ptr(i32), plus any dynamically added globals
         {
             var global_buf = std.ArrayListUnmanaged(u8){};
             defer global_buf.deinit(self.allocator);
 
-            const globals = [_]struct { typ: c.ValType, init: i64 }{
-                .{ .typ = .i32, .init = 65536 }, // SP - start at 64KB
-            };
+            // Count: SP (1) + dynamic globals
+            const total_globals = 1 + self.globals.items.len;
+            try assemble.writeULEB128(self.allocator, &global_buf, total_globals);
 
-            try assemble.writeULEB128(self.allocator, &global_buf, globals.len);
-            for (globals) |g| {
-                try global_buf.append(self.allocator, @intFromEnum(g.typ));
-                try global_buf.append(self.allocator, 0x01); // mutable
+            // Global 0: SP (stack pointer) - always present
+            try global_buf.append(self.allocator, @intFromEnum(c.ValType.i32));
+            try global_buf.append(self.allocator, 0x01); // mutable
+            try global_buf.append(self.allocator, 0x41); // i32.const
+            try assemble.writeSLEB128(self.allocator, &global_buf, 65536); // 64KB
+            try global_buf.append(self.allocator, 0x0B); // end
+
+            // Dynamic globals (heap_ptr, etc.)
+            for (self.globals.items) |g| {
+                try global_buf.append(self.allocator, @intFromEnum(g.val_type));
+                try global_buf.append(self.allocator, if (g.mutable) 0x01 else 0x00);
                 // Init expression
-                if (g.typ == .i32) {
+                if (g.val_type == .i32) {
                     try global_buf.append(self.allocator, 0x41); // i32.const
-                    try assemble.writeSLEB128(self.allocator, &global_buf, g.init);
+                    try assemble.writeSLEB128(self.allocator, &global_buf, g.init_i32);
                 } else {
                     try global_buf.append(self.allocator, 0x42); // i64.const
-                    try assemble.writeSLEB128(self.allocator, &global_buf, g.init);
+                    try assemble.writeSLEB128(self.allocator, &global_buf, g.init_i64);
                 }
                 try global_buf.append(self.allocator, 0x0B); // end
             }

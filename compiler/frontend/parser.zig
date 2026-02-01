@@ -520,11 +520,36 @@ pub const Parser = struct {
             .kw_if => return self.parseIfExpr(),
             .kw_switch => return self.parseSwitchExpr(),
             .kw_new => {
+                // new Type { field: value, ... }
+                // Reference: Go's walkNew (walk/builtin.go:601-616)
                 self.advance();
-                const t = try self.parseType() orelse { self.err.errorWithCode(self.pos(), .e202, "expected type after 'new'"); return null; };
-                if (!self.expect(.lparen)) return null;
-                if (!self.expect(.rparen)) return null;
-                return try self.tree.addExpr(.{ .new_expr = .{ .type_node = t, .span = Span.init(start, self.pos()) } });
+                if (!self.check(.ident)) {
+                    self.err.errorWithCode(self.pos(), .e202, "expected type name after 'new'");
+                    return null;
+                }
+                const type_name = self.tok.text;
+                self.advance();
+                if (!self.expect(.lbrace)) return null;
+                var fields = std.ArrayListUnmanaged(ast.FieldInit){};
+                while (!self.check(.rbrace) and !self.check(.eof)) {
+                    if (!self.check(.ident)) {
+                        self.syntaxError("expected field name");
+                        return null;
+                    }
+                    const fname = self.tok.text;
+                    const fstart = self.pos();
+                    self.advance();
+                    if (!self.expect(.colon)) return null;
+                    const fval = try self.parseExpr() orelse return null;
+                    try fields.append(self.allocator, .{ .name = fname, .value = fval, .span = Span.init(fstart, self.pos()) });
+                    if (!self.check(.rbrace) and !self.expect(.comma)) return null;
+                }
+                if (!self.expect(.rbrace)) return null;
+                return try self.tree.addExpr(.{ .new_expr = .{
+                    .type_name = type_name,
+                    .fields = try self.allocator.dupe(ast.FieldInit, fields.items),
+                    .span = Span.init(start, self.pos()),
+                } });
             },
             .period => {
                 self.advance();

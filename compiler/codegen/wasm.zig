@@ -590,6 +590,11 @@ pub const CodeBuilder = struct {
         try self.buf.append(self.allocator, Op.i32_wrap_i64);
     }
 
+    /// Emit i64.extend_i32_u instruction (zero-extend i32 to i64).
+    pub fn emitI64ExtendI32U(self: *CodeBuilder) !void {
+        try self.buf.append(self.allocator, Op.i64_extend_i32_u);
+    }
+
     /// Emit i64.load instruction with alignment and offset.
     /// Memory address should be on the stack (i32).
     pub fn emitI64Load(self: *CodeBuilder, align_log2: u32, offset: u32) !void {

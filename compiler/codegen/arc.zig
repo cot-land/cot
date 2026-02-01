@@ -47,11 +47,17 @@ pub const HEAP_START: u32 = 0x10000; // 64KB reserved for stack
 
 /// Runtime function indices (new simplified API for Linker)
 pub const RuntimeFunctions = struct {
+    /// cot_alloc index
+    alloc_idx: u32,
+
     /// cot_retain index
     retain_idx: u32,
 
     /// cot_release index
     release_idx: u32,
+
+    /// heap_ptr global index
+    heap_ptr_global: u32,
 };
 
 /// Legacy runtime function indices (old API for wasm.Module)
@@ -77,6 +83,7 @@ pub const LegacyRuntimeFunctions = struct {
 };
 
 /// ARC function names for lookup
+pub const ALLOC_NAME = "cot_alloc";
 pub const RETAIN_NAME = "cot_retain";
 pub const RELEASE_NAME = "cot_release";
 
@@ -87,6 +94,27 @@ pub const RELEASE_NAME = "cot_release";
 /// Adds ARC runtime functions to a Wasm Linker.
 /// Returns the indices of the generated functions.
 pub fn addToLinker(allocator: std.mem.Allocator, linker: *wasm_link.Linker) !RuntimeFunctions {
+    // Add heap pointer global (mutable i32, starts at HEAP_START)
+    // Note: addGlobal returns index in dynamic list, but SP is at index 0
+    // so actual global index is dynamic_idx + 1
+    const heap_ptr_dynamic_idx = try linker.addGlobal(.{
+        .val_type = .i32,
+        .mutable = true,
+        .init_i32 = @intCast(HEAP_START),
+    });
+    const heap_ptr_global = heap_ptr_dynamic_idx + 1; // Offset by SP
+
+    // Generate alloc function: (i64) -> i64
+    // Takes size, returns pointer to user data (after header)
+    const alloc_type = try linker.addType(&[_]ValType{.i64}, &[_]ValType{.i64});
+    const alloc_body = try generateAllocBody(allocator, heap_ptr_global);
+    const alloc_idx = try linker.addFunc(.{
+        .name = ALLOC_NAME,
+        .type_idx = alloc_type,
+        .code = alloc_body,
+        .exported = false,
+    });
+
     // Generate retain function: (i64) -> i64
     // Note: Using i64 for pointers to match Cot's default type
     const retain_type = try linker.addType(&[_]ValType{.i64}, &[_]ValType{.i64});
@@ -109,9 +137,59 @@ pub fn addToLinker(allocator: std.mem.Allocator, linker: *wasm_link.Linker) !Run
     });
 
     return RuntimeFunctions{
+        .alloc_idx = alloc_idx,
         .retain_idx = retain_idx,
         .release_idx = release_idx,
+        .heap_ptr_global = heap_ptr_global,
     };
+}
+
+/// Generates bytecode for cot_alloc(size: i64) -> i64
+/// Allocates heap memory with header, returns pointer to user data.
+/// Reference: Go's runtime.newobject (malloc.go:2208-2213)
+fn generateAllocBody(allocator: std.mem.Allocator, heap_ptr_global: u32) ![]const u8 {
+    var code = wasm.CodeBuilder.init(allocator);
+    defer code.deinit();
+
+    // Parameter: size (local 0, i64)
+    // Local 1: ptr (allocated address, i32)
+    // Local 2: total_size (i32)
+    _ = try code.declareLocals(&[_]wasm.ValType{ .i32, .i32 });
+
+    // total_size = (i32)size + HEAP_OBJECT_HEADER_SIZE
+    try code.emitLocalGet(0); // size (i64)
+    try code.emitI32WrapI64(); // convert to i32
+    try code.emitI32Const(@intCast(HEAP_OBJECT_HEADER_SIZE));
+    try code.emitI32Add();
+
+    // Align to 8 bytes: (total_size + 7) & ~7
+    try code.emitI32Const(7);
+    try code.emitI32Add();
+    try code.emitI32Const(-8); // ~7 = -8 in two's complement
+    try code.emitI32And();
+    try code.emitLocalSet(2); // total_size
+
+    // ptr = heap_ptr
+    try code.emitGlobalGet(heap_ptr_global);
+    try code.emitLocalTee(1); // ptr
+
+    // heap_ptr = heap_ptr + total_size
+    try code.emitLocalGet(2);
+    try code.emitI32Add();
+    try code.emitGlobalSet(heap_ptr_global);
+
+    // Store initial refcount at ptr + REFCOUNT_OFFSET
+    try code.emitLocalGet(1); // ptr
+    try code.emitI64Const(INITIAL_REFCOUNT);
+    try code.emitI64Store(3, REFCOUNT_OFFSET);
+
+    // Return (i64)(ptr + USER_DATA_OFFSET)
+    try code.emitLocalGet(1);
+    try code.emitI32Const(@intCast(USER_DATA_OFFSET));
+    try code.emitI32Add();
+    try code.emitI64ExtendI32U(); // zero-extend to i64
+
+    return code.finish();
 }
 
 /// Generates bytecode for cot_retain(obj: i64) -> i64
@@ -553,8 +631,12 @@ test "addToLinker creates functions" {
     const funcs = try addToLinker(allocator, &linker);
 
     // Verify we got distinct function indices
+    try std.testing.expect(funcs.alloc_idx != funcs.retain_idx);
     try std.testing.expect(funcs.retain_idx != funcs.release_idx);
 
-    // Verify functions were added
-    try std.testing.expectEqual(@as(usize, 2), linker.funcs.items.len);
+    // Verify functions were added (alloc, retain, release = 3)
+    try std.testing.expectEqual(@as(usize, 3), linker.funcs.items.len);
+
+    // Verify global was added (heap_ptr)
+    try std.testing.expectEqual(@as(usize, 1), linker.globals.items.len);
 }
