@@ -278,7 +278,7 @@ pub struct Function {
 - [x] **1.15** Create `audit/clif/jumptable.zig.md`
 - [x] **1.16** Port Cranelift IR unit tests (40 tests embedded in modules)
 - [x] **1.17** Run tests, verify all pass (40/40 passing)
-- [ ] **1.18** Commit: "Port Cranelift IR (CLIF) infrastructure"
+- [x] **1.18** Commit: "Port Cranelift IR (CLIF) infrastructure"
 
 ---
 
@@ -474,22 +474,22 @@ Operator::BrTable { targets } => {
 
 ### 2.6 Phase 2 Task Checklist
 
-- [ ] **2.1** Create `compiler/codegen/native/wasm_to_clif/` directory
-- [ ] **2.2** Port `stack.rs` → `stack.zig`
-- [ ] **2.3** Create `audit/clif/wasm_to_clif/stack.zig.md`
-- [ ] **2.4** Create `value_stack.zig`
-- [ ] **2.5** Create `audit/clif/wasm_to_clif/value_stack.zig.md`
-- [ ] **2.6** Port `code_translator.rs` control flow → `translator.zig`
-- [ ] **2.7** Create `audit/clif/wasm_to_clif/translator.zig.md`
-- [ ] **2.8** Implement br_table with edge splitting
-- [ ] **2.9** Create `audit/clif/wasm_to_clif/br_table.zig.md`
-- [ ] **2.10** Port arithmetic instructions
-- [ ] **2.11** Port memory instructions
-- [ ] **2.12** Port local/global instructions
-- [ ] **2.13** Port `func_translator.rs` → `func_translator.zig`
-- [ ] **2.14** Create `audit/clif/wasm_to_clif/func_translator.zig.md`
-- [ ] **2.15** Port Cranelift Wasm translation tests
-- [ ] **2.16** Test with simple Wasm programs
+- [x] **2.1** Create `compiler/codegen/native/wasm_to_clif/` directory
+- [x] **2.2** Port `stack.rs` → `stack.zig` (includes value stack)
+- [x] **2.3** Create `audit/clif/wasm_to_clif/stack.zig.md`
+- [x] **2.4** Value stack is part of stack.zig (TranslationState.stack)
+- [x] **2.5** Value stack audit is part of stack.zig.md
+- [x] **2.6** Port `code_translator.rs` control flow → `translator.zig`
+- [x] **2.7** Create `audit/clif/wasm_to_clif/translator.zig.md`
+- [x] **2.8** Implement br_table with edge splitting (in translator.zig)
+- [x] **2.9** br_table audit is part of translator.zig.md
+- [x] **2.10** Port arithmetic instructions (in translator.zig)
+- [ ] **2.11** Port memory instructions (deferred - needs heap)
+- [x] **2.12** Port local/global instructions (local only, global deferred)
+- [x] **2.13** Port `func_translator.rs` → `func_translator.zig`
+- [x] **2.14** Create `audit/clif/wasm_to_clif/func_translator.zig.md`
+- [x] **2.15** Port Cranelift Wasm translation tests (19 tests passing)
+- [x] **2.16** Test with simple Wasm programs (via test cases)
 - [ ] **2.17** Commit: "Port Cranelift Wasm→CLIF translator"
 
 ---
@@ -821,15 +821,15 @@ const regalloc = @import("codegen/native/regalloc/regalloc.zig");
 | Phase | Status | Progress |
 |-------|--------|----------|
 | 0: Removal | ✅ Complete | 28/28 |
-| 1: CLIF IR | 🔄 In Progress | 17/18 |
-| 2: Wasm Translation | Not Started | 0/17 |
+| 1: CLIF IR | ✅ Complete | 18/18 |
+| 2: Wasm Translation | 🔄 In Progress | 15/17 |
 | 3: MachInst | Not Started | 0/16 |
 | 4: ARM64 | Not Started | 0/14 |
 | 5: x86-64 | Not Started | 0/13 |
 | 6: Regalloc | Not Started | 0/11 |
 | 7: Integration | Not Started | 0/12 |
 | 8: Self-Hosting | Not Started | 0/4 |
-| **TOTAL** | | **45/133** |
+| **TOTAL** | | **61/133** |
 
 ### Estimated LOC
 

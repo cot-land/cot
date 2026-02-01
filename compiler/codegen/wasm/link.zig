@@ -164,6 +164,11 @@ pub const Linker = struct {
         return @intCast(self.imports.items.len);
     }
 
+    /// Get the number of functions added
+    pub fn funcCount(self: *const Linker) u32 {
+        return @intCast(self.funcs.items.len);
+    }
+
     /// Add a global variable
     /// Returns the global's index
     pub fn addGlobal(self: *Linker, global: WasmGlobal) !u32 {

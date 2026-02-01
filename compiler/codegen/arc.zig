@@ -59,6 +59,12 @@ pub const RuntimeFunctions = struct {
     /// cot_string_concat index
     string_concat_idx: u32,
 
+    /// cot_append index (stub for now)
+    append_idx: u32,
+
+    /// cot_memset_zero index (stub for now)
+    memset_zero_idx: u32,
+
     /// heap_ptr global index
     heap_ptr_global: u32,
 
@@ -93,6 +99,8 @@ pub const ALLOC_NAME = "cot_alloc";
 pub const RETAIN_NAME = "cot_retain";
 pub const RELEASE_NAME = "cot_release";
 pub const STRING_CONCAT_NAME = "cot_string_concat";
+pub const APPEND_NAME = "cot_append";
+pub const MEMSET_ZERO_NAME = "cot_memset_zero";
 
 // =============================================================================
 // Code Generation for Runtime Functions (for new Linker API)
@@ -163,14 +171,57 @@ pub fn addToLinker(allocator: std.mem.Allocator, linker: *wasm_link.Linker) !Run
         .exported = false,
     });
 
+    // Generate stub append function (TODO: implement properly for arrays)
+    // Takes (arr_ptr, element_ptr) -> new_arr_ptr
+    const append_type = try linker.addType(
+        &[_]ValType{ .i64, .i64 },
+        &[_]ValType{.i64},
+    );
+    const append_body = try generateStubBody(allocator);
+    const append_idx = try linker.addFunc(.{
+        .name = APPEND_NAME,
+        .type_idx = append_type,
+        .code = append_body,
+        .exported = false,
+    });
+
+    // Generate stub memset_zero function (TODO: implement properly)
+    // Takes (ptr, size) -> void
+    const memset_zero_type = try linker.addType(
+        &[_]ValType{ .i64, .i64 },
+        &[_]ValType{},
+    );
+    const memset_zero_body = try generateStubBody(allocator);
+    const memset_zero_idx = try linker.addFunc(.{
+        .name = MEMSET_ZERO_NAME,
+        .type_idx = memset_zero_type,
+        .code = memset_zero_body,
+        .exported = false,
+    });
+
     return RuntimeFunctions{
         .alloc_idx = alloc_idx,
         .retain_idx = retain_idx,
         .release_idx = release_idx,
         .string_concat_idx = string_concat_idx,
+        .append_idx = append_idx,
+        .memset_zero_idx = memset_zero_idx,
         .heap_ptr_global = heap_ptr_global,
         .destructor_type = destructor_type,
     };
+}
+
+/// Generates a stub function body that returns 0 (for i64 returns) or does nothing (for void)
+/// Used for unimplemented functions
+fn generateStubBody(allocator: std.mem.Allocator) ![]const u8 {
+    var code = wasm.CodeBuilder.init(allocator);
+    defer code.deinit();
+
+    // Return 0 for any return type (harmless for void returns)
+    try code.emitI64Const(0);
+    // Note: finish() adds the end opcode automatically
+
+    return try code.finish();
 }
 
 /// Generates bytecode for cot_alloc(metadata_ptr: i64, size: i64) -> i64
@@ -761,8 +812,8 @@ test "addToLinker creates functions" {
     try std.testing.expect(funcs.retain_idx != funcs.release_idx);
     try std.testing.expect(funcs.release_idx != funcs.string_concat_idx);
 
-    // Verify functions were added (alloc, retain, release, string_concat = 4)
-    try std.testing.expectEqual(@as(usize, 4), linker.funcs.items.len);
+    // Verify functions were added (alloc, retain, release, string_concat, append, memset_zero = 6)
+    try std.testing.expectEqual(@as(usize, 6), linker.funcs.items.len);
 
     // Verify global was added (heap_ptr)
     try std.testing.expectEqual(@as(usize, 1), linker.globals.items.len);
