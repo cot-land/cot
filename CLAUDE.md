@@ -121,6 +121,7 @@ The Go compiler is at `~/learning/go/src/cmd/`. Key files:
 
 | Document | Purpose |
 |----------|---------|
+| `ROADMAP_PHASE2.md` | **M17-M24 detailed plan with Go/Swift research** |
 | `WASM_BACKEND.md` | Wasm milestones M1-M16, implementation details |
 | `AOT_EXECUTION_PLAN.md` | Native codegen phases, task checklist |
 | `VISION.md` | Language vision, strategy, roadmap |
@@ -283,20 +284,15 @@ The project succeeds through persistence and copying proven designs, not shortcu
 
 ## Current Tasks
 
-### Option A: M16 Browser Imports
-- Import section for JS interop
-- console.log, DOM access
-- Go reference: `cmd/link/internal/wasm/asm.go` writeImportSec
+**See `ROADMAP_PHASE2.md` for detailed implementation plans with Go/Swift research.**
 
-### Option B: AOT Phase 4
-- Wire ARM64/AMD64 into driver.zig
-- Un-skip 22 native tests
-- Enable `cot build --native` for native binary output
+### Priority Order (Recommended)
 
-### Option C: E2E Testing
-- Create full end-to-end test programs in Cot
-- Test strings, structs, arrays working together
-- Verify wasm output runs correctly in wasmtime
+1. **M17: Frontend emits retain/release** - Make ARC runtime actually used
+2. **M18: Heap allocation (new keyword)** - Dynamic memory allocation
+3. **M19: Destructor calls on release** - Complete ARC lifecycle
+4. **M20-M22: Language features** - String ops, array append, for-range loops
+5. **M23-M24: Native AOT debugging** - Fix complex programs, enable skipped tests
 
 ---
 
