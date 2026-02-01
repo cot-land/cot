@@ -524,6 +524,15 @@ pub const CodeBuilder = struct {
         try enc.encodeULEB128(self.writer(), func_idx);
     }
 
+    /// Emit call_indirect instruction for destructor/vtable calls.
+    /// type_idx: function signature type index
+    /// table_idx: table index (usually 0)
+    pub fn emitCallIndirect(self: *CodeBuilder, type_idx: u32, table_idx: u32) !void {
+        try self.buf.append(self.allocator, Op.call_indirect);
+        try enc.encodeULEB128(self.writer(), type_idx);
+        try enc.encodeULEB128(self.writer(), table_idx);
+    }
+
     /// Emit drop instruction.
     pub fn emitDrop(self: *CodeBuilder) !void {
         try self.buf.append(self.allocator, Op.drop);
@@ -623,6 +632,33 @@ pub const CodeBuilder = struct {
         try self.buf.append(self.allocator, Op.i32_store);
         try enc.encodeULEB128(self.writer(), align_log2);
         try enc.encodeULEB128(self.writer(), offset);
+    }
+
+    /// Emit i64.load8_u instruction (load single byte, zero-extend to i64).
+    /// Stack: [addr (i32)] → [value (i64)]
+    pub fn emitI64Load8U(self: *CodeBuilder, offset: u32) !void {
+        try self.buf.append(self.allocator, Op.i64_load8_u);
+        try enc.encodeULEB128(self.writer(), 0); // alignment (log2(1) = 0)
+        try enc.encodeULEB128(self.writer(), offset);
+    }
+
+    /// Emit i64.store8 instruction (store low byte of i64).
+    /// Stack: [addr (i32), value (i64)] → []
+    pub fn emitI64Store8(self: *CodeBuilder, offset: u32) !void {
+        try self.buf.append(self.allocator, Op.i64_store8);
+        try enc.encodeULEB128(self.writer(), 0); // alignment
+        try enc.encodeULEB128(self.writer(), offset);
+    }
+
+    /// Emit memory.copy instruction (bulk memory operation).
+    /// Stack: [dest (i32), src (i32), len (i32)] → []
+    /// Go reference: Wasm bulk memory proposal
+    pub fn emitMemoryCopy(self: *CodeBuilder) !void {
+        // memory.copy is a two-byte opcode: 0xFC 0x0A
+        try self.buf.append(self.allocator, 0xFC); // misc prefix
+        try self.buf.append(self.allocator, 0x0A); // memory.copy
+        try self.buf.append(self.allocator, 0x00); // dest memory index
+        try self.buf.append(self.allocator, 0x00); // src memory index
     }
 
     /// Set the number of locals (beyond parameters).

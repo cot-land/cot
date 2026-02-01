@@ -278,6 +278,13 @@ pub const SSABuilder = struct {
                 break :blk val;
             },
 
+            .type_metadata => |m| blk: {
+                const val = try self.func.newValue(.metadata_addr, node.type_idx, cur, self.cur_pos);
+                val.aux = .{ .string = m.type_name };
+                try cur.addValue(self.allocator, val);
+                break :blk val;
+            },
+
             .binary => |b| try self.convertBinary(b, node.type_idx, cur),
             .unary => |u| try self.convertUnary(u, node.type_idx, cur),
 

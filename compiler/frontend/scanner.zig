@@ -262,7 +262,7 @@ pub const Scanner = struct {
             '!' => if (self.ch == '=') blk: { self.advance(); break :blk .neq; } else .lnot,
             '<' => if (self.ch == '=') blk: { self.advance(); break :blk .leq; } else if (self.ch == '<') blk: { self.advance(); break :blk .shl; } else .lss,
             '>' => if (self.ch == '=') blk: { self.advance(); break :blk .geq; } else if (self.ch == '>') blk: { self.advance(); break :blk .shr; } else .gtr,
-            '.' => if (self.ch == '*') blk: { self.advance(); break :blk .period_star; } else if (self.ch == '?') blk: { self.advance(); break :blk .period_question; } else .period,
+            '.' => if (self.ch == '.') blk: { self.advance(); break :blk .period_period; } else if (self.ch == '*') blk: { self.advance(); break :blk .period_star; } else if (self.ch == '?') blk: { self.advance(); break :blk .period_question; } else .period,
             '?' => if (self.ch == '?') blk: { self.advance(); break :blk .coalesce; } else if (self.ch == '.') blk: { self.advance(); break :blk .optional_chain; } else .question,
             else => .illegal,
         };

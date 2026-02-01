@@ -152,7 +152,24 @@ pub const VarStmt = struct { name: []const u8, type_expr: NodeIndex, value: Node
 pub const AssignStmt = struct { target: NodeIndex, op: Token, value: NodeIndex, span: Span };
 pub const IfStmt = struct { condition: NodeIndex, then_branch: NodeIndex, else_branch: NodeIndex, span: Span };
 pub const WhileStmt = struct { condition: NodeIndex, body: NodeIndex, label: ?[]const u8 = null, span: Span };
-pub const ForStmt = struct { binding: []const u8, iterable: NodeIndex, body: NodeIndex, span: Span };
+/// For loop statement supporting:
+/// - `for item in collection { }` (value only)
+/// - `for i, item in collection { }` (index and value)
+/// - `for i in 0..10 { }` (numeric range)
+pub const ForStmt = struct {
+    binding: []const u8, // Primary binding (value or index for range)
+    index_binding: ?[]const u8 = null, // Optional index when iterating with index
+    iterable: NodeIndex, // Collection or null for range
+    range_start: NodeIndex = null_node, // For `for i in start..end`
+    range_end: NodeIndex = null_node, // For `for i in start..end`
+    body: NodeIndex,
+    span: Span,
+
+    /// Check if this is a numeric range loop (for i in 0..10)
+    pub fn isRange(self: ForStmt) bool {
+        return self.range_start != null_node;
+    }
+};
 pub const BlockStmt = struct { stmts: []const NodeIndex, span: Span };
 pub const BreakStmt = struct { label: ?[]const u8 = null, span: Span };
 pub const ContinueStmt = struct { label: ?[]const u8 = null, span: Span };

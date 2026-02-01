@@ -56,7 +56,7 @@ pub const Op = enum(u16) {
     load, store,
     load8, load16, load32, load64, store8, store16, store32, store64,
     load8s, load16s, load32s,
-    addr, local_addr, global_addr, off_ptr, add_ptr, sub_ptr,
+    addr, local_addr, global_addr, metadata_addr, off_ptr, add_ptr, sub_ptr,
     store_wb, move, zero,
     var_def, var_live, var_kill,
     sp, store_sp, // Stack pointer operations for Wasm->native AOT

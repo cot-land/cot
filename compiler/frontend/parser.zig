@@ -790,14 +790,62 @@ pub const Parser = struct {
     fn parseForStmt(self: *Parser) ParseError!?NodeIndex {
         const start = self.pos();
         self.advance();
-        if (!self.check(.ident)) { self.err.errorWithCode(self.pos(), .e203, "expected loop variable"); return null; }
-        const binding = self.tok.text;
+        if (!self.check(.ident)) {
+            self.err.errorWithCode(self.pos(), .e203, "expected loop variable");
+            return null;
+        }
+        const first_binding = self.tok.text;
         self.advance();
-        if (!self.expect(.kw_in)) { self.syntaxError("expected 'in' in for loop"); return null; }
-        const iter = try self.parseExpr() orelse return null;
-        if (!self.check(.lbrace)) { self.err.errorWithCode(self.pos(), .e204, "expected '{' after for clause"); return null; }
+
+        // Check for indexed iteration: for i, item in collection
+        var index_binding: ?[]const u8 = null;
+        var value_binding: []const u8 = first_binding;
+        if (self.check(.comma)) {
+            self.advance();
+            if (!self.check(.ident)) {
+                self.err.errorWithCode(self.pos(), .e203, "expected value binding after ','");
+                return null;
+            }
+            index_binding = first_binding;
+            value_binding = self.tok.text;
+            self.advance();
+        }
+
+        if (!self.expect(.kw_in)) {
+            self.syntaxError("expected 'in' in for loop");
+            return null;
+        }
+
+        // Parse the iterable or range expression
+        const iter_or_start = try self.parseExpr() orelse return null;
+
+        // Check for range syntax: for i in start..end
+        var range_start: ast.NodeIndex = ast.null_node;
+        var range_end: ast.NodeIndex = ast.null_node;
+        var iterable: ast.NodeIndex = iter_or_start;
+
+        if (self.match(.period_period)) {
+            // Range syntax: start..end
+            range_start = iter_or_start;
+            range_end = try self.parseExpr() orelse return null;
+            iterable = ast.null_node;
+        }
+
+        if (!self.check(.lbrace)) {
+            self.err.errorWithCode(self.pos(), .e204, "expected '{' after for clause");
+            return null;
+        }
         const body = try self.parseBlock() orelse return null;
-        return try self.tree.addStmt(.{ .for_stmt = .{ .binding = binding, .iterable = iter, .body = body, .span = Span.init(start, self.pos()) } });
+
+        return try self.tree.addStmt(.{ .for_stmt = .{
+            .binding = value_binding,
+            .index_binding = index_binding,
+            .iterable = iterable,
+            .range_start = range_start,
+            .range_end = range_end,
+            .body = body,
+            .span = Span.init(start, self.pos()),
+        } });
     }
 };
 

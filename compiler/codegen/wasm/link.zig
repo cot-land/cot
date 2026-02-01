@@ -66,6 +66,17 @@ pub const WasmGlobal = struct {
     init_i64: i64 = 0,
 };
 
+/// Table element for indirect calls (destructors, vtables)
+pub const TableEntry = struct {
+    func_idx: u32, // Function index to call
+};
+
+/// Element segment for table initialization
+pub const ElementSegment = struct {
+    offset: u32, // Offset in table
+    funcs: []const u32, // Function indices
+};
+
 /// Module linker state
 pub const Linker = struct {
     allocator: std.mem.Allocator,
@@ -90,6 +101,10 @@ pub const Linker = struct {
     // Data segments (for future)
     data_segments: std.ArrayListUnmanaged(DataSegment) = .{},
 
+    // Table for indirect calls (destructors, vtables)
+    table_size: u32 = 0, // 0 means no table
+    table_funcs: std.ArrayListUnmanaged(u32) = .{}, // Functions to put in table
+
     pub fn init(allocator: std.mem.Allocator) Linker {
         return .{ .allocator = allocator };
     }
@@ -104,6 +119,7 @@ pub const Linker = struct {
         self.types.deinit(self.allocator);
         self.type_storage.deinit(self.allocator);
         self.data_segments.deinit(self.allocator);
+        self.table_funcs.deinit(self.allocator);
     }
 
     /// Add or find a function type, return its index
@@ -167,6 +183,25 @@ pub const Linker = struct {
     pub fn setMemory(self: *Linker, min_pages: u32, max_pages: ?u32) void {
         self.memory_min_pages = min_pages;
         self.memory_max_pages = max_pages;
+    }
+
+    /// Add a function to the indirect call table
+    /// Returns the table index for call_indirect
+    pub fn addTableFunc(self: *Linker, func_idx: u32) !u32 {
+        const table_idx: u32 = @intCast(self.table_funcs.items.len);
+        try self.table_funcs.append(self.allocator, func_idx);
+        // Update table size
+        if (table_idx + 1 > self.table_size) {
+            self.table_size = table_idx + 1;
+        }
+        return table_idx;
+    }
+
+    /// Set minimum table size (for reserved slots like null entry)
+    pub fn setTableSize(self: *Linker, size: u32) void {
+        if (size > self.table_size) {
+            self.table_size = size;
+        }
     }
 
     /// Add a data segment for static data (string literals, etc.)
@@ -262,6 +297,20 @@ pub const Linker = struct {
         }
 
         // ====================================================================
+        // Table Section (for call_indirect - destructors, vtables)
+        // ====================================================================
+        if (self.table_size > 0) {
+            var table_buf = std.ArrayListUnmanaged(u8){};
+            defer table_buf.deinit(self.allocator);
+
+            try assemble.writeULEB128(self.allocator, &table_buf, 1); // 1 table
+            try table_buf.append(self.allocator, 0x70); // funcref type
+            try table_buf.append(self.allocator, 0x00); // limits without max
+            try assemble.writeULEB128(self.allocator, &table_buf, self.table_size);
+            try writeSection(writer, self.allocator, .table, table_buf.items);
+        }
+
+        // ====================================================================
         // Memory Section (Go: asm.go writeMemorySec)
         // ====================================================================
         {
@@ -352,6 +401,30 @@ pub const Linker = struct {
             try assemble.writeULEB128(self.allocator, &export_buf, 0); // memory index 0
 
             try writeSection(writer, self.allocator, .@"export", export_buf.items);
+        }
+
+        // ====================================================================
+        // Element Section (initialize table with function references)
+        // ====================================================================
+        if (self.table_funcs.items.len > 0) {
+            var elem_buf = std.ArrayListUnmanaged(u8){};
+            defer elem_buf.deinit(self.allocator);
+
+            try assemble.writeULEB128(self.allocator, &elem_buf, 1); // 1 element segment
+            // Table index 0
+            try assemble.writeULEB128(self.allocator, &elem_buf, 0);
+            // Offset expression: i32.const 0, end
+            try elem_buf.append(self.allocator, 0x41); // i32.const
+            try assemble.writeSLEB128(self.allocator, &elem_buf, 0);
+            try elem_buf.append(self.allocator, 0x0B); // end
+            // Function indices
+            try assemble.writeULEB128(self.allocator, &elem_buf, self.table_funcs.items.len);
+            const import_count = self.imports.items.len;
+            for (self.table_funcs.items) |func_idx| {
+                // Function indices must account for imports
+                try assemble.writeULEB128(self.allocator, &elem_buf, import_count + func_idx);
+            }
+            try writeSection(writer, self.allocator, .element, elem_buf.items);
         }
 
         // ====================================================================

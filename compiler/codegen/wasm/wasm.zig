@@ -68,11 +68,13 @@ pub const StringOffsetMap = std.StringHashMap(i32);
 ///
 /// @param func_indices: Optional map of function names to Wasm function indices (for calls)
 /// @param string_offsets: Map of string literal content to memory offsets (for const_string)
+/// @param metadata_offsets: Map of type names to metadata memory offsets (for ARC destructors)
 pub fn generateFunc(
     allocator: std.mem.Allocator,
     ssa_func: *const SsaFunc,
     func_indices: ?*const FuncIndexMap,
     string_offsets: ?*const StringOffsetMap,
+    metadata_offsets: ?*const StringOffsetMap,
 ) ![]u8 {
     debug.log(.codegen, "wasm: generateFunc '{s}'", .{ssa_func.name});
 
@@ -85,6 +87,9 @@ pub fn generateFunc(
     }
     if (string_offsets) |offsets| {
         gen_state.setStringOffsets(offsets);
+    }
+    if (metadata_offsets) |offsets| {
+        gen_state.setMetadataOffsets(offsets);
     }
 
     try gen_state.generate();

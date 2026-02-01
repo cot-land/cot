@@ -8,6 +8,7 @@ const source = @import("source.zig");
 const errors = @import("errors.zig");
 const checker = @import("checker.zig");
 const token = @import("token.zig");
+const arc = @import("arc_insertion.zig");
 
 const Allocator = std.mem.Allocator;
 const Ast = ast.Ast;
@@ -31,6 +32,7 @@ pub const Lowerer = struct {
     temp_counter: u32 = 0,
     loop_stack: std.ArrayListUnmanaged(LoopContext),
     defer_stack: std.ArrayListUnmanaged(NodeIndex),
+    cleanup_stack: arc.CleanupStack,
     const_values: std.StringHashMap(i64),
     test_mode: bool = false,
     test_names: std.ArrayListUnmanaged([]const u8),
@@ -60,6 +62,7 @@ pub const Lowerer = struct {
             .chk = chk,
             .loop_stack = .{},
             .defer_stack = .{},
+            .cleanup_stack = arc.CleanupStack.init(allocator),
             .const_values = std.StringHashMap(i64).init(allocator),
             .test_names = .{},
             .test_display_names = .{},
@@ -75,6 +78,7 @@ pub const Lowerer = struct {
     pub fn deinit(self: *Lowerer) void {
         self.loop_stack.deinit(self.allocator);
         self.defer_stack.deinit(self.allocator);
+        self.cleanup_stack.deinit();
         self.const_values.deinit();
         self.test_names.deinit(self.allocator);
         self.test_display_names.deinit(self.allocator);
@@ -291,6 +295,7 @@ pub const Lowerer = struct {
             .block_stmt => |block| {
                 const fb = self.current_func orelse return false;
                 const defer_depth = self.defer_stack.items.len;
+                const cleanup_depth = self.cleanup_stack.getScopeDepth();
                 const scope_depth = fb.markScopeEntry();
                 for (block.stmts) |stmt_idx| {
                     const stmt_node = self.tree.getNode(stmt_idx) orelse continue;
@@ -299,6 +304,7 @@ pub const Lowerer = struct {
                     }
                 }
                 try self.emitDeferredExprs(defer_depth);
+                try self.emitCleanups(cleanup_depth);
                 fb.restoreScope(scope_depth);
                 return false;
             },
@@ -318,6 +324,7 @@ pub const Lowerer = struct {
             if (lowered != ir.null_node) value_node = lowered;
         }
         try self.emitDeferredExprs(0);
+        try self.emitCleanups(0);
         _ = try fb.emitRet(value_node, ret.span);
     }
 
@@ -325,6 +332,30 @@ pub const Lowerer = struct {
         while (self.defer_stack.items.len > target_depth) {
             const defer_expr = self.defer_stack.pop() orelse break;
             _ = try self.lowerExprNode(defer_expr);
+        }
+    }
+
+    /// Emit release calls for all active cleanups down to target_depth.
+    /// Called at scope exit (block end, return, break, etc.)
+    fn emitCleanups(self: *Lowerer, target_depth: usize) Error!void {
+        const fb = self.current_func orelse return;
+        const items = self.cleanup_stack.getActiveCleanups();
+
+        // Process in reverse order (LIFO - last allocated, first released)
+        var i = items.len;
+        while (i > target_depth) {
+            i -= 1;
+            const cleanup = items[i];
+            if (cleanup.isActive()) {
+                // Emit cot_release(value)
+                var args = [_]ir.NodeIndex{cleanup.value};
+                _ = try fb.emitCall("cot_release", &args, false, TypeRegistry.VOID, Span.zero);
+            }
+        }
+
+        // Mark cleanups as dead (they've been emitted)
+        while (self.cleanup_stack.items.items.len > target_depth) {
+            _ = self.cleanup_stack.items.pop();
         }
     }
 
@@ -658,6 +689,13 @@ pub const Lowerer = struct {
 
     fn lowerFor(self: *Lowerer, for_stmt: ast.ForStmt) !void {
         const fb = self.current_func orelse return;
+
+        // Handle numeric range: for i in start..end { }
+        if (for_stmt.isRange()) {
+            try self.lowerForRange(for_stmt);
+            return;
+        }
+
         const iter_type = self.inferExprType(for_stmt.iterable);
         const iter_info = self.type_reg.get(iter_type);
         const elem_type: TypeIndex = switch (iter_info) {
@@ -772,6 +810,67 @@ pub const Lowerer = struct {
         _ = try fb.emitStoreLocal(idx_local, idx_after, for_stmt.span);
         _ = try fb.emitJump(cond_block, for_stmt.span);
 
+        _ = self.loop_stack.pop();
+        fb.setBlock(exit_block);
+    }
+
+    /// Lower numeric range for loop: for i in start..end { }
+    /// Reference: Go's range lowering (walk/range.go:162-208)
+    fn lowerForRange(self: *Lowerer, for_stmt: ast.ForStmt) !void {
+        const fb = self.current_func orelse return;
+
+        // Evaluate range start and end
+        const start_val = try self.lowerExprNode(for_stmt.range_start);
+        const end_val = try self.lowerExprNode(for_stmt.range_end);
+
+        // Create index variable
+        const idx_local = try fb.addLocalWithSize(for_stmt.binding, TypeRegistry.I64, true, 8);
+        _ = try fb.emitStoreLocal(idx_local, start_val, for_stmt.span);
+
+        // Store end value in a local
+        const end_name = try std.fmt.allocPrint(self.allocator, "__for_end_{d}", .{self.temp_counter});
+        self.temp_counter += 1;
+        const end_local = try fb.addLocalWithSize(end_name, TypeRegistry.I64, false, 8);
+        _ = try fb.emitStoreLocal(end_local, end_val, for_stmt.span);
+
+        // Create blocks
+        const cond_block = try fb.newBlock("for.cond");
+        const body_block = try fb.newBlock("for.body");
+        const incr_block = try fb.newBlock("for.incr");
+        const exit_block = try fb.newBlock("for.end");
+
+        // Jump to condition
+        _ = try fb.emitJump(cond_block, for_stmt.span);
+
+        // Condition: i < end
+        fb.setBlock(cond_block);
+        const idx_val = try fb.emitLoadLocal(idx_local, TypeRegistry.I64, for_stmt.span);
+        const end_val_cond = try fb.emitLoadLocal(end_local, TypeRegistry.I64, for_stmt.span);
+        const cond = try fb.emitBinary(.lt, idx_val, end_val_cond, TypeRegistry.BOOL, for_stmt.span);
+        _ = try fb.emitBranch(cond, body_block, exit_block, for_stmt.span);
+
+        // Push loop context for break/continue
+        try self.loop_stack.append(self.allocator, .{
+            .cond_block = incr_block,
+            .exit_block = exit_block,
+            .defer_depth = self.defer_stack.items.len,
+        });
+
+        // Body
+        fb.setBlock(body_block);
+        if (!try self.lowerBlockNode(for_stmt.body)) {
+            _ = try fb.emitJump(incr_block, for_stmt.span);
+        }
+
+        // Increment: i = i + 1
+        fb.setBlock(incr_block);
+        const idx_before = try fb.emitLoadLocal(idx_local, TypeRegistry.I64, for_stmt.span);
+        const one = try fb.emitConstInt(1, TypeRegistry.I64, for_stmt.span);
+        const idx_after = try fb.emitBinary(.add, idx_before, one, TypeRegistry.I64, for_stmt.span);
+        _ = try fb.emitStoreLocal(idx_local, idx_after, for_stmt.span);
+        _ = try fb.emitJump(cond_block, for_stmt.span);
+
+        // Exit
         _ = self.loop_stack.pop();
         fb.setBlock(exit_block);
     }
@@ -1317,9 +1416,12 @@ pub const Lowerer = struct {
         const payload_size = self.type_reg.sizeOf(struct_type_idx);
         const total_size = HEAP_HEADER_SIZE + payload_size;
 
-        // Call cot_alloc(size) -> ptr to user data (after header)
+        // Call cot_alloc(metadata_ptr, size) -> ptr to user data (after header)
+        // Reference: Swift's swift_allocObject(metadata, size, align)
+        // Pass type metadata - resolved to actual address during Wasm codegen
+        const metadata_node = try fb.emitTypeMetadata(ne.type_name, ne.span);
         const size_node = try fb.emitConstInt(@intCast(total_size), TypeRegistry.I64, ne.span);
-        var alloc_args = [_]ir.NodeIndex{size_node};
+        var alloc_args = [_]ir.NodeIndex{ metadata_node, size_node };
         const ptr_type = try self.type_reg.makePointer(struct_type_idx);
         const alloc_result = try fb.emitCall("cot_alloc", &alloc_args, false, ptr_type, ne.span);
 
@@ -1359,8 +1461,13 @@ pub const Lowerer = struct {
             }
         }
 
+        // Register cleanup to release the allocated object when scope exits
+        // Reference: Swift's ManagedValue pattern - owned values get cleanups
+        const final_ptr = try fb.emitLoadLocal(temp_idx, ptr_type, ne.span);
+        _ = try self.cleanup_stack.push(arc.Cleanup.init(.release, final_ptr, ptr_type));
+
         // Return the pointer to the allocated object
-        return try fb.emitLoadLocal(temp_idx, ptr_type, ne.span);
+        return final_ptr;
     }
 
     fn lowerIfExpr(self: *Lowerer, if_expr: ast.IfExpr) Error!ir.NodeIndex {

@@ -201,10 +201,11 @@ fn lowerValue(v: *Value) bool {
         .init_mem, .invalid,
         .const_bool, .const_nil, .const_string, .const_ptr,
         // slice_make/string_make: compound value construction, handled in codegen
-        // slice_ptr/len and string_ptr/len: decomposed above, should not reach here
+        // slice_ptr/len/string_ptr/len: decomposed by rewritedec
+        // string_concat: decomposed by rewritedec to static_call + string_make
         .string_make, .string_concat,
         .slice_make,
-        .addr, .local_addr, .global_addr, .off_ptr, .add_ptr, .sub_ptr,
+        .addr, .local_addr, .global_addr, .metadata_addr, .off_ptr, .add_ptr, .sub_ptr,
         .var_def, .var_live, .var_kill,
         .is_non_nil, .is_nil, .bounds_check, .slice_bounds,
         .store_reg, .load_reg,

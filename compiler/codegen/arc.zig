@@ -56,8 +56,14 @@ pub const RuntimeFunctions = struct {
     /// cot_release index
     release_idx: u32,
 
+    /// cot_string_concat index
+    string_concat_idx: u32,
+
     /// heap_ptr global index
     heap_ptr_global: u32,
+
+    /// Destructor function type index for call_indirect
+    destructor_type: u32,
 };
 
 /// Legacy runtime function indices (old API for wasm.Module)
@@ -86,6 +92,7 @@ pub const LegacyRuntimeFunctions = struct {
 pub const ALLOC_NAME = "cot_alloc";
 pub const RETAIN_NAME = "cot_retain";
 pub const RELEASE_NAME = "cot_release";
+pub const STRING_CONCAT_NAME = "cot_string_concat";
 
 // =============================================================================
 // Code Generation for Runtime Functions (for new Linker API)
@@ -104,9 +111,10 @@ pub fn addToLinker(allocator: std.mem.Allocator, linker: *wasm_link.Linker) !Run
     });
     const heap_ptr_global = heap_ptr_dynamic_idx + 1; // Offset by SP
 
-    // Generate alloc function: (i64) -> i64
-    // Takes size, returns pointer to user data (after header)
-    const alloc_type = try linker.addType(&[_]ValType{.i64}, &[_]ValType{.i64});
+    // Generate alloc function: (i64, i64) -> i64
+    // Takes (metadata_ptr, size), returns pointer to user data (after header)
+    // Reference: Swift's swift_allocObject(metadata, size, align)
+    const alloc_type = try linker.addType(&[_]ValType{ .i64, .i64 }, &[_]ValType{.i64});
     const alloc_body = try generateAllocBody(allocator, heap_ptr_global);
     const alloc_idx = try linker.addFunc(.{
         .name = ALLOC_NAME,
@@ -126,9 +134,13 @@ pub fn addToLinker(allocator: std.mem.Allocator, linker: *wasm_link.Linker) !Run
         .exported = false,
     });
 
+    // Add destructor type for call_indirect: (i64) -> void
+    // Reference: Swift's HeapObjectDestroyer type
+    const destructor_type = try linker.addType(&[_]ValType{.i64}, &[_]ValType{});
+
     // Generate release function: (i64) -> void
-    const release_type = try linker.addType(&[_]ValType{.i64}, &[_]ValType{});
-    const release_body = try generateReleaseBody(allocator);
+    const release_type = destructor_type; // Same signature as destructors
+    const release_body = try generateReleaseBody(allocator, destructor_type);
     const release_idx = try linker.addFunc(.{
         .name = RELEASE_NAME,
         .type_idx = release_type,
@@ -136,28 +148,45 @@ pub fn addToLinker(allocator: std.mem.Allocator, linker: *wasm_link.Linker) !Run
         .exported = false,
     });
 
+    // Generate string_concat function: (i64, i64, i64, i64) -> i64
+    // Takes (s1_ptr, s1_len, s2_ptr, s2_len), returns new_ptr
+    // Reference: Go's runtime/string.go concatstrings
+    const string_concat_type = try linker.addType(
+        &[_]ValType{ .i64, .i64, .i64, .i64 },
+        &[_]ValType{.i64},
+    );
+    const string_concat_body = try generateStringConcatBody(allocator, heap_ptr_global);
+    const string_concat_idx = try linker.addFunc(.{
+        .name = STRING_CONCAT_NAME,
+        .type_idx = string_concat_type,
+        .code = string_concat_body,
+        .exported = false,
+    });
+
     return RuntimeFunctions{
         .alloc_idx = alloc_idx,
         .retain_idx = retain_idx,
         .release_idx = release_idx,
+        .string_concat_idx = string_concat_idx,
         .heap_ptr_global = heap_ptr_global,
+        .destructor_type = destructor_type,
     };
 }
 
-/// Generates bytecode for cot_alloc(size: i64) -> i64
+/// Generates bytecode for cot_alloc(metadata_ptr: i64, size: i64) -> i64
 /// Allocates heap memory with header, returns pointer to user data.
-/// Reference: Go's runtime.newobject (malloc.go:2208-2213)
+/// Reference: Swift's swift_allocObject (HeapObject.cpp:247-270)
 fn generateAllocBody(allocator: std.mem.Allocator, heap_ptr_global: u32) ![]const u8 {
     var code = wasm.CodeBuilder.init(allocator);
     defer code.deinit();
 
-    // Parameter: size (local 0, i64)
-    // Local 1: ptr (allocated address, i32)
-    // Local 2: total_size (i32)
+    // Parameters: metadata_ptr (local 0, i64), size (local 1, i64)
+    // Local 2: ptr (allocated address, i32)
+    // Local 3: total_size (i32)
     _ = try code.declareLocals(&[_]wasm.ValType{ .i32, .i32 });
 
     // total_size = (i32)size + HEAP_OBJECT_HEADER_SIZE
-    try code.emitLocalGet(0); // size (i64)
+    try code.emitLocalGet(1); // size (i64)
     try code.emitI32WrapI64(); // convert to i32
     try code.emitI32Const(@intCast(HEAP_OBJECT_HEADER_SIZE));
     try code.emitI32Add();
@@ -167,24 +196,31 @@ fn generateAllocBody(allocator: std.mem.Allocator, heap_ptr_global: u32) ![]cons
     try code.emitI32Add();
     try code.emitI32Const(-8); // ~7 = -8 in two's complement
     try code.emitI32And();
-    try code.emitLocalSet(2); // total_size
+    try code.emitLocalSet(3); // total_size
 
     // ptr = heap_ptr
     try code.emitGlobalGet(heap_ptr_global);
-    try code.emitLocalTee(1); // ptr
+    try code.emitLocalTee(2); // ptr
 
     // heap_ptr = heap_ptr + total_size
-    try code.emitLocalGet(2);
+    try code.emitLocalGet(3);
     try code.emitI32Add();
     try code.emitGlobalSet(heap_ptr_global);
 
+    // Store metadata_ptr at ptr + METADATA_OFFSET
+    // Reference: Swift stores metadata pointer at object start
+    try code.emitLocalGet(2); // ptr
+    try code.emitLocalGet(0); // metadata_ptr (i64)
+    try code.emitI32WrapI64(); // convert to i32
+    try code.emitI32Store(2, METADATA_OFFSET);
+
     // Store initial refcount at ptr + REFCOUNT_OFFSET
-    try code.emitLocalGet(1); // ptr
+    try code.emitLocalGet(2); // ptr
     try code.emitI64Const(INITIAL_REFCOUNT);
     try code.emitI64Store(3, REFCOUNT_OFFSET);
 
     // Return (i64)(ptr + USER_DATA_OFFSET)
-    try code.emitLocalGet(1);
+    try code.emitLocalGet(2);
     try code.emitI32Const(@intCast(USER_DATA_OFFSET));
     try code.emitI32Add();
     try code.emitI64ExtendI32U(); // zero-extend to i64
@@ -248,9 +284,13 @@ fn generateRetainBody(allocator: std.mem.Allocator) ![]const u8 {
     return code.finish();
 }
 
+/// Offset of destructor function index in metadata
+pub const DESTRUCTOR_OFFSET: u32 = 8;
+
 /// Generates bytecode for cot_release(obj: i64) -> void
-/// Decrements refcount. Frees object if count reaches zero.
-fn generateReleaseBody(allocator: std.mem.Allocator) ![]const u8 {
+/// Decrements refcount. Calls destructor if count reaches zero.
+/// Reference: Swift's _swift_release_dealloc (HeapObject.cpp:835-836)
+fn generateReleaseBody(allocator: std.mem.Allocator, destructor_type_idx: u32) ![]const u8 {
     var code = wasm.CodeBuilder.init(allocator);
     defer code.deinit();
 
@@ -258,8 +298,9 @@ fn generateReleaseBody(allocator: std.mem.Allocator) ![]const u8 {
     // Local 1: header_ptr (i64)
     // Local 2: old_count (i64)
     // Local 3: new_count (i64)
+    // Local 4: destructor_ptr (i32)
 
-    _ = try code.declareLocals(&[_]wasm.ValType{ .i64, .i64, .i64 });
+    _ = try code.declareLocals(&[_]wasm.ValType{ .i64, .i64, .i64, .i32 });
 
     // if (obj == 0) return
     try code.emitLocalGet(0);
@@ -300,16 +341,101 @@ fn generateReleaseBody(allocator: std.mem.Allocator) ![]const u8 {
     try code.emitLocalGet(3);
     try code.emitI64Store(3, REFCOUNT_OFFSET);
 
-    // if (new_count == 0) { /* free object */ }
-    // For M15, we don't actually free memory (bump allocator)
-    // Future: call destructor, add to free list
+    // if (new_count == 0) { call destructor }
+    // Reference: Swift's asFullMetadata(object->metadata)->destroy(object)
     try code.emitLocalGet(3);
     try code.emitI64Eqz();
     try code.emitIf(BLOCK_VOID);
-    // TODO: Call destructor via metadata lookup
-    // TODO: Add to free list for reuse
-    // For now, just a marker that the object is dead
+
+    // Load metadata_ptr from header
+    try code.emitLocalGet(1); // header_ptr
+    try code.emitI32WrapI64();
+    try code.emitI32Load(2, METADATA_OFFSET); // Load metadata_ptr (i32)
+
+    // Load destructor_ptr from metadata at offset 8
+    try code.emitI32Load(2, DESTRUCTOR_OFFSET); // destructor_ptr (i32)
+    try code.emitLocalTee(4); // Save to local 4
+
+    // if (destructor_ptr != 0) { call_indirect }
+    try code.emitIf(BLOCK_VOID);
+    try code.emitLocalGet(0); // Push object ptr as argument
+    try code.emitLocalGet(4); // Push destructor table index
+    try code.emitCallIndirect(destructor_type_idx, 0); // call_indirect (table 0)
     try code.emitEnd();
+
+    try code.emitEnd();
+
+    return code.finish();
+}
+
+/// Generates bytecode for cot_string_concat(s1_ptr, s1_len, s2_ptr, s2_len) -> new_ptr
+/// Allocates a new buffer on the heap and copies both strings into it.
+/// Reference: Go's runtime/string.go concatstrings
+fn generateStringConcatBody(allocator: std.mem.Allocator, heap_ptr_global: u32) ![]const u8 {
+    var code = wasm.CodeBuilder.init(allocator);
+    defer code.deinit();
+
+    // Parameters:
+    //   local 0: s1_ptr (i64)
+    //   local 1: s1_len (i64)
+    //   local 2: s2_ptr (i64)
+    //   local 3: s2_len (i64)
+    // Locals:
+    //   local 4: new_len (i32)
+    //   local 5: new_ptr (i32)
+    _ = try code.declareLocals(&[_]wasm.ValType{ .i32, .i32 });
+
+    // new_len = (i32)s1_len + (i32)s2_len
+    try code.emitLocalGet(1); // s1_len (i64)
+    try code.emitI32WrapI64();
+    try code.emitLocalGet(3); // s2_len (i64)
+    try code.emitI32WrapI64();
+    try code.emitI32Add();
+    try code.emitLocalTee(4); // new_len
+
+    // Check for zero length - if both strings empty, return 0
+    try code.emitI32Eqz();
+    try code.emitIf(BLOCK_VOID);
+    try code.emitI64Const(0);
+    try code.emitReturn();
+    try code.emitEnd();
+
+    // Allocate buffer: new_ptr = heap_ptr
+    try code.emitGlobalGet(heap_ptr_global);
+    try code.emitLocalTee(5); // new_ptr
+
+    // heap_ptr = heap_ptr + ((new_len + 7) & ~7)  // 8-byte aligned
+    try code.emitLocalGet(4); // new_len
+    try code.emitI32Const(7);
+    try code.emitI32Add();
+    try code.emitI32Const(-8);
+    try code.emitI32And();
+    try code.emitI32Add();
+    try code.emitGlobalSet(heap_ptr_global);
+
+    // memory.copy(new_ptr, s1_ptr, s1_len)
+    // Stack: [dest, src, len] all i32
+    try code.emitLocalGet(5); // dest = new_ptr (i32)
+    try code.emitLocalGet(0); // src = s1_ptr (i64)
+    try code.emitI32WrapI64();
+    try code.emitLocalGet(1); // len = s1_len (i64)
+    try code.emitI32WrapI64();
+    try code.emitMemoryCopy();
+
+    // memory.copy(new_ptr + s1_len, s2_ptr, s2_len)
+    try code.emitLocalGet(5); // new_ptr
+    try code.emitLocalGet(1); // s1_len (i64)
+    try code.emitI32WrapI64();
+    try code.emitI32Add(); // dest = new_ptr + s1_len
+    try code.emitLocalGet(2); // src = s2_ptr (i64)
+    try code.emitI32WrapI64();
+    try code.emitLocalGet(3); // len = s2_len (i64)
+    try code.emitI32WrapI64();
+    try code.emitMemoryCopy();
+
+    // Return (i64)new_ptr
+    try code.emitLocalGet(5);
+    try code.emitI64ExtendI32U();
 
     return code.finish();
 }
@@ -613,7 +739,7 @@ test "generateRetainBody produces valid bytecode" {
 
 test "generateReleaseBody produces valid bytecode" {
     const allocator = std.testing.allocator;
-    const body = try generateReleaseBody(allocator);
+    const body = try generateReleaseBody(allocator, 0); // type_idx 0 for test
     defer allocator.free(body);
 
     // Should have content
@@ -633,9 +759,10 @@ test "addToLinker creates functions" {
     // Verify we got distinct function indices
     try std.testing.expect(funcs.alloc_idx != funcs.retain_idx);
     try std.testing.expect(funcs.retain_idx != funcs.release_idx);
+    try std.testing.expect(funcs.release_idx != funcs.string_concat_idx);
 
-    // Verify functions were added (alloc, retain, release = 3)
-    try std.testing.expectEqual(@as(usize, 3), linker.funcs.items.len);
+    // Verify functions were added (alloc, retain, release, string_concat = 4)
+    try std.testing.expectEqual(@as(usize, 4), linker.funcs.items.len);
 
     // Verify global was added (heap_ptr)
     try std.testing.expectEqual(@as(usize, 1), linker.globals.items.len);

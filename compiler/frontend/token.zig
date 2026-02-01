@@ -23,7 +23,7 @@ pub const Token = enum(u8) {
     land, lor, lnot, // && || !
     assign, arrow, fat_arrow, coalesce, optional_chain, // = -> => ?? ?.
     lparen, rparen, lbrack, rbrack, lbrace, rbrace, // ( ) [ ] { }
-    comma, period, period_star, period_question, // , . .* .?
+    comma, period, period_period, period_star, period_question, // , . .. .* .?
     semicolon, colon, at, question, // ; : @ ?
     operator_end,
 
@@ -143,6 +143,7 @@ const token_strings = blk: {
     s[@intFromEnum(Token.rbrace)] = "}";
     s[@intFromEnum(Token.comma)] = ",";
     s[@intFromEnum(Token.period)] = ".";
+    s[@intFromEnum(Token.period_period)] = "..";
     s[@intFromEnum(Token.period_star)] = ".*";
     s[@intFromEnum(Token.period_question)] = ".?";
     s[@intFromEnum(Token.semicolon)] = ";";

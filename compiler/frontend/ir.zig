@@ -91,6 +91,7 @@ pub const UnionPayload = struct { variant_idx: u32, value: NodeIndex };
 pub const PtrCast = struct { operand: NodeIndex };
 pub const IntToPtr = struct { operand: NodeIndex };
 pub const PtrToInt = struct { operand: NodeIndex };
+pub const TypeMetadata = struct { type_name: []const u8 };
 
 pub const Node = struct {
     type_idx: TypeIndex,
@@ -116,6 +117,7 @@ pub const Node = struct {
         str_concat: StrConcat, string_header: StringHeader,
         union_init: UnionInit, union_tag: UnionTag, union_payload: UnionPayload,
         ptr_cast: PtrCast, int_to_ptr: IntToPtr, ptr_to_int: PtrToInt,
+        type_metadata: TypeMetadata,
         nop: void,
     };
 
@@ -328,6 +330,7 @@ pub const FuncBuilder = struct {
     pub fn emitIntToPtr(self: *FuncBuilder, operand: NodeIndex, target_type: TypeIndex, span: Span) !NodeIndex { return self.emit(Node.init(.{ .int_to_ptr = .{ .operand = operand } }, target_type, span)); }
     pub fn emitPtrToInt(self: *FuncBuilder, operand: NodeIndex, target_type: TypeIndex, span: Span) !NodeIndex { return self.emit(Node.init(.{ .ptr_to_int = .{ .operand = operand } }, target_type, span)); }
     pub fn emitMakeSlice(self: *FuncBuilder, base_ptr: NodeIndex, start: ?NodeIndex, end: NodeIndex, elem_size: u32, type_idx: TypeIndex, span: Span) !NodeIndex { return self.emitSliceValue(base_ptr, start, end, elem_size, type_idx, span); }
+    pub fn emitTypeMetadata(self: *FuncBuilder, type_name: []const u8, span: Span) !NodeIndex { return self.emit(Node.init(.{ .type_metadata = .{ .type_name = type_name } }, TypeRegistry.I64, span)); }
 
     pub fn build(self: *FuncBuilder) !Func {
         var params = std.ArrayListUnmanaged(Local){};

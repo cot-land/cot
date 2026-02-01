@@ -17,11 +17,13 @@
 //! This pass runs AFTER rewritegeneric (which converts const_string to string_make).
 
 const std = @import("std");
-const Value = @import("../value.zig").Value;
+const value_mod = @import("../value.zig");
+const Value = value_mod.Value;
+const TypeIndex = value_mod.TypeIndex;
+const Pos = value_mod.Pos;
 const Block = @import("../block.zig").Block;
 const Func = @import("../func.zig").Func;
 const Op = @import("../op.zig").Op;
-const TypeIndex = @import("../value.zig").TypeIndex;
 const TypeRegistry = @import("../../frontend/types.zig").TypeRegistry;
 const debug = @import("../../pipeline_debug.zig");
 
@@ -72,6 +74,11 @@ fn rewriteValue(allocator: std.mem.Allocator, f: *Func, block: *Block, v: *Value
         .string_ptr => rewriteStringPtr(allocator, f, block, v),
         .string_len => rewriteStringLen(allocator, f, block, v),
 
+        // ====================================================================
+        // String concatenation (Go: runtime concatstrings lowering)
+        // ====================================================================
+        .string_concat => rewriteStringConcat(allocator, f, block, v),
+
         else => false,
     };
 }
@@ -84,7 +91,7 @@ fn rewriteValue(allocator: std.mem.Allocator, f: *Func, block: *Block, v: *Value
 ///   (SlicePtr (Load<slice> ptr mem)) → (Load<ptr> ptr mem)
 fn rewriteSlicePtr(allocator: std.mem.Allocator, f: *Func, block: *Block, v: *Value) !bool {
     if (v.args.len < 1) return false;
-    const v_0 = v.args[0];
+    const v_0 = followCopy(v.args[0]);
 
     // Pattern 1: SlicePtr(SliceMake ptr _ _) → ptr
     // Go: lines 542-551
@@ -124,6 +131,24 @@ fn rewriteSlicePtr(allocator: std.mem.Allocator, f: *Func, block: *Block, v: *Va
         return true;
     }
 
+    // Pattern 4: SlicePtr(Load<string> ptr mem) → Load<ptr> ptr mem
+    if (v_0.op == .load and v_0.type_idx == TypeRegistry.STRING) {
+        if (v_0.args.len >= 1) {
+            const ptr = v_0.args[0];
+            debug.log(.codegen, "  v{d}: slice_ptr(load<string>) -> load<ptr>", .{v.id});
+
+            const load_val = try f.newValue(.load, TypeRegistry.I64, block, v.pos);
+            load_val.addArg(ptr);
+            if (v_0.args.len >= 2) {
+                load_val.addArg(v_0.args[1]);
+            }
+            try block.addValue(allocator, load_val);
+
+            copyOf(v, load_val);
+            return true;
+        }
+    }
+
     return false;
 }
 
@@ -135,7 +160,7 @@ fn rewriteSlicePtr(allocator: std.mem.Allocator, f: *Func, block: *Block, v: *Va
 ///   (SliceLen (Load<slice> ptr mem)) → (Load<i64> (OffPtr ptr 8) mem)
 fn rewriteSliceLen(allocator: std.mem.Allocator, f: *Func, block: *Block, v: *Value) !bool {
     if (v.args.len < 1) return false;
-    const v_0 = v.args[0];
+    const v_0 = followCopy(v.args[0]);
 
     // Pattern 1: SliceLen(SliceMake _ len _) → len
     // Go: lines 504-513
@@ -180,6 +205,29 @@ fn rewriteSliceLen(allocator: std.mem.Allocator, f: *Func, block: *Block, v: *Va
         return true;
     }
 
+    // Pattern 4: SliceLen(Load<string> ptr mem) → Load<i64> (OffPtr ptr 8) mem
+    if (v_0.op == .load and v_0.type_idx == TypeRegistry.STRING) {
+        if (v_0.args.len >= 1) {
+            const ptr = v_0.args[0];
+            debug.log(.codegen, "  v{d}: slice_len(load<string>) -> load<i64>(off_ptr 8)", .{v.id});
+
+            const off_ptr = try f.newValue(.off_ptr, TypeRegistry.I64, block, v.pos);
+            off_ptr.aux_int = 8;
+            off_ptr.addArg(ptr);
+            try block.addValue(allocator, off_ptr);
+
+            const load_val = try f.newValue(.load, TypeRegistry.I64, block, v.pos);
+            load_val.addArg(off_ptr);
+            if (v_0.args.len >= 2) {
+                load_val.addArg(v_0.args[1]);
+            }
+            try block.addValue(allocator, load_val);
+
+            copyOf(v, load_val);
+            return true;
+        }
+    }
+
     return false;
 }
 
@@ -187,7 +235,7 @@ fn rewriteSliceLen(allocator: std.mem.Allocator, f: *Func, block: *Block, v: *Va
 /// Go reference: rewriteValuedec_OpStringPtr (lines 795-829)
 fn rewriteStringPtr(allocator: std.mem.Allocator, f: *Func, block: *Block, v: *Value) !bool {
     if (v.args.len < 1) return false;
-    const v_0 = v.args[0];
+    const v_0 = followCopy(v.args[0]);
 
     // Pattern 1: StringPtr(StringMake ptr _) → ptr
     if (v_0.op == .string_make and v_0.args.len >= 1) {
@@ -222,7 +270,7 @@ fn rewriteStringPtr(allocator: std.mem.Allocator, f: *Func, block: *Block, v: *V
 /// Go reference: rewriteValuedec_OpStringLen (lines 755-793)
 fn rewriteStringLen(allocator: std.mem.Allocator, f: *Func, block: *Block, v: *Value) !bool {
     if (v.args.len < 1) return false;
-    const v_0 = v.args[0];
+    const v_0 = followCopy(v.args[0]);
 
     // Pattern 1: StringLen(StringMake _ len) → len
     if (v_0.op == .string_make and v_0.args.len >= 2) {
@@ -256,6 +304,128 @@ fn rewriteStringLen(allocator: std.mem.Allocator, f: *Func, block: *Block, v: *V
     }
 
     return false;
+}
+
+/// Rewrite StringConcat to call cot_string_concat and construct result.
+/// Go reference: walk/expr.go concatstring2 lowering
+///
+/// Pattern:
+///   (StringConcat s1 s2) →
+///     ptr1 = extract_ptr(s1)
+///     len1 = extract_len(s1)
+///     ptr2 = extract_ptr(s2)
+///     len2 = extract_len(s2)
+///     new_ptr = static_call("cot_string_concat", ptr1, len1, ptr2, len2)
+///     new_len = add(len1, len2)
+///     result = string_make(new_ptr, new_len)
+fn rewriteStringConcat(allocator: std.mem.Allocator, f: *Func, block: *Block, v: *Value) !bool {
+    if (v.args.len < 2) return false;
+    const s1 = v.args[0];
+    const s2 = v.args[1];
+
+    debug.log(.codegen, "  v{d}: string_concat -> static_call + string_make", .{v.id});
+
+    // Extract ptr/len from s1
+    const s1_ptr = try extractStringPtr(allocator, f, block, s1, v.pos);
+    const s1_len = try extractStringLen(allocator, f, block, s1, v.pos);
+
+    // Extract ptr/len from s2
+    const s2_ptr = try extractStringPtr(allocator, f, block, s2, v.pos);
+    const s2_len = try extractStringLen(allocator, f, block, s2, v.pos);
+
+    // Create static_call to cot_string_concat(ptr1, len1, ptr2, len2) -> new_ptr
+    const call = try f.newValue(.static_call, TypeRegistry.I64, block, v.pos);
+    call.aux = .{ .string = "cot_string_concat" };
+    call.addArg(s1_ptr);
+    call.addArg(s1_len);
+    call.addArg(s2_ptr);
+    try call.addArgAlloc(s2_len, allocator); // 4th arg needs allocator
+    try block.addValue(allocator, call);
+
+    // Create new_len = s1_len + s2_len
+    const new_len = try f.newValue(.add, TypeRegistry.I64, block, v.pos);
+    new_len.addArg2(s1_len, s2_len);
+    try block.addValue(allocator, new_len);
+
+    // Create string_make(new_ptr, new_len)
+    const result = try f.newValue(.string_make, TypeRegistry.STRING, block, v.pos);
+    result.addArg2(call, new_len);
+    try block.addValue(allocator, result);
+
+    // Replace v with result
+    copyOf(v, result);
+    return true;
+}
+
+/// Extract the pointer component from a string value.
+fn extractStringPtr(allocator: std.mem.Allocator, f: *Func, block: *Block, s: *Value, pos: Pos) !*Value {
+    // If s is string_make or slice_make (STRING loads create slice_make), directly get arg[0]
+    if ((s.op == .string_make or s.op == .slice_make) and s.args.len >= 1) {
+        return s.args[0];
+    }
+
+    // If s is a load, create a load for the ptr field
+    if (s.op == .load and s.type_idx == TypeRegistry.STRING) {
+        if (s.args.len >= 1) {
+            const base_ptr = s.args[0];
+            const load_val = try f.newValue(.load, TypeRegistry.I64, block, pos);
+            load_val.addArg(base_ptr);
+            if (s.args.len >= 2) {
+                load_val.addArg(s.args[1]); // mem
+            }
+            try block.addValue(allocator, load_val);
+            return load_val;
+        }
+    }
+
+    // Otherwise create a string_ptr extraction (will be rewritten in next iteration)
+    const ptr_val = try f.newValue(.string_ptr, TypeRegistry.I64, block, pos);
+    ptr_val.addArg(s);
+    try block.addValue(allocator, ptr_val);
+    return ptr_val;
+}
+
+/// Extract the length component from a string value.
+fn extractStringLen(allocator: std.mem.Allocator, f: *Func, block: *Block, s: *Value, pos: Pos) !*Value {
+    // If s is string_make or slice_make (STRING loads create slice_make), directly get arg[1]
+    if ((s.op == .string_make or s.op == .slice_make) and s.args.len >= 2) {
+        return s.args[1];
+    }
+
+    // If s is a load, create a load for the len field at offset 8
+    if (s.op == .load and s.type_idx == TypeRegistry.STRING) {
+        if (s.args.len >= 1) {
+            const base_ptr = s.args[0];
+            const off_ptr = try f.newValue(.off_ptr, TypeRegistry.I64, block, pos);
+            off_ptr.aux_int = 8;
+            off_ptr.addArg(base_ptr);
+            try block.addValue(allocator, off_ptr);
+
+            const load_val = try f.newValue(.load, TypeRegistry.I64, block, pos);
+            load_val.addArg(off_ptr);
+            if (s.args.len >= 2) {
+                load_val.addArg(s.args[1]); // mem
+            }
+            try block.addValue(allocator, load_val);
+            return load_val;
+        }
+    }
+
+    // Otherwise create a string_len extraction (will be rewritten in next iteration)
+    const len_val = try f.newValue(.string_len, TypeRegistry.I64, block, pos);
+    len_val.addArg(s);
+    try block.addValue(allocator, len_val);
+    return len_val;
+}
+
+/// Follow copy chain to find the original value.
+/// Go reference: Similar pattern in Go's SSA where copies are transparent.
+fn followCopy(v: *Value) *Value {
+    var current = v;
+    while (current.op == .copy and current.args.len >= 1) {
+        current = current.args[0];
+    }
+    return current;
 }
 
 /// Check if a type is a slice type.

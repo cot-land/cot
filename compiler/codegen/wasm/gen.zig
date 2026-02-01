@@ -74,6 +74,9 @@ pub const GenState = struct {
     /// Maps string literal content to memory offsets
     string_offsets: ?*const std.StringHashMap(i32) = null,
 
+    /// Maps type names to metadata memory offsets
+    metadata_offsets: ?*const std.StringHashMap(i32) = null,
+
     pub fn init(allocator: std.mem.Allocator, func: *const SsaFunc) GenState {
         return .{
             .allocator = allocator,
@@ -91,6 +94,10 @@ pub const GenState = struct {
 
     pub fn setStringOffsets(self: *GenState, offsets: *const std.StringHashMap(i32)) void {
         self.string_offsets = offsets;
+    }
+
+    pub fn setMetadataOffsets(self: *GenState, offsets: *const std.StringHashMap(i32)) void {
+        self.metadata_offsets = offsets;
     }
 
     pub fn deinit(self: *GenState) void {
@@ -262,7 +269,20 @@ pub const GenState = struct {
 
             // NOTE: const_string is rewritten to string_make by rewritegeneric.zig
             // NOTE: string_ptr/string_len/slice_ptr/slice_len are decomposed by rewritedec.zig
-            // If we see these ops here, decomposition didn't run or pattern didn't match
+
+            // Compound type ops - these are conceptual groupings, no code generated
+            // The components are accessed via extraction ops which get decomposed
+            .string_make, .slice_make => {
+                // No code - these values are decomposed when accessed
+                debug.log(.codegen, "wasm/gen: skip compound type op {s}", .{@tagName(v.op)});
+            },
+
+            // Extraction ops for compound types - should be decomposed by rewritedec
+            // If they reach here, they're on values that couldn't be decomposed (e.g., loaded from memory)
+            .string_ptr, .string_len, .slice_ptr, .slice_len => {
+                // These should have been decomposed - log warning
+                debug.log(.codegen, "wasm/gen: undecomposed extraction op {s}", .{@tagName(v.op)});
+            },
 
             // Arithmetic (i64)
             .wasm_i64_add => {
@@ -344,14 +364,42 @@ pub const GenState = struct {
 
             // Local address
             .local_addr => {
-                // SP + slot_offset
+                // SP + actual_byte_offset
+                // Use local_sizes to compute correct offset (handles variable-sized locals like strings)
                 _ = try self.builder.appendFrom(.get, prog_mod.regAddr(.sp));
                 _ = try self.builder.append(.i64_extend_i32_u);
-                const slot: i64 = v.aux_int;
-                const offset = slot * 8; // 8 bytes per slot
+                const local_idx: usize = @intCast(v.aux_int);
+                const offset = self.getLocalOffset(local_idx);
                 if (offset != 0) {
                     _ = try self.builder.appendFrom(.i64_const, prog_mod.constAddr(offset));
                     _ = try self.builder.append(.i64_add);
+                }
+            },
+
+            // Global address (for global variables in linear memory)
+            // Globals are stored at fixed addresses: GLOBAL_BASE + (index * 8)
+            // GLOBAL_BASE = 0x20000 (128KB, after stack and heap start)
+            .global_addr => {
+                const GLOBAL_BASE: i64 = 0x20000;
+                const global_idx: i64 = v.aux_int;
+                const addr: i64 = GLOBAL_BASE + (global_idx * 8);
+                _ = try self.builder.appendFrom(.i64_const, prog_mod.constAddr(addr));
+            },
+
+            // Type metadata address (for ARC destructor lookup)
+            // Resolved at link time: metadata_offsets[type_name]
+            .metadata_addr => {
+                const type_name = v.aux.string;
+                if (self.metadata_offsets) |offsets| {
+                    if (offsets.get(type_name)) |offset| {
+                        _ = try self.builder.appendFrom(.i64_const, prog_mod.constAddr(offset));
+                    } else {
+                        // Type has no destructor - pass 0 (null metadata)
+                        _ = try self.builder.appendFrom(.i64_const, prog_mod.constAddr(0));
+                    }
+                } else {
+                    // No metadata available - pass 0
+                    _ = try self.builder.appendFrom(.i64_const, prog_mod.constAddr(0));
                 }
             },
 
@@ -583,6 +631,21 @@ pub const GenState = struct {
         }
     }
 
+    /// Compute byte offset for a local variable by summing sizes of all preceding locals.
+    /// This handles variable-sized locals (e.g., strings are 16 bytes, i64 is 8 bytes).
+    fn getLocalOffset(self: *const GenState, local_idx: usize) i64 {
+        if (self.func.local_sizes.len == 0) {
+            // Fallback: assume 8 bytes per slot
+            return @intCast(local_idx * 8);
+        }
+        var offset: i64 = 0;
+        const count = @min(local_idx, self.func.local_sizes.len);
+        for (0..count) |i| {
+            offset += @intCast(self.func.local_sizes[i]);
+        }
+        return offset;
+    }
+
     /// Compute frame size from local sizes (copied from IR)
     /// Go reference: This matches how Go computes frame layout in obj/link.go
     fn computeFrameSize(self: *const GenState) i32 {
@@ -620,7 +683,7 @@ fn isRematerializable(v: *const SsaValue) bool {
     return switch (v.op) {
         .wasm_i64_const, .wasm_i32_const, .wasm_f64_const,
         .const_int, .const_32, .const_64, .const_float, .const_bool,
-        .local_addr, .global_addr,
+        .local_addr, .global_addr, .metadata_addr,
         => true,
         else => false,
     };

@@ -775,9 +775,28 @@ pub const Checker = struct {
     }
 
     fn checkForStmt(self: *Checker, fs: ast.ForStmt) CheckError!void {
-        const iter_type = try self.checkExpr(fs.iterable);
-        const iter = self.types.get(iter_type);
-        const elem_type: TypeIndex = switch (iter) { .array => |a| a.elem, .slice => |s| s.elem, else => blk: { self.err.errorWithCode(fs.span.start, .e300, "cannot iterate over this type"); break :blk invalid_type; } };
+        // Handle range loop: for i in start..end
+        const elem_type: TypeIndex = if (fs.isRange()) blk: {
+            const start_type = try self.checkExpr(fs.range_start);
+            const end_type = try self.checkExpr(fs.range_end);
+            // Both start and end must be integers
+            if (!types.isInteger(self.types.get(start_type)) or !types.isInteger(self.types.get(end_type))) {
+                self.err.errorWithCode(fs.span.start, .e300, "range bounds must be integers");
+                break :blk invalid_type;
+            }
+            break :blk start_type; // Loop variable has same type as range start
+        } else blk: {
+            const iter_type = try self.checkExpr(fs.iterable);
+            const iter = self.types.get(iter_type);
+            break :blk switch (iter) {
+                .array => |a| a.elem,
+                .slice => |s| s.elem,
+                else => {
+                    self.err.errorWithCode(fs.span.start, .e300, "cannot iterate over this type");
+                    break :blk invalid_type;
+                },
+            };
+        };
         var loop_scope = Scope.init(self.allocator, self.scope);
         defer loop_scope.deinit();
         try loop_scope.define(Symbol.init(fs.binding, .variable, elem_type, null_node, false));

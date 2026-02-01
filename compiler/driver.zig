@@ -358,15 +358,21 @@ pub const Driver = struct {
         var linker = wasm.Linker.init(self.allocator);
         defer linker.deinit();
 
-        // Configure memory (2 pages = 128KB minimum)
-        // Page 0-1 for stack (grows down from 64KB), Page 1+ for heap
-        linker.setMemory(2, null);
+        // Configure memory (3 pages = 192KB minimum)
+        // Page 0: Stack (grows down from 64KB)
+        // Page 1: Heap (starts at 64KB)
+        // Page 2+: Globals (starts at 128KB / 0x20000)
+        linker.setMemory(3, null);
 
         // ====================================================================
         // Add ARC runtime functions first (they get indices 0, 1, 2)
         // ====================================================================
         const arc_funcs = try arc.addToLinker(self.allocator, &linker);
         const arc_func_count: u32 = 3; // alloc, retain, and release
+
+        // Set minimum table size of 1 for call_indirect (destructor calls)
+        // Table entry 0 is reserved (null/no destructor)
+        linker.setTableSize(1);
 
         // Build function name -> index mapping
         // ARC functions come first, then user functions
@@ -381,6 +387,57 @@ pub const Driver = struct {
         // Add user function names (offset by ARC function count)
         for (funcs, 0..) |*ir_func, i| {
             try func_indices.put(self.allocator, ir_func.name, @intCast(i + arc_func_count));
+        }
+
+        // ====================================================================
+        // Build destructor table: map type_name -> table index
+        // Reference: Swift stores destructor pointer in type metadata
+        // ====================================================================
+        var destructor_table = std.StringHashMap(u32).init(self.allocator);
+        defer destructor_table.deinit();
+
+        // Metadata address map: type_name -> metadata memory address
+        var metadata_addrs = std.StringHashMap(i32).init(self.allocator);
+        defer metadata_addrs.deinit();
+
+        // Reserve table index 0 as null (no destructor)
+        // This ensures actual destructors start at index 1+
+        _ = try linker.addTableFunc(arc_funcs.release_idx); // Placeholder at index 0
+
+        // Find all *_deinit functions and add them to the table
+        for (funcs, 0..) |*ir_func, i| {
+            if (std.mem.endsWith(u8, ir_func.name, "_deinit")) {
+                // Extract type name from "TypeName_deinit"
+                const type_name = ir_func.name[0 .. ir_func.name.len - 7]; // Remove "_deinit"
+                const func_idx: u32 = @intCast(i + arc_func_count);
+
+                // Add to table (table_index starts at 1, 0 is reserved for null)
+                const table_idx = try linker.addTableFunc(func_idx);
+                try destructor_table.put(type_name, table_idx);
+
+                pipeline_debug.log(.codegen, "driver: destructor {s} at table[{d}] = func[{d}]", .{ ir_func.name, table_idx, func_idx });
+            }
+        }
+
+        // Generate metadata for each type with destructor
+        // Metadata layout: type_id(4), size(4), destructor_ptr(4) = 12 bytes
+        var metadata_buf: [12]u8 = undefined;
+
+        var type_id: u32 = 1;
+        var dtor_iter = destructor_table.iterator();
+        while (dtor_iter.next()) |entry| {
+            const dtor_idx = entry.value_ptr.*;
+
+            // Build metadata bytes
+            std.mem.writeInt(u32, metadata_buf[0..4], type_id, .little); // type_id
+            std.mem.writeInt(u32, metadata_buf[4..8], 8, .little); // size (placeholder)
+            std.mem.writeInt(u32, metadata_buf[8..12], dtor_idx, .little); // destructor table index
+
+            const offset = try linker.addData(&metadata_buf);
+            try metadata_addrs.put(entry.key_ptr.*, offset);
+
+            pipeline_debug.log(.codegen, "driver: metadata for {s} at offset {d}, dtor_idx={d}", .{ entry.key_ptr.*, offset, dtor_idx });
+            type_id += 1;
         }
 
         // ====================================================================
@@ -448,7 +505,7 @@ pub const Driver = struct {
             const type_idx = try linker.addType(params[0..param_count], results);
 
             // Generate function body code using Go-style two-pass architecture
-            const body = try wasm.generateFunc(self.allocator, ssa_func, &func_indices, &string_offsets);
+            const body = try wasm.generateFunc(self.allocator, ssa_func, &func_indices, &string_offsets, &metadata_addrs);
             errdefer self.allocator.free(body);
 
             // Export all functions for AOT compatibility
