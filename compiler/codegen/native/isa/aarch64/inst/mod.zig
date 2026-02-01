@@ -950,10 +950,30 @@ pub const Inst = union(enum) {
         mem: AMode,
     },
 
-    /// Load address of external symbol.
+    /// Load address of external symbol via GOT (Global Offset Table).
+    /// Emits: adrp rd, :got:X; ldr rd, [rd, :got_lo12:X]
+    /// Used for position-independent code (PIC).
+    load_ext_name_got: struct {
+        rd: Writable(Reg),
+        /// Symbol index (references external symbol table).
+        symbol_idx: u32,
+    },
+
+    /// Load address of external symbol (near, within ±4GB).
     /// Emits: adrp rd, X; add rd, rd, :lo12:X
-    /// Relocation will be handled during linking.
-    load_ext_name: struct {
+    /// Used for static linking with nearby symbols.
+    load_ext_name_near: struct {
+        rd: Writable(Reg),
+        /// Symbol index (references external symbol table).
+        symbol_idx: u32,
+        /// Offset from symbol (e.g., for struct field access).
+        offset: i64,
+    },
+
+    /// Load address of external symbol (far, absolute address).
+    /// Emits: ldr rd, #8; b #12; <8-byte address>
+    /// Used when symbol may be outside ±4GB range.
+    load_ext_name_far: struct {
         rd: Writable(Reg),
         /// Symbol index (references external symbol table).
         symbol_idx: u32,
@@ -1242,6 +1262,95 @@ pub const Inst = union(enum) {
         rn: Reg, // Source vector
         idx: u8,
         size: VectorSize,
+    },
+
+    /// Vector shift immediate with modifier (SLI, SRI, etc.)
+    vec_shift_imm_mod: struct {
+        op: VecShiftImmModOp,
+        rd: Writable(Reg),
+        ri: Reg, // Input that rd is modified from
+        rn: Reg,
+        size: VectorSize,
+        imm: u8,
+    },
+
+    /// Vector extend operations (SXTL, UXTL, etc.)
+    vec_extend: struct {
+        op: VecExtendOp,
+        rd: Writable(Reg),
+        rn: Reg,
+        /// High bit indicates 128-bit source (sxtl2/uxtl2)
+        high_half: bool,
+    },
+
+    /// Vector RR long operations (FCVTL, SHLL, etc.)
+    vec_rr_long: struct {
+        op: VecRRLongOp,
+        rd: Writable(Reg),
+        rn: Reg,
+        /// High bit indicates 128-bit source (fcvtl2/shll2)
+        high_half: bool,
+    },
+
+    /// Vector RR narrow operations (XTN, SQXTN, etc.)
+    vec_rr_narrow: struct {
+        op: VecRRNarrowOp,
+        rd: Writable(Reg),
+        rn: Reg,
+        /// High bit indicates writing to upper half
+        high_half: bool,
+    },
+
+    /// Vector RRR long operations (SMULL, UMULL, etc.)
+    vec_rrr_long: struct {
+        op: VecRRRLongOp,
+        rd: Writable(Reg),
+        rn: Reg,
+        rm: Reg,
+        /// High bit indicates 128-bit source (smull2/umull2)
+        high_half: bool,
+    },
+
+    /// Vector RRR long operations with modifier (UMLAL, SMLAL, etc.)
+    vec_rrr_long_mod: struct {
+        op: VecRRRLongModOp,
+        rd: Writable(Reg),
+        ri: Reg, // Input that rd is modified from
+        rn: Reg,
+        rm: Reg,
+        /// High bit indicates 128-bit source (umlal2/smlal2)
+        high_half: bool,
+    },
+
+    /// Vector RR pair long operations (SADDLP, UADDLP)
+    vec_rr_pair_long: struct {
+        op: VecRRPairLongOp,
+        rd: Writable(Reg),
+        rn: Reg,
+        size: VectorSize,
+    },
+
+    /// Vector extract (EXT instruction)
+    vec_extract: struct {
+        rd: Writable(Reg),
+        rn: Reg,
+        rm: Reg,
+        imm4: u8, // Extract index (0-15)
+    },
+
+    /// Vector table lookup (TBL)
+    vec_tbl: struct {
+        rd: Writable(Reg),
+        rn: Reg, // Table register
+        rm: Reg, // Index register
+    },
+
+    /// Vector table lookup with extension (TBX)
+    vec_tbl_ext: struct {
+        rd: Writable(Reg),
+        ri: Reg, // Input that rd is modified from
+        rn: Reg, // Table register
+        rm: Reg, // Index register
     },
 
     /// Generic constructor for a load (zero-extending where appropriate).

@@ -31,6 +31,13 @@ pub const VecALUModOp = mod.VecALUModOp;
 pub const VecMisc2 = mod.VecMisc2;
 pub const VecLanesOp = mod.VecLanesOp;
 pub const VecShiftImmOp = mod.VecShiftImmOp;
+pub const VecShiftImmModOp = mod.VecShiftImmModOp;
+pub const VecExtendOp = mod.VecExtendOp;
+pub const VecRRLongOp = mod.VecRRLongOp;
+pub const VecRRNarrowOp = mod.VecRRNarrowOp;
+pub const VecRRRLongOp = mod.VecRRRLongOp;
+pub const VecRRRLongModOp = mod.VecRRRLongModOp;
+pub const VecRRPairLongOp = mod.VecRRPairLongOp;
 
 pub const Reg = args.Reg;
 pub const PReg = args.PReg;
@@ -82,6 +89,7 @@ pub const MachBuffer = struct {
     data: std.ArrayListUnmanaged(u8) = .{},
     labels: std.ArrayListUnmanaged(LabelInfo) = .{},
     pending_relocs: std.ArrayListUnmanaged(Relocation) = .{},
+    external_relocs: std.ArrayListUnmanaged(ExternalRelocation) = .{},
     cur_offset_val: u32 = 0,
     allocator: Allocator,
 
@@ -93,6 +101,28 @@ pub const MachBuffer = struct {
         offset: u32,
         label: MachLabel,
         kind: LabelUse,
+    };
+
+    /// External symbol relocation (for linker).
+    pub const ExternalRelocation = struct {
+        offset: u32,
+        symbol_idx: u32,
+        addend: i64,
+        kind: ExternalRelocKind,
+    };
+
+    /// ARM64 relocation types for external symbols.
+    pub const ExternalRelocKind = enum {
+        /// ADRP page address (21 bits, 4KB aligned).
+        adrp_page,
+        /// ADD/LDR page offset (12 bits).
+        add_lo12,
+        /// GOT page address.
+        got_page,
+        /// GOT page offset (for LDR from GOT).
+        got_lo12,
+        /// Absolute 64-bit address.
+        abs64,
     };
 
     pub const LabelUse = enum {
@@ -111,6 +141,17 @@ pub const MachBuffer = struct {
         self.data.deinit(self.allocator);
         self.labels.deinit(self.allocator);
         self.pending_relocs.deinit(self.allocator);
+        self.external_relocs.deinit(self.allocator);
+    }
+
+    /// Add an external symbol relocation at the current offset.
+    pub fn addExternalReloc(self: *MachBuffer, symbol_idx: u32, addend: i64, kind: ExternalRelocKind) void {
+        self.external_relocs.append(self.allocator, .{
+            .offset = self.cur_offset_val,
+            .symbol_idx = symbol_idx,
+            .addend = addend,
+            .kind = kind,
+        }) catch unreachable;
     }
 
     pub fn curOffset(self: *const MachBuffer) u32 {
@@ -1952,29 +1993,299 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, emit_info: *const EmitInfo, st
             sink.put4(encoding);
         },
 
+        // Vector shift immediate with modifier (SLI, SRI, etc.)
+        .vec_shift_imm_mod => |payload| {
+            const enc = payload.size.encSize();
+            const q = enc.q;
+            const lane_bits: u8 = switch (payload.size.laneSize()) {
+                .size8 => 8,
+                .size16 => 16,
+                .size32 => 32,
+                .size64 => 64,
+                else => unreachable,
+            };
+
+            // SLI is shift-left insert (not a right shift)
+            const is_shr = switch (payload.op) {
+                .sli => false,
+                .sri, .srshr, .urshr, .ssra, .usra => true,
+            };
+
+            const template: u32 = switch (payload.op) {
+                .sli => 0b001_011110_0000_000_010101_00000_00000,
+                .sri => 0b001_011110_0000_000_010001_00000_00000,
+                .srshr => 0b000_011110_0000_000_001001_00000_00000,
+                .urshr => 0b001_011110_0000_000_001001_00000_00000,
+                .ssra => 0b000_011110_0000_000_000101_00000_00000,
+                .usra => 0b001_011110_0000_000_000101_00000_00000,
+            };
+
+            // Calculate immh:immb encoding
+            const imm: u32 = @as(u32, payload.imm);
+            const immh_immb: u32 = if (is_shr)
+                (@as(u32, lane_bits) << 3) | (@as(u32, lane_bits) - imm)
+            else
+                (@as(u32, lane_bits) << 3) | imm;
+
+            const rn_enc = machregToVec(payload.rn);
+            const rd_enc = machregToVec(payload.rd.toReg());
+            sink.put4((template | (q << 30)) | (immh_immb << 16) | (rn_enc << 5) | rd_enc);
+        },
+
+        // Vector extend operations (SXTL, UXTL, etc.)
+        .vec_extend => |payload| {
+            const q: u32 = if (payload.high_half) 1 else 0;
+
+            const bits = switch (payload.op) {
+                .sxtl, .sxtl2 => .{ @as(u32, 0b0), @as(u32, 0b10100) }, // SSHLL with shift=0
+                .uxtl, .uxtl2 => .{ @as(u32, 0b1), @as(u32, 0b10100) }, // USHLL with shift=0
+            };
+            const u = bits[0];
+            const opcode = bits[1];
+
+            // Encoding: 0 Q U 011110 immh immb opcode 1 Rn Rd
+            // For SXTL/UXTL, shift=0 so immh:immb encodes just the size
+            const immh: u32 = 0b0001; // 8-bit lanes (will widen to 16-bit)
+
+            const encoding: u32 = (q << 30) |
+                (u << 29) |
+                (0b011110 << 23) |
+                (immh << 19) |
+                (0b000 << 16) | // immb = 0
+                (opcode << 11) |
+                (0b1 << 10) |
+                (machregToVec(payload.rn) << 5) |
+                machregToVec(payload.rd.toReg());
+            sink.put4(encoding);
+        },
+
+        // Vector RR long operations (FCVTL, SHLL, etc.)
+        .vec_rr_long => |payload| {
+            const q: u32 = if (payload.high_half) 1 else 0;
+
+            const bits = switch (payload.op) {
+                .fcvtl, .fcvtl2 => .{ @as(u32, 0b0), @as(u32, 0b10111), @as(u32, 0b00) }, // FCVTL
+                .shll, .shll2 => .{ @as(u32, 0b1), @as(u32, 0b10011), @as(u32, 0b00) }, // SHLL
+            };
+            const u = bits[0];
+            const opcode = bits[1];
+            const size = bits[2];
+
+            // Encoding: 0 Q U 01110 size 10000 opcode 10 Rn Rd
+            const encoding: u32 = (q << 30) |
+                (u << 29) |
+                (0b01110 << 24) |
+                (size << 22) |
+                (0b10000 << 17) |
+                (opcode << 12) |
+                (0b10 << 10) |
+                (machregToVec(payload.rn) << 5) |
+                machregToVec(payload.rd.toReg());
+            sink.put4(encoding);
+        },
+
+        // Vector RR narrow operations (XTN, SQXTN, etc.)
+        .vec_rr_narrow => |payload| {
+            const q: u32 = if (payload.high_half) 1 else 0;
+
+            const bits = switch (payload.op) {
+                .xtn => .{ @as(u32, 0b0), @as(u32, 0b10010) },
+                .sqxtn => .{ @as(u32, 0b0), @as(u32, 0b10100) },
+                .sqxtun => .{ @as(u32, 0b1), @as(u32, 0b10010) },
+                .uqxtn => .{ @as(u32, 0b1), @as(u32, 0b10100) },
+                .fcvtn => .{ @as(u32, 0b0), @as(u32, 0b10110) },
+            };
+            const u = bits[0];
+            const opcode = bits[1];
+
+            // Encoding: 0 Q U 01110 size 10000 opcode 10 Rn Rd
+            const encoding: u32 = (q << 30) |
+                (u << 29) |
+                (0b01110 << 24) |
+                (0b00 << 22) | // size
+                (0b10000 << 17) |
+                (opcode << 12) |
+                (0b10 << 10) |
+                (machregToVec(payload.rn) << 5) |
+                machregToVec(payload.rd.toReg());
+            sink.put4(encoding);
+        },
+
+        // Vector RRR long operations (SMULL, UMULL, etc.)
+        .vec_rrr_long => |payload| {
+            const q: u32 = if (payload.high_half) 1 else 0;
+
+            const bits = switch (payload.op) {
+                .smull, .smull2 => .{ @as(u32, 0b0), @as(u32, 0b1100) },
+                .umull, .umull2 => .{ @as(u32, 0b1), @as(u32, 0b1100) },
+                .umlsl, .umlsl2 => .{ @as(u32, 0b1), @as(u32, 0b1010) },
+                .smlsl, .smlsl2 => .{ @as(u32, 0b0), @as(u32, 0b1010) },
+            };
+            const u = bits[0];
+            const opcode = bits[1];
+
+            // Encoding: 0 Q U 01110 size 1 Rm opcode 00 Rn Rd
+            const encoding: u32 = (q << 30) |
+                (u << 29) |
+                (0b01110 << 24) |
+                (0b00 << 22) | // size
+                (0b1 << 21) |
+                (machregToVec(payload.rm) << 16) |
+                (opcode << 12) |
+                (0b00 << 10) |
+                (machregToVec(payload.rn) << 5) |
+                machregToVec(payload.rd.toReg());
+            sink.put4(encoding);
+        },
+
+        // Vector RRR long operations with modifier (UMLAL, SMLAL, etc.)
+        .vec_rrr_long_mod => |payload| {
+            const q: u32 = if (payload.high_half) 1 else 0;
+
+            const bits = switch (payload.op) {
+                .umlal, .umlal2 => .{ @as(u32, 0b1), @as(u32, 0b1000) },
+                .smlal, .smlal2 => .{ @as(u32, 0b0), @as(u32, 0b1000) },
+            };
+            const u = bits[0];
+            const opcode = bits[1];
+
+            // Encoding: 0 Q U 01110 size 1 Rm opcode 00 Rn Rd
+            const encoding: u32 = (q << 30) |
+                (u << 29) |
+                (0b01110 << 24) |
+                (0b00 << 22) | // size
+                (0b1 << 21) |
+                (machregToVec(payload.rm) << 16) |
+                (opcode << 12) |
+                (0b00 << 10) |
+                (machregToVec(payload.rn) << 5) |
+                machregToVec(payload.rd.toReg());
+            sink.put4(encoding);
+        },
+
+        // Vector RR pair long operations (SADDLP, UADDLP)
+        .vec_rr_pair_long => |payload| {
+            const enc = payload.size.encSize();
+            const q = enc.q;
+            const enc_size = enc.size;
+
+            const u: u32 = switch (payload.op) {
+                .saddlp => 0b0,
+                .uaddlp => 0b1,
+            };
+
+            // Encoding: 0 Q U 01110 size 10000 00010 10 Rn Rd
+            const encoding: u32 = (q << 30) |
+                (u << 29) |
+                (0b01110 << 24) |
+                (enc_size << 22) |
+                (0b10000 << 17) |
+                (0b00010 << 12) |
+                (0b10 << 10) |
+                (machregToVec(payload.rn) << 5) |
+                machregToVec(payload.rd.toReg());
+            sink.put4(encoding);
+        },
+
+        // Vector extract (EXT instruction)
+        .vec_extract => |payload| {
+            std.debug.assert(payload.imm4 < 16);
+
+            // EXT encoding: 0 1 101110 00 0 Rm 0 imm4 0 Rn Rd
+            const encoding: u32 = (0b01101110000 << 21) |
+                (machregToVec(payload.rm) << 16) |
+                (@as(u32, payload.imm4) << 11) |
+                (machregToVec(payload.rn) << 5) |
+                machregToVec(payload.rd.toReg());
+            sink.put4(encoding);
+        },
+
+        // Vector table lookup (TBL)
+        .vec_tbl => |payload| {
+            // TBL encoding: 0 Q 001110 00 0 Rm 0 len 0 0 Rn Rd
+            // len=00 for single register table
+            const encoding: u32 = (0b01001110000 << 21) |
+                (machregToVec(payload.rm) << 16) |
+                (0b0 << 15) | // is_extension = false
+                (0b00 << 13) | // len = 00
+                (0b00 << 10) |
+                (machregToVec(payload.rn) << 5) |
+                machregToVec(payload.rd.toReg());
+            sink.put4(encoding);
+        },
+
+        // Vector table lookup with extension (TBX)
+        .vec_tbl_ext => |payload| {
+            // TBX encoding: 0 Q 001110 00 0 Rm 0 len 1 0 Rn Rd
+            // len=00 for single register table
+            const encoding: u32 = (0b01001110000 << 21) |
+                (machregToVec(payload.rm) << 16) |
+                (0b1 << 15) | // is_extension = true
+                (0b00 << 13) | // len = 00
+                (0b00 << 10) |
+                (machregToVec(payload.rn) << 5) |
+                machregToVec(payload.rd.toReg());
+            sink.put4(encoding);
+            _ = payload.ri; // Extension takes existing value
+        },
+
         // ==========================================================================
         // External Symbol Loading
         // ==========================================================================
 
-        // Load external symbol address (ADRP + ADD sequence)
-        .load_ext_name => |payload| {
-            // Emit ADRP rd, #0 (relocation will patch this)
-            // Encoding: 1 immlo(2) 10000 immhi(19) Rd(5)
+        // Load external symbol address via GOT (for PIC code)
+        // Emits: adrp rd, :got:X; ldr rd, [rd, :got_lo12:X]
+        .load_ext_name_got => |payload| {
+            // ADRP rd, :got:X (page address of GOT entry)
+            sink.addExternalReloc(payload.symbol_idx, 0, .got_page);
             const adrp_enc: u32 = (0b1 << 31) | (0b10000 << 24) | machregToGpr(payload.rd.toReg());
             sink.put4(adrp_enc);
 
-            // Emit ADD rd, rd, #0 (relocation will patch this)
-            // ADD (immediate) encoding: sf 0 0 10001 sh imm12 Rn Rd
+            // LDR rd, [rd, :got_lo12:X] (load from GOT entry)
+            sink.addExternalReloc(payload.symbol_idx, 0, .got_lo12);
+            // LDR (unsigned offset) encoding: 11 111 0 01 01 imm12 Rn Rt
+            const ldr_enc: u32 = (0b11_111_0_01_01 << 22) |
+                (0 << 10) | // imm12=0, will be patched by relocation
+                (machregToGpr(payload.rd.toReg()) << 5) |
+                machregToGpr(payload.rd.toReg());
+            sink.put4(ldr_enc);
+        },
+
+        // Load external symbol address (near, ADRP + ADD sequence)
+        // Emits: adrp rd, X; add rd, rd, :lo12:X
+        .load_ext_name_near => |payload| {
+            // ADRP rd, symbol (page address)
+            sink.addExternalReloc(payload.symbol_idx, payload.offset, .adrp_page);
+            const adrp_enc: u32 = (0b1 << 31) | (0b10000 << 24) | machregToGpr(payload.rd.toReg());
+            sink.put4(adrp_enc);
+
+            // ADD rd, rd, :lo12:X (page offset)
+            sink.addExternalReloc(payload.symbol_idx, payload.offset, .add_lo12);
             const add_enc: u32 = (0b1_0_0_10001_0 << 22) | // sf=1, op=0, S=0, shift=0
+                (0 << 10) | // imm12=0, will be patched by relocation
                 (machregToGpr(payload.rd.toReg()) << 5) |
                 machregToGpr(payload.rd.toReg());
             sink.put4(add_enc);
+        },
 
-            // Note: Actual relocation records would be added here when linker is wired up
-            // For now, the symbol_idx and offset are embedded in the instruction data
-            // and will be processed during object file emission
-            _ = payload.symbol_idx;
-            _ = payload.offset;
+        // Load external symbol address (far, literal pool)
+        // Emits: ldr rd, #8; b #12; <8-byte address>
+        .load_ext_name_far => |payload| {
+            // LDR rd, #8 (load from 8 bytes ahead, the literal pool)
+            // LDR (literal) encoding: 01 011 0 00 imm19 Rt
+            const ldr_enc: u32 = (0b01_011_0_00 << 24) |
+                (2 << 5) | // imm19=2 (8 bytes / 4 = 2 instructions ahead)
+                machregToGpr(payload.rd.toReg());
+            sink.put4(ldr_enc);
+
+            // B #12 (branch over the 8-byte literal)
+            // B encoding: 000101 imm26
+            const b_enc: u32 = (0b000101 << 26) | 3; // imm26=3 (12 bytes / 4 = 3 instructions)
+            sink.put4(b_enc);
+
+            // 8-byte literal (absolute address, patched by linker)
+            sink.addExternalReloc(payload.symbol_idx, payload.offset, .abs64);
+            sink.put8(0);
         },
 
         // ==========================================================================

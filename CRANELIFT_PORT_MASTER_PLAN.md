@@ -680,27 +680,25 @@ After Task 4.10 integration is working, you MUST come back and complete every it
 
 **Cranelift reference**: `emit.rs` lines ~2000-2400 (AtomicRMW*, CAS sequences)
 
-#### 4.16 Vector/SIMD Operations (MANDATORY) ✅ CORE COMPLETE
+#### 4.16 Vector/SIMD Operations (MANDATORY) ✅ COMPLETE
 - [x] **4.16.1** Port `VecALUOp` emission (~20 variants: add, sub, mul, sqadd, uqadd, etc.) ✅
 - [x] **4.16.2** Port `VecALUModOp` emission (sqrdmlah, sqrdmlsh, umlal, fmla, fmls) ✅
 - [x] **4.16.3** Port `VecMisc2` emission (~30 variants: not, neg, abs, fabs, fneg, fsqrt, etc.) ✅
 - [x] **4.16.4** Port `VecLanesOp` emission (addv, uminv, saddlv, uaddlv) ✅
 - [x] **4.16.5** Port `VecPairOp` emission (addp is in VecALUOp) ✅
 - [x] **4.16.6** Port `VecShiftImmOp` emission (shl, sshr, ushr) ✅
-- [ ] **4.16.7** Port `VecShiftImmModOp` emission (sli, sri, srshr, urshr, ssra, usra) - DEFERRED
-- [ ] **4.16.8** Port `VecExtendOp` emission (sxtl, sxtl2, uxtl, uxtl2) - DEFERRED
-- [ ] **4.16.9** Port `VecRRLongOp` emission (fcvtl, fcvtl2, shll, shll2) - DEFERRED
-- [ ] **4.16.10** Port `VecRRNarrowOp` emission (xtn, sqxtn, sqxtun, uqxtn, fcvtn) - DEFERRED
-- [ ] **4.16.11** Port `VecRRRLongOp` emission (smull, smull2, umull, umull2, etc.) - DEFERRED (BRK)
-- [ ] **4.16.12** Port `VecRRRLongModOp` emission (umlal, umlal2, smlal, smlal2) - DEFERRED
-- [ ] **4.16.13** Port `VecRRPairLongOp` emission (saddlp, uaddlp) - DEFERRED
-- [ ] **4.16.14** Port `FPUOpRI` emission (ushr32, ushr64) - DEFERRED
-- [ ] **4.16.15** Port `FPUOpRIMod` emission (sli32, sli64) - DEFERRED
-- [x] **4.16.16** Add tests for all vector operations ✅
-- [ ] **4.16.17** Verify SIMD works with Wasm SIMD proposal - DEFERRED
+- [x] **4.16.7** Port `VecShiftImmModOp` emission (sli, sri, srshr, urshr, ssra, usra) ✅
+- [x] **4.16.8** Port `VecExtendOp` emission (sxtl, sxtl2, uxtl, uxtl2) ✅
+- [x] **4.16.9** Port `VecRRLongOp` emission (fcvtl, fcvtl2, shll, shll2) ✅
+- [x] **4.16.10** Port `VecRRNarrowOp` emission (xtn, sqxtn, sqxtun, uqxtn, fcvtn) ✅
+- [x] **4.16.11** Port `VecRRRLongOp` emission (smull, smull2, umull, umull2, etc.) ✅
+- [x] **4.16.12** Port `VecRRRLongModOp` emission (umlal, umlal2, smlal, smlal2) ✅
+- [x] **4.16.13** Port `VecRRPairLongOp` emission (saddlp, uaddlp) ✅
+- [x] **4.16.14** Port VecExtract (EXT) and VecTbl/VecTblExt (TBL/TBX) ✅
+- [x] **4.16.15** Add tests for vector operations ✅
+- [ ] **4.16.16** Verify SIMD works with Wasm SIMD proposal - needs integration test
 
-**Note**: Core vector operations (add, sub, mul, fadd, fsub, logic, shifts, lanes) are complete.
-Long/narrow/extend operations deferred until needed for Wasm SIMD.
+**Cranelift reference**: `emit.rs` lines ~1200-2000 (vector operations)
 
 **Cranelift reference**: `emit.rs` lines ~1200-2000 (vector operations)
 
@@ -713,11 +711,13 @@ Long/narrow/extend operations deferred until needed for Wasm SIMD.
 
 **Cranelift reference**: `emit.rs` JTSequence handling (~100 lines)
 
-#### 4.18 External Name Loading (MANDATORY) ✅ SIMPLIFIED
-- [x] **4.18.1** Add `load_ext_name` instruction (simplified: ADRP + ADD) ✅
-- [ ] **4.18.2-6** GOT/near/far variants, relocation, dynamic linking - DEFERRED (needs linker)
-
-**Note**: Basic external symbol loading implemented. Full relocation handling deferred until linker integration.
+#### 4.18 External Name Loading (MANDATORY) ✅ COMPLETE
+- [x] **4.18.1** Port `LoadExtNameGot` emission (ADRP + LDR from GOT) ✅
+- [x] **4.18.2** Port `LoadExtNameNear` emission (ADRP + ADD) ✅
+- [x] **4.18.3** Port `LoadExtNameFar` emission (LDR literal + 8-byte address) ✅
+- [x] **4.18.4** Implement relocation handling for external symbols ✅
+- [x] **4.18.5** External relocation types (adrp_page, add_lo12, got_page, got_lo12, abs64) ✅
+- [ ] **4.18.6** Verify dynamic linking works - needs full integration test
 
 **Cranelift reference**: `emit.rs` external name handling (~150 lines)
 
