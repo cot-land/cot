@@ -261,23 +261,23 @@ pub struct Function {
 
 ### 1.8 Phase 1 Task Checklist
 
-- [ ] **1.1** Create `compiler/ir/clif/` directory
-- [ ] **1.2** Port `types.rs` → `types.zig`
-- [ ] **1.3** Create `audit/clif/types.zig.md` with 100% coverage
-- [ ] **1.4** Port `instructions.rs` → `instructions.zig`
-- [ ] **1.5** Create `audit/clif/instructions.zig.md`
-- [ ] **1.6** Port `dfg.rs` → `dfg.zig`
-- [ ] **1.7** Create `audit/clif/dfg.zig.md`
-- [ ] **1.8** Port `layout.rs` → `layout.zig`
-- [ ] **1.9** Create `audit/clif/layout.zig.md`
-- [ ] **1.10** Port `function.rs` → `function.zig`
-- [ ] **1.11** Create `audit/clif/function.zig.md`
-- [ ] **1.12** Port `builder.rs` → `builder.zig`
-- [ ] **1.13** Create `audit/clif/builder.zig.md`
-- [ ] **1.14** Port `jumptable.rs` → `jumptable.zig`
-- [ ] **1.15** Create `audit/clif/jumptable.zig.md`
-- [ ] **1.16** Port Cranelift IR unit tests
-- [ ] **1.17** Run tests, verify all pass
+- [x] **1.1** Create `compiler/ir/clif/` directory
+- [x] **1.2** Port `types.rs` → `types.zig`
+- [x] **1.3** Create `audit/clif/types.zig.md` with 100% coverage
+- [x] **1.4** Port `instructions.rs` → `instructions.zig`
+- [x] **1.5** Create `audit/clif/instructions.zig.md`
+- [x] **1.6** Port `dfg.rs` → `dfg.zig`
+- [x] **1.7** Create `audit/clif/dfg.zig.md`
+- [x] **1.8** Port `layout.rs` → `layout.zig`
+- [x] **1.9** Create `audit/clif/layout.zig.md`
+- [x] **1.10** Port `function.rs` → `function.zig`
+- [x] **1.11** Create `audit/clif/function.zig.md`
+- [x] **1.12** Port `builder.rs` → `builder.zig`
+- [x] **1.13** Create `audit/clif/builder.zig.md`
+- [x] **1.14** Port `jumptable.rs` → `jumptable.zig`
+- [x] **1.15** Create `audit/clif/jumptable.zig.md`
+- [x] **1.16** Port Cranelift IR unit tests (40 tests embedded in modules)
+- [x] **1.17** Run tests, verify all pass (40/40 passing)
 - [ ] **1.18** Commit: "Port Cranelift IR (CLIF) infrastructure"
 
 ---
@@ -821,7 +821,7 @@ const regalloc = @import("codegen/native/regalloc/regalloc.zig");
 | Phase | Status | Progress |
 |-------|--------|----------|
 | 0: Removal | ✅ Complete | 28/28 |
-| 1: CLIF IR | Not Started | 0/18 |
+| 1: CLIF IR | 🔄 In Progress | 17/18 |
 | 2: Wasm Translation | Not Started | 0/17 |
 | 3: MachInst | Not Started | 0/16 |
 | 4: ARM64 | Not Started | 0/14 |
@@ -829,7 +829,7 @@ const regalloc = @import("codegen/native/regalloc/regalloc.zig");
 | 6: Regalloc | Not Started | 0/11 |
 | 7: Integration | Not Started | 0/12 |
 | 8: Self-Hosting | Not Started | 0/4 |
-| **TOTAL** | | **28/133** |
+| **TOTAL** | | **45/133** |
 
 ### Estimated LOC
 
