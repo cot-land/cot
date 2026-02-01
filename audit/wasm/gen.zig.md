@@ -1,12 +1,140 @@
 # Audit: wasm/gen.zig
 
-## Status: WORKING - 70% PARITY
+## Status: WORKING - 75% PARITY
 
 | Metric | Value |
 |--------|-------|
-| Lines | ~585 |
+| Lines | ~650 |
 | Go Reference | cmd/compile/internal/wasm/ssa.go (595 lines) |
 | Tests | 3 unit tests |
+
+---
+
+## M20 Update: Local Variable Offset Fix
+
+### Bug: Multi-Variable String Offset Calculation
+
+**Problem:** `len(s1) + len(s2)` returned wrong values (14 instead of 11) when both s1 and s2 were string variables.
+
+**Root Cause:** Local variable offsets were calculated as `slot * 8`, but STRING is 16 bytes (ptr + len).
+
+**Fix:** Added `getLocalOffset()` function to sum actual sizes from `local_sizes` array.
+
+### New Function: getLocalOffset
+
+**gen.zig (new function):**
+```zig
+fn getLocalOffset(self: *const GenState, local_idx: usize) i64 {
+    // If no local_sizes available, fall back to 8-byte slots
+    if (self.func.local_sizes.len == 0) {
+        return @intCast(local_idx * 8);
+    }
+
+    // Sum actual sizes of all locals before this one
+    var offset: i64 = 0;
+    const count = @min(local_idx, self.func.local_sizes.len);
+    for (0..count) |i| {
+        offset += @intCast(self.func.local_sizes[i]);
+    }
+    return offset;
+}
+```
+
+### Updated local_addr Handler
+
+**Before (broken):**
+```zig
+.local_addr => {
+    const slot = @intCast(v.aux_int);
+    const offset = slot * 8;  // WRONG: assumes 8 bytes per slot
+    // ...
+},
+```
+
+**After (fixed):**
+```zig
+.local_addr => {
+    _ = try self.builder.appendFrom(.get, prog_mod.regAddr(.sp));
+    _ = try self.builder.append(.i64_extend_i32_u);
+    const local_idx: usize = @intCast(v.aux_int);
+    const offset = self.getLocalOffset(local_idx);  // Sum actual sizes
+    if (offset != 0) {
+        _ = try self.builder.appendFrom(.i64_const, prog_mod.constAddr(offset));
+        _ = try self.builder.append(.i64_add);
+    }
+},
+```
+
+### Frame Layout Example
+
+With two STRING variables (each 16 bytes):
+
+| Variable | Slot | Old Offset (slot*8) | New Offset (sum sizes) |
+|----------|------|---------------------|------------------------|
+| s1.ptr | 0 | 0 | 0 |
+| s1.len | 0 | 0+8 | 0+8 |
+| s2.ptr | 1 | 8 ❌ | 16 ✅ |
+| s2.len | 1 | 8+8 ❌ | 16+8 ✅ |
+
+**Related:** See audit/TYPE_FLOW.md for full explanation of how STRING flows through the pipeline.
+
+---
+
+## M19 Update: metadata_addr and metadata_offsets
+
+### New GenState Field
+
+**gen.zig:78:**
+```zig
+/// Maps type names to metadata memory offsets
+metadata_offsets: ?*const std.StringHashMap(i32) = null,
+```
+
+### New Method
+
+**gen.zig:97-99:**
+```zig
+pub fn setMetadataOffsets(self: *GenState, offsets: *const std.StringHashMap(i32)) void {
+    self.metadata_offsets = offsets;
+}
+```
+
+### New Op Handler
+
+**gen.zig:377-390:**
+```zig
+// Type metadata address (for ARC destructor lookup)
+// Resolved at link time: metadata_offsets[type_name]
+.metadata_addr => {
+    const type_name = v.aux.string;
+    if (self.metadata_offsets) |offsets| {
+        if (offsets.get(type_name)) |offset| {
+            _ = try self.builder.appendFrom(.i64_const, prog_mod.constAddr(offset));
+        } else {
+            // Type has no destructor - pass 0 (null metadata)
+            _ = try self.builder.appendFrom(.i64_const, prog_mod.constAddr(0));
+        }
+    } else {
+        // No metadata available - pass 0
+        _ = try self.builder.appendFrom(.i64_const, prog_mod.constAddr(0));
+    }
+},
+```
+
+### Updated isRematerializable
+
+**gen.zig:657:**
+```zig
+fn isRematerializable(v: *const SsaValue) bool {
+    return switch (v.op) {
+        .wasm_i64_const, .wasm_i32_const, .wasm_f64_const,
+        .const_int, .const_32, .const_64, .const_float, .const_bool,
+        .local_addr, .global_addr, .metadata_addr,  // metadata_addr added
+        => true,
+        else => false,
+    };
+}
+```
 
 ---
 
@@ -17,23 +145,12 @@
 | Go Function | Go Lines | Our Function | Our Lines | Parity |
 |-------------|----------|--------------|-----------|--------|
 | ssaGenValue | 217-311 | ssaGenValue | 156-240 | **GOOD** |
-| ssaGenValueOnStack | 313-461 | ssaGenValueOnStack | 244-368 | **GOOD** |
-| ssaGenBlock | 169-215 | ssaGenBlock | 372-436 | **GOOD** |
-| getValue32 | 474-489 | getValue32 | 444-467 | **YES** |
-| getValue64 | 491-503 | getValue64 | 471-487 | **YES** |
-| setReg | 530-533 | setReg | 491-494 | **YES** |
-| isCmp | 463-472 | isCmp | 514-526 | **YES** |
-
-### ssaGenValue (Go: lines 217-311)
-
-| Op Category | Go Lines | Our Lines | Parity |
-|-------------|----------|-----------|--------|
-| Calls | 219-246 | 161-171 | **SIMPLIFIED** |
-| LoweredMove | 248-254 | 176-182 | **YES** |
-| LoweredZero | 255-258 | 184-190 | **YES** |
-| LoweredNilCheck | 260-272 | 195-201 | **YES** |
-| Stores | 280-284 | 206-218 | **YES** |
-| Default (OnWasmStack) | 295-309 | 224-238 | **YES** |
+| ssaGenValueOnStack | 313-461 | ssaGenValueOnStack | 244-395 | **GOOD** |
+| ssaGenBlock | 169-215 | ssaGenBlock | 400-470 | **GOOD** |
+| getValue32 | 474-489 | getValue32 | 480-505 | **YES** |
+| getValue64 | 491-503 | getValue64 | 510-530 | **YES** |
+| setReg | 530-533 | setReg | 535-540 | **YES** |
+| isCmp | 463-472 | isCmp | 550-565 | **YES** |
 
 ### ssaGenValueOnStack (Go: lines 313-461)
 
@@ -46,89 +163,26 @@
 | Float ops | 402-406 | 309-319 | **YES** |
 | Copy | 454-455 | 324-326 | **YES** |
 | Arg | (in ssaGenValue) | 331-342 | **ADDED** |
-| LocalAddr | (in ssaGenValue) | 347-355 | **ADDED** |
-
-### getValue32 (Go: lines 474-489)
-
-Go logic:
-1. Check OnWasmStack - generate inline, wrap if not cmp
-2. Else load from register with i32.wrap_i64
-
-Our implementation (lines 444-467) matches exactly:
-```zig
-if (v.on_wasm_stack) {
-    // Generate inline
-    try self.ssaGenValueOnStack(v);
-    if (!isCmp(v)) {
-        _ = try self.builder.append(.i32_wrap_i64);
-    }
-    return;
-}
-// Get from local
-if (self.value_to_local.get(v.id)) |local_idx| {
-    _ = try self.builder.appendFrom(.local_get, ...);
-    _ = try self.builder.append(.i32_wrap_i64);
-}
-```
-
-### getValue64 (Go: lines 491-503)
-
-Go logic:
-1. Check OnWasmStack - generate inline
-2. Else load from register
-
-Our implementation (lines 471-487) matches exactly.
-
-### setReg (Go: lines 530-533)
-
-Go:
-```go
-func setReg(s *ssagen.State, v *ssa.Value) {
-    getReg(s, v)
-    p := s.Prog(wasm.ASet)
-    p.To = regAddr(v.Reg())
-}
-```
-
-Ours (lines 491-494):
-```zig
-pub fn setReg(self: *GenState, v: *const SsaValue) !void {
-    const local_idx = try self.allocateLocal(v);
-    _ = try self.builder.appendTo(.local_set, prog_mod.constAddr(local_idx));
-}
-```
-
-**Note**: We use local indices instead of Go's register mapping. Functionally equivalent.
-
-### isCmp (Go: lines 463-472)
-
-Go checks for comparison opcodes that produce i32 results:
-- I64Eqz, I64Eq, I64Ne, I64LtS, I64LtU, I64GtS, I64GtU, I64LeS, I64LeU, I64GeS, I64GeU
-- F32Eq, F32Ne, F32Lt, F32Gt, F32Le, F32Ge
-- F64Eq, F64Ne, F64Lt, F64Gt, F64Le, F64Ge
-
-Our implementation (lines 514-526) covers i64 comparisons. Float comparisons added as needed.
+| LocalAddr | (in ssaGenValue) | 347-365 | **ADDED** |
+| GlobalAddr | (custom) | 368-373 | **ADDED** |
+| **MetadataAddr** | N/A | 377-390 | **NEW (M19)** |
+| OffPtr | (custom) | 393-405 | **ADDED** |
 
 ---
 
-## OnWasmStack Optimization
+## metadata_addr Pattern
 
-Go's key optimization (lines 132-140):
-- Values with OnWasmStack=true are generated inline, not stored to registers
-- Tracked with `ssagen.OnWasmStackSkipped` counter
-- Used for values consumed exactly once, immediately after production
+The `metadata_addr` op follows the same pattern as `global_addr`:
 
-Our implementation tracks this in `GenState`:
-```zig
-on_wasm_stack_skipped: i32 = 0,
-```
+| Op | aux.string | Resolution | Emit |
+|----|------------|------------|------|
+| global_addr | variable name | GLOBAL_BASE + idx*8 | i64.const |
+| metadata_addr | type name | metadata_offsets lookup | i64.const |
 
-And handles it in getValue32/getValue64:
-```zig
-if (v.on_wasm_stack) {
-    self.on_wasm_stack_skipped -= 1;
-    try self.ssaGenValueOnStack(v);
-    return;
+**Swift Reference (IRGenModule.cpp):**
+```cpp
+llvm::Constant *IRGenModule::getAddrOfTypeMetadata(CanType type) {
+  return getAddrOfTypeMetadataRecord(type)->getValue();
 }
 ```
 
@@ -155,10 +209,36 @@ if (v.on_wasm_stack) {
 | wasm_i64_le_s | AI64LeS | .i64_le_s | **YES** |
 | wasm_i64_gt_s | AI64GtS | .i64_gt_s | **YES** |
 | wasm_i64_ge_s | AI64GeS | .i64_ge_s | **YES** |
-| wasm_f64_add | AF64Add | .f64_add | **YES** |
-| wasm_f64_sub | AF64Sub | .f64_sub | **YES** |
-| wasm_f64_mul | AF64Mul | .f64_mul | **YES** |
-| wasm_f64_div | AF64Div | .f64_div | **YES** |
+| local_addr | - | SP offset calc | **ADDED** |
+| global_addr | - | GLOBAL_BASE + idx | **ADDED** |
+| **metadata_addr** | - | **metadata lookup** | **NEW (M19)** |
+| off_ptr | - | i64.const + i64.add | **ADDED** |
+| add_ptr | - | mul + i64.add | **ADDED** |
+
+---
+
+## generateFunc Signature Update
+
+**wasm.zig:71-76 (before M19):**
+```zig
+pub fn generateFunc(
+    allocator: std.mem.Allocator,
+    ssa_func: *const SsaFunc,
+    func_indices: ?*const FuncIndexMap,
+    string_offsets: ?*const StringOffsetMap,
+) ![]u8
+```
+
+**wasm.zig:71-77 (after M19):**
+```zig
+pub fn generateFunc(
+    allocator: std.mem.Allocator,
+    ssa_func: *const SsaFunc,
+    func_indices: ?*const FuncIndexMap,
+    string_offsets: ?*const StringOffsetMap,
+    metadata_offsets: ?*const StringOffsetMap,  // NEW
+) ![]u8
+```
 
 ---
 
@@ -170,7 +250,6 @@ if (v.on_wasm_stack) {
 | InterCall | 234-243 | **SKIPPED** | No interfaces |
 | WB (write barrier) | 274-278 | **SKIPPED** | No GC |
 | Select | 286-293 | **FUTURE** | Conditional move |
-| Addr (global) | 328-340 | **FUTURE** | Global addresses |
 | Convert ops | 407-449 | **FUTURE** | Type conversions |
 
 ---
@@ -178,8 +257,12 @@ if (v.on_wasm_stack) {
 ## Verification
 
 ```bash
-$ zig test compiler/codegen/wasm/gen.zig
-All 3 tests passed.
+$ zig build test
+All tests passed.
+
+$ ./zig-out/bin/cot --target=wasm32 test/cases/arc/destructor_called.cot -o /tmp/dtor.wasm
+$ node -e '...'
+Result: 99n  # Destructor called via metadata lookup
 ```
 
-**VERDICT: 70% parity. Core value/block generation matches Go. Advanced ops (closures, interfaces, GC) not yet implemented.**
+**VERDICT: 75% parity. Core value/block generation matches Go. Added metadata_addr for M19 ARC destructors. Advanced ops (closures, interfaces, GC) not yet implemented.**

@@ -11,6 +11,36 @@
 
 ---
 
+## M19 Update: TypeMetadata → metadata_addr
+
+### New Case in convertNode
+
+**ssa_builder.zig:280-285:**
+```zig
+.type_metadata => |m| blk: {
+    const val = try self.func.newValue(.metadata_addr, node.type_idx, cur, self.cur_pos);
+    val.aux = .{ .string = m.type_name };
+    try cur.addValue(self.allocator, val);
+    break :blk val;
+},
+```
+
+This follows the same pattern as `addr_global`:
+
+**addr_global (ssa_builder.zig:274-279):**
+```zig
+.addr_global => |g| blk: {
+    const val = try self.func.newValue(.global_addr, node.type_idx, cur, self.cur_pos);
+    val.aux = .{ .string = g.name };
+    try cur.addValue(self.allocator, val);
+    break :blk val;
+},
+```
+
+**Pattern:** Both are symbolic address references resolved at link time.
+
+---
+
 ## Function-by-Function Verification
 
 ### SSABuilder struct
@@ -25,85 +55,112 @@
 
 | Method | 0.2 Logic | 0.3 Logic | Verdict |
 |--------|-----------|-----------|---------|
-| init() | Create func, entry block, init params with 3-phase ABI | Same (compact, no verbose comments) | IDENTICAL |
+| init() | Create func, entry block, init params with 3-phase ABI | Same (compact) | IDENTICAL |
 | deinit() | Free all hash maps | Same | IDENTICAL |
 | takeFunc() | Return func, set to dummy | Return func, set to undefined | SIMPLIFIED |
 
-### Block Management (4 methods)
+## M20 Update: STRING Loads Create slice_make
 
-| Method | 0.2 Logic | 0.3 Logic | Verdict |
-|--------|-----------|-----------|---------|
-| startBlock() | Save defvars, set cur_block, clear vars | Same (compact) | IDENTICAL |
-| endBlock() | Save defvars, clear cur_block | Same | IDENTICAL |
-| saveDefvars() | Copy vars to defvars[block.id] | Same | IDENTICAL |
-| getOrCreateBlock() | Lookup or create SSA block | Same | IDENTICAL |
+### Critical Insight
 
-### Variable Tracking (2 methods)
+When loading a STRING from a local variable, the SSA builder creates `slice_make` (NOT `string_make`).
 
-| Method | 0.2 Logic | 0.3 Logic | Verdict |
-|--------|-----------|-----------|---------|
-| assign() | Put local→value in vars | Same | IDENTICAL |
-| variable() | Get from vars, fwd_vars, or create fwd_ref | Same (no comments) | IDENTICAL |
+**Why?** STRING is internally `{ .slice = .{ .elem = U8 } }`, so `type_registry.get(STRING)` returns `.slice`.
 
-### Main Build Loop (2 methods)
+**ssa_builder.zig convertLoadLocal:**
+```zig
+const load_type = self.type_registry.get(type_idx);
 
-| Method | 0.2 Logic | 0.3 Logic | Verdict |
-|--------|-----------|-----------|---------|
-| build() | Process blocks, convert nodes, handle terminators | Same (no debug log) | IDENTICAL |
-| verify() | Check phis, block terminators | Same (compact) | IDENTICAL |
+if (load_type == .slice) {  // STRING matches this!
+    // Load ptr and len separately, combine with slice_make
+    const ptr_load = try self.func.newValue(.load, TypeRegistry.I64, ...);
+    const len_load = try self.func.newValue(.load, TypeRegistry.I64, ...);
+    const slice_val = try self.func.newValue(.slice_make, type_idx, ...);
+    slice_val.addArg2(ptr_load, len_load);
+    return slice_val;
+}
+```
 
-### convertNode - Major Refactor
+**Impact on rewritedec.zig:**
+The decomposition pass must handle BOTH ops when extracting string components:
+```zig
+// In extractStringPtr/extractStringLen:
+if ((s.op == .string_make or s.op == .slice_make) and s.args.len >= 1) {
+    return s.args[0];  // ptr
+}
+```
 
-| Component | 0.2 | 0.3 | Verdict |
-|-----------|-----|-----|---------|
-| Main switch | 1200+ lines inline | 134 lines dispatcher | REFACTORED |
-| Helper count | 0 | 35+ helpers | EXTRACTED |
+See `audit/TYPE_FLOW.md` for full pipeline explanation.
+
+---
+
+### convertNode - IR to SSA Mapping
+
+| IR Node | SSA Op | Handler | Verdict |
+|---------|--------|---------|---------|
+| const_int | const_int | emitConst() | IDENTICAL |
+| const_float | const_float | emitConst() | IDENTICAL |
+| const_bool | const_bool | emitConst() | IDENTICAL |
+| const_null | const_nil | emitConst() | IDENTICAL |
+| load_local | load / **slice_make** | convertLoadLocal() | **M20: slice for STRING** |
+| store_local | store | convertStoreLocal() | IDENTICAL |
+| global_ref | load + global_addr | convertGlobalRef() | IDENTICAL |
+| global_store | store + global_addr | convertGlobalStore() | IDENTICAL |
+| addr_global | global_addr | inline | IDENTICAL |
+| **type_metadata** | **metadata_addr** | inline | **NEW (M19)** |
+| binary | various | convertBinary() | IDENTICAL |
+| unary | various | convertUnary() | IDENTICAL |
+| call | static_call | convertCall() | IDENTICAL |
+| call_indirect | inter_call | convertCallIndirect() | IDENTICAL |
+| field_local | off_ptr + load | convertFieldLocal() | IDENTICAL |
+| ptr_load | load | convertPtrLoad() | IDENTICAL |
+| ptr_store | store | convertPtrStore() | IDENTICAL |
+| ... | ... | ... | IDENTICAL |
 
 ### New Helper Methods (35+ methods)
 
 | Category | Methods | Verdict |
 |----------|---------|---------|
-| Constants | emitConst() | NEW (extracted) |
-| Locals | emitLocalAddr(), convertLoadLocal(), convertStoreLocal() | NEW (extracted) |
-| Globals | convertGlobalRef(), convertGlobalStore() | NEW (extracted) |
-| Binary/Unary | convertBinary(), convertUnary() | NEW (extracted) |
-| Calls | convertCall(), convertCallIndirect() | NEW (extracted) |
-| Fields | convertFieldLocal(), convertStoreLocalField(), convertFieldValue(), convertStoreField() | NEW (extracted) |
-| Indexing | convertIndexLocal(), convertIndexValue(), emitIndexedLoad(), convertStoreIndexLocal(), convertStoreIndexValue(), emitIndexedStore() | NEW (extracted) |
-| Slicing | convertSliceLocal(), convertSliceValue(), emitSlice(), convertSliceOp() | NEW (extracted) |
-| Pointers | convertPtrLoad(), convertPtrStore(), convertPtrLoadValue(), convertPtrStoreValue(), convertPtrField(), convertPtrFieldStore() | NEW (extracted) |
-| Control | convertSelect(), convertConvert(), convertCast() | NEW (extracted) |
-| Strings | convertStrConcat(), convertStringHeader() | NEW (extracted) |
-| Unions | convertUnionInit(), convertUnionTag(), convertUnionPayload() | NEW (extracted) |
-| Logical | convertLogicalOp(), markLogicalOperands() | NEW (extracted) |
+| Constants | emitConst() | EXTRACTED |
+| Locals | emitLocalAddr(), convertLoadLocal(), convertStoreLocal() | EXTRACTED |
+| Globals | convertGlobalRef(), convertGlobalStore() | EXTRACTED |
+| Binary/Unary | convertBinary(), convertUnary() | EXTRACTED |
+| Calls | convertCall(), convertCallIndirect() | EXTRACTED |
+| Fields | convertFieldLocal(), convertStoreLocalField(), etc. | EXTRACTED |
+| Pointers | convertPtrLoad(), convertPtrStore(), etc. | EXTRACTED |
+| Control | convertSelect(), convertConvert() | EXTRACTED |
+| Strings | convertStrConcat(), convertStringHeader() | EXTRACTED |
+| Unions | convertUnionInit(), convertUnionTag(), convertUnionPayload() | EXTRACTED |
 
-### Phi Insertion (4 methods)
+---
 
-| Method | 0.2 Logic | 0.3 Logic | Verdict |
-|--------|-----------|-----------|---------|
-| insertPhis() | Resolve fwd_refs, insert phi nodes | Same (compact) | IDENTICAL |
-| reorderPhis() | Move phis to block start | Same | IDENTICAL |
-| ensureDefvar() | Create entry in defvars | Same | IDENTICAL |
-| lookupVarOutgoing() | Recursive predecessor lookup | Same (simplified) | IDENTICAL |
+## metadata_addr SSA Operation
 
-### Removed Methods
+### Go Reference
 
-| Method | 0.2 | 0.3 | Verdict |
-|--------|-----|-----|---------|
-| clearNodeCache() | Clear node_values map | Removed | UNUSED |
-| convertStringCompare() | String comparison | Moved to runtime | REMOVED |
-| binaryOpToSSA() | Map IR op to SSA op | Inlined | INLINED |
-| unaryOpToSSA() | Map IR op to SSA op | Inlined | INLINED |
+Go stores type metadata addresses similarly in `cmd/compile/internal/gc/reflect.go`:
+```go
+// typeptrdata returns the length in bytes of the prefix of t containing pointer data.
+func typeptrdata(t *types.Type) int64
+```
 
-### Tests (3/3)
+### Swift Reference
 
-| Test | 0.2 | 0.3 | Verdict |
-|------|-----|-----|---------|
-| SSABuilder basic init | Create builder, check func | Same | IDENTICAL |
-| SSABuilder block transitions | startBlock, endBlock | Same | IDENTICAL |
-| SSABuilder variable tracking | assign, variable lookup | Same | IDENTICAL |
+Swift's SILGen emits metatype instructions:
+```cpp
+// SILGenType.cpp
+ManagedValue SILGenFunction::emitMetatypeRef(SourceLoc loc, CanMetatypeType type) {
+  auto metatype = B.createMetatype(loc, getLoweredType(type));
+  return ManagedValue::forUnmanaged(metatype);
+}
+```
 
-Note: Integration tests moved to lower.zig E2E tests. Full pipeline tested via `zig build test` (248/248 pass).
+### Cot Implementation
+
+The `metadata_addr` operation:
+1. Takes type name as `aux.string`
+2. Resolved to memory address during Wasm codegen
+3. Used to pass type metadata to `cot_alloc`
 
 ---
 
@@ -113,9 +170,7 @@ Note: Integration tests moved to lower.zig E2E tests. Full pipeline tested via `
 2. **Extracted 35+ helper methods** - convertNode from 1200+ lines to 134-line dispatcher
 3. **DRY principle** - Shared helpers: emitIndexedLoad/Store, emitSlice, emitLocalAddr
 4. **Removed debug logging** - No pipeline_debug import
-5. **Simplified takeFunc()** - Removed dummy allocation workaround
-6. **Removed unused methods** - clearNodeCache, convertStringCompare
-7. **Inlined op mappers** - binaryOpToSSA, unaryOpToSSA
+5. **M19: Added type_metadata handling** - Maps to metadata_addr SSA op
 
 ## What Did NOT Change
 
@@ -131,32 +186,23 @@ Note: Integration tests moved to lower.zig E2E tests. Full pipeline tested via `
 
 ---
 
-## Architecture Improvement
+## Architecture
 
 ### Before (0.2)
 ```
 convertNode (1200+ lines)
     ├── inline const_int (10 lines)
     ├── inline load_local (40 lines)
-    ├── inline store_local (110 lines)
-    ├── inline global_ref (50 lines)
-    ├── inline binary (100 lines)
-    │   └── inline string compare (113 lines)
     └── ... 25+ more inline cases
 ```
 
-### After (0.3)
+### After (0.3 + M19)
 ```
-convertNode (134 lines)
+convertNode (140 lines)
     ├── emitConst() (6 lines)
     ├── convertLoadLocal() (30 lines)
-    │   └── emitLocalAddr() (7 lines)
-    ├── convertStoreLocal() (50 lines)
-    ├── convertBinary() (20 lines)
-    ├── emitIndexedLoad() (18 lines)
-    │   └── used by convertIndexLocal(), convertIndexValue()
-    └── emitSlice() (34 lines)
-        └── used by convertSliceLocal(), convertSliceValue()
+    ├── type_metadata → metadata_addr (6 lines)  // NEW
+    └── 35+ extracted helpers
 ```
 
 ---
@@ -168,4 +214,4 @@ $ zig build test
 248/248 tests passed
 ```
 
-**VERIFIED: Logic 100% identical. Extracted 35+ helpers from monolithic convertNode. 61% reduction - largest in codebase.**
+**VERIFIED: Logic 100% identical. M19: type_metadata → metadata_addr. M20: STRING loads create slice_make. 61% reduction - largest in codebase.**
