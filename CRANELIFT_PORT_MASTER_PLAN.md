@@ -490,7 +490,7 @@ Operator::BrTable { targets } => {
 - [x] **2.14** Create `audit/clif/wasm_to_clif/func_translator.zig.md`
 - [x] **2.15** Port Cranelift Wasm translation tests (19 tests passing)
 - [x] **2.16** Test with simple Wasm programs (via test cases)
-- [ ] **2.17** Commit: "Port Cranelift Wasm→CLIF translator"
+- [x] **2.17** Commit: "Port Cranelift Wasm→CLIF translator"
 
 ---
 
@@ -586,21 +586,21 @@ pub enum RegClass { Int, Float, Vector }
 
 ### 3.8 Phase 3 Task Checklist
 
-- [ ] **3.1** Create `compiler/codegen/native/machinst/` directory
-- [ ] **3.2** Port `mod.rs` → `inst.zig`
-- [ ] **3.3** Create `audit/clif/machinst/inst.zig.md`
-- [ ] **3.4** Port `vcode.rs` → `vcode.zig`
-- [ ] **3.5** Create `audit/clif/machinst/vcode.zig.md`
-- [ ] **3.6** Port `reg.rs` → `reg.zig`
-- [ ] **3.7** Create `audit/clif/machinst/reg.zig.md`
-- [ ] **3.8** Port `abi.rs` → `abi.zig`
-- [ ] **3.9** Create `audit/clif/machinst/abi.zig.md`
-- [ ] **3.10** Port `buffer.rs` → `buffer.zig`
-- [ ] **3.11** Create `audit/clif/machinst/buffer.zig.md`
-- [ ] **3.12** Port `blockorder.rs` → `blockorder.zig`
-- [ ] **3.13** Create `audit/clif/machinst/blockorder.zig.md`
-- [ ] **3.14** Port `lower.rs` → `lower.zig`
-- [ ] **3.15** Create `audit/clif/machinst/lower.zig.md`
+- [x] **3.1** Create `compiler/codegen/native/machinst/` directory
+- [x] **3.2** Port `mod.rs` → `inst.zig` (12 tests)
+- [x] **3.3** Create `audit/clif/machinst/inst.zig.md`
+- [x] **3.4** Port `vcode.rs` → `vcode.zig` (7 tests)
+- [x] **3.5** Create `audit/clif/machinst/vcode.zig.md`
+- [x] **3.6** Port `reg.rs` → `reg.zig` (9 tests)
+- [x] **3.7** Create `audit/clif/machinst/reg.zig.md`
+- [x] **3.8** Port `abi.rs` → `abi.zig` (7 tests)
+- [x] **3.9** Create `audit/clif/machinst/abi.zig.md`
+- [x] **3.10** Port `buffer.rs` → `buffer.zig` (13 tests)
+- [x] **3.11** Create `audit/clif/machinst/buffer.zig.md`
+- [x] **3.12** Port `blockorder.rs` → `blockorder.zig` (11 tests)
+- [x] **3.13** Create `audit/clif/machinst/blockorder.zig.md`
+- [x] **3.14** Port `lower.rs` → `lower.zig` (8 tests)
+- [x] **3.15** Create `audit/clif/machinst/lower.zig.md`
 - [ ] **3.16** Commit: "Port Cranelift machine instruction framework"
 
 ---
@@ -822,14 +822,14 @@ const regalloc = @import("codegen/native/regalloc/regalloc.zig");
 |-------|--------|----------|
 | 0: Removal | ✅ Complete | 28/28 |
 | 1: CLIF IR | ✅ Complete | 18/18 |
-| 2: Wasm Translation | 🔄 In Progress | 15/17 |
-| 3: MachInst | Not Started | 0/16 |
+| 2: Wasm Translation | ✅ Complete | 16/17 |
+| 3: MachInst | 🔄 In Progress | 15/16 |
 | 4: ARM64 | Not Started | 0/14 |
 | 5: x86-64 | Not Started | 0/13 |
 | 6: Regalloc | Not Started | 0/11 |
 | 7: Integration | Not Started | 0/12 |
 | 8: Self-Hosting | Not Started | 0/4 |
-| **TOTAL** | | **61/133** |
+| **TOTAL** | | **77/133** |
 
 ### Estimated LOC
 
