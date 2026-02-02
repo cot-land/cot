@@ -114,7 +114,7 @@ pub trait ABIMachineSpec {
 | store | `(lower (store ...))` | ✅ Complete | |
 | jump | `(lower_branch (jump ...))` | ✅ Complete | |
 | brif | `(lower_branch (brif ...))` | ✅ Complete | |
-| br_table | `(lower_branch (br_table ...))` | ❌ RETURNS NULL | Emit code exists but not wired |
+| br_table | `(lower_branch (br_table ...))` | ✅ Complete | jt_sequence with bounded array targets |
 | return | `(lower_branch (return ...))` | ✅ Complete | |
 | call | `(lower (call ...))` | ❌ STUB | Hardcoded BlockIndex(0) |
 | stack_load | `(lower (stack_load ...))` | ⚠️ HARDCODED | Offset always 0 |
@@ -174,19 +174,14 @@ Note: Cranelift extracts `cc` (condition code) from the instruction.
 
 ### CRITICAL (Blocking return 42):
 
-1. **br_table successor computation broken**
-   - Cranelift: `visit_block_succs` extracts jump table from DFG
-   - Cot: `InstData.getBrTableData()` returns null because it can't access Function
-   - Root cause: `blockorder.zig:339` calls `inst_data.getBrTableData()` which always returns null
-   - Fix: In `visitBlockSuccs`, extract JT index from `inst_data.imm`, look up in `func.dfg.jump_tables`
-   - Location: `compiler/codegen/native/machinst/blockorder.zig:337-346`
+1. ~~**br_table successor computation broken**~~ ✅ FIXED
+   - Fixed: Jump table targets now use bounded array with owned storage
+   - Fixed: applyAllocs ordering matches get_operands collection order
+   - Fixed: Label patching writes data before requesting patch
 
-2. **br_table lowering returns null**
-   - Cranelift: Uses JTSequence (aarch64) / jmp_table_seq (x64)
-   - Cot: Emit code exists at emit.zig:2513 but lowering returns null
-   - Dependency: Requires fix #1 first (so targets are populated)
-   - Fix: Wire lower.zig br_table case to generate jt_sequence
-   - Location: `compiler/codegen/native/isa/aarch64/lower.zig:263-266`
+2. ~~**br_table lowering returns null**~~ ✅ FIXED (ARM64)
+   - Fixed: lower.zig now generates jt_sequence instruction
+   - Note: x64 still needs same fix (Task #101)
 
 3. **icmp condition code hardcoded**
    - Cranelift: Extracts cc from instruction via ISLE pattern matching
@@ -223,12 +218,14 @@ Note: Cranelift extracts `cc` (condition code) from the instruction.
 
 | # | Gap | Status | Commit |
 |---|-----|--------|--------|
-| 1 | br_table lowering | ⬜ TODO | |
+| 1 | br_table lowering (ARM64) | ✅ DONE | 161b37e |
+| 1b | br_table lowering (x64) | ⬜ TODO | |
 | 2 | icmp condition code | ⬜ TODO | |
 | 3 | Call lowering | ⬜ TODO | |
 | 4 | Stack slot offsets | ⬜ TODO | |
 | 5 | Prologue/epilogue | ⬜ TODO | |
 | 6 | Spill/reload | ⬜ TODO | |
+| 7 | Trivial register allocator | ✅ DONE | 161b37e |
 
 ---
 
