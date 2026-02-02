@@ -2729,7 +2729,8 @@ test "emit unconditional jump" {
     var emit_state = EmitState{};
     const emit_info = EmitInfo.init(.{});
 
-    const label = MachLabel.fromU32(0);
+    // Allocate label in the buffer before using it
+    const label = try buf.getLabel();
     const jump_inst = Inst{ .jump = .{
         .dest = BranchTarget{ .label = label },
     } };
@@ -2746,8 +2747,9 @@ test "emit conditional branch" {
     var emit_state = EmitState{};
     const emit_info = EmitInfo.init(.{});
 
-    const label = MachLabel.fromU32(0);
-    const fallthrough = MachLabel.fromU32(1);
+    // Allocate labels in the buffer before using them
+    const label = try buf.getLabel();
+    const fallthrough = try buf.getLabel();
     const cond_br_inst = Inst{ .cond_br = .{
         .kind = CondBrKind{ .cond = Cond.eq },
         .taken = BranchTarget{ .label = label },
@@ -2781,9 +2783,9 @@ test "emit compare and branch" {
     try emit(&cmp_inst, &buf, &emit_info, &emit_state);
     try testing.expectEqual(@as(u32, 4), buf.curOffset());
 
-    // B.LT label
-    const label = MachLabel.fromU32(0);
-    const fallthrough = MachLabel.fromU32(1);
+    // B.LT label - allocate labels in the buffer first
+    const label = try buf.getLabel();
+    const fallthrough = try buf.getLabel();
     const blt_inst = Inst{ .cond_br = .{
         .kind = CondBrKind{ .cond = Cond.lt },
         .taken = BranchTarget{ .label = label },
@@ -2808,7 +2810,8 @@ test "emit function call" {
     var emit_state = EmitState{};
     const emit_info = EmitInfo.init(.{});
 
-    const target = MachLabel.fromU32(0);
+    // Allocate label in the buffer before using it
+    const target = try buf.getLabel();
     const call_inst = Inst{ .call = .{
         .dest = BranchTarget{ .label = target },
     } };
