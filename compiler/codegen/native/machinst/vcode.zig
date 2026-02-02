@@ -27,6 +27,9 @@ const inst_mod = @import("inst.zig");
 // Import CLIF types
 const clif = @import("../../../ir/clif/mod.zig");
 
+// Import regalloc types
+const regalloc_operand = @import("../regalloc/operand.zig");
+
 // Re-export key types from reg module
 pub const VReg = reg_mod.VReg;
 pub const Reg = reg_mod.Reg;
@@ -331,39 +334,8 @@ pub const Edit = union(enum) {
 };
 
 /// Allocation result from register allocator.
-pub const Allocation = struct {
-    kind: AllocationKind,
-
-    const Self = @This();
-
-    pub const AllocationKind = union(enum) {
-        reg: PReg,
-        stack: SpillSlot,
-        none: void,
-    };
-
-    pub fn asReg(self: Self) ?PReg {
-        return switch (self.kind) {
-            .reg => |r| r,
-            else => null,
-        };
-    }
-
-    pub fn asStack(self: Self) ?SpillSlot {
-        return switch (self.kind) {
-            .stack => |s| s,
-            else => null,
-        };
-    }
-
-    pub fn fromReg(preg: PReg) Self {
-        return .{ .kind = .{ .reg = preg } };
-    }
-
-    pub fn fromStack(slot: SpillSlot) Self {
-        return .{ .kind = .{ .stack = slot } };
-    }
-};
+/// Use the unified type from regalloc/operand.zig.
+pub const Allocation = regalloc_operand.Allocation;
 
 /// InstOrEdit for iterating over instructions and edits together.
 pub const InstOrEdit = union(enum) {
@@ -462,6 +434,10 @@ pub const ValueLabelsRanges = std.AutoHashMapUnmanaged(ValueLabel, std.ArrayList
 pub fn VCode(comptime I: type) type {
     return struct {
         const Self = @This();
+
+        /// MachBuffer type for this instruction type.
+        /// Uses the ISA-specific LabelUse from the instruction type.
+        const MachBufferType = @import("buffer.zig").MachBuffer(I.LabelUse);
 
         /// Allocator used for all allocations.
         allocator: Allocator,
@@ -824,7 +800,7 @@ pub fn VCode(comptime I: type) type {
         pub fn emit(
             self: *const Self,
             regalloc_output: *const RegallocOutput,
-            emit_info: EmitInfo,
+            emit_info: *const I.EmitInfo,
         ) !EmitResult {
             const alloc = self.allocator;
 
@@ -927,25 +903,8 @@ pub const EmitInfo = struct {
     };
 };
 
-/// Type alias for the machine buffer with a generic label use type.
-pub const MachBufferType = @import("buffer.zig").MachBuffer(DefaultLabelUse);
+/// Finalized machine buffer result.
 pub const MachBufferFinalized = @import("buffer.zig").MachBufferFinalized;
-
-/// Default label use type for branch fixups.
-const DefaultLabelUse = struct {
-    max_pos_range: u32 = 128 * 1024 * 1024,
-    max_neg_range: u32 = 128 * 1024 * 1024,
-    patch_size: usize = 4,
-    supports_veneer: bool = true,
-
-    fn patch(self: DefaultLabelUse, buf: []u8, use_offset: u32, label_offset: u32) void {
-        _ = self;
-        // Simple 4-byte relative offset patch
-        const rel: i32 = @intCast(@as(i64, label_offset) - @as(i64, use_offset));
-        const bytes = std.mem.toBytes(std.mem.nativeToLittle(i32, rel));
-        @memcpy(buf[use_offset..][0..4], &bytes);
-    }
-};
 
 /// Fact for proof-carrying code verification.
 pub const Fact = struct {

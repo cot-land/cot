@@ -284,7 +284,7 @@ pub const X64LowerBackend = struct {
             },
             .@"return" => {
                 // Return instruction
-                ctx.emit(Inst{ .ret = {} }) catch return null;
+                ctx.emit(Inst{ .ret = .{ .stack_bytes_to_pop = 0 } }) catch return null;
             },
             else => return null,
         }
@@ -1113,7 +1113,7 @@ pub const X64LowerBackend = struct {
         const addr_reg = addr.onlyReg() orelse return null;
         const dst_reg = dst.onlyReg() orelse return null;
         const addr_gpr = Gpr.unwrapNew(addr_reg);
-        const amode = SyntheticAmode.real(Amode.immReg(0, addr_gpr.toReg()));
+        const amode = SyntheticAmode.real_amode(Amode.immReg(0, addr_gpr.toReg()));
 
         if (dst_ty.isFloat()) {
             const op: SseOpcode = if (dst_ty.bytes() == 4) .movss else .movsd;
@@ -1152,7 +1152,7 @@ pub const X64LowerBackend = struct {
         const src_reg = src.onlyReg() orelse return null;
         const addr_reg = addr.onlyReg() orelse return null;
         const addr_gpr = Gpr.unwrapNew(addr_reg);
-        const amode = SyntheticAmode.real(Amode.immReg(0, addr_gpr.toReg()));
+        const amode = SyntheticAmode.real_amode(Amode.immReg(0, addr_gpr.toReg()));
 
         if (src_ty.isFloat()) {
             const op: SseOpcode = if (src_ty.bytes() == 4) .movss else .movsd;
@@ -1280,7 +1280,7 @@ pub const X64LowerBackend = struct {
         ctx.emit(Inst{
             .load_ext_name = .{
                 .dst = dst_gpr,
-                .name = .{ .user = .{ .namespace = 0, .index = 0 } },
+                .name = .{ .User = inst_mod.UserExternalNameRef.initFull(0, 0) },
                 .offset = 0,
             },
         }) catch return null;
@@ -1337,7 +1337,7 @@ pub const X64LowerBackend = struct {
         ctx.emit(Inst{
             .load_ext_name = .{
                 .dst = dst_gpr,
-                .name = .{ .user = .{ .namespace = 0, .index = 0 } },
+                .name = .{ .User = inst_mod.UserExternalNameRef.initFull(0, 0) },
                 .offset = 0,
             },
         }) catch return null;
@@ -1443,16 +1443,16 @@ fn operandSizeFromType(ty: ClifType) OperandSize {
 /// Convert IntCC to x64 condition code.
 pub fn ccFromIntCC(cc: IntCC) CC {
     return switch (cc) {
-        .equal => .z,
-        .not_equal => .nz,
-        .signed_less_than => .l,
-        .signed_greater_than_or_equal => .nl,
-        .signed_greater_than => .nle,
-        .signed_less_than_or_equal => .le,
-        .unsigned_less_than => .b,
-        .unsigned_greater_than_or_equal => .nb,
-        .unsigned_greater_than => .nbe,
-        .unsigned_less_than_or_equal => .be,
+        .eq => .z,
+        .ne => .nz,
+        .slt => .l,
+        .sge => .nl,
+        .sgt => .nle,
+        .sle => .le,
+        .ult => .b,
+        .uge => .nb,
+        .ugt => .nbe,
+        .ule => .be,
     };
 }
 
@@ -1475,8 +1475,8 @@ test "operandSizeFromType" {
 }
 
 test "ccFromIntCC" {
-    try std.testing.expectEqual(CC.z, ccFromIntCC(.equal));
-    try std.testing.expectEqual(CC.nz, ccFromIntCC(.not_equal));
-    try std.testing.expectEqual(CC.l, ccFromIntCC(.signed_less_than));
-    try std.testing.expectEqual(CC.b, ccFromIntCC(.unsigned_less_than));
+    try std.testing.expectEqual(CC.z, ccFromIntCC(.eq));
+    try std.testing.expectEqual(CC.nz, ccFromIntCC(.ne));
+    try std.testing.expectEqual(CC.l, ccFromIntCC(.slt));
+    try std.testing.expectEqual(CC.b, ccFromIntCC(.ult));
 }

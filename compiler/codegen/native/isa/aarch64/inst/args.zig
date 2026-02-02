@@ -333,8 +333,8 @@ pub const OperandSize = enum {
     /// Convert to I32 or I64.
     pub fn toTy(self: OperandSize) Type {
         return switch (self) {
-            .size32 => Type.i32,
-            .size64 => Type.i64,
+            .size32 => Type.I32,
+            .size64 => Type.I64,
         };
     }
 
@@ -417,8 +417,8 @@ pub const ScalarSize = enum {
         return switch (self) {
             .size8 => Type.i8,
             .size16 => Type.i16,
-            .size32 => Type.i32,
-            .size64 => Type.i64,
+            .size32 => Type.I32,
+            .size64 => Type.I64,
             .size128 => Type.i128,
         };
     }

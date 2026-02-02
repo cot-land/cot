@@ -126,11 +126,17 @@ pub const ExternalName = union(enum) {
 };
 
 /// User external name reference.
+/// Matches Cranelift's UserExternalName in ir/extname.rs
 pub const UserExternalNameRef = struct {
+    namespace: u32,
     index: u32,
 
     pub fn init(index: u32) UserExternalNameRef {
-        return .{ .index = index };
+        return .{ .namespace = 0, .index = index };
+    }
+
+    pub fn initFull(namespace: u32, index: u32) UserExternalNameRef {
+        return .{ .namespace = namespace, .index = index };
     }
 };
 
@@ -163,52 +169,16 @@ pub const KnownSymbol = enum {
     CoffTlsIndex,
 };
 
-/// Block index.
-pub const BlockIndex = struct {
-    index: usize,
-
-    pub fn init(index: usize) BlockIndex {
-        return .{ .index = index };
-    }
-};
+/// Block index - use the unified type from inst.zig.
+pub const BlockIndex = inst.BlockIndex;
 
 // =============================================================================
 // MachLabel
 // =============================================================================
 
 /// A label in the machine code buffer.
-/// Labels can be bound to offsets or used as forward references.
-/// This is distinct from inst.MachLabel which is for instruction-level labels.
-pub const MachLabel = struct {
-    /// The label index (0-based).
-    value: u32,
-
-    /// Sentinel value for invalid labels.
-    pub const INVALID: MachLabel = .{ .value = std.math.maxInt(u32) };
-
-    pub fn init(value: u32) MachLabel {
-        return .{ .value = value };
-    }
-
-    /// Create a label for a block.
-    pub fn fromBlock(block: BlockIndex) MachLabel {
-        return .{ .value = @intCast(block.index) };
-    }
-
-    /// Get the block index from this label.
-    pub fn toBlock(self: MachLabel) BlockIndex {
-        return .{ .index = self.value };
-    }
-
-    /// Check if this label is valid.
-    pub fn isValid(self: MachLabel) bool {
-        return self.value != std.math.maxInt(u32);
-    }
-
-    pub fn eql(self: MachLabel, other: MachLabel) bool {
-        return self.value == other.value;
-    }
-};
+/// Use the unified type from inst.zig.
+pub const MachLabel = inst.MachLabel;
 
 // =============================================================================
 // LabelUse trait interface
@@ -727,9 +697,20 @@ pub fn MachBuffer(comptime LabelUseType: type) type {
             try self.data.appendSlice(self.allocator, &std.mem.toBytes(std.mem.nativeToLittle(u64, value)));
         }
 
+        /// Emit a signed 32-bit value (little-endian).
+        pub fn putSimm32(self: *Self, value: i32) !void {
+            try self.put4(@bitCast(value));
+        }
+
         /// Emit data bytes.
         pub fn putData(self: *Self, bytes: []const u8) !void {
             try self.data.appendSlice(self.allocator, bytes);
+        }
+
+        /// Reset the buffer for reuse (primarily for testing).
+        pub fn reset(self: *Self) void {
+            self.data.clearRetainingCapacity();
+            // curOffset() derives from data.items.len, so clearing data is enough
         }
 
         /// Align the buffer to a given alignment.
@@ -767,7 +748,7 @@ pub fn MachBuffer(comptime LabelUseType: type) type {
         /// Bind a label to the current offset.
         pub fn bindLabel(self: *Self, label: MachLabel) !void {
             const offset = self.curOffset();
-            self.label_offsets.items[label.value] = offset;
+            self.label_offsets.items[label.index] = offset;
 
             // Add to labels at tail.
             try self.labels_at_tail.append(self.allocator, label);
@@ -777,7 +758,7 @@ pub fn MachBuffer(comptime LabelUseType: type) type {
         pub fn resolveLabel(self: *const Self, label: MachLabel) MachLabel {
             var current = label;
             while (true) {
-                const alias = self.label_aliases.items[current.value];
+                const alias = self.label_aliases.items[current.index];
                 if (alias.eql(current)) {
                     return current;
                 }
@@ -788,7 +769,7 @@ pub fn MachBuffer(comptime LabelUseType: type) type {
         /// Get the offset for a bound label (or UNKNOWN_OFFSET).
         pub fn labelOffset(self: *const Self, label: MachLabel) CodeOffset {
             const resolved = self.resolveLabel(label);
-            return self.label_offsets.items[resolved.value];
+            return self.label_offsets.items[resolved.index];
         }
 
         /// Use a label at a specific offset, creating a fixup if needed.
@@ -1014,7 +995,7 @@ pub fn MachBuffer(comptime LabelUseType: type) type {
 
             // Emit pending traps.
             for (self.pending_traps.items) |trap| {
-                self.label_offsets.items[trap.label.value] = self.curOffset();
+                self.label_offsets.items[trap.label.index] = self.curOffset();
                 try self.traps.append(self.allocator, .{
                     .offset = self.curOffset(),
                     .code = trap.code,
@@ -1252,7 +1233,7 @@ pub fn MachTextSectionBuilder(comptime LabelUseType: type) type {
 
 test "MachLabel basic operations" {
     const label = MachLabel.init(42);
-    try std.testing.expectEqual(@as(u32, 42), label.value);
+    try std.testing.expectEqual(@as(u32, 42), label.index);
     try std.testing.expect(label.isValid());
     try std.testing.expect(!MachLabel.INVALID.isValid());
 }
@@ -1260,8 +1241,8 @@ test "MachLabel basic operations" {
 test "MachLabel from block" {
     const block = BlockIndex.init(5);
     const label = MachLabel.fromBlock(block);
-    try std.testing.expectEqual(@as(u32, 5), label.value);
-    try std.testing.expectEqual(@as(usize, 5), label.toBlock().index);
+    try std.testing.expectEqual(@as(u32, 5), label.index);
+    try std.testing.expectEqual(@as(usize, 5), label.toBlock().index());
 }
 
 // Stub LabelUse type for testing.
@@ -1443,7 +1424,7 @@ test "MachBuffer get new label" {
     const label1 = try buf.getLabel();
     const label2 = try buf.getLabel();
 
-    try std.testing.expectEqual(@as(u32, 0), label0.value);
-    try std.testing.expectEqual(@as(u32, 1), label1.value);
-    try std.testing.expectEqual(@as(u32, 2), label2.value);
+    try std.testing.expectEqual(@as(u32, 0), label0.index);
+    try std.testing.expectEqual(@as(u32, 1), label1.index);
+    try std.testing.expectEqual(@as(u32, 2), label2.index);
 }

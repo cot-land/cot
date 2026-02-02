@@ -254,6 +254,12 @@ pub const Reg = struct {
         return (self.bits & REG_SPILLSLOT_BIT) != 0;
     }
 
+    /// Get the hardware encoding. Only valid for physical registers.
+    pub fn hwEnc(self: Self) u8 {
+        const rreg = self.toRealReg() orelse @panic("hwEnc called on non-physical register");
+        return rreg.preg.hwEnc();
+    }
+
     /// Format for display.
     pub fn format(
         self: Self,

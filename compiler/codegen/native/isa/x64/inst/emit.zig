@@ -67,142 +67,75 @@ pub const isSibSpecial = regs.isSibSpecial;
 pub const isDispRequired = regs.isDispRequired;
 
 //=============================================================================
-// Machine buffer for instruction emission
+//=============================================================================
+// X64 Label Use - for MachBuffer parameterization
 //=============================================================================
 
-/// A buffer that collects emitted machine code.
-pub const MachBuffer = struct {
-    data: std.ArrayListUnmanaged(u8) = .{},
-    labels: std.ArrayListUnmanaged(LabelInfo) = .{},
-    pending_relocs: std.ArrayListUnmanaged(Relocation) = .{},
-    external_relocs: std.ArrayListUnmanaged(ExternalRelocation) = .{},
-    cur_offset_val: u32 = 0,
-    allocator: Allocator,
+const buffer_mod = @import("../../../machinst/buffer.zig");
 
-    pub const LabelInfo = struct {
-        offset: ?u32 = null,
-    };
+/// X64 label use types with ranges and patching behavior.
+/// Placeholder - will be fully implemented during x64 unification.
+pub const X64LabelUse = struct {
+    kind: Kind,
+    max_pos_range: buffer_mod.CodeOffset,
+    max_neg_range: buffer_mod.CodeOffset,
+    patch_size: usize,
+    supports_veneer: bool,
 
-    pub const Relocation = struct {
-        offset: u32,
-        label: MachLabel,
-        kind: LabelUse,
-    };
-
-    /// External symbol relocation (for linker).
-    pub const ExternalRelocation = struct {
-        offset: u32,
-        target: mod.ExternalName,
-        addend: i64,
-        kind: ExternalRelocKind,
-    };
-
-    /// x86-64 relocation types for external symbols.
-    pub const ExternalRelocKind = enum {
-        /// PC-relative 32-bit displacement (used for calls).
-        call_pc_rel_4,
-        /// PC-relative 32-bit displacement (used for jumps).
-        jmp_pc_rel_4,
-        /// PC-relative 32-bit displacement (used for data access).
-        pc_rel_4,
-        /// GOT-relative 32-bit.
-        got_pc_rel_4,
-        /// Absolute 64-bit address.
-        abs_64,
-        /// Absolute 32-bit address.
-        abs_32,
-    };
-
-    pub const LabelUse = enum {
-        /// 32-bit PC-relative displacement for JMP and Jcc.
+    pub const Kind = enum {
         jmp_rel_32,
-        /// 8-bit PC-relative displacement for short jumps.
         jmp_rel_8,
-        /// 32-bit PC-relative displacement for RIP-relative addressing.
         pc_rel_32,
     };
 
-    pub fn init(allocator: Allocator) MachBuffer {
-        return .{ .allocator = allocator };
-    }
+    /// JMP/Jcc rel32: ±2GB
+    pub const jmp_rel_32 = X64LabelUse{
+        .kind = .jmp_rel_32,
+        .max_pos_range = 1 << 31,
+        .max_neg_range = 1 << 31,
+        .patch_size = 4,
+        .supports_veneer = false,
+    };
 
-    pub fn deinit(self: *MachBuffer) void {
-        self.data.deinit(self.allocator);
-        self.labels.deinit(self.allocator);
-        self.pending_relocs.deinit(self.allocator);
-        self.external_relocs.deinit(self.allocator);
-    }
+    /// JMP/Jcc rel8: ±127 bytes
+    pub const jmp_rel_8 = X64LabelUse{
+        .kind = .jmp_rel_8,
+        .max_pos_range = 127,
+        .max_neg_range = 128,
+        .patch_size = 1,
+        .supports_veneer = true, // Can be expanded to rel32
+    };
 
-    /// Add an external symbol relocation at the current offset.
-    pub fn addExternalReloc(self: *MachBuffer, target: mod.ExternalName, addend: i64, kind: ExternalRelocKind) void {
-        self.external_relocs.append(self.allocator, .{
-            .offset = self.cur_offset_val,
-            .target = target,
-            .addend = addend,
-            .kind = kind,
-        }) catch unreachable;
-    }
+    /// RIP-relative: ±2GB
+    pub const pc_rel_32 = X64LabelUse{
+        .kind = .pc_rel_32,
+        .max_pos_range = 1 << 31,
+        .max_neg_range = 1 << 31,
+        .patch_size = 4,
+        .supports_veneer = false,
+    };
 
-    pub fn curOffset(self: *const MachBuffer) u32 {
-        return self.cur_offset_val;
-    }
-
-    /// Put a single byte.
-    pub fn put1(self: *MachBuffer, val: u8) void {
-        self.data.append(self.allocator, val) catch unreachable;
-        self.cur_offset_val += 1;
-    }
-
-    /// Put a 16-bit little-endian value.
-    pub fn put2(self: *MachBuffer, val: u16) void {
-        const bytes = std.mem.asBytes(&val);
-        self.data.appendSlice(self.allocator, bytes) catch unreachable;
-        self.cur_offset_val += 2;
-    }
-
-    /// Put a 32-bit little-endian value.
-    pub fn put4(self: *MachBuffer, val: u32) void {
-        const bytes = std.mem.asBytes(&val);
-        self.data.appendSlice(self.allocator, bytes) catch unreachable;
-        self.cur_offset_val += 4;
-    }
-
-    /// Put a 64-bit little-endian value.
-    pub fn put8(self: *MachBuffer, val: u64) void {
-        const bytes = std.mem.asBytes(&val);
-        self.data.appendSlice(self.allocator, bytes) catch unreachable;
-        self.cur_offset_val += 8;
-    }
-
-    /// Put a signed 32-bit value.
-    pub fn putSimm32(self: *MachBuffer, val: i32) void {
-        self.put4(@bitCast(val));
-    }
-
-    /// Put raw data.
-    pub fn putData(self: *MachBuffer, data: []const u8) void {
-        self.data.appendSlice(self.allocator, data) catch unreachable;
-        self.cur_offset_val += @intCast(data.len);
-    }
-
-    pub fn getLabel(self: *MachBuffer) MachLabel {
-        const idx = self.labels.items.len;
-        self.labels.append(self.allocator, .{ .offset = null }) catch unreachable;
-        return MachLabel.fromU32(@intCast(idx));
-    }
-
-    pub fn bindLabel(self: *MachBuffer, label: MachLabel, _: anytype) void {
-        self.labels.items[label.asU32()].offset = self.cur_offset_val;
-    }
-
-    pub fn useLabelAtOffset(self: *MachBuffer, offset: u32, label: MachLabel, kind: LabelUse) void {
-        self.pending_relocs.append(self.allocator, .{
-            .offset = offset,
-            .label = label,
-            .kind = kind,
-        }) catch unreachable;
+    pub fn patch(self: X64LabelUse, buf: []u8, use_offset: buffer_mod.CodeOffset, label_offset: buffer_mod.CodeOffset) void {
+        const pc_rel = @as(i64, @intCast(label_offset)) - @as(i64, @intCast(use_offset));
+        switch (self.kind) {
+            .jmp_rel_32, .pc_rel_32 => {
+                const rel32: i32 = @intCast(pc_rel);
+                std.mem.writeInt(i32, buf[use_offset..][0..4], rel32, .little);
+            },
+            .jmp_rel_8 => {
+                const rel8: i8 = @intCast(pc_rel);
+                buf[use_offset] = @bitCast(rel8);
+            },
+        }
     }
 };
+
+//=============================================================================
+// Machine buffer for instruction emission
+//=============================================================================
+
+/// Machine buffer for x64 - uses the common MachBuffer with X64LabelUse.
+pub const MachBuffer = buffer_mod.MachBuffer(X64LabelUse);
 
 //=============================================================================
 // Emission state
@@ -317,9 +250,9 @@ pub const RexPrefix = struct {
     /// Possibly emit the REX prefix byte.
     /// Only emitted if the REX prefix is not 0x40 (default) or if
     /// the instruction uses 8-bit operands requiring REX.
-    pub fn encode(self: RexPrefix, sink: *MachBuffer) void {
+    pub fn encode(self: RexPrefix, sink: *MachBuffer) !void {
         if (self.byte != 0x40 or self.must_emit) {
-            sink.put1(self.byte);
+            try sink.put1(self.byte);
         }
     }
 
@@ -411,18 +344,18 @@ pub const VexPrefix = struct {
     }
 
     /// Encode the VEX prefix to the buffer.
-    pub fn encode(self: VexPrefix, sink: *MachBuffer) void {
+    pub fn encode(self: VexPrefix, sink: *MachBuffer) !void {
         if (self.canUse2Byte()) {
             // 2-byte VEX: C5 [R̄ vvvv L pp]
-            sink.put1(0xC5);
+            try sink.put1(0xC5);
             const byte2: u8 = (@as(u8, self.r_inv) << 7) |
                 (@as(u8, self.vvvv_inv) << 3) |
                 (@as(u8, self.l) << 2) |
                 @intFromEnum(self.pp);
-            sink.put1(byte2);
+            try sink.put1(byte2);
         } else {
             // 3-byte VEX: C4 [R̄ X̄ B̄ m-mmmm] [W vvvv L pp]
-            sink.put1(0xC4);
+            try sink.put1(0xC4);
             const byte2: u8 = (@as(u8, self.r_inv) << 7) |
                 (@as(u8, self.x_inv) << 6) |
                 (@as(u8, self.b_inv) << 5) |
@@ -431,8 +364,8 @@ pub const VexPrefix = struct {
                 (@as(u8, self.vvvv_inv) << 3) |
                 (@as(u8, self.l) << 2) |
                 @intFromEnum(self.pp);
-            sink.put1(byte2);
-            sink.put1(byte3);
+            try sink.put1(byte2);
+            try sink.put1(byte3);
         }
     }
 };
@@ -450,10 +383,10 @@ pub fn emitVexRm(
     pp: VexPp,
     mmmmm: VexMmmmm,
     opcode: u8,
-) void {
+) !void {
     const vex = VexPrefix.init(reg_enc, rm_enc, index_enc, vvvv_enc, w, l, pp, mmmmm);
-    vex.encode(sink);
-    sink.put1(opcode);
+    try vex.encode(sink);
+    try sink.put1(opcode);
 }
 
 //=============================================================================
@@ -553,9 +486,9 @@ pub const EvexPrefix = struct {
     }
 
     /// Encode the EVEX prefix to the buffer.
-    pub fn encode(self: EvexPrefix, sink: *MachBuffer) void {
+    pub fn encode(self: EvexPrefix, sink: *MachBuffer) !void {
         // Byte 1: 0x62 (EVEX prefix indicator)
-        sink.put1(0x62);
+        try sink.put1(0x62);
 
         // Byte 2 (P0): R X B R' 0 0 m m
         const p0: u8 = (@as(u8, self.r_inv) << 7) |
@@ -563,14 +496,14 @@ pub const EvexPrefix = struct {
             (@as(u8, self.b_inv) << 5) |
             (@as(u8, self.r_prime_inv) << 4) |
             @intFromEnum(self.mm);
-        sink.put1(p0);
+        try sink.put1(p0);
 
         // Byte 3 (P1): W v v v v 1 p p
         const p1: u8 = (@as(u8, self.w) << 7) |
             (@as(u8, self.vvvv_inv) << 3) |
             (1 << 2) | // Fixed bit
             @intFromEnum(self.pp);
-        sink.put1(p1);
+        try sink.put1(p1);
 
         // Byte 4 (P2): z L' L b V' a a a
         const p2: u8 = (@as(u8, self.z) << 7) |
@@ -578,7 +511,7 @@ pub const EvexPrefix = struct {
             (@as(u8, self.b) << 4) |
             (@as(u8, self.v_prime_inv) << 3) |
             self.aaa;
-        sink.put1(p2);
+        try sink.put1(p2);
     }
 };
 
@@ -597,10 +530,10 @@ pub fn emitEvexRm(
     b: bool,
     aaa: u3,
     opcode: u8,
-) void {
+) !void {
     const evex = EvexPrefix.init(reg_enc, rm_enc, index_enc, vvvv_enc, w, ll, pp, mm, z, b, aaa);
-    evex.encode(sink);
-    sink.put1(opcode);
+    try evex.encode(sink);
+    try sink.put1(opcode);
 }
 
 //=============================================================================
@@ -679,11 +612,11 @@ pub const Disp = union(enum) {
     }
 
     /// Emit the displacement into the code sink.
-    pub fn emit(self: Disp, sink: *MachBuffer) void {
+    pub fn emit(self: Disp, sink: *MachBuffer) !void {
         switch (self) {
             .none => {},
-            .imm8 => |n| sink.put1(@bitCast(n)),
-            .imm32 => |n| sink.put4(@bitCast(n)),
+            .imm8 => |n| try sink.put1(@bitCast(n)),
+            .imm32 => |n| try sink.put4(@bitCast(n)),
         }
     }
 };
@@ -723,7 +656,7 @@ pub fn emitModrmSibDisp(
     amode: Amode,
     bytes_at_end: u8,
     evex_scaling: ?i8,
-) void {
+) !void {
     switch (amode) {
         .imm_reg => |m| {
             const enc_e = m.base.hwEnc();
@@ -739,9 +672,9 @@ pub fn emitModrmSibDisp(
                 // 0b100. This special encoding means that the index register
                 // isn't used and the base is 0b100 with or without a
                 // REX-encoded 4th bit (e.g. rsp or r12)
-                sink.put1(encodeModrm(imm.m0d(), enc_g & 7, 0b100));
-                sink.put1(0b00_100_100);
-                imm.emit(sink);
+                try sink.put1(encodeModrm(imm.m0d(), enc_g & 7, 0b100));
+                try sink.put1(0b00_100_100);
+                try imm.emit(sink);
             } else {
                 // If the base register is rbp and there's no offset then force
                 // a 1-byte zero offset since otherwise the encoding would be
@@ -749,8 +682,8 @@ pub fn emitModrmSibDisp(
                 if (enc_e_low3 == GprEnc.RBP) {
                     imm.forceImmediate();
                 }
-                sink.put1(encodeModrm(imm.m0d(), enc_g & 7, enc_e & 7));
-                imm.emit(sink);
+                try sink.put1(encodeModrm(imm.m0d(), enc_g & 7, enc_e & 7));
+                try imm.emit(sink);
             }
         },
 
@@ -775,17 +708,17 @@ pub fn emitModrmSibDisp(
 
             // With the above determined encode the ModRM byte, then the SIB
             // byte, then any immediate as necessary.
-            sink.put1(encodeModrm(imm.m0d(), enc_g & 7, 0b100));
-            sink.put1(encodeSib(m.shift, enc_index & 7, enc_base & 7));
-            imm.emit(sink);
+            try sink.put1(encodeModrm(imm.m0d(), enc_g & 7, 0b100));
+            try sink.put1(encodeSib(m.shift, enc_index & 7, enc_base & 7));
+            try imm.emit(sink);
         },
 
         .rip_relative => |m| {
             // RIP-relative is mod=00, rm=101.
-            sink.put1(encodeModrm(0b00, enc_g & 7, 0b101));
+            try sink.put1(encodeModrm(0b00, enc_g & 7, 0b101));
 
             // Record the use of the target for relocation.
-            sink.useLabelAtOffset(sink.curOffset(), m.target, .pc_rel_32);
+            try sink.useLabelAtOffset(sink.curOffset(), m.target, .pc_rel_32);
 
             // N.B.: some instructions (XmmRmRImm format for example)
             // have bytes *after* the RIP-relative offset. The
@@ -794,15 +727,15 @@ pub fn emitModrmSibDisp(
             // to the end of the u32 field. So, to compensate for
             // this, we emit a negative extra offset in the u32 field
             // initially, and the relocation will add to it.
-            sink.putSimm32(-@as(i32, bytes_at_end));
+            try sink.putSimm32(-@as(i32, bytes_at_end));
         },
     }
 }
 
 /// Emit ModRM/SIB for a register-to-register operation.
-pub fn emitModrmReg(sink: *MachBuffer, enc_g: u8, enc_e: u8) void {
+pub fn emitModrmReg(sink: *MachBuffer, enc_g: u8, enc_e: u8) !void {
     // mod=11 for register-direct addressing
-    sink.put1(encodeModrm(0b11, enc_g & 7, enc_e & 7));
+    try sink.put1(encodeModrm(0b11, enc_g & 7, enc_e & 7));
 }
 
 //=============================================================================
@@ -871,10 +804,10 @@ pub fn memFinalize(mem: SyntheticAmode, state: *const EmitState) MemFinalizeResu
 //=============================================================================
 
 /// Emit a REX prefix if needed, followed by an opcode.
-pub fn emitRexOpcode(sink: *MachBuffer, rex: RexPrefix, opcode: []const u8) void {
-    rex.encode(sink);
+pub fn emitRexOpcode(sink: *MachBuffer, rex: RexPrefix, opcode: []const u8) !void {
+    try rex.encode(sink);
     for (opcode) |byte| {
-        sink.put1(byte);
+        try sink.put1(byte);
     }
 }
 
@@ -911,7 +844,7 @@ fn aluImmOpcodeExt(op: AluRmiROpcode) u8 {
 //=============================================================================
 
 /// Emit a single instruction to the code buffer.
-pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: *const EmitState) void {
+pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: *const EmitState) !void {
     _ = info;
 
     switch (inst.*) {
@@ -919,7 +852,7 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
         // NOPs
         //---------------------------------------------------------------------
         .nop => |nop| {
-            emitNop(sink, nop.len);
+            try emitNop(sink, nop.len);
         },
 
         //---------------------------------------------------------------------
@@ -931,24 +864,24 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
                 // XOR reg, reg is shorter for zeroing
                 const size = imm.dst_size;
                 if (size == .size16) {
-                    sink.put1(0x66); // operand size prefix
+                    try sink.put1(0x66); // operand size prefix
                 }
                 const rex = RexPrefix.twoOp(dst_enc, dst_enc, size == .size64, false);
-                rex.encode(sink);
-                sink.put1(0x31); // XOR r/m, r
-                emitModrmReg(sink, dst_enc, dst_enc);
+                try rex.encode(sink);
+                try sink.put1(0x31); // XOR r/m, r
+                try emitModrmReg(sink, dst_enc, dst_enc);
             } else if (imm.simm64 <= 0xFFFFFFFF and imm.dst_size == .size64) {
                 // MOV r32, imm32 with zero extension
                 const rex = RexPrefix.oneOp(dst_enc, false, false);
-                rex.encode(sink);
-                sink.put1(0xB8 + (dst_enc & 7));
-                sink.put4(@truncate(imm.simm64));
+                try rex.encode(sink);
+                try sink.put1(0xB8 + (dst_enc & 7));
+                try sink.put4(@truncate(imm.simm64));
             } else {
                 // MOV r64, imm64
                 const rex = RexPrefix.oneOp(dst_enc, true, false);
-                rex.encode(sink);
-                sink.put1(0xB8 + (dst_enc & 7));
-                sink.put8(imm.simm64);
+                try rex.encode(sink);
+                try sink.put1(0xB8 + (dst_enc & 7));
+                try sink.put8(imm.simm64);
             }
         },
 
@@ -961,13 +894,13 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             const size = mov.size;
 
             if (size == .size16) {
-                sink.put1(0x66);
+                try sink.put1(0x66);
             }
             const rex = RexPrefix.twoOp(src_enc, dst_enc, size == .size64, size == .size8);
-            rex.encode(sink);
+            try rex.encode(sink);
             const opcode: u8 = if (size == .size8) 0x88 else 0x89;
-            sink.put1(opcode);
-            emitModrmReg(sink, src_enc, dst_enc);
+            try sink.put1(opcode);
+            try emitModrmReg(sink, src_enc, dst_enc);
         },
 
         //---------------------------------------------------------------------
@@ -979,17 +912,17 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             const size = mov.size;
 
             if (size == .size16) {
-                sink.put1(0x66);
+                try sink.put1(0x66);
             }
             const rex = switch (finalized.amode) {
                 .imm_reg => |m| RexPrefix.memOp(dst_enc, m.base.hwEnc(), size == .size64, size == .size8),
                 .imm_reg_reg_shift => |m| RexPrefix.threeOp(dst_enc, m.index.hwEnc(), m.base.hwEnc(), size == .size64, size == .size8),
                 .rip_relative => RexPrefix.twoOp(dst_enc, 0, size == .size64, size == .size8),
             };
-            rex.encode(sink);
+            try rex.encode(sink);
             const opcode: u8 = if (size == .size8) 0x8A else 0x8B;
-            sink.put1(opcode);
-            emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
+            try sink.put1(opcode);
+            try emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
         },
 
         //---------------------------------------------------------------------
@@ -1001,17 +934,17 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             const size = mov.size;
 
             if (size == .size16) {
-                sink.put1(0x66);
+                try sink.put1(0x66);
             }
             const rex = switch (finalized.amode) {
                 .imm_reg => |m| RexPrefix.memOp(src_enc, m.base.hwEnc(), size == .size64, size == .size8),
                 .imm_reg_reg_shift => |m| RexPrefix.threeOp(src_enc, m.index.hwEnc(), m.base.hwEnc(), size == .size64, size == .size8),
                 .rip_relative => RexPrefix.twoOp(src_enc, 0, size == .size64, size == .size8),
             };
-            rex.encode(sink);
+            try rex.encode(sink);
             const opcode: u8 = if (size == .size8) 0x88 else 0x89;
-            sink.put1(opcode);
-            emitModrmSibDisp(sink, src_enc, finalized.amode, 0, null);
+            try sink.put1(opcode);
+            try emitModrmSibDisp(sink, src_enc, finalized.amode, 0, null);
         },
 
         //---------------------------------------------------------------------
@@ -1032,10 +965,10 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
                     const gpr = Gpr{ .reg = r };
                     const src_enc = gpr.hwEnc();
                     const rex = RexPrefix.twoOp(dst_enc, src_enc, need_rex_w, uses_8bit);
-                    rex.encode(sink);
-                    sink.put1(0x0F);
-                    sink.put1(if (uses_8bit) 0xB6 else 0xB7);
-                    emitModrmReg(sink, dst_enc, src_enc);
+                    try rex.encode(sink);
+                    try sink.put1(0x0F);
+                    try sink.put1(if (uses_8bit) 0xB6 else 0xB7);
+                    try emitModrmReg(sink, dst_enc, src_enc);
                 },
                 .mem => |amode| {
                     const finalized = memFinalize(amode, state);
@@ -1044,10 +977,10 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
                         .imm_reg_reg_shift => |m| RexPrefix.threeOp(dst_enc, m.index.hwEnc(), m.base.hwEnc(), need_rex_w, uses_8bit),
                         .rip_relative => RexPrefix.twoOp(dst_enc, 0, need_rex_w, uses_8bit),
                     };
-                    rex.encode(sink);
-                    sink.put1(0x0F);
-                    sink.put1(if (uses_8bit) 0xB6 else 0xB7);
-                    emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
+                    try rex.encode(sink);
+                    try sink.put1(0x0F);
+                    try sink.put1(if (uses_8bit) 0xB6 else 0xB7);
+                    try emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
                 },
             }
         },
@@ -1069,16 +1002,16 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
                     const gpr = Gpr{ .reg = r };
                     const src_enc = gpr.hwEnc();
                     const rex = RexPrefix.twoOp(dst_enc, src_enc, need_rex_w, uses_8bit);
-                    rex.encode(sink);
+                    try rex.encode(sink);
 
                     // MOVSXD (32->64) uses a different opcode
                     if (ext_mode == .lq) {
-                        sink.put1(0x63);
+                        try sink.put1(0x63);
                     } else {
-                        sink.put1(0x0F);
-                        sink.put1(if (uses_8bit) 0xBE else 0xBF);
+                        try sink.put1(0x0F);
+                        try sink.put1(if (uses_8bit) 0xBE else 0xBF);
                     }
-                    emitModrmReg(sink, dst_enc, src_enc);
+                    try emitModrmReg(sink, dst_enc, src_enc);
                 },
                 .mem => |amode| {
                     const finalized = memFinalize(amode, state);
@@ -1087,15 +1020,15 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
                         .imm_reg_reg_shift => |m| RexPrefix.threeOp(dst_enc, m.index.hwEnc(), m.base.hwEnc(), need_rex_w, uses_8bit),
                         .rip_relative => RexPrefix.twoOp(dst_enc, 0, need_rex_w, uses_8bit),
                     };
-                    rex.encode(sink);
+                    try rex.encode(sink);
 
                     if (ext_mode == .lq) {
-                        sink.put1(0x63);
+                        try sink.put1(0x63);
                     } else {
-                        sink.put1(0x0F);
-                        sink.put1(if (uses_8bit) 0xBE else 0xBF);
+                        try sink.put1(0x0F);
+                        try sink.put1(if (uses_8bit) 0xBE else 0xBF);
                     }
-                    emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
+                    try emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
                 },
             }
         },
@@ -1113,16 +1046,16 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
                     const gpr = Gpr{ .reg = r };
                     const src_enc = gpr.hwEnc();
                     const opcodes = aluOpcodes(op, size);
-                    if (opcodes.prefix) |p| sink.put1(p);
+                    if (opcodes.prefix) |p| try sink.put1(p);
                     const rex = RexPrefix.twoOp(src_enc, dst_enc, size == .size64, size == .size8);
-                    rex.encode(sink);
-                    sink.put1(opcodes.opcode);
-                    emitModrmReg(sink, src_enc, dst_enc);
+                    try rex.encode(sink);
+                    try sink.put1(opcodes.opcode);
+                    try emitModrmReg(sink, src_enc, dst_enc);
                 },
                 .mem => |amode| {
                     const finalized = memFinalize(amode, state);
                     const opcodes = aluOpcodes(op, size);
-                    if (opcodes.prefix) |p| sink.put1(p);
+                    if (opcodes.prefix) |p| try sink.put1(p);
                     // For memory source, opcode is different
                     const mem_opcode = opcodes.opcode - 2; // r, r/m form
                     const rex = switch (finalized.amode) {
@@ -1130,33 +1063,33 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
                         .imm_reg_reg_shift => |m| RexPrefix.threeOp(dst_enc, m.index.hwEnc(), m.base.hwEnc(), size == .size64, size == .size8),
                         .rip_relative => RexPrefix.twoOp(dst_enc, 0, size == .size64, size == .size8),
                     };
-                    rex.encode(sink);
-                    sink.put1(mem_opcode);
-                    emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
+                    try rex.encode(sink);
+                    try sink.put1(mem_opcode);
+                    try emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
                 },
                 .imm => |imm_val| {
                     const imm_i32: i32 = @bitCast(imm_val);
                     const use_short = imm_i32 >= -128 and imm_i32 <= 127 and size != .size8;
 
-                    if (size == .size16) sink.put1(0x66);
+                    if (size == .size16) try sink.put1(0x66);
                     const rex = RexPrefix.oneOp(dst_enc, size == .size64, size == .size8);
-                    rex.encode(sink);
+                    try rex.encode(sink);
 
                     if (size == .size8) {
-                        sink.put1(0x80);
-                        emitModrmReg(sink, aluImmOpcodeExt(op), dst_enc);
-                        sink.put1(@truncate(imm_val));
+                        try sink.put1(0x80);
+                        try emitModrmReg(sink, aluImmOpcodeExt(op), dst_enc);
+                        try sink.put1(@truncate(imm_val));
                     } else if (use_short) {
-                        sink.put1(0x83);
-                        emitModrmReg(sink, aluImmOpcodeExt(op), dst_enc);
-                        sink.put1(@truncate(imm_val));
+                        try sink.put1(0x83);
+                        try emitModrmReg(sink, aluImmOpcodeExt(op), dst_enc);
+                        try sink.put1(@truncate(imm_val));
                     } else {
-                        sink.put1(0x81);
-                        emitModrmReg(sink, aluImmOpcodeExt(op), dst_enc);
+                        try sink.put1(0x81);
+                        try emitModrmReg(sink, aluImmOpcodeExt(op), dst_enc);
                         if (size == .size16) {
-                            sink.put2(@truncate(imm_val));
+                            try sink.put2(@truncate(imm_val));
                         } else {
-                            sink.put4(imm_val);
+                            try sink.put4(imm_val);
                         }
                     }
                 },
@@ -1174,24 +1107,24 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             // ShiftKind encodes the opcode extension directly
             const opcode_ext: u8 = kind.enc();
 
-            if (size == .size16) sink.put1(0x66);
+            if (size == .size16) try sink.put1(0x66);
             const rex = RexPrefix.oneOp(dst_enc, size == .size64, size == .size8);
-            rex.encode(sink);
+            try rex.encode(sink);
 
             switch (shift.shift_by) {
                 .cl => {
-                    sink.put1(if (size == .size8) 0xD2 else 0xD3);
-                    emitModrmReg(sink, opcode_ext, dst_enc);
+                    try sink.put1(if (size == .size8) 0xD2 else 0xD3);
+                    try emitModrmReg(sink, opcode_ext, dst_enc);
                 },
                 .imm => |amt| {
                     // Use shorter encoding for shift-by-1
                     if (amt == 1) {
-                        sink.put1(if (size == .size8) 0xD0 else 0xD1);
-                        emitModrmReg(sink, opcode_ext, dst_enc);
+                        try sink.put1(if (size == .size8) 0xD0 else 0xD1);
+                        try emitModrmReg(sink, opcode_ext, dst_enc);
                     } else {
-                        sink.put1(if (size == .size8) 0xC0 else 0xC1);
-                        emitModrmReg(sink, opcode_ext, dst_enc);
-                        sink.put1(amt);
+                        try sink.put1(if (size == .size8) 0xC0 else 0xC1);
+                        try emitModrmReg(sink, opcode_ext, dst_enc);
+                        try sink.put1(amt);
                     }
                 },
             }
@@ -1204,7 +1137,7 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             const dst_enc = unary.dst.toReg().hwEnc();
             const size = unary.size;
 
-            if (size == .size16) sink.put1(0x66);
+            if (size == .size16) try sink.put1(0x66);
 
             // Handle different unary operations
             switch (unary.op) {
@@ -1221,9 +1154,9 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
                         .reg => |r| {
                             const src_enc = r.hwEnc();
                             const rex = RexPrefix.oneOp(src_enc, size == .size64, size == .size8);
-                            rex.encode(sink);
-                            sink.put1(if (size == .size8) 0xF6 else 0xF7);
-                            emitModrmReg(sink, opcode_ext, src_enc);
+                            try rex.encode(sink);
+                            try sink.put1(if (size == .size8) 0xF6 else 0xF7);
+                            try emitModrmReg(sink, opcode_ext, src_enc);
                         },
                         .mem => |amode| {
                             const finalized = memFinalize(amode, state);
@@ -1232,9 +1165,9 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
                                 .imm_reg_reg_shift => |m| RexPrefix.threeOp(opcode_ext, m.index.hwEnc(), m.base.hwEnc(), size == .size64, size == .size8),
                                 .rip_relative => RexPrefix.twoOp(opcode_ext, 0, size == .size64, size == .size8),
                             };
-                            rex.encode(sink);
-                            sink.put1(if (size == .size8) 0xF6 else 0xF7);
-                            emitModrmSibDisp(sink, opcode_ext, finalized.amode, 0, null);
+                            try rex.encode(sink);
+                            try sink.put1(if (size == .size8) 0xF6 else 0xF7);
+                            try emitModrmSibDisp(sink, opcode_ext, finalized.amode, 0, null);
                         },
                     }
                 },
@@ -1244,10 +1177,10 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
                         .reg => |r| {
                             const src_enc = r.hwEnc();
                             const rex = RexPrefix.twoOp(dst_enc, src_enc, size == .size64, false);
-                            rex.encode(sink);
-                            sink.put1(0x0F);
-                            sink.put1(if (unary.op == .bsf) 0xBC else 0xBD);
-                            emitModrmReg(sink, dst_enc, src_enc);
+                            try rex.encode(sink);
+                            try sink.put1(0x0F);
+                            try sink.put1(if (unary.op == .bsf) 0xBC else 0xBD);
+                            try emitModrmReg(sink, dst_enc, src_enc);
                         },
                         .mem => |amode| {
                             const finalized = memFinalize(amode, state);
@@ -1256,30 +1189,30 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
                                 .imm_reg_reg_shift => |m| RexPrefix.threeOp(dst_enc, m.index.hwEnc(), m.base.hwEnc(), size == .size64, false),
                                 .rip_relative => RexPrefix.twoOp(dst_enc, 0, size == .size64, false),
                             };
-                            rex.encode(sink);
-                            sink.put1(0x0F);
-                            sink.put1(if (unary.op == .bsf) 0xBC else 0xBD);
-                            emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
+                            try rex.encode(sink);
+                            try sink.put1(0x0F);
+                            try sink.put1(if (unary.op == .bsf) 0xBC else 0xBD);
+                            try emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
                         },
                     }
                 },
                 // LZCNT, TZCNT, POPCNT use F3 0F prefix
                 .lzcnt, .tzcnt, .popcnt => {
-                    sink.put1(0xF3); // REP prefix
+                    try sink.put1(0xF3); // REP prefix
                     switch (unary.src.inner) {
                         .reg => |r| {
                             const src_enc = r.hwEnc();
                             const rex = RexPrefix.twoOp(dst_enc, src_enc, size == .size64, false);
-                            rex.encode(sink);
-                            sink.put1(0x0F);
+                            try rex.encode(sink);
+                            try sink.put1(0x0F);
                             const opcode2: u8 = switch (unary.op) {
                                 .lzcnt => 0xBD,
                                 .tzcnt => 0xBC,
                                 .popcnt => 0xB8,
                                 else => unreachable,
                             };
-                            sink.put1(opcode2);
-                            emitModrmReg(sink, dst_enc, src_enc);
+                            try sink.put1(opcode2);
+                            try emitModrmReg(sink, dst_enc, src_enc);
                         },
                         .mem => |amode| {
                             const finalized = memFinalize(amode, state);
@@ -1288,16 +1221,16 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
                                 .imm_reg_reg_shift => |m| RexPrefix.threeOp(dst_enc, m.index.hwEnc(), m.base.hwEnc(), size == .size64, false),
                                 .rip_relative => RexPrefix.twoOp(dst_enc, 0, size == .size64, false),
                             };
-                            rex.encode(sink);
-                            sink.put1(0x0F);
+                            try rex.encode(sink);
+                            try sink.put1(0x0F);
                             const opcode2: u8 = switch (unary.op) {
                                 .lzcnt => 0xBD,
                                 .tzcnt => 0xBC,
                                 .popcnt => 0xB8,
                                 else => unreachable,
                             };
-                            sink.put1(opcode2);
-                            emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
+                            try sink.put1(opcode2);
+                            try emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
                         },
                     }
                 },
@@ -1311,15 +1244,15 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             const size = mul.size;
             const opcode_ext: u8 = if (mul.signed) 5 else 4; // IMUL /5, MUL /4
 
-            if (size == .size16) sink.put1(0x66);
+            if (size == .size16) try sink.put1(0x66);
 
             switch (mul.src.inner) {
                 .reg => |r| {
                     const src_enc = r.hwEnc();
                     const rex = RexPrefix.oneOp(src_enc, size == .size64, size == .size8);
-                    rex.encode(sink);
-                    sink.put1(if (size == .size8) 0xF6 else 0xF7);
-                    emitModrmReg(sink, opcode_ext, src_enc);
+                    try rex.encode(sink);
+                    try sink.put1(if (size == .size8) 0xF6 else 0xF7);
+                    try emitModrmReg(sink, opcode_ext, src_enc);
                 },
                 .mem => |amode| {
                     const finalized = memFinalize(amode, state);
@@ -1328,9 +1261,9 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
                         .imm_reg_reg_shift => |m| RexPrefix.threeOp(opcode_ext, m.index.hwEnc(), m.base.hwEnc(), size == .size64, size == .size8),
                         .rip_relative => RexPrefix.twoOp(opcode_ext, 0, size == .size64, size == .size8),
                     };
-                    rex.encode(sink);
-                    sink.put1(if (size == .size8) 0xF6 else 0xF7);
-                    emitModrmSibDisp(sink, opcode_ext, finalized.amode, 0, null);
+                    try rex.encode(sink);
+                    try sink.put1(if (size == .size8) 0xF6 else 0xF7);
+                    try emitModrmSibDisp(sink, opcode_ext, finalized.amode, 0, null);
                 },
             }
         },
@@ -1342,15 +1275,15 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             const size = div.size;
             const opcode_ext: u8 = if (div.signed) 7 else 6; // IDIV /7, DIV /6
 
-            if (size == .size16) sink.put1(0x66);
+            if (size == .size16) try sink.put1(0x66);
 
             switch (div.divisor.inner) {
                 .reg => |r| {
                     const src_enc = r.hwEnc();
                     const rex = RexPrefix.oneOp(src_enc, size == .size64, size == .size8);
-                    rex.encode(sink);
-                    sink.put1(if (size == .size8) 0xF6 else 0xF7);
-                    emitModrmReg(sink, opcode_ext, src_enc);
+                    try rex.encode(sink);
+                    try sink.put1(if (size == .size8) 0xF6 else 0xF7);
+                    try emitModrmReg(sink, opcode_ext, src_enc);
                 },
                 .mem => |amode| {
                     const finalized = memFinalize(amode, state);
@@ -1359,9 +1292,9 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
                         .imm_reg_reg_shift => |m| RexPrefix.threeOp(opcode_ext, m.index.hwEnc(), m.base.hwEnc(), size == .size64, size == .size8),
                         .rip_relative => RexPrefix.twoOp(opcode_ext, 0, size == .size64, size == .size8),
                     };
-                    rex.encode(sink);
-                    sink.put1(if (size == .size8) 0xF6 else 0xF7);
-                    emitModrmSibDisp(sink, opcode_ext, finalized.amode, 0, null);
+                    try rex.encode(sink);
+                    try sink.put1(if (size == .size8) 0xF6 else 0xF7);
+                    try emitModrmSibDisp(sink, opcode_ext, finalized.amode, 0, null);
                 },
             }
         },
@@ -1371,12 +1304,12 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
         //---------------------------------------------------------------------
         .sign_extend_data => |ext| {
             const size = ext.size;
-            if (size == .size16) sink.put1(0x66);
+            if (size == .size16) try sink.put1(0x66);
             const rex = RexPrefix.oneOp(0, size == .size64, false);
-            if (rex.needsEmit()) rex.encode(sink);
+            if (rex.needsEmit()) try rex.encode(sink);
 
             // CWD/CDQ/CQO
-            sink.put1(0x99);
+            try sink.put1(0x99);
         },
 
         //---------------------------------------------------------------------
@@ -1384,9 +1317,9 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
         //---------------------------------------------------------------------
         .jmp_known => |jmp| {
             // Near jump (rel32)
-            sink.put1(0xE9);
-            sink.useLabelAtOffset(sink.curOffset(), jmp.dst, .jmp_rel_32);
-            sink.put4(0); // Placeholder for displacement
+            try sink.put1(0xE9);
+            try sink.useLabelAtOffset(sink.curOffset(), jmp.dst, .jmp_rel_32);
+            try sink.put4(0); // Placeholder for displacement
         },
 
         .jmp_unknown => |jmp| {
@@ -1394,9 +1327,9 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
                 .reg => |r| {
                     const enc = r.hwEnc();
                     const rex = RexPrefix.oneOp(enc, false, false);
-                    rex.encode(sink);
-                    sink.put1(0xFF);
-                    emitModrmReg(sink, 4, enc); // JMP uses /4
+                    try rex.encode(sink);
+                    try sink.put1(0xFF);
+                    try emitModrmReg(sink, 4, enc); // JMP uses /4
                 },
                 .mem => |amode| {
                     const finalized = memFinalize(amode, state);
@@ -1405,28 +1338,28 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
                         .imm_reg_reg_shift => |m| RexPrefix.threeOp(4, m.index.hwEnc(), m.base.hwEnc(), false, false),
                         .rip_relative => RexPrefix.twoOp(4, 0, false, false),
                     };
-                    rex.encode(sink);
-                    sink.put1(0xFF);
-                    emitModrmSibDisp(sink, 4, finalized.amode, 0, null);
+                    try rex.encode(sink);
+                    try sink.put1(0xFF);
+                    try emitModrmSibDisp(sink, 4, finalized.amode, 0, null);
                 },
             }
         },
 
         .jmp_cond => |jmp| {
             // Conditional jump (rel32)
-            sink.put1(0x0F);
-            sink.put1(0x80 + jmp.cc.getEnc());
-            sink.useLabelAtOffset(sink.curOffset(), jmp.taken, .jmp_rel_32);
-            sink.put4(0); // Placeholder for displacement
+            try sink.put1(0x0F);
+            try sink.put1(0x80 + jmp.cc.getEnc());
+            try sink.useLabelAtOffset(sink.curOffset(), jmp.taken, .jmp_rel_32);
+            try sink.put4(0); // Placeholder for displacement
             // Note: not_taken is typically fall-through
         },
 
         .winch_jmp_if => |jmp| {
             // One-way conditional jump
-            sink.put1(0x0F);
-            sink.put1(0x80 + jmp.cc.getEnc());
-            sink.useLabelAtOffset(sink.curOffset(), jmp.taken, .jmp_rel_32);
-            sink.put4(0);
+            try sink.put1(0x0F);
+            try sink.put1(0x80 + jmp.cc.getEnc());
+            try sink.useLabelAtOffset(sink.curOffset(), jmp.taken, .jmp_rel_32);
+            try sink.put4(0);
         },
 
         //---------------------------------------------------------------------
@@ -1434,10 +1367,10 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
         //---------------------------------------------------------------------
         .ret => |ret| {
             if (ret.stack_bytes_to_pop == 0) {
-                sink.put1(0xC3); // RET
+                try sink.put1(0xC3); // RET
             } else {
-                sink.put1(0xC2); // RET imm16
-                sink.put2(@truncate(ret.stack_bytes_to_pop));
+                try sink.put1(0xC2); // RET imm16
+                try sink.put2(@truncate(ret.stack_bytes_to_pop));
             }
         },
 
@@ -1445,15 +1378,11 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
         // Call
         //---------------------------------------------------------------------
         .call_known => |call| {
-            sink.put1(0xE8);
-            sink.put4(0); // Placeholder for displacement
+            try sink.put1(0xE8);
+            try sink.put4(0); // Placeholder for displacement
             // Record relocation for the call target (after emitting the displacement)
             // The addend adjusts for the difference between end of instruction and start of displacement
-            sink.addExternalReloc(
-                call.info.dest,
-                -4,
-                .call_pc_rel_4,
-            );
+            try sink.addRelocExternalName(buffer_mod.Reloc.X86CallPCRel4, call.info.dest, -4);
         },
 
         .call_unknown => |call| {
@@ -1461,9 +1390,9 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
                 .reg => |r| {
                     const enc = r.hwEnc();
                     const rex = RexPrefix.oneOp(enc, false, false);
-                    rex.encode(sink);
-                    sink.put1(0xFF);
-                    emitModrmReg(sink, 2, enc); // CALL uses /2
+                    try rex.encode(sink);
+                    try sink.put1(0xFF);
+                    try emitModrmReg(sink, 2, enc); // CALL uses /2
                 },
                 .mem => |amode| {
                     const finalized = memFinalize(amode, state);
@@ -1472,9 +1401,9 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
                         .imm_reg_reg_shift => |m| RexPrefix.threeOp(2, m.index.hwEnc(), m.base.hwEnc(), false, false),
                         .rip_relative => RexPrefix.twoOp(2, 0, false, false),
                     };
-                    rex.encode(sink);
-                    sink.put1(0xFF);
-                    emitModrmSibDisp(sink, 2, finalized.amode, 0, null);
+                    try rex.encode(sink);
+                    try sink.put1(0xFF);
+                    try emitModrmSibDisp(sink, 2, finalized.amode, 0, null);
                 },
             }
         },
@@ -1484,8 +1413,8 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
         //---------------------------------------------------------------------
         .ud2 => |_| {
             // Note: trap_code is recorded for debugging but doesn't affect encoding
-            sink.put1(0x0F);
-            sink.put1(0x0B);
+            try sink.put1(0x0F);
+            try sink.put1(0x0B);
         },
 
 
@@ -1495,19 +1424,19 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
         .fence => |fence| {
             switch (fence.kind) {
                 .mfence => {
-                    sink.put1(0x0F);
-                    sink.put1(0xAE);
-                    sink.put1(0xF0);
+                    try sink.put1(0x0F);
+                    try sink.put1(0xAE);
+                    try sink.put1(0xF0);
                 },
                 .lfence => {
-                    sink.put1(0x0F);
-                    sink.put1(0xAE);
-                    sink.put1(0xE8);
+                    try sink.put1(0x0F);
+                    try sink.put1(0xAE);
+                    try sink.put1(0xE8);
                 },
                 .sfence => {
-                    sink.put1(0x0F);
-                    sink.put1(0xAE);
-                    sink.put1(0xF8);
+                    try sink.put1(0x0F);
+                    try sink.put1(0xAE);
+                    try sink.put1(0xF8);
                 },
             }
         },
@@ -1519,16 +1448,16 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             const dst_enc = cmov.dst.toReg().hwEnc();
             const size = cmov.size;
 
-            if (size == .size16) sink.put1(0x66);
+            if (size == .size16) try sink.put1(0x66);
 
             switch (cmov.src.inner) {
                 .reg => |r| {
                     const src_enc = r.hwEnc();
                     const rex = RexPrefix.twoOp(dst_enc, src_enc, size == .size64, false);
-                    rex.encode(sink);
-                    sink.put1(0x0F);
-                    sink.put1(0x40 + cmov.cc.getEnc());
-                    emitModrmReg(sink, dst_enc, src_enc);
+                    try rex.encode(sink);
+                    try sink.put1(0x0F);
+                    try sink.put1(0x40 + cmov.cc.getEnc());
+                    try emitModrmReg(sink, dst_enc, src_enc);
                 },
                 .mem => |amode| {
                     const finalized = memFinalize(amode, state);
@@ -1537,10 +1466,10 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
                         .imm_reg_reg_shift => |m| RexPrefix.threeOp(dst_enc, m.index.hwEnc(), m.base.hwEnc(), size == .size64, false),
                         .rip_relative => RexPrefix.twoOp(dst_enc, 0, size == .size64, false),
                     };
-                    rex.encode(sink);
-                    sink.put1(0x0F);
-                    sink.put1(0x40 + cmov.cc.getEnc());
-                    emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
+                    try rex.encode(sink);
+                    try sink.put1(0x0F);
+                    try sink.put1(0x40 + cmov.cc.getEnc());
+                    try emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
                 },
             }
         },
@@ -1551,10 +1480,10 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
         .setcc => |setcc| {
             const dst_enc = setcc.dst.toReg().hwEnc();
             const rex = RexPrefix.oneOp(dst_enc, false, true);
-            rex.encode(sink);
-            sink.put1(0x0F);
-            sink.put1(0x90 + setcc.cc.getEnc());
-            emitModrmReg(sink, 0, dst_enc);
+            try rex.encode(sink);
+            try sink.put1(0x0F);
+            try sink.put1(0x90 + setcc.cc.getEnc());
+            try emitModrmReg(sink, 0, dst_enc);
         },
 
         //---------------------------------------------------------------------
@@ -1567,48 +1496,48 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             switch (cmp.src.inner) {
                 .reg => |r| {
                     const src_enc = r.hwEnc();
-                    if (size == .size16) sink.put1(0x66);
+                    if (size == .size16) try sink.put1(0x66);
                     const rex = RexPrefix.twoOp(src_enc, dst_enc, size == .size64, size == .size8);
-                    rex.encode(sink);
-                    sink.put1(if (size == .size8) 0x38 else 0x39);
-                    emitModrmReg(sink, src_enc, dst_enc);
+                    try rex.encode(sink);
+                    try sink.put1(if (size == .size8) 0x38 else 0x39);
+                    try emitModrmReg(sink, src_enc, dst_enc);
                 },
                 .mem => |amode| {
                     const finalized = memFinalize(amode, state);
-                    if (size == .size16) sink.put1(0x66);
+                    if (size == .size16) try sink.put1(0x66);
                     const rex = switch (finalized.amode) {
                         .imm_reg => |m| RexPrefix.memOp(dst_enc, m.base.hwEnc(), size == .size64, size == .size8),
                         .imm_reg_reg_shift => |m| RexPrefix.threeOp(dst_enc, m.index.hwEnc(), m.base.hwEnc(), size == .size64, size == .size8),
                         .rip_relative => RexPrefix.twoOp(dst_enc, 0, size == .size64, size == .size8),
                     };
-                    rex.encode(sink);
-                    sink.put1(if (size == .size8) 0x3A else 0x3B);
-                    emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
+                    try rex.encode(sink);
+                    try sink.put1(if (size == .size8) 0x3A else 0x3B);
+                    try emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
                 },
                 .imm => |imm_val| {
                     // Interpret u32 as signed for range check
                     const signed_imm: i32 = @bitCast(imm_val);
                     const use_short = signed_imm >= -128 and signed_imm <= 127 and size != .size8;
 
-                    if (size == .size16) sink.put1(0x66);
+                    if (size == .size16) try sink.put1(0x66);
                     const rex = RexPrefix.oneOp(dst_enc, size == .size64, size == .size8);
-                    rex.encode(sink);
+                    try rex.encode(sink);
 
                     if (size == .size8) {
-                        sink.put1(0x80);
-                        emitModrmReg(sink, 7, dst_enc);
-                        sink.put1(@truncate(imm_val));
+                        try sink.put1(0x80);
+                        try emitModrmReg(sink, 7, dst_enc);
+                        try sink.put1(@truncate(imm_val));
                     } else if (use_short) {
-                        sink.put1(0x83);
-                        emitModrmReg(sink, 7, dst_enc);
-                        sink.put1(@truncate(imm_val));
+                        try sink.put1(0x83);
+                        try emitModrmReg(sink, 7, dst_enc);
+                        try sink.put1(@truncate(imm_val));
                     } else {
-                        sink.put1(0x81);
-                        emitModrmReg(sink, 7, dst_enc);
+                        try sink.put1(0x81);
+                        try emitModrmReg(sink, 7, dst_enc);
                         if (size == .size16) {
-                            sink.put2(@truncate(imm_val));
+                            try sink.put2(@truncate(imm_val));
                         } else {
-                            sink.put4(imm_val);
+                            try sink.put4(imm_val);
                         }
                     }
                 },
@@ -1625,24 +1554,24 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             switch (test_inst.src.inner) {
                 .reg => |r| {
                     const src_enc = r.hwEnc();
-                    if (size == .size16) sink.put1(0x66);
+                    if (size == .size16) try sink.put1(0x66);
                     const rex = RexPrefix.twoOp(src_enc, dst_enc, size == .size64, size == .size8);
-                    rex.encode(sink);
-                    sink.put1(if (size == .size8) 0x84 else 0x85);
-                    emitModrmReg(sink, src_enc, dst_enc);
+                    try rex.encode(sink);
+                    try sink.put1(if (size == .size8) 0x84 else 0x85);
+                    try emitModrmReg(sink, src_enc, dst_enc);
                 },
                 .imm => |imm_val| {
-                    if (size == .size16) sink.put1(0x66);
+                    if (size == .size16) try sink.put1(0x66);
                     const rex = RexPrefix.oneOp(dst_enc, size == .size64, size == .size8);
-                    rex.encode(sink);
+                    try rex.encode(sink);
 
-                    sink.put1(if (size == .size8) 0xF6 else 0xF7);
-                    emitModrmReg(sink, 0, dst_enc);
+                    try sink.put1(if (size == .size8) 0xF6 else 0xF7);
+                    try emitModrmReg(sink, 0, dst_enc);
 
                     switch (size) {
-                        .size8 => sink.put1(@truncate(imm_val)),
-                        .size16 => sink.put2(@truncate(imm_val)),
-                        .size32, .size64 => sink.put4(imm_val),
+                        .size8 => try sink.put1(@truncate(imm_val)),
+                        .size16 => try sink.put2(@truncate(imm_val)),
+                        .size32, .size64 => try sink.put4(imm_val),
                     }
                 },
                 .mem => {
@@ -1661,15 +1590,15 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             const finalized = memFinalize(lea.src, state);
             const size = lea.size;
 
-            if (size == .size16) sink.put1(0x66);
+            if (size == .size16) try sink.put1(0x66);
             const rex = switch (finalized.amode) {
                 .imm_reg => |m| RexPrefix.memOp(dst_enc, m.base.hwEnc(), size == .size64, false),
                 .imm_reg_reg_shift => |m| RexPrefix.threeOp(dst_enc, m.index.hwEnc(), m.base.hwEnc(), size == .size64, false),
                 .rip_relative => RexPrefix.twoOp(dst_enc, 0, size == .size64, false),
             };
-            rex.encode(sink);
-            sink.put1(0x8D);
-            emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
+            try rex.encode(sink);
+            try sink.put1(0x8D);
+            try emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
         },
 
 
@@ -1680,12 +1609,12 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             const dst_enc = load.dst.toReg().hwEnc();
             // LEA dst, [rip + symbol]
             const rex = RexPrefix.twoOp(dst_enc, 0, true, false);
-            rex.encode(sink);
-            sink.put1(0x8D);
-            sink.put1(encodeModrm(0b00, dst_enc & 7, 0b101));
-            sink.put4(0);
+            try rex.encode(sink);
+            try sink.put1(0x8D);
+            try sink.put1(encodeModrm(0b00, dst_enc & 7, 0b101));
+            try sink.put4(0);
             // Record relocation for the displacement
-            sink.addExternalReloc(load.name, load.offset, .pc_rel_4);
+            try sink.addRelocExternalName(buffer_mod.Reloc.X86PCRel4, load.name, load.offset);
         },
 
         //---------------------------------------------------------------------
@@ -1707,19 +1636,19 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             const opcode = sseOpcodeBytes(xmm.op);
 
             // Emit prefix if needed (0x66, 0xF3, or 0xF2)
-            if (prefix) |p| sink.put1(p);
+            if (prefix) |p| try sink.put1(p);
 
             switch (xmm.src.inner) {
                 .reg => |r| {
                     const src_enc = r.hwEnc();
                     // REX prefix if needed
                     const rex = RexPrefix.twoOp(dst_enc, src_enc, false, false);
-                    rex.encode(sink);
+                    try rex.encode(sink);
                     // Opcode (0x0F prefix + opcode byte(s))
-                    sink.put1(0x0F);
-                    for (opcode) |b| sink.put1(b);
+                    try sink.put1(0x0F);
+                    for (opcode) |b| try sink.put1(b);
                     // ModRM: mod=11 (register), reg=dst, rm=src
-                    sink.put1(encodeModrm(0b11, dst_enc & 7, src_enc & 7));
+                    try sink.put1(encodeModrm(0b11, dst_enc & 7, src_enc & 7));
                 },
                 .mem => |samode| {
                     const finalized = memFinalize(samode, state);
@@ -1729,10 +1658,10 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
                         .rip_relative => 0,
                     };
                     const rex = RexPrefix.memOp(dst_enc, base_enc, false, false);
-                    rex.encode(sink);
-                    sink.put1(0x0F);
-                    for (opcode) |b| sink.put1(b);
-                    emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
+                    try rex.encode(sink);
+                    try sink.put1(0x0F);
+                    for (opcode) |b| try sink.put1(b);
+                    try emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
                 },
             }
         },
@@ -1743,16 +1672,16 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             const prefix = sseOpcodePrefix(xmm.op);
             const opcode = sseOpcodeBytes(xmm.op);
 
-            if (prefix) |p| sink.put1(p);
+            if (prefix) |p| try sink.put1(p);
 
             switch (xmm.src.inner) {
                 .reg => |r| {
                     const src_enc = r.hwEnc();
                     const rex = RexPrefix.twoOp(dst_enc, src_enc, false, false);
-                    rex.encode(sink);
-                    sink.put1(0x0F);
-                    for (opcode) |b| sink.put1(b);
-                    sink.put1(encodeModrm(0b11, dst_enc & 7, src_enc & 7));
+                    try rex.encode(sink);
+                    try sink.put1(0x0F);
+                    for (opcode) |b| try sink.put1(b);
+                    try sink.put1(encodeModrm(0b11, dst_enc & 7, src_enc & 7));
                 },
                 .mem => |samode| {
                     const finalized = memFinalize(samode, state);
@@ -1762,10 +1691,10 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
                         .rip_relative => 0,
                     };
                     const rex = RexPrefix.memOp(dst_enc, base_enc, false, false);
-                    rex.encode(sink);
-                    sink.put1(0x0F);
-                    for (opcode) |b| sink.put1(b);
-                    emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
+                    try rex.encode(sink);
+                    try sink.put1(0x0F);
+                    for (opcode) |b| try sink.put1(b);
+                    try emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
                 },
             }
         },
@@ -1777,7 +1706,7 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             const prefix = sseOpcodePrefix(xmm.op);
             const opcode = sseOpcodeBytes(xmm.op);
 
-            if (prefix) |p| sink.put1(p);
+            if (prefix) |p| try sink.put1(p);
 
             const base_enc: u8 = switch (finalized.amode) {
                 .imm_reg => |m| m.base.hwEnc(),
@@ -1785,10 +1714,10 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
                 .rip_relative => 0,
             };
             const rex = RexPrefix.memOp(src_enc, base_enc, false, false);
-            rex.encode(sink);
-            sink.put1(0x0F);
-            for (opcode) |b| sink.put1(b);
-            emitModrmSibDisp(sink, src_enc, finalized.amode, 0, null);
+            try rex.encode(sink);
+            try sink.put1(0x0F);
+            for (opcode) |b| try sink.put1(b);
+            try emitModrmSibDisp(sink, src_enc, finalized.amode, 0, null);
         },
 
         .xmm_mov_m_r => |xmm| {
@@ -1798,7 +1727,7 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             const prefix = sseOpcodePrefix(xmm.op);
             const opcode = sseOpcodeBytes(xmm.op);
 
-            if (prefix) |p| sink.put1(p);
+            if (prefix) |p| try sink.put1(p);
 
             const base_enc: u8 = switch (finalized.amode) {
                 .imm_reg => |m| m.base.hwEnc(),
@@ -1806,10 +1735,10 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
                 .rip_relative => 0,
             };
             const rex = RexPrefix.memOp(dst_enc, base_enc, false, false);
-            rex.encode(sink);
-            sink.put1(0x0F);
-            for (opcode) |b| sink.put1(b);
-            emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
+            try rex.encode(sink);
+            try sink.put1(0x0F);
+            for (opcode) |b| try sink.put1(b);
+            try emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
         },
 
         .xmm_to_gpr => |xmm| {
@@ -1818,12 +1747,12 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             const dst_enc = xmm.dst.toReg().hwEnc();
             const is_64bit = xmm.dst_size == .size64;
             // 0x66 prefix for MOVD/MOVQ
-            sink.put1(0x66);
+            try sink.put1(0x66);
             const rex = RexPrefix.twoOp(src_enc, dst_enc, is_64bit, false);
-            rex.encode(sink);
-            sink.put1(0x0F);
-            sink.put1(0x7E); // MOVD/MOVQ opcode
-            sink.put1(encodeModrm(0b11, src_enc & 7, dst_enc & 7));
+            try rex.encode(sink);
+            try sink.put1(0x0F);
+            try sink.put1(0x7E); // MOVD/MOVQ opcode
+            try sink.put1(encodeModrm(0b11, src_enc & 7, dst_enc & 7));
         },
 
         .gpr_to_xmm => |xmm| {
@@ -1831,15 +1760,15 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             const dst_enc = xmm.dst.toReg().hwEnc();
             const is_64bit = xmm.src_size == .size64;
             // 0x66 prefix for MOVD/MOVQ
-            sink.put1(0x66);
+            try sink.put1(0x66);
             switch (xmm.src.inner) {
                 .reg => |r| {
                     const src_enc = r.hwEnc();
                     const rex = RexPrefix.twoOp(dst_enc, src_enc, is_64bit, false);
-                    rex.encode(sink);
-                    sink.put1(0x0F);
-                    sink.put1(0x6E); // MOVD/MOVQ opcode (gpr->xmm)
-                    sink.put1(encodeModrm(0b11, dst_enc & 7, src_enc & 7));
+                    try rex.encode(sink);
+                    try sink.put1(0x0F);
+                    try sink.put1(0x6E); // MOVD/MOVQ opcode (gpr->xmm)
+                    try sink.put1(encodeModrm(0b11, dst_enc & 7, src_enc & 7));
                 },
                 .mem => |samode| {
                     const finalized = memFinalize(samode, state);
@@ -1849,10 +1778,10 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
                         .rip_relative => 0,
                     };
                     const rex = RexPrefix.memOp(dst_enc, base_enc, is_64bit, false);
-                    rex.encode(sink);
-                    sink.put1(0x0F);
-                    sink.put1(0x6E);
-                    emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
+                    try rex.encode(sink);
+                    try sink.put1(0x0F);
+                    try sink.put1(0x6E);
+                    try emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
                 },
             }
         },
@@ -1863,16 +1792,16 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             const prefix = sseOpcodePrefix(xmm.op);
             const opcode = sseOpcodeBytes(xmm.op);
 
-            if (prefix) |p| sink.put1(p);
+            if (prefix) |p| try sink.put1(p);
 
             switch (xmm.src.inner) {
                 .reg => |r| {
                     const src_enc = r.hwEnc();
                     const rex = RexPrefix.twoOp(dst_enc, src_enc, false, false);
-                    rex.encode(sink);
-                    sink.put1(0x0F);
-                    for (opcode) |b| sink.put1(b);
-                    sink.put1(encodeModrm(0b11, dst_enc & 7, src_enc & 7));
+                    try rex.encode(sink);
+                    try sink.put1(0x0F);
+                    for (opcode) |b| try sink.put1(b);
+                    try sink.put1(encodeModrm(0b11, dst_enc & 7, src_enc & 7));
                 },
                 .mem => |samode| {
                     const finalized = memFinalize(samode, state);
@@ -1882,10 +1811,10 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
                         .rip_relative => 0,
                     };
                     const rex = RexPrefix.memOp(dst_enc, base_enc, false, false);
-                    rex.encode(sink);
-                    sink.put1(0x0F);
-                    for (opcode) |b| sink.put1(b);
-                    emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
+                    try rex.encode(sink);
+                    try sink.put1(0x0F);
+                    for (opcode) |b| try sink.put1(b);
+                    try emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
                 },
             }
         },
@@ -1913,40 +1842,40 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             const tmp2_enc = jt.tmp2.toReg().hwEnc();
 
             // Get label for start of jump table
-            const jt_label = sink.getLabel();
+            const jt_label = try sink.getLabel();
 
             // lea start_of_jump_table(%rip), %tmp1
             const lea_rex = RexPrefix.twoOp(tmp1_enc, 0, true, false);
-            lea_rex.encode(sink);
-            sink.put1(0x8D); // LEA opcode
-            sink.put1(encodeModrm(0b00, tmp1_enc & 7, 0b101)); // RIP-relative
+            try lea_rex.encode(sink);
+            try sink.put1(0x8D); // LEA opcode
+            try sink.put1(encodeModrm(0b00, tmp1_enc & 7, 0b101)); // RIP-relative
             const lea_disp_offset = sink.curOffset();
-            sink.put4(0); // Placeholder for displacement
+            try sink.put4(0); // Placeholder for displacement
 
             // movsxd (%tmp1, %idx, 4), %tmp2 - load signed 32-bit, scale by 4
             const movsx_rex = RexPrefix.threeOp(tmp2_enc, idx_enc, tmp1_enc, true, false);
-            movsx_rex.encode(sink);
-            sink.put1(0x63); // MOVSXD opcode
+            try movsx_rex.encode(sink);
+            try sink.put1(0x63); // MOVSXD opcode
             // ModRM: mod=00, reg=tmp2, rm=100 (SIB follows)
-            sink.put1(encodeModrm(0b00, tmp2_enc & 7, 0b100));
+            try sink.put1(encodeModrm(0b00, tmp2_enc & 7, 0b100));
             // SIB: scale=2 (multiply by 4), index=idx, base=tmp1
-            sink.put1(encodeSib(2, idx_enc & 7, tmp1_enc & 7));
+            try sink.put1(encodeSib(2, idx_enc & 7, tmp1_enc & 7));
 
             // add %tmp2, %tmp1
             const add_rex = RexPrefix.twoOp(tmp2_enc, tmp1_enc, true, false);
-            add_rex.encode(sink);
-            sink.put1(0x01); // ADD r/m64, r64
-            sink.put1(encodeModrm(0b11, tmp2_enc & 7, tmp1_enc & 7));
+            try add_rex.encode(sink);
+            try sink.put1(0x01); // ADD r/m64, r64
+            try sink.put1(encodeModrm(0b11, tmp2_enc & 7, tmp1_enc & 7));
 
             // jmp *%tmp1 (indirect jump)
             if (isExtendedReg(tmp1_enc)) {
-                sink.put1(0x41); // REX.B
+                try sink.put1(0x41); // REX.B
             }
-            sink.put1(0xFF); // JMP r/m64
-            sink.put1(encodeModrm(0b11, 4, tmp1_enc & 7)); // /4 for indirect jmp
+            try sink.put1(0xFF); // JMP r/m64
+            try sink.put1(encodeModrm(0b11, 4, tmp1_enc & 7)); // /4 for indirect jmp
 
             // Bind the jump table label
-            sink.bindLabel(jt_label, state);
+            try sink.bindLabel(jt_label);
 
             // Patch the LEA displacement to point here
             _ = lea_disp_offset; // Used implicitly via label
@@ -1957,13 +1886,13 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             const jt_start = sink.curOffset();
             for (jt.targets) |target| {
                 const entry_offset = sink.curOffset();
-                sink.useLabelAtOffset(entry_offset, target, .pc_rel_32);
-                sink.put4(@as(u32, @bitCast(@as(i32, @intCast(@as(i64, entry_offset) - @as(i64, jt_start))))));
+                try sink.useLabelAtOffset(entry_offset, target, .pc_rel_32);
+                try sink.put4(@as(u32, @bitCast(@as(i32, @intCast(@as(i64, entry_offset) - @as(i64, jt_start))))));
             }
             // Default target
             const default_offset = sink.curOffset();
-            sink.useLabelAtOffset(default_offset, jt.default, .pc_rel_32);
-            sink.put4(@as(u32, @bitCast(@as(i32, @intCast(@as(i64, default_offset) - @as(i64, jt_start))))));
+            try sink.useLabelAtOffset(default_offset, jt.default, .pc_rel_32);
+            try sink.put4(@as(u32, @bitCast(@as(i32, @intCast(@as(i64, default_offset) - @as(i64, jt_start))))));
         },
 
         //---------------------------------------------------------------------
@@ -1991,62 +1920,62 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             const need_rex_w: bool = size_qword;
 
             // 1. Load initial value: mov (%mem), %rax (dst_old must be RAX)
-            if (size_word) sink.put1(0x66); // 16-bit prefix
+            if (size_word) try sink.put1(0x66); // 16-bit prefix
             if (size_byte) {
                 // movzbl for 8-bit
                 const rex = RexPrefix.memOp(dst_old_enc, getBaseEnc(finalized.amode), false, false);
-                rex.encode(sink);
-                sink.put1(0x0F);
-                sink.put1(0xB6);
+                try rex.encode(sink);
+                try sink.put1(0x0F);
+                try sink.put1(0xB6);
             } else {
                 const rex = RexPrefix.memOp(dst_old_enc, getBaseEnc(finalized.amode), need_rex_w, false);
-                rex.encode(sink);
-                sink.put1(0x8B); // MOV r, r/m
+                try rex.encode(sink);
+                try sink.put1(0x8B); // MOV r, r/m
             }
-            emitModrmSibDisp(sink, dst_old_enc, finalized.amode, 0, null);
+            try emitModrmSibDisp(sink, dst_old_enc, finalized.amode, 0, null);
 
             // 2. Label for retry loop
-            const again_label = sink.getLabel();
-            sink.bindLabel(again_label, state);
+            const again_label = try sink.getLabel();
+            try sink.bindLabel(again_label);
 
             // 3. Copy old value to temp: mov %rax, %tmp
             {
                 const rex = RexPrefix.twoOp(tmp_enc, dst_old_enc, need_rex_w, false);
-                rex.encode(sink);
+                try rex.encode(sink);
                 if (size_byte) {
-                    sink.put1(0x88); // MOV r/m8, r8
+                    try sink.put1(0x88); // MOV r/m8, r8
                 } else {
-                    if (size_word) sink.put1(0x66);
-                    sink.put1(0x89); // MOV r/m, r
+                    if (size_word) try sink.put1(0x66);
+                    try sink.put1(0x89); // MOV r/m, r
                 }
-                sink.put1(encodeModrm(0b11, dst_old_enc & 7, tmp_enc & 7));
+                try sink.put1(encodeModrm(0b11, dst_old_enc & 7, tmp_enc & 7));
             }
 
             // 4. Apply operation: <op> %operand, %tmp
-            emitAtomicOp(sink, atomic.op, operand_enc, tmp_enc, size_byte, size_word, need_rex_w);
+            try emitAtomicOp(sink, atomic.op, operand_enc, tmp_enc, size_byte, size_word, need_rex_w);
 
             // 5. LOCK CMPXCHG: lock cmpxchg %tmp, (%mem)
-            sink.put1(0xF0); // LOCK prefix
-            if (size_word) sink.put1(0x66);
+            try sink.put1(0xF0); // LOCK prefix
+            if (size_word) try sink.put1(0x66);
             {
                 const rex = RexPrefix.memOp(tmp_enc, getBaseEnc(finalized.amode), need_rex_w, false);
-                rex.encode(sink);
+                try rex.encode(sink);
             }
             if (size_byte) {
-                sink.put1(0x0F);
-                sink.put1(0xB0); // CMPXCHG r/m8, r8
+                try sink.put1(0x0F);
+                try sink.put1(0xB0); // CMPXCHG r/m8, r8
             } else {
-                sink.put1(0x0F);
-                sink.put1(0xB1); // CMPXCHG r/m, r
+                try sink.put1(0x0F);
+                try sink.put1(0xB1); // CMPXCHG r/m, r
             }
-            emitModrmSibDisp(sink, tmp_enc, finalized.amode, 0, null);
+            try emitModrmSibDisp(sink, tmp_enc, finalized.amode, 0, null);
 
             // 6. JNZ again (retry if ZF=0)
-            sink.put1(0x75); // JNZ rel8
+            try sink.put1(0x75); // JNZ rel8
             // Calculate offset back to again_label (will be negative)
             const jnz_offset = sink.curOffset();
-            sink.useLabelAtOffset(jnz_offset, again_label, .jmp_rel_8);
-            sink.put1(0xFE); // Placeholder for short jump offset
+            try sink.useLabelAtOffset(jnz_offset, again_label, .jmp_rel_8);
+            try sink.put1(0xFE); // Placeholder for short jump offset
         },
 
         .atomic_128_rmw_seq => |atomic| {
@@ -2080,37 +2009,37 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
 
             // Load current value from memory into RAX:RDX
             // MOV RAX, [mem]
-            emitLoad64(sink, GprEnc.RAX, finalized.amode);
+            try emitLoad64(sink, GprEnc.RAX, finalized.amode);
             // MOV RDX, [mem+8]
-            emitLoad64AtOffset(sink, GprEnc.RDX, finalized.amode, 8);
+            try emitLoad64AtOffset(sink, GprEnc.RDX, finalized.amode, 8);
 
             // Create loop label
-            const again_label = sink.getLabel();
-            sink.bindLabel(again_label, state);
+            const again_label = try sink.getLabel();
+            try sink.bindLabel(again_label);
 
             // Copy RAX -> temp_low
-            emitMovRR(sink, temp_low_enc, GprEnc.RAX);
+            try emitMovRR(sink, temp_low_enc, GprEnc.RAX);
             // Copy RDX -> temp_high
-            emitMovRR(sink, temp_high_enc, GprEnc.RDX);
+            try emitMovRR(sink, temp_high_enc, GprEnc.RDX);
 
             // Compute new value based on operation
             // Result goes into RCX:RBX
-            emit128AtomicOp(sink, atomic.op, temp_low_enc, temp_high_enc, operand_low_enc, operand_high_enc);
+            try emit128AtomicOp(sink, atomic.op, temp_low_enc, temp_high_enc, operand_low_enc, operand_high_enc);
 
             // LOCK CMPXCHG16B [mem]
-            emitLockCmpxchg16b(sink, finalized.amode);
+            try emitLockCmpxchg16b(sink, finalized.amode);
 
             // JNZ again
-            sink.put1(0x75); // JNZ rel8
+            try sink.put1(0x75); // JNZ rel8
             const jnz_offset = sink.curOffset();
-            sink.useLabelAtOffset(jnz_offset, again_label, .jmp_rel_8);
-            sink.put1(0xFE); // Placeholder
+            try sink.useLabelAtOffset(jnz_offset, again_label, .jmp_rel_8);
+            try sink.put1(0xFE); // Placeholder
 
             // Move result to destination registers
             // MOV dst_old_low, RAX
-            emitMovRR(sink, dst_old_low_enc, GprEnc.RAX);
+            try emitMovRR(sink, dst_old_low_enc, GprEnc.RAX);
             // MOV dst_old_high, RDX
-            emitMovRR(sink, dst_old_high_enc, GprEnc.RDX);
+            try emitMovRR(sink, dst_old_high_enc, GprEnc.RDX);
         },
 
         .atomic_128_xchg_seq => |atomic| {
@@ -2135,29 +2064,29 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             const dst_old_high_enc = atomic.dst_old_high.toReg().hwEnc();
 
             // Load current value from memory into RAX:RDX
-            emitLoad64(sink, GprEnc.RAX, finalized.amode);
-            emitLoad64AtOffset(sink, GprEnc.RDX, finalized.amode, 8);
+            try emitLoad64(sink, GprEnc.RAX, finalized.amode);
+            try emitLoad64AtOffset(sink, GprEnc.RDX, finalized.amode, 8);
 
             // Create loop label
-            const again_label = sink.getLabel();
-            sink.bindLabel(again_label, state);
+            const again_label = try sink.getLabel();
+            try sink.bindLabel(again_label);
 
             // Move new value into RBX:RCX
-            emitMovRR(sink, GprEnc.RBX, operand_low_enc);
-            emitMovRR(sink, GprEnc.RCX, operand_high_enc);
+            try emitMovRR(sink, GprEnc.RBX, operand_low_enc);
+            try emitMovRR(sink, GprEnc.RCX, operand_high_enc);
 
             // LOCK CMPXCHG16B [mem]
-            emitLockCmpxchg16b(sink, finalized.amode);
+            try emitLockCmpxchg16b(sink, finalized.amode);
 
             // JNZ again
-            sink.put1(0x75); // JNZ rel8
+            try sink.put1(0x75); // JNZ rel8
             const jnz_offset = sink.curOffset();
-            sink.useLabelAtOffset(jnz_offset, again_label, .jmp_rel_8);
-            sink.put1(0xFE); // Placeholder
+            try sink.useLabelAtOffset(jnz_offset, again_label, .jmp_rel_8);
+            try sink.put1(0xFE); // Placeholder
 
             // Move result to destination registers
-            emitMovRR(sink, dst_old_low_enc, GprEnc.RAX);
-            emitMovRR(sink, dst_old_high_enc, GprEnc.RDX);
+            try emitMovRR(sink, dst_old_low_enc, GprEnc.RAX);
+            try emitMovRR(sink, dst_old_high_enc, GprEnc.RDX);
         },
 
         //---------------------------------------------------------------------
@@ -2165,9 +2094,9 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
         //---------------------------------------------------------------------
         .jmp_cond_or => |jco| {
             // jcc1 taken; jcc2 taken; jmp not_taken
-            emitCondJmp(sink, jco.cc1, jco.taken);
-            emitCondJmp(sink, jco.cc2, jco.taken);
-            emitUncondJmp(sink, jco.not_taken);
+            try emitCondJmp(sink, jco.cc1, jco.taken);
+            try emitCondJmp(sink, jco.cc2, jco.taken);
+            try emitUncondJmp(sink, jco.not_taken);
         },
 
         //---------------------------------------------------------------------
@@ -2177,45 +2106,45 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             // Conditional trap: if condition is true, execute UD2
             // Implementation: Jcc over the UD2, then UD2
             // We invert the condition to skip the trap
-            const skip_label = sink.getLabel();
+            const skip_label = try sink.getLabel();
             // Jump over the trap if condition is NOT true
-            emitCondJmpRel8(sink, trap.cc.invert(), skip_label);
+            try emitCondJmpRel8(sink, trap.cc.invert(), skip_label);
             // UD2 (trap)
-            sink.put1(0x0F);
-            sink.put1(0x0B);
-            sink.bindLabel(skip_label, state);
+            try sink.put1(0x0F);
+            try sink.put1(0x0B);
+            try sink.bindLabel(skip_label);
         },
 
         .trap_if_and => |trap| {
             // Trap if both conditions are true (cc1 AND cc2)
             // Implementation: skip if !cc1 OR !cc2
-            const skip_label = sink.getLabel();
+            const skip_label = try sink.getLabel();
             // Jump to skip if !cc1
-            emitCondJmpRel8(sink, trap.cc1.invert(), skip_label);
+            try emitCondJmpRel8(sink, trap.cc1.invert(), skip_label);
             // Jump to skip if !cc2
-            emitCondJmpRel8(sink, trap.cc2.invert(), skip_label);
+            try emitCondJmpRel8(sink, trap.cc2.invert(), skip_label);
             // UD2 (trap) - both conditions were true
-            sink.put1(0x0F);
-            sink.put1(0x0B);
-            sink.bindLabel(skip_label, state);
+            try sink.put1(0x0F);
+            try sink.put1(0x0B);
+            try sink.bindLabel(skip_label);
         },
 
         .trap_if_or => |trap| {
             // Trap if either condition is true (cc1 OR cc2)
             // Implementation: Jcc1 to trap, Jcc2 to trap, jmp skip, trap: UD2, skip:
-            const trap_label = sink.getLabel();
-            const skip_label = sink.getLabel();
+            const trap_label = try sink.getLabel();
+            const skip_label = try sink.getLabel();
             // Jump to trap if cc1
-            emitCondJmpRel8(sink, trap.cc1, trap_label);
+            try emitCondJmpRel8(sink, trap.cc1, trap_label);
             // Jump to trap if cc2
-            emitCondJmpRel8(sink, trap.cc2, trap_label);
+            try emitCondJmpRel8(sink, trap.cc2, trap_label);
             // Neither condition was true, skip the trap
-            emitUncondJmpRel8(sink, skip_label);
+            try emitUncondJmpRel8(sink, skip_label);
             // trap: UD2
-            sink.bindLabel(trap_label, state);
-            sink.put1(0x0F);
-            sink.put1(0x0B);
-            sink.bindLabel(skip_label, state);
+            try sink.bindLabel(trap_label);
+            try sink.put1(0x0F);
+            try sink.put1(0x0B);
+            try sink.bindLabel(skip_label);
         },
 
         //---------------------------------------------------------------------
@@ -2262,61 +2191,61 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
 //=============================================================================
 
 /// Emit a NOP of the specified length (1-9 bytes).
-pub fn emitNop(sink: *MachBuffer, len: u8) void {
+pub fn emitNop(sink: *MachBuffer, len: u8) !void {
     switch (len) {
         0 => {},
-        1 => sink.put1(0x90),
+        1 => try sink.put1(0x90),
         2 => {
-            sink.put1(0x66);
-            sink.put1(0x90);
+            try sink.put1(0x66);
+            try sink.put1(0x90);
         },
         3 => {
-            sink.put1(0x0F);
-            sink.put1(0x1F);
-            sink.put1(0x00);
+            try sink.put1(0x0F);
+            try sink.put1(0x1F);
+            try sink.put1(0x00);
         },
         4 => {
-            sink.put1(0x0F);
-            sink.put1(0x1F);
-            sink.put1(0x40);
-            sink.put1(0x00);
+            try sink.put1(0x0F);
+            try sink.put1(0x1F);
+            try sink.put1(0x40);
+            try sink.put1(0x00);
         },
         5 => {
-            sink.put1(0x0F);
-            sink.put1(0x1F);
-            sink.put1(0x44);
-            sink.put2(0x0000);
+            try sink.put1(0x0F);
+            try sink.put1(0x1F);
+            try sink.put1(0x44);
+            try sink.put2(0x0000);
         },
         6 => {
-            sink.put1(0x66);
-            sink.put1(0x0F);
-            sink.put1(0x1F);
-            sink.put1(0x44);
-            sink.put2(0x0000);
+            try sink.put1(0x66);
+            try sink.put1(0x0F);
+            try sink.put1(0x1F);
+            try sink.put1(0x44);
+            try sink.put2(0x0000);
         },
         7 => {
-            sink.put1(0x0F);
-            sink.put1(0x1F);
-            sink.put1(0x80);
-            sink.put4(0x00000000);
+            try sink.put1(0x0F);
+            try sink.put1(0x1F);
+            try sink.put1(0x80);
+            try sink.put4(0x00000000);
         },
         8 => {
-            sink.put1(0x0F);
-            sink.put1(0x1F);
-            sink.put1(0x84);
-            sink.put1(0x00);
-            sink.put4(0x00000000);
+            try sink.put1(0x0F);
+            try sink.put1(0x1F);
+            try sink.put1(0x84);
+            try sink.put1(0x00);
+            try sink.put4(0x00000000);
         },
         else => {
             // For len >= 9, use 9-byte NOP and recurse
-            sink.put1(0x66);
-            sink.put1(0x0F);
-            sink.put1(0x1F);
-            sink.put1(0x84);
-            sink.put1(0x00);
-            sink.put4(0x00000000);
+            try sink.put1(0x66);
+            try sink.put1(0x0F);
+            try sink.put1(0x1F);
+            try sink.put1(0x84);
+            try sink.put1(0x00);
+            try sink.put4(0x00000000);
             if (len > 9) {
-                emitNop(sink, len - 9);
+                try emitNop(sink, len - 9);
             }
         },
     }
@@ -2333,7 +2262,7 @@ fn sseOpcodePrefix(op: SseOpcode) ?u8 {
         .addps, .subps, .mulps, .divps, .maxps, .minps, .movaps, .movups, .sqrtps, .rsqrtps, .rcpps, .andps, .andnps, .orps, .xorps, .cmpps, .shufps => null,
 
         // 0x66 prefix (packed double and integer SIMD)
-        .addpd, .subpd, .mulpd, .divpd, .maxpd, .minpd, .movapd, .movupd, .sqrtpd, .andpd, .andnpd, .orpd, .xorpd, .cmppd, .shufpd, .addsd, .subsd, .mulsd, .divsd, .maxsd, .minsd, .sqrtsd, .cmpsd, .comisd, .ucomisd, .cvtss2sd, .cvtsd2ss, .cvtdq2pd, .cvtpd2dq, .cvttpd2dq, .cvtdq2ps, .cvtps2dq, .cvttps2dq, .movdqa, .movdqu, .pand, .pandn, .por, .pxor, .paddq, .psubq, .pmullw, .pmulhw, .pmulhuw, .pmuludq, .pmulld, .paddb, .paddw, .paddd, .psubb, .psubw, .psubd, .pcmpeqb, .pcmpeqw, .pcmpeqd, .pcmpeqq, .pcmpgtb, .pcmpgtw, .pcmpgtd, .pcmpgtq, .psllw, .pslld, .psllq, .psrlw, .psrld, .psrlq, .psraw, .psrad, .pshufd, .punpcklbw, .punpcklwd, .punpckldq, .punpcklqdq, .punpckhbw, .punpckhwd, .punpckhdq, .punpckhqdq, .haddpd, .hsubpd, .phaddd, .phaddw, .phsubd, .phsubw, .movmskpd, .pmovmskb, .pblendw, .blendpd, .pblendvb, .blendvpd, .insertps, .pinsrb, .pinsrw, .pinsrd, .pinsrq, .extractps, .pextrb, .pextrw, .pextrd, .pextrq => 0x66,
+        .addpd, .subpd, .mulpd, .divpd, .maxpd, .minpd, .movapd, .movupd, .sqrtpd, .andpd, .andnpd, .orpd, .xorpd, .cmppd, .shufpd, .addsd, .subsd, .mulsd, .divsd, .maxsd, .minsd, .sqrtsd, .cmpsd, .comisd, .ucomisd, .cvtss2sd, .cvtsd2ss, .cvtdq2pd, .cvtpd2dq, .cvttpd2dq, .cvtdq2ps, .cvtps2dq, .cvttps2dq, .movdqa, .movdqu, .pand, .pandn, .por, .pxor, .paddq, .psubq, .pmullw, .pmulhw, .pmulhuw, .pmuludq, .pmulld, .paddb, .paddw, .paddd, .psubb, .psubw, .psubd, .pcmpeqb, .pcmpeqw, .pcmpeqd, .pcmpeqq, .pcmpgtb, .pcmpgtw, .pcmpgtd, .pcmpgtq, .psllw, .pslld, .psllq, .psrlw, .psrld, .psrlq, .psraw, .psrad, .pshufd, .punpcklbw, .punpcklwd, .punpckldq, .punpcklqdq, .punpckhbw, .punpckhwd, .punpckhdq, .punpckhqdq, .haddpd, .hsubpd, .phaddd, .phaddw, .phsubd, .phsubw, .movmskpd, .pmovmskb, .pblendw, .blendpd, .pblendvb, .blendvpd, .insertps, .pinsrb, .pinsrw, .pinsrd, .pinsrq, .extractps, .pextrb, .pextrw, .pextrd, .pextrq, .movd, .movq => 0x66,
 
         // 0xF3 prefix (scalar single)
         .addss, .subss, .mulss, .divss, .maxss, .minss, .sqrtss, .rsqrtss, .rcpss, .cmpss, .comiss, .ucomiss, .cvtsi2ss, .cvtss2si, .cvttss2si, .movss, .pshufhw => 0xF3,
@@ -2373,6 +2302,7 @@ fn sseOpcodeBytes(op: SseOpcode) []const u8 {
         .movdqu => &[_]u8{0x6F},
         .movlps, .movlpd => &[_]u8{0x12},
         .movhps, .movhpd => &[_]u8{0x16},
+        .movd, .movq => &[_]u8{0x6E}, // GPR to XMM (use REX.W for movq)
 
         // Logical
         .andps, .andpd => &[_]u8{0x54},
@@ -2534,70 +2464,70 @@ fn getBaseEnc(amode: Amode) u8 {
 }
 
 /// Emit the atomic operation (AND/OR/XOR/etc) for atomic_rmw_seq.
-fn emitAtomicOp(sink: *MachBuffer, op: AtomicRmwSeqOp, operand_enc: u8, tmp_enc: u8, size_byte: bool, size_word: bool, need_rex_w: bool) void {
+fn emitAtomicOp(sink: *MachBuffer, op: AtomicRmwSeqOp, operand_enc: u8, tmp_enc: u8, size_byte: bool, size_word: bool, need_rex_w: bool) !void {
     const rex = RexPrefix.twoOp(operand_enc, tmp_enc, need_rex_w, false);
 
     switch (op) {
         .add => {
-            if (size_word) sink.put1(0x66);
-            rex.encode(sink);
-            sink.put1(if (size_byte) 0x00 else 0x01); // ADD r/m, r
-            sink.put1(encodeModrm(0b11, operand_enc & 7, tmp_enc & 7));
+            if (size_word) try sink.put1(0x66);
+            try rex.encode(sink);
+            try sink.put1(if (size_byte) 0x00 else 0x01); // ADD r/m, r
+            try sink.put1(encodeModrm(0b11, operand_enc & 7, tmp_enc & 7));
         },
         .sub => {
-            if (size_word) sink.put1(0x66);
-            rex.encode(sink);
-            sink.put1(if (size_byte) 0x28 else 0x29); // SUB r/m, r
-            sink.put1(encodeModrm(0b11, operand_enc & 7, tmp_enc & 7));
+            if (size_word) try sink.put1(0x66);
+            try rex.encode(sink);
+            try sink.put1(if (size_byte) 0x28 else 0x29); // SUB r/m, r
+            try sink.put1(encodeModrm(0b11, operand_enc & 7, tmp_enc & 7));
         },
         .xchg => {
             // For XCHG, we just move the operand to temp (old value will be returned)
-            if (size_word) sink.put1(0x66);
-            rex.encode(sink);
-            sink.put1(if (size_byte) 0x88 else 0x89); // MOV r/m, r
-            sink.put1(encodeModrm(0b11, operand_enc & 7, tmp_enc & 7));
+            if (size_word) try sink.put1(0x66);
+            try rex.encode(sink);
+            try sink.put1(if (size_byte) 0x88 else 0x89); // MOV r/m, r
+            try sink.put1(encodeModrm(0b11, operand_enc & 7, tmp_enc & 7));
         },
         .@"and" => {
-            if (size_word) sink.put1(0x66);
-            rex.encode(sink);
-            sink.put1(if (size_byte) 0x20 else 0x21); // AND r/m, r
-            sink.put1(encodeModrm(0b11, operand_enc & 7, tmp_enc & 7));
+            if (size_word) try sink.put1(0x66);
+            try rex.encode(sink);
+            try sink.put1(if (size_byte) 0x20 else 0x21); // AND r/m, r
+            try sink.put1(encodeModrm(0b11, operand_enc & 7, tmp_enc & 7));
         },
         .@"or" => {
-            if (size_word) sink.put1(0x66);
-            rex.encode(sink);
-            sink.put1(if (size_byte) 0x08 else 0x09); // OR r/m, r
-            sink.put1(encodeModrm(0b11, operand_enc & 7, tmp_enc & 7));
+            if (size_word) try sink.put1(0x66);
+            try rex.encode(sink);
+            try sink.put1(if (size_byte) 0x08 else 0x09); // OR r/m, r
+            try sink.put1(encodeModrm(0b11, operand_enc & 7, tmp_enc & 7));
         },
         .xor => {
-            if (size_word) sink.put1(0x66);
-            rex.encode(sink);
-            sink.put1(if (size_byte) 0x30 else 0x31); // XOR r/m, r
-            sink.put1(encodeModrm(0b11, operand_enc & 7, tmp_enc & 7));
+            if (size_word) try sink.put1(0x66);
+            try rex.encode(sink);
+            try sink.put1(if (size_byte) 0x30 else 0x31); // XOR r/m, r
+            try sink.put1(encodeModrm(0b11, operand_enc & 7, tmp_enc & 7));
         },
         .nand => {
             // AND then NOT
-            if (size_word) sink.put1(0x66);
-            rex.encode(sink);
-            sink.put1(if (size_byte) 0x20 else 0x21); // AND
-            sink.put1(encodeModrm(0b11, operand_enc & 7, tmp_enc & 7));
+            if (size_word) try sink.put1(0x66);
+            try rex.encode(sink);
+            try sink.put1(if (size_byte) 0x20 else 0x21); // AND
+            try sink.put1(encodeModrm(0b11, operand_enc & 7, tmp_enc & 7));
             // NOT tmp
-            if (size_word) sink.put1(0x66);
+            if (size_word) try sink.put1(0x66);
             const not_rex = RexPrefix.oneOp(tmp_enc, need_rex_w, false);
-            not_rex.encode(sink);
-            sink.put1(if (size_byte) 0xF6 else 0xF7); // NOT r/m
-            sink.put1(encodeModrm(0b11, 2, tmp_enc & 7)); // /2 for NOT
+            try not_rex.encode(sink);
+            try sink.put1(if (size_byte) 0xF6 else 0xF7); // NOT r/m
+            try sink.put1(encodeModrm(0b11, 2, tmp_enc & 7)); // /2 for NOT
         },
         .umin, .umax, .smin, .smax => {
             // CMP then CMOVcc
-            if (size_word) sink.put1(0x66);
-            rex.encode(sink);
-            sink.put1(if (size_byte) 0x38 else 0x39); // CMP r/m, r
-            sink.put1(encodeModrm(0b11, operand_enc & 7, tmp_enc & 7));
+            if (size_word) try sink.put1(0x66);
+            try rex.encode(sink);
+            try sink.put1(if (size_byte) 0x38 else 0x39); // CMP r/m, r
+            try sink.put1(encodeModrm(0b11, operand_enc & 7, tmp_enc & 7));
             // CMOVcc operand -> tmp
             const cmov_rex = RexPrefix.twoOp(tmp_enc, operand_enc, need_rex_w, false);
-            cmov_rex.encode(sink);
-            sink.put1(0x0F);
+            try cmov_rex.encode(sink);
+            try sink.put1(0x0F);
             const cmov_cc: u8 = switch (op) {
                 .umin => 0x46, // CMOVBE
                 .umax => 0x43, // CMOVAE
@@ -2605,8 +2535,8 @@ fn emitAtomicOp(sink: *MachBuffer, op: AtomicRmwSeqOp, operand_enc: u8, tmp_enc:
                 .smax => 0x4D, // CMOVGE
                 else => unreachable,
             };
-            sink.put1(cmov_cc);
-            sink.put1(encodeModrm(0b11, tmp_enc & 7, operand_enc & 7));
+            try sink.put1(cmov_cc);
+            try sink.put1(encodeModrm(0b11, tmp_enc & 7, operand_enc & 7));
         },
     }
 }
@@ -2616,26 +2546,26 @@ fn emitAtomicOp(sink: *MachBuffer, op: AtomicRmwSeqOp, operand_enc: u8, tmp_enc:
 //=============================================================================
 
 /// Emit MOV r64, r64.
-fn emitMovRR(sink: *MachBuffer, dst_enc: u8, src_enc: u8) void {
+fn emitMovRR(sink: *MachBuffer, dst_enc: u8, src_enc: u8) !void {
     // REX.W + 89 /r = MOV r/m64, r64
     const rex = RexPrefix.twoOp(src_enc, dst_enc, true, false);
-    rex.encode(sink);
-    sink.put1(0x89);
-    sink.put1(encodeModrm(0b11, src_enc & 7, dst_enc & 7));
+    try rex.encode(sink);
+    try sink.put1(0x89);
+    try sink.put1(encodeModrm(0b11, src_enc & 7, dst_enc & 7));
 }
 
 /// Emit MOV r64, [mem].
-fn emitLoad64(sink: *MachBuffer, dst_enc: u8, amode: Amode) void {
+fn emitLoad64(sink: *MachBuffer, dst_enc: u8, amode: Amode) !void {
     // REX.W + 8B /r = MOV r64, r/m64
     const base_enc = getBaseEnc(amode);
     const rex = RexPrefix.memOp(dst_enc, base_enc, true, false);
-    rex.encode(sink);
-    sink.put1(0x8B);
-    emitModrmSibDisp(sink, dst_enc, amode, 0, null);
+    try rex.encode(sink);
+    try sink.put1(0x8B);
+    try emitModrmSibDisp(sink, dst_enc, amode, 0, null);
 }
 
 /// Emit MOV r64, [mem+offset].
-fn emitLoad64AtOffset(sink: *MachBuffer, dst_enc: u8, amode: Amode, extra_offset: i32) void {
+fn emitLoad64AtOffset(sink: *MachBuffer, dst_enc: u8, amode: Amode, extra_offset: i32) !void {
     // Adjust the displacement
     const adjusted_amode = switch (amode) {
         .imm_reg => |m| Amode{ .imm_reg = .{
@@ -2654,22 +2584,22 @@ fn emitLoad64AtOffset(sink: *MachBuffer, dst_enc: u8, amode: Amode, extra_offset
             .target = m.target,
         } },
     };
-    emitLoad64(sink, dst_enc, adjusted_amode);
+    try emitLoad64(sink, dst_enc, adjusted_amode);
 }
 
 /// Emit LOCK CMPXCHG16B [mem].
 /// Compares RDX:RAX with m128. If equal, stores RCX:RBX and sets ZF=1.
 /// Otherwise loads m128 into RDX:RAX and clears ZF=0.
-fn emitLockCmpxchg16b(sink: *MachBuffer, amode: Amode) void {
+fn emitLockCmpxchg16b(sink: *MachBuffer, amode: Amode) !void {
     // LOCK prefix
-    sink.put1(0xF0);
+    try sink.put1(0xF0);
     // REX.W + 0F C7 /1 = CMPXCHG16B m128
     const base_enc = getBaseEnc(amode);
     const rex = RexPrefix.memOp(1, base_enc, true, false); // REX.W for 128-bit
-    rex.encode(sink);
-    sink.put1(0x0F);
-    sink.put1(0xC7);
-    emitModrmSibDisp(sink, 1, amode, 0, null); // /1 opcode extension
+    try rex.encode(sink);
+    try sink.put1(0x0F);
+    try sink.put1(0xC7);
+    try emitModrmSibDisp(sink, 1, amode, 0, null); // /1 opcode extension
 }
 
 /// Emit the 128-bit atomic operation.
@@ -2682,72 +2612,72 @@ fn emit128AtomicOp(
     temp_high_enc: u8,
     operand_low_enc: u8,
     operand_high_enc: u8,
-) void {
+) !void {
     // First, copy temp to RBX:RCX (the destination for CMPXCHG16B)
-    emitMovRR(sink, GprEnc.RBX, temp_low_enc);
-    emitMovRR(sink, GprEnc.RCX, temp_high_enc);
+    try emitMovRR(sink, GprEnc.RBX, temp_low_enc);
+    try emitMovRR(sink, GprEnc.RCX, temp_high_enc);
 
     // Then apply the operation to RBX:RCX
     switch (op) {
         .add => {
             // ADD RBX, operand_low; ADC RCX, operand_high
             var rex = RexPrefix.twoOp(operand_low_enc, GprEnc.RBX, true, false);
-            rex.encode(sink);
-            sink.put1(0x01); // ADD r/m64, r64
-            sink.put1(encodeModrm(0b11, operand_low_enc & 7, GprEnc.RBX & 7));
+            try rex.encode(sink);
+            try sink.put1(0x01); // ADD r/m64, r64
+            try sink.put1(encodeModrm(0b11, operand_low_enc & 7, GprEnc.RBX & 7));
 
             rex = RexPrefix.twoOp(operand_high_enc, GprEnc.RCX, true, false);
-            rex.encode(sink);
-            sink.put1(0x11); // ADC r/m64, r64
-            sink.put1(encodeModrm(0b11, operand_high_enc & 7, GprEnc.RCX & 7));
+            try rex.encode(sink);
+            try sink.put1(0x11); // ADC r/m64, r64
+            try sink.put1(encodeModrm(0b11, operand_high_enc & 7, GprEnc.RCX & 7));
         },
         .sub => {
             // SUB RBX, operand_low; SBB RCX, operand_high
             var rex = RexPrefix.twoOp(operand_low_enc, GprEnc.RBX, true, false);
-            rex.encode(sink);
-            sink.put1(0x29); // SUB r/m64, r64
-            sink.put1(encodeModrm(0b11, operand_low_enc & 7, GprEnc.RBX & 7));
+            try rex.encode(sink);
+            try sink.put1(0x29); // SUB r/m64, r64
+            try sink.put1(encodeModrm(0b11, operand_low_enc & 7, GprEnc.RBX & 7));
 
             rex = RexPrefix.twoOp(operand_high_enc, GprEnc.RCX, true, false);
-            rex.encode(sink);
-            sink.put1(0x19); // SBB r/m64, r64
-            sink.put1(encodeModrm(0b11, operand_high_enc & 7, GprEnc.RCX & 7));
+            try rex.encode(sink);
+            try sink.put1(0x19); // SBB r/m64, r64
+            try sink.put1(encodeModrm(0b11, operand_high_enc & 7, GprEnc.RCX & 7));
         },
         .@"and" => {
             // AND RBX, operand_low; AND RCX, operand_high
             var rex = RexPrefix.twoOp(operand_low_enc, GprEnc.RBX, true, false);
-            rex.encode(sink);
-            sink.put1(0x21); // AND r/m64, r64
-            sink.put1(encodeModrm(0b11, operand_low_enc & 7, GprEnc.RBX & 7));
+            try rex.encode(sink);
+            try sink.put1(0x21); // AND r/m64, r64
+            try sink.put1(encodeModrm(0b11, operand_low_enc & 7, GprEnc.RBX & 7));
 
             rex = RexPrefix.twoOp(operand_high_enc, GprEnc.RCX, true, false);
-            rex.encode(sink);
-            sink.put1(0x21);
-            sink.put1(encodeModrm(0b11, operand_high_enc & 7, GprEnc.RCX & 7));
+            try rex.encode(sink);
+            try sink.put1(0x21);
+            try sink.put1(encodeModrm(0b11, operand_high_enc & 7, GprEnc.RCX & 7));
         },
         .@"or" => {
             // OR RBX, operand_low; OR RCX, operand_high
             var rex = RexPrefix.twoOp(operand_low_enc, GprEnc.RBX, true, false);
-            rex.encode(sink);
-            sink.put1(0x09); // OR r/m64, r64
-            sink.put1(encodeModrm(0b11, operand_low_enc & 7, GprEnc.RBX & 7));
+            try rex.encode(sink);
+            try sink.put1(0x09); // OR r/m64, r64
+            try sink.put1(encodeModrm(0b11, operand_low_enc & 7, GprEnc.RBX & 7));
 
             rex = RexPrefix.twoOp(operand_high_enc, GprEnc.RCX, true, false);
-            rex.encode(sink);
-            sink.put1(0x09);
-            sink.put1(encodeModrm(0b11, operand_high_enc & 7, GprEnc.RCX & 7));
+            try rex.encode(sink);
+            try sink.put1(0x09);
+            try sink.put1(encodeModrm(0b11, operand_high_enc & 7, GprEnc.RCX & 7));
         },
         .xor => {
             // XOR RBX, operand_low; XOR RCX, operand_high
             var rex = RexPrefix.twoOp(operand_low_enc, GprEnc.RBX, true, false);
-            rex.encode(sink);
-            sink.put1(0x31); // XOR r/m64, r64
-            sink.put1(encodeModrm(0b11, operand_low_enc & 7, GprEnc.RBX & 7));
+            try rex.encode(sink);
+            try sink.put1(0x31); // XOR r/m64, r64
+            try sink.put1(encodeModrm(0b11, operand_low_enc & 7, GprEnc.RBX & 7));
 
             rex = RexPrefix.twoOp(operand_high_enc, GprEnc.RCX, true, false);
-            rex.encode(sink);
-            sink.put1(0x31);
-            sink.put1(encodeModrm(0b11, operand_high_enc & 7, GprEnc.RCX & 7));
+            try rex.encode(sink);
+            try sink.put1(0x31);
+            try sink.put1(encodeModrm(0b11, operand_high_enc & 7, GprEnc.RCX & 7));
         },
     }
 }
@@ -2757,40 +2687,40 @@ fn emit128AtomicOp(
 //=============================================================================
 
 /// Emit a conditional jump to a label.
-fn emitCondJmp(sink: *MachBuffer, cc: CC, target: MachLabel) void {
+fn emitCondJmp(sink: *MachBuffer, cc: CC, target: MachLabel) !void {
     // 0x0F 0x8X rel32 format for far conditional jump
-    sink.put1(0x0F);
-    sink.put1(0x80 + @intFromEnum(cc));
+    try sink.put1(0x0F);
+    try sink.put1(0x80 + @intFromEnum(cc));
     const offset = sink.curOffset();
-    sink.useLabelAtOffset(offset, target, .jmp_rel_32);
-    sink.put4(0); // Placeholder for displacement
+    try sink.useLabelAtOffset(offset, target, .jmp_rel_32);
+    try sink.put4(0); // Placeholder for displacement
 }
 
 /// Emit an unconditional jump to a label.
-fn emitUncondJmp(sink: *MachBuffer, target: MachLabel) void {
+fn emitUncondJmp(sink: *MachBuffer, target: MachLabel) !void {
     // 0xE9 rel32 format for far unconditional jump
-    sink.put1(0xE9);
+    try sink.put1(0xE9);
     const offset = sink.curOffset();
-    sink.useLabelAtOffset(offset, target, .jmp_rel_32);
-    sink.put4(0); // Placeholder for displacement
+    try sink.useLabelAtOffset(offset, target, .jmp_rel_32);
+    try sink.put4(0); // Placeholder for displacement
 }
 
 /// Emit a short conditional jump to a label (rel8).
-fn emitCondJmpRel8(sink: *MachBuffer, cc: CC, target: MachLabel) void {
+fn emitCondJmpRel8(sink: *MachBuffer, cc: CC, target: MachLabel) !void {
     // 0x7X rel8 format for short conditional jump
-    sink.put1(0x70 + @intFromEnum(cc));
+    try sink.put1(0x70 + @intFromEnum(cc));
     const offset = sink.curOffset();
-    sink.useLabelAtOffset(offset, target, .jmp_rel_8);
-    sink.put1(0xFE); // Placeholder for displacement
+    try sink.useLabelAtOffset(offset, target, .jmp_rel_8);
+    try sink.put1(0xFE); // Placeholder for displacement
 }
 
 /// Emit a short unconditional jump to a label (rel8).
-fn emitUncondJmpRel8(sink: *MachBuffer, target: MachLabel) void {
+fn emitUncondJmpRel8(sink: *MachBuffer, target: MachLabel) !void {
     // 0xEB rel8 format for short unconditional jump
-    sink.put1(0xEB);
+    try sink.put1(0xEB);
     const offset = sink.curOffset();
-    sink.useLabelAtOffset(offset, target, .jmp_rel_8);
-    sink.put1(0xFE); // Placeholder for displacement
+    try sink.useLabelAtOffset(offset, target, .jmp_rel_8);
+    try sink.put1(0xFE); // Placeholder for displacement
 }
 
 //=============================================================================
@@ -2862,20 +2792,18 @@ test "NOP emission" {
     defer sink.deinit();
 
     // Test 1-byte NOP
-    emitNop(&sink, 1);
+    try emitNop(&sink, 1);
     try std.testing.expectEqual(@as(u8, 0x90), sink.data.items[0]);
 
     // Test 2-byte NOP
-    sink.data.clearRetainingCapacity();
-    sink.cur_offset_val = 0;
-    emitNop(&sink, 2);
+    sink.reset();
+    try emitNop(&sink, 2);
     try std.testing.expectEqual(@as(u8, 0x66), sink.data.items[0]);
     try std.testing.expectEqual(@as(u8, 0x90), sink.data.items[1]);
 
     // Test 3-byte NOP
-    sink.data.clearRetainingCapacity();
-    sink.cur_offset_val = 0;
-    emitNop(&sink, 3);
+    sink.reset();
+    try emitNop(&sink, 3);
     try std.testing.expectEqual(@as(u8, 0x0F), sink.data.items[0]);
     try std.testing.expectEqual(@as(u8, 0x1F), sink.data.items[1]);
     try std.testing.expectEqual(@as(u8, 0x00), sink.data.items[2]);
@@ -2891,14 +2819,13 @@ test "Basic instruction emission" {
 
     // Test RET instruction
     const ret_inst = Inst{ .ret = .{ .stack_bytes_to_pop = 0 } };
-    emit(&ret_inst, &sink, &info, &state);
+    try emit(&ret_inst, &sink, &info, &state);
     try std.testing.expectEqual(@as(u8, 0xC3), sink.data.items[0]);
 
     // Test UD2 instruction
-    sink.data.clearRetainingCapacity();
-    sink.cur_offset_val = 0;
+    sink.reset();
     const ud2_inst = Inst{ .ud2 = .{ .trap_code = .stack_overflow } };
-    emit(&ud2_inst, &sink, &info, &state);
+    try emit(&ud2_inst, &sink, &info, &state);
     try std.testing.expectEqual(@as(u8, 0x0F), sink.data.items[0]);
     try std.testing.expectEqual(@as(u8, 0x0B), sink.data.items[1]);
 }
@@ -2926,13 +2853,12 @@ test "VEX prefix encoding" {
     );
 
     try testing.expect(vex1.canUse2Byte()); // Should use 2-byte VEX
-    vex1.encode(&sink);
+    try vex1.encode(&sink);
     try testing.expectEqual(@as(u8, 0xC5), sink.data.items[0]);
     try testing.expectEqual(@as(u8, 0xF0), sink.data.items[1]);
 
     // Test 3-byte VEX when B bit is needed (using xmm10)
-    sink.data.clearRetainingCapacity();
-    sink.cur_offset_val = 0;
+    sink.reset();
 
     const vex2 = VexPrefix.init(
         0, // reg = xmm0
@@ -2946,7 +2872,7 @@ test "VEX prefix encoding" {
     );
 
     try testing.expect(!vex2.canUse2Byte()); // Should use 3-byte VEX (B=0)
-    vex2.encode(&sink);
+    try vex2.encode(&sink);
     try testing.expectEqual(@as(u8, 0xC4), sink.data.items[0]);
     // byte2 = (R̄<<7) | (X̄<<6) | (B̄<<5) | m-mmmm = (1<<7) | (1<<6) | (0<<5) | 1 = 0xC1
     try testing.expectEqual(@as(u8, 0xC1), sink.data.items[1]);
@@ -2954,8 +2880,7 @@ test "VEX prefix encoding" {
     try testing.expectEqual(@as(u8, 0x79), sink.data.items[2]);
 
     // Test 3-byte VEX with W=1
-    sink.data.clearRetainingCapacity();
-    sink.cur_offset_val = 0;
+    sink.reset();
 
     const vex3 = VexPrefix.init(
         0, // reg
@@ -2969,7 +2894,7 @@ test "VEX prefix encoding" {
     );
 
     try testing.expect(!vex3.canUse2Byte()); // W=1 requires 3-byte VEX
-    vex3.encode(&sink);
+    try vex3.encode(&sink);
     try testing.expectEqual(@as(u8, 0xC4), sink.data.items[0]);
 }
 
@@ -2995,14 +2920,13 @@ test "EVEX prefix encoding" {
         0, // no mask
     );
 
-    evex1.encode(&sink);
+    try evex1.encode(&sink);
     // Should produce 4 bytes starting with 0x62
     try testing.expectEqual(@as(u8, 0x62), sink.data.items[0]);
     try testing.expectEqual(@as(usize, 4), sink.data.items.len);
 
     // Test EVEX with extended registers (zmm16-31)
-    sink.data.clearRetainingCapacity();
-    sink.cur_offset_val = 0;
+    sink.reset();
 
     const evex2 = EvexPrefix.init(
         16, // reg = zmm16 (needs R' = 0)
@@ -3018,14 +2942,13 @@ test "EVEX prefix encoding" {
         1, // k1 mask
     );
 
-    evex2.encode(&sink);
+    try evex2.encode(&sink);
     try testing.expectEqual(@as(u8, 0x62), sink.data.items[0]);
     // Verify R' is 0 (bit 4 of P0 should be 0)
     try testing.expectEqual(@as(u1, 0), @as(u1, @truncate((sink.data.items[1] >> 4) & 1)));
 
     // Test EVEX with broadcast and mask
-    sink.data.clearRetainingCapacity();
-    sink.cur_offset_val = 0;
+    sink.reset();
 
     const evex3 = EvexPrefix.init(
         0, // reg
@@ -3041,7 +2964,7 @@ test "EVEX prefix encoding" {
         3, // k3 mask
     );
 
-    evex3.encode(&sink);
+    try evex3.encode(&sink);
     try testing.expectEqual(@as(u8, 0x62), sink.data.items[0]);
     // Check P2: b bit (bit 4) should be 1, aaa (bits 0-2) should be 3
     try testing.expectEqual(@as(u1, 1), @as(u1, @truncate((sink.data.items[3] >> 4) & 1)));

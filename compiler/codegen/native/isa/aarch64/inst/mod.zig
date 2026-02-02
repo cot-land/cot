@@ -12,6 +12,9 @@ pub const args = @import("args.zig");
 pub const emit = @import("emit.zig");
 pub const get_operands = @import("get_operands.zig");
 
+// Export LabelUse for MachBuffer parameterization (matches Cranelift pattern)
+pub const LabelUse = emit.AArch64LabelUse;
+
 // Re-export commonly used types
 pub const xreg = regs.xreg;
 pub const vreg = regs.vreg;
@@ -1427,6 +1430,13 @@ pub const Inst = union(enum) {
         };
     }
 
+    /// LabelUse type for this instruction type (for MachBuffer parameterization).
+    /// Matches Cranelift's pattern where VCodeInst trait has associated LabelUse type.
+    pub const LabelUse = emit_mod.AArch64LabelUse;
+
+    /// EmitInfo type for this instruction type.
+    pub const EmitInfo = emit_mod.EmitInfo;
+
     /// Check if this is a "low-level" branch that should not appear in VCode.
     /// Low-level branches are internal implementation details that get expanded
     /// into real branch instructions during emission.
@@ -1511,8 +1521,32 @@ pub const Inst = union(enum) {
                 }
             },
 
-            // ALU with immediate: rd (def), rn (use)
-            .alu_rr_imm12, .alu_rr_imm_logic, .alu_rr_imm_shift => |*p| {
+            // ALU with 12-bit immediate: rd (def), rn (use)
+            .alu_rr_imm12 => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // ALU with logic immediate: rd (def), rn (use)
+            .alu_rr_imm_logic => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // ALU with shift immediate: rd (def), rn (use)
+            .alu_rr_imm_shift => |*p| {
                 if (alloc_idx < allocs.len) {
                     p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
                     alloc_idx += 1;
@@ -1524,7 +1558,23 @@ pub const Inst = union(enum) {
             },
 
             // ALU with shift: rd (def), rn (use), rm (use)
-            .alu_rrr_shift, .alu_rrr_extend => |*p| {
+            .alu_rrr_shift => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rm = applyAlloc(p.rm, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // ALU with extend: rd (def), rn (use), rm (use)
+            .alu_rrr_extend => |*p| {
                 if (alloc_idx < allocs.len) {
                     p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
                     alloc_idx += 1;
@@ -1552,7 +1602,49 @@ pub const Inst = union(enum) {
             },
 
             // Loads: rd (def), mem (uses)
-            .uload8, .sload8, .uload16, .sload16, .uload32, .sload32, .uload64 => |*p| {
+            .uload8 => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                alloc_idx += applyAllocAMode(&p.mem, allocs[alloc_idx..]);
+            },
+            .sload8 => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                alloc_idx += applyAllocAMode(&p.mem, allocs[alloc_idx..]);
+            },
+            .uload16 => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                alloc_idx += applyAllocAMode(&p.mem, allocs[alloc_idx..]);
+            },
+            .sload16 => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                alloc_idx += applyAllocAMode(&p.mem, allocs[alloc_idx..]);
+            },
+            .uload32 => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                alloc_idx += applyAllocAMode(&p.mem, allocs[alloc_idx..]);
+            },
+            .sload32 => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                alloc_idx += applyAllocAMode(&p.mem, allocs[alloc_idx..]);
+            },
+            .uload64 => |*p| {
                 if (alloc_idx < allocs.len) {
                     p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
                     alloc_idx += 1;
@@ -1561,7 +1653,28 @@ pub const Inst = union(enum) {
             },
 
             // Stores: rd (use), mem (uses)
-            .store8, .store16, .store32, .store64 => |*p| {
+            .store8 => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAlloc(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                alloc_idx += applyAllocAMode(&p.mem, allocs[alloc_idx..]);
+            },
+            .store16 => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAlloc(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                alloc_idx += applyAllocAMode(&p.mem, allocs[alloc_idx..]);
+            },
+            .store32 => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAlloc(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                alloc_idx += applyAllocAMode(&p.mem, allocs[alloc_idx..]);
+            },
+            .store64 => |*p| {
                 if (alloc_idx < allocs.len) {
                     p.rd = applyAlloc(p.rd, allocs[alloc_idx]);
                     alloc_idx += 1;
@@ -1644,7 +1757,21 @@ pub const Inst = union(enum) {
             },
 
             // Conditional select: rd (def), rn (use), rm (use)
-            .csel, .csneg => |*p| {
+            .csel => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rm = applyAlloc(p.rm, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+            .csneg => |*p| {
                 if (alloc_idx < allocs.len) {
                     p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
                     alloc_idx += 1;
@@ -1660,7 +1787,13 @@ pub const Inst = union(enum) {
             },
 
             // Conditional set: rd (def)
-            .cset, .csetm => |*p| {
+            .cset => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+            .csetm => |*p| {
                 if (alloc_idx < allocs.len) {
                     p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
                     alloc_idx += 1;
@@ -1688,7 +1821,27 @@ pub const Inst = union(enum) {
             },
 
             // FPU moves: rd (def), rn (use)
-            .fpu_move32, .fpu_move64, .fpu_move128 => |*p| {
+            .fpu_move32 => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+            .fpu_move64 => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+            .fpu_move128 => |*p| {
                 if (alloc_idx < allocs.len) {
                     p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
                     alloc_idx += 1;
@@ -1749,8 +1902,15 @@ pub const Inst = union(enum) {
             // Trap if: same as cond_br
             .trap_if => {},
 
-            // ADR/ADRP: rd (def)
-            .adr, .adrp => |*p| {
+            // ADR: rd (def)
+            .adr => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+            // ADRP: rd (def)
+            .adrp => |*p| {
                 if (alloc_idx < allocs.len) {
                     p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
                     alloc_idx += 1;
@@ -1767,7 +1927,19 @@ pub const Inst = union(enum) {
             },
 
             // External symbol loads: rd (def)
-            .load_ext_name_got, .load_ext_name_near, .load_ext_name_far => |*p| {
+            .load_ext_name_got => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+            .load_ext_name_near => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+            .load_ext_name_far => |*p| {
                 if (alloc_idx < allocs.len) {
                     p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
                     alloc_idx += 1;
@@ -1787,7 +1959,37 @@ pub const Inst = union(enum) {
             },
 
             // FPU unary: rd (def), rn (use)
-            .fpu_rr, .fpu_round, .fpu_to_int, .int_to_fpu => |*p| {
+            .fpu_rr => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+            .fpu_round => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+            .fpu_to_int => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+            .int_to_fpu => |*p| {
                 if (alloc_idx < allocs.len) {
                     p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
                     alloc_idx += 1;
@@ -1835,7 +2037,21 @@ pub const Inst = union(enum) {
             },
 
             // FPU loads: rd (def), mem (uses)
-            .fpu_load32, .fpu_load64, .fpu_load128 => |*p| {
+            .fpu_load32 => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                alloc_idx += applyAllocAMode(&p.mem, allocs[alloc_idx..]);
+            },
+            .fpu_load64 => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                alloc_idx += applyAllocAMode(&p.mem, allocs[alloc_idx..]);
+            },
+            .fpu_load128 => |*p| {
                 if (alloc_idx < allocs.len) {
                     p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
                     alloc_idx += 1;
@@ -1844,7 +2060,21 @@ pub const Inst = union(enum) {
             },
 
             // FPU stores: rd (use), mem (uses)
-            .fpu_store32, .fpu_store64, .fpu_store128 => |*p| {
+            .fpu_store32 => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAlloc(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                alloc_idx += applyAllocAMode(&p.mem, allocs[alloc_idx..]);
+            },
+            .fpu_store64 => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAlloc(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                alloc_idx += applyAllocAMode(&p.mem, allocs[alloc_idx..]);
+            },
+            .fpu_store128 => |*p| {
                 if (alloc_idx < allocs.len) {
                     p.rd = applyAlloc(p.rd, allocs[alloc_idx]);
                     alloc_idx += 1;
@@ -2035,7 +2265,17 @@ pub const Inst = union(enum) {
                 }
             },
 
-            .vec_misc, .vec_lanes => |*p| {
+            .vec_misc => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+            .vec_lanes => |*p| {
                 if (alloc_idx < allocs.len) {
                     p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
                     alloc_idx += 1;
@@ -2116,7 +2356,27 @@ pub const Inst = union(enum) {
                 }
             },
 
-            .vec_extend, .vec_rr_long, .vec_rr_narrow => |*p| {
+            .vec_extend => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+            .vec_rr_long => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+            .vec_rr_narrow => |*p| {
                 if (alloc_idx < allocs.len) {
                     p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
                     alloc_idx += 1;
@@ -2224,7 +2484,7 @@ pub const Inst = union(enum) {
 
         // Emit the instruction with resolved registers
         var state = emit_mod.EmitState{};
-        emit_mod.emit(&inst_copy, sink, emit_info, &state);
+        try emit_mod.emit(&inst_copy, sink, emit_info, &state);
     }
 };
 
@@ -2234,9 +2494,17 @@ fn applyAlloc(reg: Reg, alloc: Allocation) Reg {
         // No allocation - register is already physical or unused
         return reg;
     }
-    if (alloc.asReg()) |preg| {
-        // Convert PReg to Reg
-        return Reg.fromPReg(preg);
+    if (alloc.asReg()) |regalloc_preg| {
+        // Convert regalloc PReg to machinst PReg (they have same encoding but different types)
+        const machinst_preg = machinst_reg.PReg.init(
+            @intCast(regalloc_preg.hwEnc()),
+            switch (regalloc_preg.class()) {
+                .int => machinst_reg.RegClass.int,
+                .float => machinst_reg.RegClass.float,
+                .vector => machinst_reg.RegClass.vector,
+            },
+        );
+        return Reg.fromPReg(machinst_preg);
     }
     // Stack allocation - should have been handled by regalloc edits
     // Return original register (will cause emit error if virtual)

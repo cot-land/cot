@@ -451,19 +451,13 @@ pub fn assignArg(
     // Check if it's a float type
     if (ty.isFloat()) {
         if (state.nextArgFpr()) |fpr_enc| {
-            const rreg = RealReg{
-                .hw_enc_val = fpr_enc,
-                .cls = .float,
-            };
+            const rreg = RealReg{ .preg = PReg.init(fpr_enc, .float) };
             return ABIArg.reg(rreg, ty, extension, purpose);
         }
     } else {
         // Integer/pointer type
         if (state.nextArgGpr()) |gpr_enc| {
-            const rreg = RealReg{
-                .hw_enc_val = gpr_enc,
-                .cls = .int,
-            };
+            const rreg = RealReg{ .preg = PReg.init(gpr_enc, .int) };
             return ABIArg.reg(rreg, ty, extension, purpose);
         }
     }
@@ -487,10 +481,7 @@ pub fn assignRet(
         // FP return in XMM0/XMM1
         if (ret_idx < 2) {
             const fpr_enc = if (ret_idx == 0) XmmEnc.XMM0 else XmmEnc.XMM1;
-            const rreg = RealReg{
-                .hw_enc_val = fpr_enc,
-                .cls = .float,
-            };
+            const rreg = RealReg{ .preg = PReg.init(fpr_enc, .float) };
             return ABIArg.reg(rreg, ty, extension, .normal);
         }
     } else {
@@ -499,19 +490,13 @@ pub fn assignRet(
             .system_v, .wasmtime_system_v, .probestack, .tail, .winch => {
                 if (ret_idx < SYSV_RET_GPRS.len) {
                     const gpr_enc = SYSV_RET_GPRS[ret_idx];
-                    const rreg = RealReg{
-                        .hw_enc_val = gpr_enc,
-                        .cls = .int,
-                    };
+                    const rreg = RealReg{ .preg = PReg.init(gpr_enc, .int) };
                     return ABIArg.reg(rreg, ty, extension, .normal);
                 }
             },
             .windows_fastcall, .wasmtime_fastcall => {
                 if (ret_idx == 0) {
-                    const rreg = RealReg{
-                        .hw_enc_val = WIN64_RET_GPR,
-                        .cls = .int,
-                    };
+                    const rreg = RealReg{ .preg = PReg.init(WIN64_RET_GPR, .int) };
                     return ABIArg.reg(rreg, ty, extension, .normal);
                 }
             },
@@ -851,8 +836,8 @@ pub const PRegSet = struct {
     pub fn with(self: PRegSet, preg: PReg) PRegSet {
         var result = self;
         switch (preg.class()) {
-            .int => result.int_regs |= @as(u16, 1) << @intCast(preg.index()),
-            .float => result.vec_regs |= @as(u16, 1) << @intCast(preg.index()),
+            .int => result.int_regs |= @as(u16, 1) << @intCast(preg.hwEnc()),
+            .float => result.vec_regs |= @as(u16, 1) << @intCast(preg.hwEnc()),
             .vector => unreachable,
         }
         return result;
@@ -861,8 +846,8 @@ pub const PRegSet = struct {
     /// Add a register to the set (mutable).
     pub fn add(self: *PRegSet, preg: PReg) void {
         switch (preg.class()) {
-            .int => self.int_regs |= @as(u16, 1) << @intCast(preg.index()),
-            .float => self.vec_regs |= @as(u16, 1) << @intCast(preg.index()),
+            .int => self.int_regs |= @as(u16, 1) << @intCast(preg.hwEnc()),
+            .float => self.vec_regs |= @as(u16, 1) << @intCast(preg.hwEnc()),
             .vector => unreachable,
         }
     }
@@ -870,8 +855,8 @@ pub const PRegSet = struct {
     /// Check if a register is in the set.
     pub fn contains(self: PRegSet, preg: PReg) bool {
         return switch (preg.class()) {
-            .int => (self.int_regs & (@as(u16, 1) << @intCast(preg.index()))) != 0,
-            .float => (self.vec_regs & (@as(u16, 1) << @intCast(preg.index()))) != 0,
+            .int => (self.int_regs & (@as(u16, 1) << @intCast(preg.hwEnc()))) != 0,
+            .float => (self.vec_regs & (@as(u16, 1) << @intCast(preg.hwEnc()))) != 0,
             .vector => false,
         };
     }
@@ -1018,7 +1003,7 @@ pub const X64MachineDeps = struct {
 
     /// Word type.
     pub fn wordType() Type {
-        return Type.i64;
+        return Type.I64;
     }
 
     /// Return required stack alignment in bytes.
@@ -1033,17 +1018,28 @@ pub const X64MachineDeps = struct {
         const static_float: []const RegClass = &[_]RegClass{.float};
         const static_int_pair: []const RegClass = &[_]RegClass{ .int, .int };
 
-        const static_i64: []const Type = &[_]Type{Type.i64};
-        const static_f64: []const Type = &[_]Type{Type.f64};
-        const static_i64_pair: []const Type = &[_]Type{ Type.i64, Type.i64 };
+        const static_i64: []const Type = &[_]Type{Type.I64};
+        const static_f64: []const Type = &[_]Type{Type.F64};
+        const static_i64_pair: []const Type = &[_]Type{ Type.I64, Type.I64 };
 
-        return switch (value_type.kind) {
-            .i8, .i16, .i32, .i64 => .{ .rcs = static_int, .reg_types = static_i64 },
-            .i128 => .{ .rcs = static_int_pair, .reg_types = static_i64_pair },
-            .f16, .f32, .f64 => .{ .rcs = static_float, .reg_types = static_f64 },
-            .f128 => .{ .rcs = static_float, .reg_types = static_f64 },
-            .i8x16, .i16x8, .i32x4, .i64x2, .f32x4, .f64x2 => .{ .rcs = static_float, .reg_types = static_f64 },
-        };
+        // I128 special case (two registers)
+        if (value_type.eql(Type.I128)) {
+            return .{ .rcs = static_int_pair, .reg_types = static_i64_pair };
+        }
+        // Integer types
+        if (value_type.isInt()) {
+            return .{ .rcs = static_int, .reg_types = static_i64 };
+        }
+        // Float types
+        if (value_type.isFloat()) {
+            return .{ .rcs = static_float, .reg_types = static_f64 };
+        }
+        // Vector types use float registers
+        if (value_type.isVector()) {
+            return .{ .rcs = static_float, .reg_types = static_f64 };
+        }
+        // Default to int
+        return .{ .rcs = static_int, .reg_types = static_i64 };
     }
 
     /// Compute argument/return value locations.
@@ -1077,16 +1073,16 @@ pub const X64MachineDeps = struct {
             // Return area pointer goes in first integer arg reg
             if (is_win64) {
                 ret_area_ptr = ABIArg.reg(
-                    RealReg{ .hw_enc_val = WIN64_ARG_GPRS[0], .cls = .int },
-                    Type.i64,
+                    RealReg{ .preg = PReg.init(WIN64_ARG_GPRS[0], .int) },
+                    Type.I64,
                     .none,
                     .struct_return,
                 );
                 arg_idx += 1;
             } else {
                 ret_area_ptr = ABIArg.reg(
-                    RealReg{ .hw_enc_val = SYSV_ARG_GPRS[0], .cls = .int },
-                    Type.i64,
+                    RealReg{ .preg = PReg.init(SYSV_ARG_GPRS[0], .int) },
+                    Type.I64,
                     .none,
                     .struct_return,
                 );
@@ -1101,7 +1097,7 @@ pub const X64MachineDeps = struct {
 
             // Handle StructReturn
             if (param.purpose == .struct_return) {
-                std.debug.assert(param.value_type.kind == .int64);
+                std.debug.assert(param.value_type.eql(Type.I64));
                 // Already handled by add_ret_area_ptr
                 continue;
             }
@@ -1144,14 +1140,14 @@ pub const X64MachineDeps = struct {
                         var slots_array = BoundedArray(ABIArgSlot, 4){};
                         slots_array.appendAssumeCapacity(.{
                             .reg = .{
-                                .reg = RealReg{ .hw_enc_val = GprEnc.RAX, .cls = .int },
+                                .reg = RealReg{ .preg = PReg.init(GprEnc.RAX, .int) },
                                 .ty = reg_types[0],
                                 .extension = param.extension,
                             },
                         });
                         slots_array.appendAssumeCapacity(.{
                             .reg = .{
-                                .reg = RealReg{ .hw_enc_val = GprEnc.RDX, .cls = .int },
+                                .reg = RealReg{ .preg = PReg.init(GprEnc.RDX, .int) },
                                 .ty = reg_types[1],
                                 .extension = param.extension,
                             },
@@ -1167,14 +1163,14 @@ pub const X64MachineDeps = struct {
                         var slots_array = BoundedArray(ABIArgSlot, 4){};
                         slots_array.appendAssumeCapacity(.{
                             .reg = .{
-                                .reg = RealReg{ .hw_enc_val = SYSV_ARG_GPRS[next_gpr], .cls = .int },
+                                .reg = RealReg{ .preg = PReg.init(SYSV_ARG_GPRS[next_gpr], .int) },
                                 .ty = reg_types[0],
                                 .extension = param.extension,
                             },
                         });
                         slots_array.appendAssumeCapacity(.{
                             .reg = .{
-                                .reg = RealReg{ .hw_enc_val = SYSV_ARG_GPRS[next_gpr + 1], .cls = .int },
+                                .reg = RealReg{ .preg = PReg.init(SYSV_ARG_GPRS[next_gpr + 1], .int) },
                                 .ty = reg_types[1],
                                 .extension = param.extension,
                             },
@@ -1233,7 +1229,7 @@ pub const X64MachineDeps = struct {
                     const reg_class: RegClass = if (rc == .float) .float else .int;
 
                     try args_list.append(allocator, ABIArg.reg(
-                        RealReg{ .hw_enc_val = reg_enc, .cls = reg_class },
+                        RealReg{ .preg = PReg.init(reg_enc, reg_class) },
                         param.value_type,
                         param.extension,
                         param.purpose,
@@ -1249,7 +1245,7 @@ pub const X64MachineDeps = struct {
                 if (rc == .float) {
                     if (next_fpr < max_fprs) {
                         try args_list.append(allocator, ABIArg.reg(
-                            RealReg{ .hw_enc_val = SYSV_ARG_FPRS[next_fpr], .cls = .float },
+                            RealReg{ .preg = PReg.init(SYSV_ARG_FPRS[next_fpr], .float) },
                             param.value_type,
                             param.extension,
                             param.purpose,
@@ -1260,7 +1256,7 @@ pub const X64MachineDeps = struct {
                 } else {
                     if (next_gpr < max_gprs) {
                         try args_list.append(allocator, ABIArg.reg(
-                            RealReg{ .hw_enc_val = SYSV_ARG_GPRS[next_gpr], .cls = .int },
+                            RealReg{ .preg = PReg.init(SYSV_ARG_GPRS[next_gpr], .int) },
                             param.value_type,
                             param.extension,
                             param.purpose,
@@ -1385,14 +1381,14 @@ pub const X64MachineDeps = struct {
         if (imm == 0) {
             // Just move if no add needed
             if (into_reg.toReg().bits != from_reg.bits) {
-                insts.appendAssumeCapacity(genMove(into_reg, from_reg, Type.i64));
+                insts.appendAssumeCapacity(genMove(into_reg, from_reg, Type.I64));
             }
             return insts;
         }
 
         // If into_reg != from_reg, move first then add
         if (into_reg.toReg().bits != from_reg.bits) {
-            insts.appendAssumeCapacity(genMove(into_reg, from_reg, Type.i64));
+            insts.appendAssumeCapacity(genMove(into_reg, from_reg, Type.I64));
         }
 
         // ADD r64, imm32
@@ -1567,7 +1563,7 @@ pub const X64MachineDeps = struct {
 
         // Push integer registers
         for (clobbered.int_regs) |reg| {
-            const preg = PReg.init(reg.toReg().hw_enc_val, .int);
+            const preg = PReg.init(reg.toReg().hwEnc(), .int);
             insts.appendAssumeCapacity(Inst.push64(.{
                 .src = .{ .reg = Gpr.fromReg(Reg.fromRealReg(preg)) },
             }));
@@ -1587,7 +1583,7 @@ pub const X64MachineDeps = struct {
             // Save each XMM register
             var offset: i32 = 0;
             for (vec_regs) |reg| {
-                const preg = PReg.init(reg.toReg().hw_enc_val, .float);
+                const preg = PReg.init(reg.toReg().hwEnc(), .float);
                 const amode = SyntheticAmode{ .real_sp = .{ .offset = offset } };
                 insts.appendAssumeCapacity(Inst.xmmMovRM(.{
                     .op = .movaps,
@@ -1639,7 +1635,7 @@ pub const X64MachineDeps = struct {
             while (i > 0) {
                 i -= 1;
                 const reg = vec_regs[i];
-                const preg = PReg.init(reg.toReg().hw_enc_val, .float);
+                const preg = PReg.init(reg.toReg().hwEnc(), .float);
                 const amode = SyntheticAmode{ .real_sp = .{ .offset = offset } };
                 const xmm_w = Writable(Xmm).fromReg(Xmm.fromReg(Reg.fromRealReg(preg)));
                 insts.appendAssumeCapacity(Inst.xmmRmR(.{
@@ -1663,7 +1659,7 @@ pub const X64MachineDeps = struct {
         while (i > 0) {
             i -= 1;
             const reg = clobbered.int_regs[i];
-            const preg = PReg.init(reg.toReg().hw_enc_val, .int);
+            const preg = PReg.init(reg.toReg().hwEnc(), .int);
             const gpr_w = Writable(Gpr).fromReg(Gpr.fromReg(Reg.fromRealReg(preg)));
             insts.appendAssumeCapacity(Inst.pop64(.{
                 .dst = gpr_w,
@@ -1727,7 +1723,7 @@ pub const X64MachineDeps = struct {
         // Filter to callee-saved registers
         var callee_saves = BoundedArray(Writable(RealReg), 32){};
         for (clobbered_regs) |reg| {
-            if (isCalleeSaved(call_conv, reg.toReg().hw_enc_val, reg.toReg().class() == .float)) {
+            if (isCalleeSaved(call_conv, reg.toReg().hwEnc(), reg.toReg().class() == .float)) {
                 callee_saves.appendAssumeCapacity(reg);
             }
         }
@@ -1739,8 +1735,8 @@ pub const X64MachineDeps = struct {
             {},
             struct {
                 fn cmp(_: void, a: Writable(RealReg), b: Writable(RealReg)) bool {
-                    const a_enc = a.toReg().hw_enc_val;
-                    const b_enc = b.toReg().hw_enc_val;
+                    const a_enc = a.toReg().hwEnc();
+                    const b_enc = b.toReg().hwEnc();
                     return a_enc < b_enc;
                 }
             }.cmp,
@@ -2001,7 +1997,7 @@ test "assignArg" {
     // Basic test for argument assignment
     var state = ABIState.init(.system_v);
     const param = AbiParam{
-        .value_type = Type.i64,
+        .value_type = Type.I64,
         .extension = .none,
         .purpose = .normal,
     };
@@ -2014,8 +2010,8 @@ test "assignArg" {
             try std.testing.expectEqual(@as(usize, 1), s.slots.len);
             switch (s.slots.get(0)) {
                 .reg => |r| {
-                    try std.testing.expectEqual(GprEnc.RDI, r.reg.hw_enc_val);
-                    try std.testing.expectEqual(RegClass.int, r.reg.cls);
+                    try std.testing.expectEqual(GprEnc.RDI, r.reg.hwEnc());
+                    try std.testing.expectEqual(RegClass.int, r.reg.class());
                 },
                 .stack => unreachable,
             }
@@ -2034,15 +2030,15 @@ test "X64MachineDeps basic" {
 test "X64MachineDeps rcForType" {
     const testing = std.testing;
 
-    const i64_info = X64MachineDeps.rcForType(Type.i64);
+    const i64_info = X64MachineDeps.rcForType(Type.I64);
     try testing.expectEqual(@as(usize, 1), i64_info.rcs.len);
     try testing.expectEqual(RegClass.int, i64_info.rcs[0]);
 
-    const f64_info = X64MachineDeps.rcForType(Type.f64);
+    const f64_info = X64MachineDeps.rcForType(Type.F64);
     try testing.expectEqual(@as(usize, 1), f64_info.rcs.len);
     try testing.expectEqual(RegClass.float, f64_info.rcs[0]);
 
-    const i128_info = X64MachineDeps.rcForType(Type.i128);
+    const i128_info = X64MachineDeps.rcForType(Type.I128);
     try testing.expectEqual(@as(usize, 2), i128_info.rcs.len);
 }
 
@@ -2136,5 +2132,5 @@ test "createRegEnv" {
 
     // r11 should be scratch
     try std.testing.expect(env.scratch_by_class[0] != null);
-    try std.testing.expectEqual(@as(u8, GprEnc.R11), env.scratch_by_class[0].?.index_val);
+    try std.testing.expectEqual(@as(u8, GprEnc.R11), env.scratch_by_class[0].?.hwEnc());
 }

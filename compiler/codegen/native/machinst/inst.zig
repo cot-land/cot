@@ -294,6 +294,11 @@ pub const MachLabel = struct {
         return .{ .index = index };
     }
 
+    /// Create a label from a u32 (alias for init).
+    pub fn fromU32(index: u32) Self {
+        return .{ .index = index };
+    }
+
     /// Get a label for a block.
     pub fn fromBlock(bindex: BlockIndex) Self {
         return .{ .index = @intCast(bindex.index()) };
@@ -304,13 +309,31 @@ pub const MachLabel = struct {
         return self.index;
     }
 
-    /// Invalid/unknown label sentinel.
+    /// Get the index as u32 (alias for getIndex, for compatibility).
+    pub fn asU32(self: Self) u32 {
+        return self.index;
+    }
+
+    /// Get the block index from this label.
+    pub fn toBlock(self: Self) BlockIndex {
+        return BlockIndex.new(self.index);
+    }
+
+    /// Invalid/unknown label constant.
+    pub const INVALID = Self{ .index = UNKNOWN };
+
+    /// Invalid/unknown label sentinel function.
     pub fn invalid() Self {
-        return .{ .index = UNKNOWN };
+        return INVALID;
     }
 
     pub fn isValid(self: Self) bool {
         return self.index != UNKNOWN;
+    }
+
+    /// Compare two labels for equality.
+    pub fn eql(self: Self, other: Self) bool {
+        return self.index == other.index;
     }
 
     /// Creates a string representing this label.

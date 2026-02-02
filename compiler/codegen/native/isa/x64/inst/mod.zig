@@ -49,6 +49,14 @@ pub const CallArgList = args.CallArgList;
 // Import emit module for MachBuffer
 const emit_mod = @import("emit.zig");
 
+// Import common types from machinst (following Cranelift's crate::ir pattern)
+const buffer_mod = @import("../../../machinst/buffer.zig");
+pub const ExternalName = buffer_mod.ExternalName;
+pub const UserExternalNameRef = buffer_mod.UserExternalNameRef;
+pub const LibCall = buffer_mod.LibCall;
+pub const KnownSymbol = buffer_mod.KnownSymbol;
+pub const Reloc = buffer_mod.Reloc;
+
 // Import regalloc types
 const regalloc_operand = @import("../../../regalloc/operand.zig");
 const Allocation = regalloc_operand.Allocation;
@@ -104,45 +112,6 @@ pub const TrapCode = enum(u16) {
     pub const STACK_OVERFLOW = TrapCode.stack_overflow;
     pub const HEAP_OUT_OF_BOUNDS = TrapCode.heap_out_of_bounds;
     pub const UNREACHABLE = TrapCode.unreachable_code_reached;
-};
-
-//=============================================================================
-// External name (for calls)
-//=============================================================================
-
-pub const ExternalName = union(enum) {
-    /// A user-defined function, identified by index.
-    user: struct {
-        namespace: u32,
-        index: u32,
-    },
-    /// A library call.
-    lib_call: LibCall,
-    /// A known symbol.
-    known_symbol: KnownSymbol,
-
-    pub const LibCall = enum {
-        probestack,
-        floor_f32,
-        floor_f64,
-        ceil_f32,
-        ceil_f64,
-        trunc_f32,
-        trunc_f64,
-        nearest_f32,
-        nearest_f64,
-        fma_f32,
-        fma_f64,
-        memcpy,
-        memset,
-        memmove,
-        memcmp,
-    };
-
-    pub const KnownSymbol = enum {
-        elf_global_offset_table,
-        plt_got,
-    };
 };
 
 //=============================================================================
@@ -941,6 +910,13 @@ pub const Inst = union(enum) {
         return .{ .jmp_known = .{ .dst = target } };
     }
 
+    /// LabelUse type for this instruction type (for MachBuffer parameterization).
+    /// Matches Cranelift's pattern where VCodeInst trait has associated LabelUse type.
+    pub const LabelUse = emit_mod.X64LabelUse;
+
+    /// EmitInfo type for this instruction type.
+    pub const EmitInfo = emit_mod.EmitInfo;
+
     /// Check if this instruction is a low-level branch.
     /// Low-level branches are typically expanded during emission.
     pub fn isLowLevelBranch(self: Inst) bool {
@@ -1049,7 +1025,22 @@ pub const Inst = union(enum) {
     /// Emit this instruction with register allocations applied.
     /// Takes the allocations for this instruction's operands and emits
     /// the instruction with virtual registers replaced by physical registers.
+    /// TODO: x64 register allocation handling is not yet fully implemented.
     pub fn emitWithAllocs(
+        self: *const Inst,
+        sink: *emit_mod.MachBuffer,
+        allocs: []const Allocation,
+        emit_info: *const emit_mod.EmitInfo,
+    ) !void {
+        // TODO: Full x64 register allocation handling not yet implemented
+        // For now, just emit the instruction as-is
+        _ = allocs;
+        var state = emit_mod.EmitState{};
+        try emit_mod.emit(self, sink, emit_info, &state);
+    }
+
+    /// Placeholder for when full x64 register allocation is implemented.
+    fn emitWithAllocsFullImpl(
         self: *const Inst,
         sink: *emit_mod.MachBuffer,
         allocs: []const Allocation,
@@ -1300,26 +1291,7 @@ pub const Inst = union(enum) {
                 }
             },
 
-            .push64 => |*p| {
-                switch (p.src.inner) {
-                    .reg => |*r| {
-                        if (alloc_idx < allocs.len) {
-                            r.* = applyAllocGpr(r.*, allocs[alloc_idx]);
-                            alloc_idx += 1;
-                        }
-                    },
-                    .mem => |*m| {
-                        alloc_idx += applyAllocSyntheticAmode(m, allocs[alloc_idx..]);
-                    },
-                }
-            },
-
-            .pop64 => |*p| {
-                if (alloc_idx < allocs.len) {
-                    p.dst = applyAllocWritableGpr(p.dst, allocs[alloc_idx]);
-                    alloc_idx += 1;
-                }
-            },
+            // TODO: push64 and pop64 not yet in Inst union
 
             // XMM instructions
             .xmm_rm_r => |*p| {
@@ -2497,6 +2469,9 @@ pub const SseOpcode = enum {
     movlpd,
     movhps,
     movhpd,
+    // GPR↔XMM moves
+    movd, // 32-bit GPR to/from XMM
+    movq, // 64-bit GPR to/from XMM
 
     // Arithmetic (scalar)
     addss,

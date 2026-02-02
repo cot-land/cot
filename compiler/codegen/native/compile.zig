@@ -501,57 +501,83 @@ pub fn VCodeAdapter(comptime VCodeType: type) type {
 // =============================================================================
 
 /// Emit machine code for AArch64.
+/// Reference: cranelift/codegen/src/machinst/vcode.rs emit()
 fn emitCodeAArch64(
     allocator: Allocator,
     vcode: *const VCodeAArch64,
     regalloc_output_val: *const Output,
     backend: AArch64Backend,
-) !EmitResult {
-    _ = vcode;
-    _ = regalloc_output_val;
+) !VCodeAArch64.EmitResult {
     _ = backend;
 
-    var buffer = MachBuffer(AArch64LabelUse).init(allocator);
-    defer buffer.deinit();
+    // Convert regalloc Output to VCode's RegallocOutput format
+    // Build allocation ranges from inst_alloc_offsets
+    var alloc_ranges = try allocator.alloc(vcode_mod.Range, regalloc_output_val.inst_alloc_offsets.items.len);
+    defer allocator.free(alloc_ranges);
 
-    // Placeholder: emit a simple ret instruction
-    // ARM64 ret instruction: 0xD65F03C0
-    try buffer.put4(0xD65F03C0);
+    for (regalloc_output_val.inst_alloc_offsets.items, 0..) |offset, i| {
+        const next_offset = if (i + 1 < regalloc_output_val.inst_alloc_offsets.items.len)
+            regalloc_output_val.inst_alloc_offsets.items[i + 1]
+        else
+            @as(u32, @intCast(regalloc_output_val.allocs.items.len));
 
-    const finalized = try buffer.finish();
+        alloc_ranges[i] = .{
+            .start = offset,
+            .end = next_offset,
+        };
+    }
 
-    return EmitResult{
-        .buffer = finalized,
-        .frame_size = 0,
-        .bb_offsets = .{},
+    const vcode_regalloc = vcode_mod.RegallocOutput{
+        .num_spillslots = @intCast(regalloc_output_val.num_spillslots),
+        .allocs = regalloc_output_val.allocs.items,
+        .alloc_ranges = alloc_ranges,
     };
+
+    // Create emit info for AArch64 (use ISA-specific EmitInfo)
+    const emit_info = aarch64.inst.emit.EmitInfo{};
+
+    // Emit using VCode's emit method
+    return try vcode.emit(&vcode_regalloc, &emit_info);
 }
 
 /// Emit machine code for x64.
+/// Reference: cranelift/codegen/src/machinst/vcode.rs emit()
 fn emitCodeX64(
     allocator: Allocator,
     vcode: *const VCodeX64,
     regalloc_output_val: *const Output,
     backend: X64Backend,
-) !EmitResult {
-    _ = vcode;
-    _ = regalloc_output_val;
+) !VCodeX64.EmitResult {
     _ = backend;
 
-    var buffer = MachBuffer(X64LabelUse).init(allocator);
-    defer buffer.deinit();
+    // Convert regalloc Output to VCode's RegallocOutput format
+    // Build allocation ranges from inst_alloc_offsets
+    var alloc_ranges = try allocator.alloc(vcode_mod.Range, regalloc_output_val.inst_alloc_offsets.items.len);
+    defer allocator.free(alloc_ranges);
 
-    // Placeholder: emit a simple ret instruction
-    // x64 ret instruction: 0xC3
-    try buffer.put1(0xC3);
+    for (regalloc_output_val.inst_alloc_offsets.items, 0..) |offset, i| {
+        const next_offset = if (i + 1 < regalloc_output_val.inst_alloc_offsets.items.len)
+            regalloc_output_val.inst_alloc_offsets.items[i + 1]
+        else
+            @as(u32, @intCast(regalloc_output_val.allocs.items.len));
 
-    const finalized = try buffer.finish();
+        alloc_ranges[i] = .{
+            .start = offset,
+            .end = next_offset,
+        };
+    }
 
-    return EmitResult{
-        .buffer = finalized,
-        .frame_size = 0,
-        .bb_offsets = .{},
+    const vcode_regalloc = vcode_mod.RegallocOutput{
+        .num_spillslots = @intCast(regalloc_output_val.num_spillslots),
+        .allocs = regalloc_output_val.allocs.items,
+        .alloc_ranges = alloc_ranges,
     };
+
+    // Create emit info for x64 (use ISA-specific EmitInfo)
+    const emit_info = x64.inst.emit.EmitInfo{};
+
+    // Emit using VCode's emit method
+    return try vcode.emit(&vcode_regalloc, &emit_info);
 }
 
 /// AArch64 label use type for branch fixups.
