@@ -482,7 +482,7 @@ pub const DataFlowGraph = struct {
     // ------------------------------------------------------------------------
 
     /// Create a new value.
-    fn makeValue(self: *Self, data: ValueData) !Value {
+    pub fn makeValue(self: *Self, data: ValueData) !Value {
         const index: u32 = @intCast(self.values.items.len);
         try self.values.append(self.allocator, data);
         return Value.fromIndex(index);

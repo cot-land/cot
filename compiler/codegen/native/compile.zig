@@ -136,7 +136,7 @@ pub const X64Backend = struct {
 /// Create a default machine environment.
 /// This provides the register allocation environment for both architectures.
 fn createDefaultMachineEnv() MachineEnv {
-    return MachineEnv.init();
+    return MachineEnv.empty();
 }
 
 /// ABI selection.
