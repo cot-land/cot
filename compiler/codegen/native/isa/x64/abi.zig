@@ -646,6 +646,1077 @@ pub fn linkReg() ?Reg {
     return null;
 }
 
+/// Align a value up to the given alignment.
+pub fn alignTo(value: u32, alignment: u32) u32 {
+    std.debug.assert(std.math.isPowerOfTwo(alignment));
+    return (value + alignment - 1) & ~(alignment - 1);
+}
+
+//=============================================================================
+// Stack addressing mode
+//=============================================================================
+
+/// Stack addressing mode for x86-64.
+pub const StackAMode = union(enum) {
+    /// Incoming argument on stack (relative to caller's SP).
+    incoming_arg: struct {
+        off: i64,
+        stack_args_size: u32,
+    },
+    /// Stack slot offset (relative to nominal SP).
+    slot: i64,
+    /// Outgoing argument (relative to current SP).
+    outgoing_arg: i64,
+
+    /// Convert to SyntheticAmode for emission.
+    pub fn toAmode(self: StackAMode) SyntheticAmode {
+        return switch (self) {
+            .incoming_arg => |ia| SyntheticAmode.incomingArg(
+                @intCast(@as(i64, ia.stack_args_size) + RETURN_ADDRESS_SIZE - ia.off),
+            ),
+            .slot => |off| SyntheticAmode.slotOffset(@intCast(off)),
+            .outgoing_arg => |off| SyntheticAmode.real_amode(
+                Amode.immReg(@intCast(off), rsp()),
+            ),
+        };
+    }
+};
+
+//=============================================================================
+// Frame layout
+//=============================================================================
+
+/// Frame layout for x86-64 functions.
+/// This describes the stack frame structure after prologue execution.
+pub const FrameLayout = struct {
+    /// Word size in bytes (8 for x86-64).
+    word_bytes: u32 = 8,
+    /// Size of incoming arguments on the stack.
+    incoming_args_size: u32 = 0,
+    /// Size of tail call arguments area.
+    tail_args_size: u32 = 0,
+    /// Size of the setup area (RBP save).
+    setup_area_size: u32 = 0,
+    /// Size of clobber save area.
+    clobber_size: u32 = 0,
+    /// Size of fixed frame storage (locals).
+    fixed_frame_storage_size: u32 = 0,
+    /// Size of stack slots.
+    stackslots_size: u32 = 0,
+    /// Size of outgoing arguments area.
+    outgoing_args_size: u32 = 0,
+    /// Clobbered callee-saved registers.
+    clobbered_callee_saves: BoundedArray(Writable(RealReg), 32) = .{},
+    /// Function calls status.
+    function_calls: FunctionCalls = .none,
+
+    /// Get the total frame size.
+    pub fn frameSize(self: *const FrameLayout) u32 {
+        return self.setup_area_size + self.clobber_size +
+            self.fixed_frame_storage_size + self.stackslots_size +
+            self.outgoing_args_size;
+    }
+
+    /// Get the clobbered callee-saves by class.
+    pub fn clobberedCalleeSavesByClass(self: *const FrameLayout) struct {
+        int_regs: []const Writable(RealReg),
+        vec_regs: []const Writable(RealReg),
+    } {
+        var int_count: usize = 0;
+        var vec_start: usize = self.clobbered_callee_saves.len;
+
+        // Count int registers first
+        for (self.clobbered_callee_saves.constSlice(), 0..) |reg, i| {
+            if (reg.toReg().class() == .int) {
+                int_count += 1;
+            } else {
+                vec_start = i;
+                break;
+            }
+        }
+
+        if (int_count == self.clobbered_callee_saves.len) {
+            // All int, no vec
+            return .{
+                .int_regs = self.clobbered_callee_saves.constSlice(),
+                .vec_regs = &[_]Writable(RealReg){},
+            };
+        }
+
+        return .{
+            .int_regs = self.clobbered_callee_saves.constSlice()[0..int_count],
+            .vec_regs = self.clobbered_callee_saves.constSlice()[vec_start..],
+        };
+    }
+};
+
+//=============================================================================
+// ISA flags
+//=============================================================================
+
+/// x86-64 ISA-specific flags.
+pub const IsaFlags = struct {
+    /// Use AVX instructions.
+    use_avx: bool = false,
+    /// Use AVX2 instructions.
+    use_avx2: bool = false,
+    /// Use AVX-512 instructions.
+    use_avx512: bool = false,
+    /// Use BMI1 instructions.
+    use_bmi1: bool = false,
+    /// Use BMI2 instructions.
+    use_bmi2: bool = false,
+    /// Use LZCNT instruction.
+    use_lzcnt: bool = false,
+    /// Use POPCNT instruction.
+    use_popcnt: bool = false,
+    /// Use FMA instructions.
+    use_fma: bool = false,
+    /// Use SSE4.1 instructions.
+    use_sse41: bool = false,
+    /// Use SSE4.2 instructions.
+    use_sse42: bool = false,
+
+    pub const default = IsaFlags{};
+};
+
+/// General settings flags.
+pub const SettingsFlags = struct {
+    /// Preserve frame pointers.
+    preserve_frame_pointers: bool = true,
+    /// Enable pinned register.
+    enable_pinned_reg: bool = false,
+    /// Generate unwind info.
+    unwind_info: bool = true,
+    /// Enable multi-return implicit sret.
+    enable_multi_ret_implicit_sret: bool = false,
+    /// Enable LLVM ABI extensions.
+    enable_llvm_abi_extensions: bool = false,
+
+    pub const default = SettingsFlags{};
+};
+
+//=============================================================================
+// Signature
+//=============================================================================
+
+/// Function signature.
+pub const Signature = struct {
+    /// Parameters.
+    params: []const AbiParam,
+    /// Return values.
+    returns: []const AbiParam,
+};
+
+//=============================================================================
+// Unwind instructions
+//=============================================================================
+
+/// Unwind instruction for DWARF/etc.
+pub const UnwindInst = union(enum) {
+    /// Define a new frame.
+    define_new_frame: struct {
+        offset_downward_to_clobbers: u32,
+        offset_upward_to_caller_sp: u32,
+    },
+    /// Push frame register (RBP).
+    push_frame_reg: struct {
+        offset_upward_to_caller_sp: u32,
+    },
+    /// Save a register.
+    save_reg: struct {
+        clobber_offset: u32,
+        reg: RealReg,
+    },
+    /// Stack allocation.
+    stack_alloc: struct {
+        size: u32,
+    },
+};
+
+//=============================================================================
+// PRegSet for x64
+//=============================================================================
+
+/// A set of physical registers for x64.
+pub const PRegSet = struct {
+    /// Bitmap of integer registers (rax-r15).
+    int_regs: u16 = 0,
+    /// Bitmap of vector/float registers (xmm0-xmm15).
+    vec_regs: u16 = 0,
+
+    pub const empty = PRegSet{};
+
+    /// Add a register to the set.
+    pub fn with(self: PRegSet, preg: PReg) PRegSet {
+        var result = self;
+        switch (preg.class()) {
+            .int => result.int_regs |= @as(u16, 1) << @intCast(preg.index()),
+            .float => result.vec_regs |= @as(u16, 1) << @intCast(preg.index()),
+            .vector => unreachable,
+        }
+        return result;
+    }
+
+    /// Add a register to the set (mutable).
+    pub fn add(self: *PRegSet, preg: PReg) void {
+        switch (preg.class()) {
+            .int => self.int_regs |= @as(u16, 1) << @intCast(preg.index()),
+            .float => self.vec_regs |= @as(u16, 1) << @intCast(preg.index()),
+            .vector => unreachable,
+        }
+    }
+
+    /// Check if a register is in the set.
+    pub fn contains(self: PRegSet, preg: PReg) bool {
+        return switch (preg.class()) {
+            .int => (self.int_regs & (@as(u16, 1) << @intCast(preg.index()))) != 0,
+            .float => (self.vec_regs & (@as(u16, 1) << @intCast(preg.index()))) != 0,
+            .vector => false,
+        };
+    }
+
+    /// Union of two sets.
+    pub fn unionWith(self: PRegSet, other: PRegSet) PRegSet {
+        return .{
+            .int_regs = self.int_regs | other.int_regs,
+            .vec_regs = self.vec_regs | other.vec_regs,
+        };
+    }
+};
+
+//=============================================================================
+// Default clobber sets
+//=============================================================================
+
+/// System V x64 clobbers: rax, rcx, rdx, rsi, rdi, r8-r11, and all xmm.
+pub const DEFAULT_SYSV_CLOBBERS: PRegSet = blk: {
+    var set = PRegSet.empty;
+    // Caller-saved GPRs
+    set.int_regs |= (1 << GprEnc.RAX) | (1 << GprEnc.RCX) | (1 << GprEnc.RDX);
+    set.int_regs |= (1 << GprEnc.RSI) | (1 << GprEnc.RDI);
+    set.int_regs |= (1 << GprEnc.R8) | (1 << GprEnc.R9) | (1 << GprEnc.R10) | (1 << GprEnc.R11);
+    // All XMM are caller-saved in System V
+    set.vec_regs = 0xFFFF;
+    break :blk set;
+};
+
+/// Windows x64 clobbers: rax, rcx, rdx, r8-r11, xmm0-xmm5.
+pub const DEFAULT_WIN64_CLOBBERS: PRegSet = blk: {
+    var set = PRegSet.empty;
+    // Caller-saved GPRs
+    set.int_regs |= (1 << GprEnc.RAX) | (1 << GprEnc.RCX) | (1 << GprEnc.RDX);
+    set.int_regs |= (1 << GprEnc.R8) | (1 << GprEnc.R9) | (1 << GprEnc.R10) | (1 << GprEnc.R11);
+    // Only XMM0-5 are caller-saved in Windows
+    set.vec_regs = 0x003F;
+    break :blk set;
+};
+
+/// All registers clobbered (for exceptions).
+pub const ALL_CLOBBERS: PRegSet = .{
+    .int_regs = 0xFFFF,
+    .vec_regs = 0xFFFF,
+};
+
+/// No clobbers.
+pub const NO_CLOBBERS: PRegSet = PRegSet.empty;
+
+//=============================================================================
+// X64MachineDeps - main ABI implementation
+//=============================================================================
+
+/// x86-64-specific ABI behavior. This struct just serves as an implementation
+/// point for the trait; it is never actually instantiated.
+pub const X64MachineDeps = struct {
+    const Self = @This();
+
+    /// Instruction type.
+    pub const I = Inst;
+
+    /// ISA flags type.
+    pub const F = IsaFlags;
+
+    /// This is the limit for the size of argument and return-value areas on the
+    /// stack. We place a reasonable limit here to avoid integer overflow issues
+    /// with 32-bit arithmetic: for now, 128 MB.
+    pub const STACK_ARG_RET_SIZE_LIMIT: u32 = 128 * 1024 * 1024;
+
+    /// Word size in bits.
+    pub fn wordBits() u32 {
+        return 64;
+    }
+
+    /// Word type.
+    pub fn wordType() Type {
+        return Type.i64;
+    }
+
+    /// Return required stack alignment in bytes.
+    pub fn stackAlign(call_conv: CallConv) u32 {
+        _ = call_conv;
+        return 16;
+    }
+
+    /// Get the register class for a type.
+    pub fn rcForType(value_type: Type) struct { rcs: []const RegClass, reg_types: []const Type } {
+        const static_int: []const RegClass = &[_]RegClass{.int};
+        const static_float: []const RegClass = &[_]RegClass{.float};
+        const static_int_pair: []const RegClass = &[_]RegClass{ .int, .int };
+
+        const static_i64: []const Type = &[_]Type{Type.i64};
+        const static_f64: []const Type = &[_]Type{Type.f64};
+        const static_i64_pair: []const Type = &[_]Type{ Type.i64, Type.i64 };
+
+        return switch (value_type.kind) {
+            .i8, .i16, .i32, .i64 => .{ .rcs = static_int, .reg_types = static_i64 },
+            .i128 => .{ .rcs = static_int_pair, .reg_types = static_i64_pair },
+            .f16, .f32, .f64 => .{ .rcs = static_float, .reg_types = static_f64 },
+            .f128 => .{ .rcs = static_float, .reg_types = static_f64 },
+            .i8x16, .i16x8, .i32x4, .i64x2, .f32x4, .f64x2 => .{ .rcs = static_float, .reg_types = static_f64 },
+        };
+    }
+
+    /// Compute argument/return value locations.
+    /// Implements System V AMD64 and Windows x64 ABIs.
+    pub fn computeArgLocs(
+        call_conv: CallConv,
+        flags: SettingsFlags,
+        params: []const AbiParam,
+        args_or_rets: ArgsOrRets,
+        add_ret_area_ptr: bool,
+        allocator: Allocator,
+    ) !struct { stack_size: u32, ret_area_ptr_idx: ?usize, args: std.ArrayListUnmanaged(ABIArg) } {
+        const is_win64 = call_conv == .windows_fastcall or call_conv == .wasmtime_fastcall;
+
+        var next_gpr: u8 = 0;
+        var next_fpr: u8 = 0;
+        var arg_idx: u8 = 0; // For Windows unified arg slots
+        var next_stack: u32 = 0;
+
+        // Windows needs 32-byte shadow space for first 4 args
+        if (is_win64 and args_or_rets == .args) {
+            next_stack = WIN64_SHADOW_SPACE;
+        }
+
+        var args_list = std.ArrayListUnmanaged(ABIArg){};
+
+        // Handle return area pointer
+        var ret_area_ptr: ?ABIArg = null;
+        if (add_ret_area_ptr) {
+            std.debug.assert(args_or_rets == .args);
+            // Return area pointer goes in first integer arg reg
+            if (is_win64) {
+                ret_area_ptr = ABIArg.reg(
+                    RealReg{ .hw_enc_val = WIN64_ARG_GPRS[0], .cls = .int },
+                    Type.i64,
+                    .none,
+                    .struct_return,
+                );
+                arg_idx += 1;
+            } else {
+                ret_area_ptr = ABIArg.reg(
+                    RealReg{ .hw_enc_val = SYSV_ARG_GPRS[0], .cls = .int },
+                    Type.i64,
+                    .none,
+                    .struct_return,
+                );
+                next_gpr += 1;
+            }
+        }
+
+        for (params) |param| {
+            const rc_info = rcForType(param.value_type);
+            const rcs = rc_info.rcs;
+            const reg_types = rc_info.reg_types;
+
+            // Handle StructReturn
+            if (param.purpose == .struct_return) {
+                std.debug.assert(param.value_type.kind == .int64);
+                // Already handled by add_ret_area_ptr
+                continue;
+            }
+
+            // Handle multi-register params (i128)
+            const is_multi_reg = rcs.len >= 2;
+            if (is_multi_reg) {
+                std.debug.assert(rcs.len == 2);
+
+                if (is_win64) {
+                    // Windows: i128 goes on stack
+                    const offset = next_stack;
+                    next_stack += 16;
+
+                    var slots_array = BoundedArray(ABIArgSlot, 4){};
+                    slots_array.appendAssumeCapacity(.{
+                        .stack = .{
+                            .offset = @intCast(offset),
+                            .ty = reg_types[0],
+                            .extension = param.extension,
+                        },
+                    });
+                    slots_array.appendAssumeCapacity(.{
+                        .stack = .{
+                            .offset = @intCast(offset + 8),
+                            .ty = reg_types[1],
+                            .extension = param.extension,
+                        },
+                    });
+
+                    try args_list.append(allocator, .{
+                        .slots = .{
+                            .slots = slots_array,
+                            .purpose = param.purpose,
+                        },
+                    });
+                } else {
+                    // System V: i128 in RDX:RAX for returns, or two consecutive regs for args
+                    if (args_or_rets == .rets) {
+                        var slots_array = BoundedArray(ABIArgSlot, 4){};
+                        slots_array.appendAssumeCapacity(.{
+                            .reg = .{
+                                .reg = RealReg{ .hw_enc_val = GprEnc.RAX, .cls = .int },
+                                .ty = reg_types[0],
+                                .extension = param.extension,
+                            },
+                        });
+                        slots_array.appendAssumeCapacity(.{
+                            .reg = .{
+                                .reg = RealReg{ .hw_enc_val = GprEnc.RDX, .cls = .int },
+                                .ty = reg_types[1],
+                                .extension = param.extension,
+                            },
+                        });
+
+                        try args_list.append(allocator, .{
+                            .slots = .{
+                                .slots = slots_array,
+                                .purpose = param.purpose,
+                            },
+                        });
+                    } else if (next_gpr + 2 <= SYSV_ARG_GPRS.len) {
+                        var slots_array = BoundedArray(ABIArgSlot, 4){};
+                        slots_array.appendAssumeCapacity(.{
+                            .reg = .{
+                                .reg = RealReg{ .hw_enc_val = SYSV_ARG_GPRS[next_gpr], .cls = .int },
+                                .ty = reg_types[0],
+                                .extension = param.extension,
+                            },
+                        });
+                        slots_array.appendAssumeCapacity(.{
+                            .reg = .{
+                                .reg = RealReg{ .hw_enc_val = SYSV_ARG_GPRS[next_gpr + 1], .cls = .int },
+                                .ty = reg_types[1],
+                                .extension = param.extension,
+                            },
+                        });
+
+                        try args_list.append(allocator, .{
+                            .slots = .{
+                                .slots = slots_array,
+                                .purpose = param.purpose,
+                            },
+                        });
+                        next_gpr += 2;
+                    } else {
+                        // Spill to stack
+                        const offset = next_stack;
+                        next_stack += 16;
+
+                        var slots_array = BoundedArray(ABIArgSlot, 4){};
+                        slots_array.appendAssumeCapacity(.{
+                            .stack = .{
+                                .offset = @intCast(offset),
+                                .ty = reg_types[0],
+                                .extension = param.extension,
+                            },
+                        });
+                        slots_array.appendAssumeCapacity(.{
+                            .stack = .{
+                                .offset = @intCast(offset + 8),
+                                .ty = reg_types[1],
+                                .extension = param.extension,
+                            },
+                        });
+
+                        try args_list.append(allocator, .{
+                            .slots = .{
+                                .slots = slots_array,
+                                .purpose = param.purpose,
+                            },
+                        });
+                    }
+                }
+                continue;
+            }
+
+            // Single register parameter
+            const rc = rcs[0];
+
+            if (is_win64) {
+                // Windows: unified slots, same index for GPR and FPR
+                if (arg_idx < 4) {
+                    const reg_enc = if (rc == .float)
+                        WIN64_ARG_FPRS[arg_idx]
+                    else
+                        WIN64_ARG_GPRS[arg_idx];
+
+                    const reg_class: RegClass = if (rc == .float) .float else .int;
+
+                    try args_list.append(allocator, ABIArg.reg(
+                        RealReg{ .hw_enc_val = reg_enc, .cls = reg_class },
+                        param.value_type,
+                        param.extension,
+                        param.purpose,
+                    ));
+                    arg_idx += 1;
+                    continue;
+                }
+            } else {
+                // System V: separate GPR and FPR counts
+                const max_gprs: u8 = @intCast(SYSV_ARG_GPRS.len);
+                const max_fprs: u8 = @intCast(SYSV_ARG_FPRS.len);
+
+                if (rc == .float) {
+                    if (next_fpr < max_fprs) {
+                        try args_list.append(allocator, ABIArg.reg(
+                            RealReg{ .hw_enc_val = SYSV_ARG_FPRS[next_fpr], .cls = .float },
+                            param.value_type,
+                            param.extension,
+                            param.purpose,
+                        ));
+                        next_fpr += 1;
+                        continue;
+                    }
+                } else {
+                    if (next_gpr < max_gprs) {
+                        try args_list.append(allocator, ABIArg.reg(
+                            RealReg{ .hw_enc_val = SYSV_ARG_GPRS[next_gpr], .cls = .int },
+                            param.value_type,
+                            param.extension,
+                            param.purpose,
+                        ));
+                        next_gpr += 1;
+                        continue;
+                    }
+                }
+            }
+
+            // Spill to stack
+            if (args_or_rets == .rets and !flags.enable_multi_ret_implicit_sret) {
+                return error.TooManyReturnValues;
+            }
+
+            const size: u32 = @intCast(param.value_type.bits() / 8);
+            const aligned_size = @max(size, 8); // Min 8-byte stack slots
+            next_stack = alignTo(next_stack, aligned_size);
+
+            try args_list.append(allocator, ABIArg.stack(
+                @intCast(next_stack),
+                param.value_type,
+                param.extension,
+                param.purpose,
+            ));
+            next_stack += aligned_size;
+        }
+
+        // Handle return area pointer
+        var ret_area_ptr_idx: ?usize = null;
+        if (ret_area_ptr) |ptr| {
+            try args_list.append(allocator, ptr);
+            ret_area_ptr_idx = args_list.items.len - 1;
+        }
+
+        // Align stack to 16 bytes
+        next_stack = alignTo(next_stack, 16);
+
+        return .{
+            .stack_size = next_stack,
+            .ret_area_ptr_idx = ret_area_ptr_idx,
+            .args = args_list,
+        };
+    }
+
+    /// Generate a load from stack.
+    pub fn genLoadStack(mem: StackAMode, into_reg: Writable(Reg), ty: Type) Inst {
+        const amode = mem.toAmode();
+        return Inst.movRM(.{
+            .size = OperandSize.fromType(ty),
+            .src = amode,
+            .dst = into_reg.toGpr(),
+        });
+    }
+
+    /// Generate a store to stack.
+    pub fn genStoreStack(mem: StackAMode, from_reg: Reg, ty: Type) Inst {
+        const amode = mem.toAmode();
+        return Inst.movMR(.{
+            .size = OperandSize.fromType(ty),
+            .src = Gpr.fromReg(from_reg),
+            .dst = amode,
+        });
+    }
+
+    /// Generate a move between registers.
+    pub fn genMove(to_reg: Writable(Reg), from_reg: Reg, ty: Type) Inst {
+        if (ty.isFloat()) {
+            // Use MOVAPS for XMM registers
+            return Inst.xmmMov(.{
+                .op = .movaps,
+                .src = Xmm.fromReg(from_reg),
+                .dst = to_reg.toXmm(),
+            });
+        } else {
+            // Use MOV for GPRs
+            return Inst.movRR(.{
+                .size = OperandSize.fromType(ty),
+                .src = Gpr.fromReg(from_reg),
+                .dst = to_reg.toGpr(),
+            });
+        }
+    }
+
+    /// Generate an extend instruction.
+    pub fn genExtend(
+        to_reg: Writable(Reg),
+        from_reg: Reg,
+        signed: bool,
+        from_bits: u8,
+        to_bits: u8,
+    ) Inst {
+        std.debug.assert(from_bits < to_bits);
+
+        const ext_mode = ExtMode.fromBits(from_bits, to_bits);
+
+        if (signed) {
+            return Inst.movsxRmR(.{
+                .ext_mode = ext_mode,
+                .src = .{ .reg = Gpr.fromReg(from_reg) },
+                .dst = to_reg.toGpr(),
+            });
+        } else {
+            return Inst.movzxRmR(.{
+                .ext_mode = ext_mode,
+                .src = .{ .reg = Gpr.fromReg(from_reg) },
+                .dst = to_reg.toGpr(),
+            });
+        }
+    }
+
+    /// Generate an add with immediate.
+    pub fn genAddImm(
+        call_conv: CallConv,
+        into_reg: Writable(Reg),
+        from_reg: Reg,
+        imm: u32,
+    ) BoundedArray(Inst, 4) {
+        _ = call_conv;
+        var insts = BoundedArray(Inst, 4){};
+
+        if (imm == 0) {
+            // Just move if no add needed
+            if (into_reg.toReg().bits != from_reg.bits) {
+                insts.appendAssumeCapacity(genMove(into_reg, from_reg, Type.i64));
+            }
+            return insts;
+        }
+
+        // If into_reg != from_reg, move first then add
+        if (into_reg.toReg().bits != from_reg.bits) {
+            insts.appendAssumeCapacity(genMove(into_reg, from_reg, Type.i64));
+        }
+
+        // ADD r64, imm32
+        insts.appendAssumeCapacity(Inst.aluRmiR(.{
+            .size = .size64,
+            .op = .add,
+            .src1 = into_reg.toGpr(),
+            .src2 = .{ .imm = imm },
+            .dst = into_reg.toGpr(),
+        }));
+
+        return insts;
+    }
+
+    /// Generate SP register adjustment.
+    pub fn genSpRegAdjust(amount: i32) BoundedArray(Inst, 4) {
+        var ret = BoundedArray(Inst, 4){};
+
+        if (amount == 0) {
+            return ret;
+        }
+
+        const abs_amount: u32 = if (amount > 0)
+            @intCast(amount)
+        else
+            @intCast(-amount);
+        const is_sub = amount < 0;
+        const op: AluRmiROpcode = if (is_sub) .sub else .add;
+
+        // Use RSP as both src and dst
+        const rsp_w = Writable(Gpr).fromReg(Gpr.fromReg(rsp()));
+
+        ret.appendAssumeCapacity(Inst.aluRmiR(.{
+            .size = .size64,
+            .op = op,
+            .src1 = rsp_w.toReg(),
+            .src2 = .{ .imm = abs_amount },
+            .dst = rsp_w,
+        }));
+
+        return ret;
+    }
+
+    /// Get address of stack slot.
+    pub fn genGetStackAddr(mem: StackAMode, into_reg: Writable(Reg)) Inst {
+        const amode = mem.toAmode();
+        return Inst.lea(.{
+            .size = .size64,
+            .src = amode,
+            .dst = into_reg.toGpr(),
+        });
+    }
+
+    /// Get the stack limit register.
+    pub fn getStacklimitReg(call_conv: CallConv) Reg {
+        _ = call_conv;
+        // Use r11 as scratch/stack limit register
+        return r11();
+    }
+
+    /// Generate a load from base + offset.
+    pub fn genLoadBaseOffset(into_reg: Writable(Reg), base: Reg, offset: i32, ty: Type) Inst {
+        const amode = SyntheticAmode{ .real_reg = .{ .reg = Gpr.fromReg(base), .offset = offset } };
+        return Inst.movRM(.{
+            .size = OperandSize.fromType(ty),
+            .src = amode,
+            .dst = into_reg.toGpr(),
+        });
+    }
+
+    /// Generate a store to base + offset.
+    pub fn genStoreBaseOffset(base: Reg, offset: i32, from_reg: Reg, ty: Type) Inst {
+        const amode = SyntheticAmode{ .real_reg = .{ .reg = Gpr.fromReg(base), .offset = offset } };
+        return Inst.movMR(.{
+            .size = OperandSize.fromType(ty),
+            .src = Gpr.fromReg(from_reg),
+            .dst = amode,
+        });
+    }
+
+    /// Generate prologue frame setup.
+    /// Standard x64 prologue: push rbp; mov rbp, rsp
+    pub fn genPrologueFrameSetup(
+        call_conv: CallConv,
+        flags: SettingsFlags,
+        isa_flags: IsaFlags,
+        frame_layout: *const FrameLayout,
+    ) BoundedArray(Inst, 16) {
+        _ = call_conv;
+        _ = isa_flags;
+        const setup_frame = frame_layout.setup_area_size > 0;
+        var insts = BoundedArray(Inst, 16){};
+
+        if (setup_frame) {
+            // push rbp
+            insts.appendAssumeCapacity(Inst.push64(.{
+                .src = .{ .reg = Gpr.fromReg(rbp()) },
+            }));
+
+            // mov rbp, rsp
+            const rbp_w = Writable(Gpr).fromReg(Gpr.fromReg(rbp()));
+            insts.appendAssumeCapacity(Inst.movRR(.{
+                .size = .size64,
+                .src = Gpr.fromReg(rsp()),
+                .dst = rbp_w,
+            }));
+
+            if (flags.unwind_info) {
+                // CFI directives would be added here
+            }
+        }
+
+        return insts;
+    }
+
+    /// Generate epilogue frame restore.
+    pub fn genEpilogueFrameRestore(
+        call_conv: CallConv,
+        flags: SettingsFlags,
+        isa_flags: IsaFlags,
+        frame_layout: *const FrameLayout,
+    ) BoundedArray(Inst, 8) {
+        _ = call_conv;
+        _ = flags;
+        _ = isa_flags;
+        const setup_frame = frame_layout.setup_area_size > 0;
+        var insts = BoundedArray(Inst, 8){};
+
+        if (setup_frame) {
+            // mov rsp, rbp
+            const rsp_w = Writable(Gpr).fromReg(Gpr.fromReg(rsp()));
+            insts.appendAssumeCapacity(Inst.movRR(.{
+                .size = .size64,
+                .src = Gpr.fromReg(rbp()),
+                .dst = rsp_w,
+            }));
+
+            // pop rbp
+            const rbp_w = Writable(Gpr).fromReg(Gpr.fromReg(rbp()));
+            insts.appendAssumeCapacity(Inst.pop64(.{
+                .dst = rbp_w,
+            }));
+        }
+
+        return insts;
+    }
+
+    /// Generate return instruction.
+    pub fn genReturn(
+        call_conv: CallConv,
+        isa_flags: IsaFlags,
+        frame_layout: *const FrameLayout,
+    ) BoundedArray(Inst, 2) {
+        _ = call_conv;
+        _ = isa_flags;
+        _ = frame_layout;
+        var insts = BoundedArray(Inst, 2){};
+        insts.appendAssumeCapacity(Inst.ret());
+        return insts;
+    }
+
+    /// Generate clobber save.
+    pub fn genClobberSave(
+        call_conv: CallConv,
+        flags: SettingsFlags,
+        frame_layout: *const FrameLayout,
+    ) BoundedArray(Inst, 32) {
+        _ = call_conv;
+        _ = flags;
+        var insts = BoundedArray(Inst, 32){};
+        const clobbered = frame_layout.clobberedCalleeSavesByClass();
+
+        // Push integer registers
+        for (clobbered.int_regs) |reg| {
+            const preg = PReg.init(reg.toReg().hw_enc_val, .int);
+            insts.appendAssumeCapacity(Inst.push64(.{
+                .src = .{ .reg = Gpr.fromReg(Reg.fromRealReg(preg)) },
+            }));
+        }
+
+        // Save XMM registers (Windows x64 only, System V doesn't save XMM)
+        // For simplicity, use SUB rsp followed by MOVAPS
+        const vec_regs = clobbered.vec_regs;
+        if (vec_regs.len > 0) {
+            const vec_save_size: u32 = @intCast(vec_regs.len * 16);
+            // Allocate space for XMM saves
+            const adj_insts = genSpRegAdjust(-@as(i32, @intCast(vec_save_size)));
+            for (adj_insts.constSlice()) |adj_inst| {
+                insts.appendAssumeCapacity(adj_inst);
+            }
+
+            // Save each XMM register
+            var offset: i32 = 0;
+            for (vec_regs) |reg| {
+                const preg = PReg.init(reg.toReg().hw_enc_val, .float);
+                const amode = SyntheticAmode{ .real_sp = .{ .offset = offset } };
+                insts.appendAssumeCapacity(Inst.xmmMovRM(.{
+                    .op = .movaps,
+                    .src = Xmm.fromReg(Reg.fromRealReg(preg)),
+                    .dst = amode,
+                }));
+                offset += 16;
+            }
+        }
+
+        // Allocate the fixed frame
+        const stack_size = frame_layout.fixed_frame_storage_size + frame_layout.outgoing_args_size;
+        if (stack_size > 0) {
+            const adj_insts = genSpRegAdjust(-@as(i32, @intCast(stack_size)));
+            for (adj_insts.constSlice()) |adj_inst| {
+                insts.appendAssumeCapacity(adj_inst);
+            }
+        }
+
+        return insts;
+    }
+
+    /// Generate clobber restore.
+    pub fn genClobberRestore(
+        call_conv: CallConv,
+        flags: SettingsFlags,
+        frame_layout: *const FrameLayout,
+    ) BoundedArray(Inst, 32) {
+        _ = call_conv;
+        _ = flags;
+        var insts = BoundedArray(Inst, 32){};
+        const clobbered = frame_layout.clobberedCalleeSavesByClass();
+
+        // Free the fixed frame
+        const stack_size = frame_layout.fixed_frame_storage_size + frame_layout.outgoing_args_size;
+        if (stack_size > 0) {
+            const adj_insts = genSpRegAdjust(@intCast(stack_size));
+            for (adj_insts.constSlice()) |adj_inst| {
+                insts.appendAssumeCapacity(adj_inst);
+            }
+        }
+
+        // Restore XMM registers (reverse order)
+        const vec_regs = clobbered.vec_regs;
+        if (vec_regs.len > 0) {
+            // Restore each XMM register
+            var offset: i32 = @intCast((vec_regs.len - 1) * 16);
+            var i: usize = vec_regs.len;
+            while (i > 0) {
+                i -= 1;
+                const reg = vec_regs[i];
+                const preg = PReg.init(reg.toReg().hw_enc_val, .float);
+                const amode = SyntheticAmode{ .real_sp = .{ .offset = offset } };
+                const xmm_w = Writable(Xmm).fromReg(Xmm.fromReg(Reg.fromRealReg(preg)));
+                insts.appendAssumeCapacity(Inst.xmmRmR(.{
+                    .op = .movaps,
+                    .src = amode,
+                    .dst = xmm_w,
+                }));
+                offset -= 16;
+            }
+
+            // Deallocate XMM save area
+            const vec_save_size: u32 = @intCast(vec_regs.len * 16);
+            const adj_insts = genSpRegAdjust(@intCast(vec_save_size));
+            for (adj_insts.constSlice()) |adj_inst| {
+                insts.appendAssumeCapacity(adj_inst);
+            }
+        }
+
+        // Pop integer registers (reverse order)
+        var i: usize = clobbered.int_regs.len;
+        while (i > 0) {
+            i -= 1;
+            const reg = clobbered.int_regs[i];
+            const preg = PReg.init(reg.toReg().hw_enc_val, .int);
+            const gpr_w = Writable(Gpr).fromReg(Gpr.fromReg(Reg.fromRealReg(preg)));
+            insts.appendAssumeCapacity(Inst.pop64(.{
+                .dst = gpr_w,
+            }));
+        }
+
+        return insts;
+    }
+
+    /// Get number of spill slots for a value.
+    pub fn getNumberOfSpillslotsForValue(
+        rc: RegClass,
+        vector_size: u32,
+        isa_flags: IsaFlags,
+    ) u32 {
+        _ = isa_flags;
+        std.debug.assert(vector_size % 8 == 0);
+        // We allocate in terms of 8-byte slots
+        return switch (rc) {
+            .int => 1,
+            .float => vector_size / 8, // XMM is 16 bytes = 2 slots
+            .vector => unreachable,
+        };
+    }
+
+    /// Get registers clobbered by call.
+    pub fn getRegsClobberedByCall(call_conv: CallConv, is_exception: bool) PRegSet {
+        if (is_exception) {
+            return ALL_CLOBBERS;
+        }
+        return switch (call_conv) {
+            .windows_fastcall, .wasmtime_fastcall => DEFAULT_WIN64_CLOBBERS,
+            else => DEFAULT_SYSV_CLOBBERS,
+        };
+    }
+
+    /// Get extension mode for a calling convention.
+    pub fn getExtMode(
+        call_conv: CallConv,
+        specified: ArgumentExtension,
+    ) ArgumentExtension {
+        _ = call_conv;
+        return specified;
+    }
+
+    /// Compute frame layout.
+    pub fn computeFrameLayout(
+        call_conv: CallConv,
+        flags: SettingsFlags,
+        sig: Signature,
+        clobbered_regs: []const Writable(RealReg),
+        function_calls: FunctionCalls,
+        incoming_args_size: u32,
+        tail_args_size: u32,
+        stackslots_size: u32,
+        fixed_frame_storage_size: u32,
+        outgoing_args_size: u32,
+    ) FrameLayout {
+        _ = sig;
+
+        // Filter to callee-saved registers
+        var callee_saves = BoundedArray(Writable(RealReg), 32){};
+        for (clobbered_regs) |reg| {
+            if (isCalleeSaved(call_conv, reg.toReg().hw_enc_val, reg.toReg().class() == .float)) {
+                callee_saves.appendAssumeCapacity(reg);
+            }
+        }
+
+        // Sort registers for deterministic output
+        std.mem.sort(
+            Writable(RealReg),
+            callee_saves.slice(),
+            {},
+            struct {
+                fn cmp(_: void, a: Writable(RealReg), b: Writable(RealReg)) bool {
+                    const a_enc = a.toReg().hw_enc_val;
+                    const b_enc = b.toReg().hw_enc_val;
+                    return a_enc < b_enc;
+                }
+            }.cmp,
+        );
+
+        // Compute clobber size
+        var clobber_size: u32 = 0;
+        for (callee_saves.constSlice()) |reg| {
+            if (reg.toReg().class() == .int) {
+                clobber_size += 8; // GPRs are 8 bytes
+            } else {
+                clobber_size += 16; // XMM are 16 bytes
+            }
+        }
+
+        // Compute setup area size
+        const setup_area_size: u32 = if (flags.preserve_frame_pointers or
+            function_calls != .none or
+            incoming_args_size > 0 or
+            clobber_size > 0 or
+            fixed_frame_storage_size > 0)
+            8 // Just RBP (return address is pushed by CALL)
+        else
+            0;
+
+        return FrameLayout{
+            .word_bytes = 8,
+            .incoming_args_size = incoming_args_size,
+            .tail_args_size = tail_args_size,
+            .setup_area_size = setup_area_size,
+            .clobber_size = clobber_size,
+            .fixed_frame_storage_size = fixed_frame_storage_size,
+            .stackslots_size = stackslots_size,
+            .outgoing_args_size = outgoing_args_size,
+            .clobbered_callee_saves = callee_saves,
+            .function_calls = function_calls,
+        };
+    }
+
+    /// Get the return value temporary register.
+    pub fn retvalTempReg(call_conv: CallConv) Writable(Reg) {
+        _ = call_conv;
+        return Writable(Reg).fromReg(r11());
+    }
+};
+
 //=============================================================================
 // Tests
 //=============================================================================
@@ -748,4 +1819,103 @@ test "assignArg" {
             }
         },
     }
+}
+
+test "X64MachineDeps basic" {
+    const testing = std.testing;
+
+    try testing.expectEqual(@as(u32, 64), X64MachineDeps.wordBits());
+    try testing.expectEqual(@as(u32, 16), X64MachineDeps.stackAlign(.system_v));
+    try testing.expectEqual(@as(u32, 16), X64MachineDeps.stackAlign(.windows_fastcall));
+}
+
+test "X64MachineDeps rcForType" {
+    const testing = std.testing;
+
+    const i64_info = X64MachineDeps.rcForType(Type.i64);
+    try testing.expectEqual(@as(usize, 1), i64_info.rcs.len);
+    try testing.expectEqual(RegClass.int, i64_info.rcs[0]);
+
+    const f64_info = X64MachineDeps.rcForType(Type.f64);
+    try testing.expectEqual(@as(usize, 1), f64_info.rcs.len);
+    try testing.expectEqual(RegClass.float, f64_info.rcs[0]);
+
+    const i128_info = X64MachineDeps.rcForType(Type.i128);
+    try testing.expectEqual(@as(usize, 2), i128_info.rcs.len);
+}
+
+test "StackAMode" {
+    // Test incoming arg conversion
+    const incoming = StackAMode{ .incoming_arg = .{ .off = 8, .stack_args_size = 32 } };
+    const amode = incoming.toAmode();
+    switch (amode) {
+        .incoming_arg => |ia| {
+            // stack_args_size(32) + RETURN_ADDRESS_SIZE(8) - off(8) = 32
+            try std.testing.expectEqual(@as(u32, 32), ia.offset_val);
+        },
+        else => unreachable,
+    }
+
+    // Test slot conversion
+    const slot = StackAMode{ .slot = 16 };
+    const slot_amode = slot.toAmode();
+    switch (slot_amode) {
+        .slot_offset => |off| {
+            try std.testing.expectEqual(@as(i32, 16), off.simm32);
+        },
+        else => unreachable,
+    }
+}
+
+test "FrameLayout" {
+    var layout = FrameLayout{
+        .setup_area_size = 8,
+        .clobber_size = 24,
+        .fixed_frame_storage_size = 32,
+        .stackslots_size = 16,
+        .outgoing_args_size = 8,
+    };
+
+    // Total: 8 + 24 + 32 + 16 + 8 = 88
+    try std.testing.expectEqual(@as(u32, 88), layout.frameSize());
+}
+
+test "PRegSet" {
+    var set = PRegSet.empty;
+
+    // Add RAX
+    set.add(PReg.init(GprEnc.RAX, .int));
+    try std.testing.expect(set.contains(PReg.init(GprEnc.RAX, .int)));
+    try std.testing.expect(!set.contains(PReg.init(GprEnc.RBX, .int)));
+
+    // Add XMM0
+    set.add(PReg.init(XmmEnc.XMM0, .float));
+    try std.testing.expect(set.contains(PReg.init(XmmEnc.XMM0, .float)));
+    try std.testing.expect(!set.contains(PReg.init(XmmEnc.XMM1, .float)));
+
+    // Test unionWith
+    var set2 = PRegSet.empty;
+    set2.add(PReg.init(GprEnc.RBX, .int));
+    const combined = set.unionWith(set2);
+    try std.testing.expect(combined.contains(PReg.init(GprEnc.RAX, .int)));
+    try std.testing.expect(combined.contains(PReg.init(GprEnc.RBX, .int)));
+}
+
+test "DEFAULT_SYSV_CLOBBERS" {
+    // Verify System V clobbers include caller-saved registers
+    try std.testing.expect(DEFAULT_SYSV_CLOBBERS.contains(PReg.init(GprEnc.RAX, .int)));
+    try std.testing.expect(DEFAULT_SYSV_CLOBBERS.contains(PReg.init(GprEnc.RCX, .int)));
+    try std.testing.expect(DEFAULT_SYSV_CLOBBERS.contains(PReg.init(GprEnc.RDI, .int)));
+    try std.testing.expect(DEFAULT_SYSV_CLOBBERS.contains(PReg.init(GprEnc.R11, .int)));
+
+    // Verify callee-saved are NOT in clobbers
+    try std.testing.expect(!DEFAULT_SYSV_CLOBBERS.contains(PReg.init(GprEnc.RBX, .int)));
+    try std.testing.expect(!DEFAULT_SYSV_CLOBBERS.contains(PReg.init(GprEnc.R12, .int)));
+}
+
+test "alignTo" {
+    try std.testing.expectEqual(@as(u32, 16), alignTo(9, 16));
+    try std.testing.expectEqual(@as(u32, 16), alignTo(16, 16));
+    try std.testing.expectEqual(@as(u32, 32), alignTo(17, 16));
+    try std.testing.expectEqual(@as(u32, 8), alignTo(5, 8));
 }
