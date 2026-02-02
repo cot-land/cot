@@ -719,6 +719,23 @@ pub const ExtMode = enum {
             .lq => "lq",
         };
     }
+
+    /// Get the source size in bytes.
+    pub fn srcBytes(self: ExtMode) u8 {
+        return switch (self) {
+            .bl, .bq => 1,
+            .wl, .wq => 2,
+            .lq => 4,
+        };
+    }
+
+    /// Get the destination size in bytes.
+    pub fn dstBytes(self: ExtMode) u8 {
+        return switch (self) {
+            .bl, .wl => 4,
+            .bq, .wq, .lq => 8,
+        };
+    }
 };
 
 //=============================================================================
@@ -992,6 +1009,36 @@ pub const OperandSize = enum {
     pub fn is64(self: OperandSize) bool {
         return self == .size64;
     }
+
+    /// Get the size in bytes (alias for toBytes).
+    pub fn bytes(self: OperandSize) u8 {
+        return self.toBytes();
+    }
+
+    /// Get the size in bits (alias for toBits).
+    pub fn bits(self: OperandSize) u8 {
+        return self.toBits();
+    }
+
+    /// Get the AT&T syntax size suffix.
+    pub fn suffix(self: OperandSize) []const u8 {
+        return switch (self) {
+            .size8 => "b",
+            .size16 => "w",
+            .size32 => "l",
+            .size64 => "q",
+        };
+    }
+
+    /// Get the human-readable name.
+    pub fn name(self: OperandSize) []const u8 {
+        return switch (self) {
+            .size8 => "byte",
+            .size16 => "word",
+            .size32 => "dword",
+            .size64 => "qword",
+        };
+    }
 };
 
 //=============================================================================
@@ -1099,6 +1146,17 @@ pub const ShiftKind = enum(u8) {
     /// Get the encoding (bits 3-5 of the ModR/M reg field).
     pub fn enc(self: ShiftKind) u8 {
         return @intFromEnum(self);
+    }
+
+    /// Get the name of this shift kind.
+    pub fn name(self: ShiftKind) []const u8 {
+        return switch (self) {
+            .shl => "shl",
+            .shr => "shr",
+            .sar => "sar",
+            .rol => "rol",
+            .ror => "ror",
+        };
     }
 };
 

@@ -330,6 +330,280 @@ pub const RexPrefix = struct {
 };
 
 //=============================================================================
+// VEX prefix encoding (for AVX instructions)
+//=============================================================================
+
+/// The mandatory prefix values for VEX encoding.
+/// These map to legacy prefixes 0x66, 0xF3, 0xF2.
+pub const VexPp = enum(u2) {
+    none = 0b00,
+    p66 = 0b01,
+    pf3 = 0b10,
+    pf2 = 0b11,
+};
+
+/// The opcode map selector for VEX encoding.
+/// m-mmmm field in 3-byte VEX.
+pub const VexMmmmm = enum(u5) {
+    /// Implied leading 0x0F byte.
+    m0f = 0b00001,
+    /// Implied leading 0x0F 0x38 bytes.
+    m0f38 = 0b00010,
+    /// Implied leading 0x0F 0x3A bytes.
+    m0f3a = 0b00011,
+};
+
+/// VEX prefix encoding for AVX instructions.
+/// Can be 2 or 3 bytes depending on the instruction requirements.
+pub const VexPrefix = struct {
+    /// R̄ bit (inverted REX.R) - 0 for extended reg field.
+    r_inv: u1,
+    /// X̄ bit (inverted REX.X) - 0 for extended index.
+    x_inv: u1,
+    /// B̄ bit (inverted REX.B) - 0 for extended r/m or base.
+    b_inv: u1,
+    /// W bit (like REX.W) - 1 for 64-bit operand size.
+    w: u1,
+    /// vvvv field (inverted) - additional source register.
+    /// 1111 for no register.
+    vvvv_inv: u4,
+    /// L bit - vector length (0 = 128-bit, 1 = 256-bit).
+    l: u1,
+    /// pp field - mandatory prefix.
+    pp: VexPp,
+    /// m-mmmm field - opcode map.
+    mmmmm: VexMmmmm,
+
+    /// Create a VEX prefix for a two-operand instruction (dst = op(src)).
+    /// reg_enc: encoding of the register operand (ModR/M reg field)
+    /// rm_enc: encoding of the r/m operand
+    /// vvvv_enc: encoding of the VEX.vvvv register (additional source), or null for no reg
+    pub fn init(
+        reg_enc: u8,
+        rm_enc: u8,
+        index_enc: ?u8,
+        vvvv_enc: ?u8,
+        w: bool,
+        l: bool,
+        pp: VexPp,
+        mmmmm: VexMmmmm,
+    ) VexPrefix {
+        const idx = index_enc orelse 0;
+        return VexPrefix{
+            .r_inv = if (isExtendedReg(reg_enc)) 0 else 1,
+            .x_inv = if (isExtendedReg(idx)) 0 else 1,
+            .b_inv = if (isExtendedReg(rm_enc)) 0 else 1,
+            .w = if (w) 1 else 0,
+            .vvvv_inv = if (vvvv_enc) |v| ~@as(u4, @truncate(v)) else 0b1111,
+            .l = if (l) 1 else 0,
+            .pp = pp,
+            .mmmmm = mmmmm,
+        };
+    }
+
+    /// Check if 2-byte VEX can be used.
+    /// 2-byte VEX requires: X̄=1, B̄=1, W=0, m-mmmm=00001 (0F).
+    pub fn canUse2Byte(self: VexPrefix) bool {
+        return self.x_inv == 1 and
+            self.b_inv == 1 and
+            self.w == 0 and
+            self.mmmmm == .m0f;
+    }
+
+    /// Encode the VEX prefix to the buffer.
+    pub fn encode(self: VexPrefix, sink: *MachBuffer) void {
+        if (self.canUse2Byte()) {
+            // 2-byte VEX: C5 [R̄ vvvv L pp]
+            sink.put1(0xC5);
+            const byte2: u8 = (@as(u8, self.r_inv) << 7) |
+                (@as(u8, self.vvvv_inv) << 3) |
+                (@as(u8, self.l) << 2) |
+                @intFromEnum(self.pp);
+            sink.put1(byte2);
+        } else {
+            // 3-byte VEX: C4 [R̄ X̄ B̄ m-mmmm] [W vvvv L pp]
+            sink.put1(0xC4);
+            const byte2: u8 = (@as(u8, self.r_inv) << 7) |
+                (@as(u8, self.x_inv) << 6) |
+                (@as(u8, self.b_inv) << 5) |
+                @intFromEnum(self.mmmmm);
+            const byte3: u8 = (@as(u8, self.w) << 7) |
+                (@as(u8, self.vvvv_inv) << 3) |
+                (@as(u8, self.l) << 2) |
+                @intFromEnum(self.pp);
+            sink.put1(byte2);
+            sink.put1(byte3);
+        }
+    }
+};
+
+/// Emit a VEX-encoded instruction with reg and r/m operands.
+/// Returns the number of VEX prefix bytes emitted (2 or 3).
+pub fn emitVexRm(
+    sink: *MachBuffer,
+    reg_enc: u8,
+    rm_enc: u8,
+    index_enc: ?u8,
+    vvvv_enc: ?u8,
+    w: bool,
+    l: bool,
+    pp: VexPp,
+    mmmmm: VexMmmmm,
+    opcode: u8,
+) void {
+    const vex = VexPrefix.init(reg_enc, rm_enc, index_enc, vvvv_enc, w, l, pp, mmmmm);
+    vex.encode(sink);
+    sink.put1(opcode);
+}
+
+//=============================================================================
+// EVEX prefix encoding (for AVX-512 instructions)
+//=============================================================================
+
+/// EVEX opcode map selector.
+pub const EvexMm = enum(u2) {
+    /// Implied leading 0x0F byte.
+    m0f = 0b01,
+    /// Implied leading 0x0F 0x38 bytes.
+    m0f38 = 0b10,
+    /// Implied leading 0x0F 0x3A bytes.
+    m0f3a = 0b11,
+};
+
+/// EVEX vector length encoding.
+pub const EvexVectorLen = enum(u2) {
+    /// 128-bit (xmm).
+    v128 = 0b00,
+    /// 256-bit (ymm).
+    v256 = 0b01,
+    /// 512-bit (zmm).
+    v512 = 0b10,
+};
+
+/// EVEX prefix encoding for AVX-512 instructions.
+/// Always 4 bytes: 62 [P0] [P1] [P2].
+pub const EvexPrefix = struct {
+    // Byte 2 (P0): R X B R' 0 0 m m
+    /// R̄ bit (inverted) - high bit of ModR/M reg field.
+    r_inv: u1,
+    /// X̄ bit (inverted) - high bit of SIB index.
+    x_inv: u1,
+    /// B̄ bit (inverted) - high bit of ModR/M r/m or SIB base.
+    b_inv: u1,
+    /// R'̄ bit (inverted) - 4th bit of ModR/M reg field (for zmm16-31).
+    r_prime_inv: u1,
+    /// mm - opcode map selector.
+    mm: EvexMm,
+
+    // Byte 3 (P1): W v v v v 1 p p
+    /// W bit - operand size (like REX.W).
+    w: u1,
+    /// vvvv (inverted) - additional source register.
+    vvvv_inv: u4,
+    /// pp - mandatory prefix.
+    pp: VexPp,
+
+    // Byte 4 (P2): z L' L b V' a a a
+    /// z - zeroing-masking (0=merge, 1=zero).
+    z: u1,
+    /// L'L - vector length.
+    ll: EvexVectorLen,
+    /// b - broadcast/rounding/SAE.
+    b: u1,
+    /// V'̄ (inverted) - 4th bit of vvvv (for zmm16-31).
+    v_prime_inv: u1,
+    /// aaa - opmask register (k0-k7, 000 = no mask).
+    aaa: u3,
+
+    /// Create an EVEX prefix.
+    pub fn init(
+        reg_enc: u8, // Full 5-bit encoding (0-31)
+        rm_enc: u8, // Full 5-bit encoding
+        index_enc: ?u8,
+        vvvv_enc: ?u8, // Full 5-bit encoding
+        w: bool,
+        ll: EvexVectorLen,
+        pp: VexPp,
+        mm: EvexMm,
+        z: bool,
+        b: bool,
+        aaa: u3,
+    ) EvexPrefix {
+        const idx = index_enc orelse 0;
+        const v = vvvv_enc orelse 0;
+
+        return EvexPrefix{
+            // P0
+            .r_inv = if ((reg_enc & 0x08) != 0) 0 else 1,
+            .x_inv = if ((idx & 0x08) != 0) 0 else 1,
+            .b_inv = if ((rm_enc & 0x08) != 0) 0 else 1,
+            .r_prime_inv = if ((reg_enc & 0x10) != 0) 0 else 1,
+            .mm = mm,
+            // P1
+            .w = if (w) 1 else 0,
+            .vvvv_inv = ~@as(u4, @truncate(v)),
+            .pp = pp,
+            // P2
+            .z = if (z) 1 else 0,
+            .ll = ll,
+            .b = if (b) 1 else 0,
+            .v_prime_inv = if ((v & 0x10) != 0) 0 else 1,
+            .aaa = aaa,
+        };
+    }
+
+    /// Encode the EVEX prefix to the buffer.
+    pub fn encode(self: EvexPrefix, sink: *MachBuffer) void {
+        // Byte 1: 0x62 (EVEX prefix indicator)
+        sink.put1(0x62);
+
+        // Byte 2 (P0): R X B R' 0 0 m m
+        const p0: u8 = (@as(u8, self.r_inv) << 7) |
+            (@as(u8, self.x_inv) << 6) |
+            (@as(u8, self.b_inv) << 5) |
+            (@as(u8, self.r_prime_inv) << 4) |
+            @intFromEnum(self.mm);
+        sink.put1(p0);
+
+        // Byte 3 (P1): W v v v v 1 p p
+        const p1: u8 = (@as(u8, self.w) << 7) |
+            (@as(u8, self.vvvv_inv) << 3) |
+            (1 << 2) | // Fixed bit
+            @intFromEnum(self.pp);
+        sink.put1(p1);
+
+        // Byte 4 (P2): z L' L b V' a a a
+        const p2: u8 = (@as(u8, self.z) << 7) |
+            (@as(u8, @intFromEnum(self.ll)) << 5) |
+            (@as(u8, self.b) << 4) |
+            (@as(u8, self.v_prime_inv) << 3) |
+            self.aaa;
+        sink.put1(p2);
+    }
+};
+
+/// Emit an EVEX-encoded instruction.
+pub fn emitEvexRm(
+    sink: *MachBuffer,
+    reg_enc: u8,
+    rm_enc: u8,
+    index_enc: ?u8,
+    vvvv_enc: ?u8,
+    w: bool,
+    ll: EvexVectorLen,
+    pp: VexPp,
+    mm: EvexMm,
+    z: bool,
+    b: bool,
+    aaa: u3,
+    opcode: u8,
+) void {
+    const evex = EvexPrefix.init(reg_enc, rm_enc, index_enc, vvvv_enc, w, ll, pp, mm, z, b, aaa);
+    evex.encode(sink);
+    sink.put1(opcode);
+}
+
+//=============================================================================
 // ModR/M and SIB byte encoding (from cranelift-assembler-x64/src/rex.rs)
 //=============================================================================
 
@@ -1775,14 +2049,115 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             sink.put1(0xFE); // Placeholder for short jump offset
         },
 
-        .atomic_128_rmw_seq => |_| {
-            // 128-bit atomics use CMPXCHG16B - complex sequence, deferred
-            unreachable;
+        .atomic_128_rmw_seq => |atomic| {
+            // 128-bit atomic read-modify-write using CMPXCHG16B
+            // Registers:
+            //   RAX:RDX = expected value (loaded from memory, then compared)
+            //   RBX:RCX = new value to store
+            //   dst_old_low:dst_old_high = old value output
+            //   temp_low:temp_high = temporary for computing new value
+            //   operand_low:operand_high = second operand for the operation
+            //
+            // The sequence:
+            //   MOV RAX, [mem]       ; load low 64 bits
+            //   MOV RDX, [mem+8]     ; load high 64 bits
+            // again:
+            //   MOV temp_low, RAX    ; save current low
+            //   MOV temp_high, RDX   ; save current high
+            //   <compute new = temp op operand, result in RCX:RBX>
+            //   LOCK CMPXCHG16B [mem]
+            //   JNZ again
+            //   MOV dst_old_low, RAX
+            //   MOV dst_old_high, RDX
+
+            const finalized = memFinalize(atomic.mem, state);
+            const operand_low_enc = atomic.operand_low.hwEnc();
+            const operand_high_enc = atomic.operand_high.hwEnc();
+            const temp_low_enc = atomic.temp_low.toReg().hwEnc();
+            const temp_high_enc = atomic.temp_high.toReg().hwEnc();
+            const dst_old_low_enc = atomic.dst_old_low.toReg().hwEnc();
+            const dst_old_high_enc = atomic.dst_old_high.toReg().hwEnc();
+
+            // Load current value from memory into RAX:RDX
+            // MOV RAX, [mem]
+            emitLoad64(sink, GprEnc.RAX, finalized.amode);
+            // MOV RDX, [mem+8]
+            emitLoad64AtOffset(sink, GprEnc.RDX, finalized.amode, 8);
+
+            // Create loop label
+            const again_label = sink.getLabel();
+            sink.bindLabel(again_label, state);
+
+            // Copy RAX -> temp_low
+            emitMovRR(sink, temp_low_enc, GprEnc.RAX);
+            // Copy RDX -> temp_high
+            emitMovRR(sink, temp_high_enc, GprEnc.RDX);
+
+            // Compute new value based on operation
+            // Result goes into RCX:RBX
+            emit128AtomicOp(sink, atomic.op, temp_low_enc, temp_high_enc, operand_low_enc, operand_high_enc);
+
+            // LOCK CMPXCHG16B [mem]
+            emitLockCmpxchg16b(sink, finalized.amode);
+
+            // JNZ again
+            sink.put1(0x75); // JNZ rel8
+            const jnz_offset = sink.curOffset();
+            sink.useLabelAtOffset(jnz_offset, again_label, .jmp_rel_8);
+            sink.put1(0xFE); // Placeholder
+
+            // Move result to destination registers
+            // MOV dst_old_low, RAX
+            emitMovRR(sink, dst_old_low_enc, GprEnc.RAX);
+            // MOV dst_old_high, RDX
+            emitMovRR(sink, dst_old_high_enc, GprEnc.RDX);
         },
 
-        .atomic_128_xchg_seq => |_| {
-            // 128-bit exchange uses CMPXCHG16B - complex sequence, deferred
-            unreachable;
+        .atomic_128_xchg_seq => |atomic| {
+            // 128-bit atomic exchange using CMPXCHG16B
+            // Simple case: just exchange, no computation needed
+            //
+            // The sequence:
+            //   MOV RAX, [mem]       ; load current low
+            //   MOV RDX, [mem+8]     ; load current high
+            // again:
+            //   MOV RBX, operand_low
+            //   MOV RCX, operand_high
+            //   LOCK CMPXCHG16B [mem]
+            //   JNZ again
+            //   MOV dst_old_low, RAX
+            //   MOV dst_old_high, RDX
+
+            const finalized = memFinalize(atomic.mem, state);
+            const operand_low_enc = atomic.operand_low.hwEnc();
+            const operand_high_enc = atomic.operand_high.hwEnc();
+            const dst_old_low_enc = atomic.dst_old_low.toReg().hwEnc();
+            const dst_old_high_enc = atomic.dst_old_high.toReg().hwEnc();
+
+            // Load current value from memory into RAX:RDX
+            emitLoad64(sink, GprEnc.RAX, finalized.amode);
+            emitLoad64AtOffset(sink, GprEnc.RDX, finalized.amode, 8);
+
+            // Create loop label
+            const again_label = sink.getLabel();
+            sink.bindLabel(again_label, state);
+
+            // Move new value into RBX:RCX
+            emitMovRR(sink, GprEnc.RBX, operand_low_enc);
+            emitMovRR(sink, GprEnc.RCX, operand_high_enc);
+
+            // LOCK CMPXCHG16B [mem]
+            emitLockCmpxchg16b(sink, finalized.amode);
+
+            // JNZ again
+            sink.put1(0x75); // JNZ rel8
+            const jnz_offset = sink.curOffset();
+            sink.useLabelAtOffset(jnz_offset, again_label, .jmp_rel_8);
+            sink.put1(0xFE); // Placeholder
+
+            // Move result to destination registers
+            emitMovRR(sink, dst_old_low_enc, GprEnc.RAX);
+            emitMovRR(sink, dst_old_high_enc, GprEnc.RDX);
         },
 
         //---------------------------------------------------------------------
@@ -1796,12 +2171,56 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
         },
 
         //---------------------------------------------------------------------
-        // Other pseudo-instructions (deferred)
-        // Trap instructions require integration with the trap handling infrastructure
+        // Trap instructions
         //---------------------------------------------------------------------
-        .trap_if,
-        .trap_if_and,
-        .trap_if_or,
+        .trap_if => |trap| {
+            // Conditional trap: if condition is true, execute UD2
+            // Implementation: Jcc over the UD2, then UD2
+            // We invert the condition to skip the trap
+            const skip_label = sink.getLabel();
+            // Jump over the trap if condition is NOT true
+            emitCondJmpRel8(sink, trap.cc.invert(), skip_label);
+            // UD2 (trap)
+            sink.put1(0x0F);
+            sink.put1(0x0B);
+            sink.bindLabel(skip_label, state);
+        },
+
+        .trap_if_and => |trap| {
+            // Trap if both conditions are true (cc1 AND cc2)
+            // Implementation: skip if !cc1 OR !cc2
+            const skip_label = sink.getLabel();
+            // Jump to skip if !cc1
+            emitCondJmpRel8(sink, trap.cc1.invert(), skip_label);
+            // Jump to skip if !cc2
+            emitCondJmpRel8(sink, trap.cc2.invert(), skip_label);
+            // UD2 (trap) - both conditions were true
+            sink.put1(0x0F);
+            sink.put1(0x0B);
+            sink.bindLabel(skip_label, state);
+        },
+
+        .trap_if_or => |trap| {
+            // Trap if either condition is true (cc1 OR cc2)
+            // Implementation: Jcc1 to trap, Jcc2 to trap, jmp skip, trap: UD2, skip:
+            const trap_label = sink.getLabel();
+            const skip_label = sink.getLabel();
+            // Jump to trap if cc1
+            emitCondJmpRel8(sink, trap.cc1, trap_label);
+            // Jump to trap if cc2
+            emitCondJmpRel8(sink, trap.cc2, trap_label);
+            // Neither condition was true, skip the trap
+            emitUncondJmpRel8(sink, skip_label);
+            // trap: UD2
+            sink.bindLabel(trap_label, state);
+            sink.put1(0x0F);
+            sink.put1(0x0B);
+            sink.bindLabel(skip_label, state);
+        },
+
+        //---------------------------------------------------------------------
+        // Other pseudo-instructions (deferred)
+        //---------------------------------------------------------------------
         .xmm_min_max_seq,
         .xmm_uninitialized_value,
         .gpr_uninitialized_value,
@@ -2193,6 +2612,147 @@ fn emitAtomicOp(sink: *MachBuffer, op: AtomicRmwSeqOp, operand_enc: u8, tmp_enc:
 }
 
 //=============================================================================
+// 128-bit atomic helpers (CMPXCHG16B)
+//=============================================================================
+
+/// Emit MOV r64, r64.
+fn emitMovRR(sink: *MachBuffer, dst_enc: u8, src_enc: u8) void {
+    // REX.W + 89 /r = MOV r/m64, r64
+    const rex = RexPrefix.twoOp(src_enc, dst_enc, true, false);
+    rex.encode(sink);
+    sink.put1(0x89);
+    sink.put1(encodeModrm(0b11, src_enc & 7, dst_enc & 7));
+}
+
+/// Emit MOV r64, [mem].
+fn emitLoad64(sink: *MachBuffer, dst_enc: u8, amode: Amode) void {
+    // REX.W + 8B /r = MOV r64, r/m64
+    const base_enc = getBaseEnc(amode);
+    const rex = RexPrefix.memOp(dst_enc, base_enc, true, false);
+    rex.encode(sink);
+    sink.put1(0x8B);
+    emitModrmSibDisp(sink, dst_enc, amode, 0, null);
+}
+
+/// Emit MOV r64, [mem+offset].
+fn emitLoad64AtOffset(sink: *MachBuffer, dst_enc: u8, amode: Amode, extra_offset: i32) void {
+    // Adjust the displacement
+    const adjusted_amode = switch (amode) {
+        .imm_reg => |m| Amode{ .imm_reg = .{
+            .simm32 = m.simm32 + extra_offset,
+            .base = m.base,
+            .flags = m.flags,
+        } },
+        .imm_reg_reg_shift => |m| Amode{ .imm_reg_reg_shift = .{
+            .simm32 = m.simm32 + extra_offset,
+            .base = m.base,
+            .index = m.index,
+            .shift = m.shift,
+            .flags = m.flags,
+        } },
+        .rip_relative => |m| Amode{ .rip_relative = .{
+            .target = m.target,
+        } },
+    };
+    emitLoad64(sink, dst_enc, adjusted_amode);
+}
+
+/// Emit LOCK CMPXCHG16B [mem].
+/// Compares RDX:RAX with m128. If equal, stores RCX:RBX and sets ZF=1.
+/// Otherwise loads m128 into RDX:RAX and clears ZF=0.
+fn emitLockCmpxchg16b(sink: *MachBuffer, amode: Amode) void {
+    // LOCK prefix
+    sink.put1(0xF0);
+    // REX.W + 0F C7 /1 = CMPXCHG16B m128
+    const base_enc = getBaseEnc(amode);
+    const rex = RexPrefix.memOp(1, base_enc, true, false); // REX.W for 128-bit
+    rex.encode(sink);
+    sink.put1(0x0F);
+    sink.put1(0xC7);
+    emitModrmSibDisp(sink, 1, amode, 0, null); // /1 opcode extension
+}
+
+/// Emit the 128-bit atomic operation.
+/// Computes new_low:new_high = (temp_low:temp_high) op (operand_low:operand_high)
+/// Result goes into RBX (low) and RCX (high).
+fn emit128AtomicOp(
+    sink: *MachBuffer,
+    op: mod.Atomic128RmwSeqOp,
+    temp_low_enc: u8,
+    temp_high_enc: u8,
+    operand_low_enc: u8,
+    operand_high_enc: u8,
+) void {
+    // First, copy temp to RBX:RCX (the destination for CMPXCHG16B)
+    emitMovRR(sink, GprEnc.RBX, temp_low_enc);
+    emitMovRR(sink, GprEnc.RCX, temp_high_enc);
+
+    // Then apply the operation to RBX:RCX
+    switch (op) {
+        .add => {
+            // ADD RBX, operand_low; ADC RCX, operand_high
+            var rex = RexPrefix.twoOp(operand_low_enc, GprEnc.RBX, true, false);
+            rex.encode(sink);
+            sink.put1(0x01); // ADD r/m64, r64
+            sink.put1(encodeModrm(0b11, operand_low_enc & 7, GprEnc.RBX & 7));
+
+            rex = RexPrefix.twoOp(operand_high_enc, GprEnc.RCX, true, false);
+            rex.encode(sink);
+            sink.put1(0x11); // ADC r/m64, r64
+            sink.put1(encodeModrm(0b11, operand_high_enc & 7, GprEnc.RCX & 7));
+        },
+        .sub => {
+            // SUB RBX, operand_low; SBB RCX, operand_high
+            var rex = RexPrefix.twoOp(operand_low_enc, GprEnc.RBX, true, false);
+            rex.encode(sink);
+            sink.put1(0x29); // SUB r/m64, r64
+            sink.put1(encodeModrm(0b11, operand_low_enc & 7, GprEnc.RBX & 7));
+
+            rex = RexPrefix.twoOp(operand_high_enc, GprEnc.RCX, true, false);
+            rex.encode(sink);
+            sink.put1(0x19); // SBB r/m64, r64
+            sink.put1(encodeModrm(0b11, operand_high_enc & 7, GprEnc.RCX & 7));
+        },
+        .@"and" => {
+            // AND RBX, operand_low; AND RCX, operand_high
+            var rex = RexPrefix.twoOp(operand_low_enc, GprEnc.RBX, true, false);
+            rex.encode(sink);
+            sink.put1(0x21); // AND r/m64, r64
+            sink.put1(encodeModrm(0b11, operand_low_enc & 7, GprEnc.RBX & 7));
+
+            rex = RexPrefix.twoOp(operand_high_enc, GprEnc.RCX, true, false);
+            rex.encode(sink);
+            sink.put1(0x21);
+            sink.put1(encodeModrm(0b11, operand_high_enc & 7, GprEnc.RCX & 7));
+        },
+        .@"or" => {
+            // OR RBX, operand_low; OR RCX, operand_high
+            var rex = RexPrefix.twoOp(operand_low_enc, GprEnc.RBX, true, false);
+            rex.encode(sink);
+            sink.put1(0x09); // OR r/m64, r64
+            sink.put1(encodeModrm(0b11, operand_low_enc & 7, GprEnc.RBX & 7));
+
+            rex = RexPrefix.twoOp(operand_high_enc, GprEnc.RCX, true, false);
+            rex.encode(sink);
+            sink.put1(0x09);
+            sink.put1(encodeModrm(0b11, operand_high_enc & 7, GprEnc.RCX & 7));
+        },
+        .xor => {
+            // XOR RBX, operand_low; XOR RCX, operand_high
+            var rex = RexPrefix.twoOp(operand_low_enc, GprEnc.RBX, true, false);
+            rex.encode(sink);
+            sink.put1(0x31); // XOR r/m64, r64
+            sink.put1(encodeModrm(0b11, operand_low_enc & 7, GprEnc.RBX & 7));
+
+            rex = RexPrefix.twoOp(operand_high_enc, GprEnc.RCX, true, false);
+            rex.encode(sink);
+            sink.put1(0x31);
+            sink.put1(encodeModrm(0b11, operand_high_enc & 7, GprEnc.RCX & 7));
+        },
+    }
+}
+
+//=============================================================================
 // Conditional jump helpers
 //=============================================================================
 
@@ -2213,6 +2773,24 @@ fn emitUncondJmp(sink: *MachBuffer, target: MachLabel) void {
     const offset = sink.curOffset();
     sink.useLabelAtOffset(offset, target, .jmp_rel_32);
     sink.put4(0); // Placeholder for displacement
+}
+
+/// Emit a short conditional jump to a label (rel8).
+fn emitCondJmpRel8(sink: *MachBuffer, cc: CC, target: MachLabel) void {
+    // 0x7X rel8 format for short conditional jump
+    sink.put1(0x70 + @intFromEnum(cc));
+    const offset = sink.curOffset();
+    sink.useLabelAtOffset(offset, target, .jmp_rel_8);
+    sink.put1(0xFE); // Placeholder for displacement
+}
+
+/// Emit a short unconditional jump to a label (rel8).
+fn emitUncondJmpRel8(sink: *MachBuffer, target: MachLabel) void {
+    // 0xEB rel8 format for short unconditional jump
+    sink.put1(0xEB);
+    const offset = sink.curOffset();
+    sink.useLabelAtOffset(offset, target, .jmp_rel_8);
+    sink.put1(0xFE); // Placeholder for displacement
 }
 
 //=============================================================================
@@ -2323,4 +2901,149 @@ test "Basic instruction emission" {
     emit(&ud2_inst, &sink, &info, &state);
     try std.testing.expectEqual(@as(u8, 0x0F), sink.data.items[0]);
     try std.testing.expectEqual(@as(u8, 0x0B), sink.data.items[1]);
+}
+
+test "VEX prefix encoding" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var sink = MachBuffer.init(allocator);
+    defer sink.deinit();
+
+    // Test 2-byte VEX: VADDPS xmm0, xmm1, xmm2
+    // VEX.128.0F.WIG 58 /r
+    // Should produce: C5 F0 58 C2
+    // C5 = 2-byte VEX prefix
+    // F0 = R=1, vvvv=~1=1110, L=0, pp=00 -> byte2 = 0xF0
+    const vex1 = VexPrefix.init(
+        0, // reg = xmm0
+        2, // rm = xmm2
+        null, // no index
+        1, // vvvv = xmm1
+        false, // W = 0
+        false, // L = 0 (128-bit)
+        .none, // pp = 00
+        .m0f, // m-mmmm = 0F
+    );
+
+    try testing.expect(vex1.canUse2Byte()); // Should use 2-byte VEX
+    vex1.encode(&sink);
+    try testing.expectEqual(@as(u8, 0xC5), sink.data.items[0]);
+    try testing.expectEqual(@as(u8, 0xF0), sink.data.items[1]);
+
+    // Test 3-byte VEX when B bit is needed (using xmm10)
+    sink.data.clearRetainingCapacity();
+    sink.cur_offset_val = 0;
+
+    const vex2 = VexPrefix.init(
+        0, // reg = xmm0
+        10, // rm = xmm10 (extended)
+        null, // no index
+        null, // no vvvv
+        false, // W = 0
+        false, // L = 0 (128-bit)
+        .p66, // pp = 01 (0x66 prefix)
+        .m0f, // m-mmmm = 0F
+    );
+
+    try testing.expect(!vex2.canUse2Byte()); // Should use 3-byte VEX (B=0)
+    vex2.encode(&sink);
+    try testing.expectEqual(@as(u8, 0xC4), sink.data.items[0]);
+    // byte2 = (R̄<<7) | (X̄<<6) | (B̄<<5) | m-mmmm = (1<<7) | (1<<6) | (0<<5) | 1 = 0xC1
+    try testing.expectEqual(@as(u8, 0xC1), sink.data.items[1]);
+    // byte3 = (W<<7) | (vvvv_inv<<3) | (L<<2) | pp = (0<<7) | (0xF<<3) | (0<<2) | 1 = 0x79
+    try testing.expectEqual(@as(u8, 0x79), sink.data.items[2]);
+
+    // Test 3-byte VEX with W=1
+    sink.data.clearRetainingCapacity();
+    sink.cur_offset_val = 0;
+
+    const vex3 = VexPrefix.init(
+        0, // reg
+        0, // rm
+        null, // no index
+        null, // no vvvv
+        true, // W = 1
+        true, // L = 1 (256-bit)
+        .pf2, // pp = 11 (0xF2 prefix)
+        .m0f38, // m-mmmm = 0F 38
+    );
+
+    try testing.expect(!vex3.canUse2Byte()); // W=1 requires 3-byte VEX
+    vex3.encode(&sink);
+    try testing.expectEqual(@as(u8, 0xC4), sink.data.items[0]);
+}
+
+test "EVEX prefix encoding" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var sink = MachBuffer.init(allocator);
+    defer sink.deinit();
+
+    // Test EVEX prefix for a simple instruction
+    // EVEX.128.66.0F.W0 = 4-byte prefix
+    const evex1 = EvexPrefix.init(
+        0, // reg = xmm0
+        2, // rm = xmm2
+        null, // no index
+        1, // vvvv = xmm1
+        false, // W = 0
+        .v128, // 128-bit
+        .p66, // 66 prefix
+        .m0f, // 0F map
+        false, // no zeroing
+        false, // no broadcast
+        0, // no mask
+    );
+
+    evex1.encode(&sink);
+    // Should produce 4 bytes starting with 0x62
+    try testing.expectEqual(@as(u8, 0x62), sink.data.items[0]);
+    try testing.expectEqual(@as(usize, 4), sink.data.items.len);
+
+    // Test EVEX with extended registers (zmm16-31)
+    sink.data.clearRetainingCapacity();
+    sink.cur_offset_val = 0;
+
+    const evex2 = EvexPrefix.init(
+        16, // reg = zmm16 (needs R' = 0)
+        0, // rm = zmm0
+        null, // no index
+        17, // vvvv = zmm17 (needs V' = 0)
+        true, // W = 1
+        .v512, // 512-bit
+        .p66, // 66 prefix
+        .m0f, // 0F map
+        true, // zeroing
+        false, // no broadcast
+        1, // k1 mask
+    );
+
+    evex2.encode(&sink);
+    try testing.expectEqual(@as(u8, 0x62), sink.data.items[0]);
+    // Verify R' is 0 (bit 4 of P0 should be 0)
+    try testing.expectEqual(@as(u1, 0), @as(u1, @truncate((sink.data.items[1] >> 4) & 1)));
+
+    // Test EVEX with broadcast and mask
+    sink.data.clearRetainingCapacity();
+    sink.cur_offset_val = 0;
+
+    const evex3 = EvexPrefix.init(
+        0, // reg
+        0, // rm
+        null, // no index
+        null, // no vvvv
+        false, // W = 0
+        .v256, // 256-bit
+        .none, // no prefix
+        .m0f38, // 0F 38 map
+        false, // no zeroing
+        true, // broadcast
+        3, // k3 mask
+    );
+
+    evex3.encode(&sink);
+    try testing.expectEqual(@as(u8, 0x62), sink.data.items[0]);
+    // Check P2: b bit (bit 4) should be 1, aaa (bits 0-2) should be 3
+    try testing.expectEqual(@as(u1, 1), @as(u1, @truncate((sink.data.items[3] >> 4) & 1)));
+    try testing.expectEqual(@as(u3, 3), @as(u3, @truncate(sink.data.items[3] & 0x7)));
 }

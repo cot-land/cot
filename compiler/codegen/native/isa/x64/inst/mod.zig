@@ -1014,7 +1014,590 @@ pub const Inst = union(enum) {
             };
         }
     }
+
+    //=========================================================================
+    // Debug printing (print_with_state)
+    //=========================================================================
+
+    /// Print instruction to a writer for debugging.
+    /// This is the x64 equivalent of Cranelift's print_with_state.
+    pub fn printWithState(self: Inst, writer: anytype) !void {
+        switch (self) {
+            // Pseudo-instructions
+            .checked_srem_seq => |p| {
+                try writer.print("checked_srem_seq {s}, {s}, {s}", .{
+                    regs.prettyPrintReg(p.divisor.toReg(), p.size.bytes()),
+                    regs.prettyPrintReg(p.dividend_lo.toReg(), p.size.bytes()),
+                    regs.prettyPrintReg(p.dividend_hi.toReg(), p.size.bytes()),
+                });
+            },
+            .checked_srem_seq8 => |p| {
+                try writer.print("checked_srem_seq8 {s}, {s}", .{
+                    regs.prettyPrintReg(p.divisor.toReg(), 1),
+                    regs.prettyPrintReg(p.dividend.toReg(), 1),
+                });
+            },
+            .xmm_uninitialized_value => |p| {
+                try writer.print("xmm_uninit -> {s}", .{
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), 16),
+                });
+            },
+            .gpr_uninitialized_value => |p| {
+                try writer.print("gpr_uninit -> {s}", .{
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), 8),
+                });
+            },
+            .xmm_min_max_seq => |p| {
+                const op_name = if (p.is_min) "xmm_min_seq" else "xmm_max_seq";
+                try writer.print("{s} {s}, {s}, {s} -> {s}", .{
+                    op_name,
+                    p.size.name(),
+                    regs.prettyPrintReg(p.lhs.toReg(), 16),
+                    regs.prettyPrintReg(p.rhs.toReg(), 16),
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), 16),
+                });
+            },
+            .cvt_uint64_to_float_seq => |p| {
+                try writer.print("cvt_u64_to_f{d} {s} -> {s}", .{
+                    p.dst_size.bits(),
+                    regs.prettyPrintReg(p.src.toReg(), 8),
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), 16),
+                });
+            },
+            .cvt_float_to_sint_seq => |p| {
+                try writer.print("cvt_f{d}_to_s{d} {s} -> {s}", .{
+                    p.src_size.bits(),
+                    p.dst_size.bits(),
+                    regs.prettyPrintReg(p.src.toReg(), 16),
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), p.dst_size.bytes()),
+                });
+            },
+            .cvt_float_to_uint_seq => |p| {
+                try writer.print("cvt_f{d}_to_u{d} {s} -> {s}", .{
+                    p.src_size.bits(),
+                    p.dst_size.bits(),
+                    regs.prettyPrintReg(p.src.toReg(), 16),
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), p.dst_size.bytes()),
+                });
+            },
+            .xmm_cmove => |p| {
+                try writer.print("xmm_cmov{s} {s}, {s} -> {s}", .{
+                    p.cc.name(),
+                    regs.prettyPrintReg(p.consequent.toReg(), 16),
+                    regs.prettyPrintReg(p.alternative.toReg(), 16),
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), 16),
+                });
+            },
+            .stack_probe_loop => |p| {
+                try writer.print("stack_probe_loop frame_size={d}, guard_size={d}", .{
+                    p.frame_size,
+                    p.guard_size,
+                });
+            },
+
+            // Move instructions
+            .mov_from_preg => |p| {
+                try writer.print("mov {s} -> {s}", .{
+                    prettyPrintPReg(p.src),
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), 8),
+                });
+            },
+            .mov_to_preg => |p| {
+                try writer.print("mov {s} -> {s}", .{
+                    regs.prettyPrintReg(p.src.toReg(), 8),
+                    prettyPrintPReg(p.dst),
+                });
+            },
+
+            // ALU instructions
+            .alu_rmi_r => |p| {
+                try writer.print("{s}{s} {s}, {s}", .{
+                    p.op.name(),
+                    p.size.suffix(),
+                    p.src.inner.prettyPrint(p.size.bytes()),
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), p.size.bytes()),
+                });
+            },
+            .unary_rm_r => |p| {
+                try writer.print("{s}{s} {s} -> {s}", .{
+                    p.op.name(),
+                    p.size.suffix(),
+                    p.src.inner.prettyPrint(p.size.bytes()),
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), p.size.bytes()),
+                });
+            },
+            .shift_r => |p| {
+                const shift_str = switch (p.shift_by) {
+                    .imm => |i| blk: {
+                        var buf: [8]u8 = undefined;
+                        break :blk std.fmt.bufPrint(&buf, "${d}", .{i}) catch "?";
+                    },
+                    .cl => "cl",
+                };
+                try writer.print("{s}{s} {s}, {s}", .{
+                    p.kind.name(),
+                    p.size.suffix(),
+                    shift_str,
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), p.size.bytes()),
+                });
+            },
+            .mul => |p| {
+                const op_name = if (p.signed) "imul" else "mul";
+                try writer.print("{s}{s} {s}", .{
+                    op_name,
+                    p.size.suffix(),
+                    p.src.inner.prettyPrint(p.size.bytes()),
+                });
+            },
+            .div => |p| {
+                const op_name = if (p.signed) "idiv" else "div";
+                try writer.print("{s}{s} {s}", .{
+                    op_name,
+                    p.size.suffix(),
+                    p.divisor.inner.prettyPrint(p.size.bytes()),
+                });
+            },
+            .sign_extend_data => |p| {
+                const op_name: []const u8 = switch (p.size) {
+                    .size8 => "cbw",
+                    .size16 => "cwd",
+                    .size32 => "cdq",
+                    .size64 => "cqo",
+                };
+                try writer.print("{s}", .{op_name});
+            },
+
+            // Move instructions
+            .imm => |p| {
+                if (p.simm64 <= 0xFFFFFFFF) {
+                    try writer.print("mov{s} ${d}, {s}", .{
+                        p.dst_size.suffix(),
+                        p.simm64,
+                        regs.prettyPrintReg(p.dst.toReg().toReg(), p.dst_size.bytes()),
+                    });
+                } else {
+                    try writer.print("movabs ${x}, {s}", .{
+                        p.simm64,
+                        regs.prettyPrintReg(p.dst.toReg().toReg(), 8),
+                    });
+                }
+            },
+            .mov_r_r => |p| {
+                try writer.print("mov{s} {s}, {s}", .{
+                    p.size.suffix(),
+                    regs.prettyPrintReg(p.src.toReg(), p.size.bytes()),
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), p.size.bytes()),
+                });
+            },
+            .movzx_rm_r => |p| {
+                try writer.print("movzx {s}, {s}", .{
+                    p.src.inner.prettyPrint(p.ext_mode.srcBytes()),
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), p.ext_mode.dstBytes()),
+                });
+            },
+            .movsx_rm_r => |p| {
+                try writer.print("movsx {s}, {s}", .{
+                    p.src.inner.prettyPrint(p.ext_mode.srcBytes()),
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), p.ext_mode.dstBytes()),
+                });
+            },
+            .mov_r_m => |p| {
+                try writer.print("mov{s} {s}, {s}", .{
+                    p.size.suffix(),
+                    regs.prettyPrintReg(p.src.toReg(), p.size.bytes()),
+                    p.dst.prettyPrint(p.size.bytes()),
+                });
+            },
+            .mov_m_r => |p| {
+                try writer.print("mov{s} {s}, {s}", .{
+                    p.size.suffix(),
+                    p.src.prettyPrint(p.size.bytes()),
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), p.size.bytes()),
+                });
+            },
+
+            // LEA
+            .lea => |p| {
+                try writer.print("lea{s} {s}, {s}", .{
+                    p.size.suffix(),
+                    p.src.prettyPrint(8),
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), p.size.bytes()),
+                });
+            },
+
+            // Comparison
+            .cmp_rmi_r => |p| {
+                try writer.print("cmp{s} {s}, {s}", .{
+                    p.size.suffix(),
+                    p.src.inner.prettyPrint(p.size.bytes()),
+                    regs.prettyPrintReg(p.dst.toReg(), p.size.bytes()),
+                });
+            },
+            .test_rmi_r => |p| {
+                try writer.print("test{s} {s}, {s}", .{
+                    p.size.suffix(),
+                    p.src.inner.prettyPrint(p.size.bytes()),
+                    regs.prettyPrintReg(p.dst.toReg(), p.size.bytes()),
+                });
+            },
+            .setcc => |p| {
+                try writer.print("set{s} {s}", .{
+                    p.cc.name(),
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), 1),
+                });
+            },
+            .cmove => |p| {
+                try writer.print("cmov{s}{s} {s}, {s}", .{
+                    p.cc.name(),
+                    p.size.suffix(),
+                    p.src.inner.prettyPrint(p.size.bytes()),
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), p.size.bytes()),
+                });
+            },
+
+            // Control flow
+            .jmp_known => |p| {
+                try writer.print("jmp label{d}", .{p.dst.index});
+            },
+            .jmp_cond => |p| {
+                try writer.print("j{s} label{d} ; else label{d}", .{
+                    p.cc.name(),
+                    p.taken.index,
+                    p.not_taken.index,
+                });
+            },
+            .jmp_cond_or => |p| {
+                try writer.print("j{s}|{s} label{d} ; else label{d}", .{
+                    p.cc1.name(),
+                    p.cc2.name(),
+                    p.taken.index,
+                    p.not_taken.index,
+                });
+            },
+            .winch_jmp_if => |p| {
+                try writer.print("j{s} label{d}", .{
+                    p.cc.name(),
+                    p.taken.index,
+                });
+            },
+            .jmp_table_seq => |p| {
+                try writer.print("jmp_table idx={s}, targets=[{d}], default=label{d}", .{
+                    regs.prettyPrintReg(p.idx, 8),
+                    p.targets.len,
+                    p.default.index,
+                });
+            },
+            .jmp_unknown => |p| {
+                try writer.print("jmp *{s}", .{
+                    p.target.prettyPrint(8),
+                });
+            },
+            .ret => |p| {
+                if (p.stack_bytes_to_pop > 0) {
+                    try writer.print("ret ${d}", .{p.stack_bytes_to_pop});
+                } else {
+                    try writer.writeAll("ret");
+                }
+            },
+
+            // Calls
+            .call_known => |_| {
+                try writer.writeAll("call <known>");
+            },
+            .call_unknown => |_| {
+                try writer.writeAll("call <unknown>");
+            },
+            .return_call_known => |_| {
+                try writer.writeAll("tail_call <known>");
+            },
+            .return_call_unknown => |_| {
+                try writer.writeAll("tail_call <unknown>");
+            },
+
+            // Traps
+            .trap_if => |p| {
+                try writer.print("trap_if {s} ; {s}", .{
+                    p.cc.name(),
+                    trapCodeName(p.trap_code),
+                });
+            },
+            .trap_if_and => |p| {
+                try writer.print("trap_if {s} && {s} ; {s}", .{
+                    p.cc1.name(),
+                    p.cc2.name(),
+                    trapCodeName(p.trap_code),
+                });
+            },
+            .trap_if_or => |p| {
+                try writer.print("trap_if {s} || {s} ; {s}", .{
+                    p.cc1.name(),
+                    p.cc2.name(),
+                    trapCodeName(p.trap_code),
+                });
+            },
+            .ud2 => |p| {
+                try writer.print("ud2 ; {s}", .{trapCodeName(p.trap_code)});
+            },
+
+            // XMM instructions
+            .xmm_rm_r => |p| {
+                try writer.print("{s} {s}, {s}", .{
+                    sseOpcodeName(p.op),
+                    p.src.inner.prettyPrint(16),
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), 16),
+                });
+            },
+            .xmm_rm_r_evex => |p| {
+                try writer.print("{s} {s}, {s}, {s}", .{
+                    avx512OpcodeName(p.op),
+                    regs.prettyPrintReg(p.src1.toReg(), 16),
+                    p.src2.inner.prettyPrint(16),
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), 16),
+                });
+            },
+            .xmm_unary_rm_r => |p| {
+                try writer.print("{s} {s}, {s}", .{
+                    sseOpcodeName(p.op),
+                    p.src.inner.prettyPrint(16),
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), 16),
+                });
+            },
+            .xmm_mov_r_m => |p| {
+                try writer.print("{s} {s}, {s}", .{
+                    sseOpcodeName(p.op),
+                    regs.prettyPrintReg(p.src.toReg(), 16),
+                    p.dst.prettyPrint(16),
+                });
+            },
+            .xmm_mov_m_r => |p| {
+                try writer.print("{s} {s}, {s}", .{
+                    sseOpcodeName(p.op),
+                    p.src.prettyPrint(16),
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), 16),
+                });
+            },
+            .xmm_cmp_rm_r => |p| {
+                try writer.print("{s} {s}, {s}", .{
+                    sseOpcodeName(p.op),
+                    p.src.inner.prettyPrint(16),
+                    regs.prettyPrintReg(p.dst.toReg(), 16),
+                });
+            },
+            .xmm_to_gpr => |p| {
+                try writer.print("{s} {s}, {s}", .{
+                    sseOpcodeName(p.op),
+                    regs.prettyPrintReg(p.src.toReg(), 16),
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), p.dst_size.bytes()),
+                });
+            },
+            .gpr_to_xmm => |p| {
+                try writer.print("{s} {s}, {s}", .{
+                    sseOpcodeName(p.op),
+                    p.src.inner.prettyPrint(p.src_size.bytes()),
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), 16),
+                });
+            },
+            .xmm_cmp_imm => |p| {
+                try writer.print("{s} ${d}, {s}, {s}", .{
+                    sseOpcodeName(p.op),
+                    @intFromEnum(p.imm),
+                    p.src.inner.prettyPrint(16),
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), 16),
+                });
+            },
+            .xmm_round => |p| {
+                try writer.print("{s} ${d}, {s}, {s}", .{
+                    sseOpcodeName(p.op),
+                    @intFromEnum(p.imm),
+                    p.src.inner.prettyPrint(16),
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), 16),
+                });
+            },
+
+            // Atomics
+            .atomic_rmw_seq => |p| {
+                const size: u8 = @intCast(p.ty.laneBytes());
+                try writer.print("atomic_{s} {s}, {s} -> {s}", .{
+                    atomicRmwOpName(p.op),
+                    p.mem.prettyPrint(size),
+                    regs.prettyPrintReg(p.operand.toReg(), size),
+                    regs.prettyPrintReg(p.dst_old.toReg().toReg(), size),
+                });
+            },
+            .atomic_128_rmw_seq => |p| {
+                try writer.print("atomic128_{s} {s}", .{
+                    atomic128RmwOpName(p.op),
+                    p.mem.prettyPrint(16),
+                });
+            },
+            .atomic_128_xchg_seq => |p| {
+                try writer.print("atomic128_xchg {s}", .{
+                    p.mem.prettyPrint(16),
+                });
+            },
+            .fence => |p| {
+                try writer.print("{s}", .{fenceKindName(p.kind)});
+            },
+
+            // TLS
+            .elf_tls_get_addr => |p| {
+                try writer.print("elf_tls_get_addr {s} -> {s}", .{
+                    externalNameStr(p.symbol),
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), 8),
+                });
+            },
+            .macho_tls_get_addr => |p| {
+                try writer.print("macho_tls_get_addr {s} -> {s}", .{
+                    externalNameStr(p.symbol),
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), 8),
+                });
+            },
+            .coff_tls_get_addr => |p| {
+                try writer.print("coff_tls_get_addr {s} -> {s}", .{
+                    externalNameStr(p.symbol),
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), 8),
+                });
+            },
+
+            // Miscellaneous
+            .load_ext_name => |p| {
+                try writer.print("lea {s}+{d}, {s}", .{
+                    externalNameStr(p.name),
+                    p.offset,
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), 8),
+                });
+            },
+            .args => |_| {
+                try writer.writeAll("args <...>");
+            },
+            .rets => |_| {
+                try writer.writeAll("rets <...>");
+            },
+            .stack_switch_basic => |_| {
+                try writer.writeAll("stack_switch_basic");
+            },
+            .unwind => |p| {
+                switch (p.inst) {
+                    .push_reg => |u| try writer.print("unwind: push {s}", .{
+                        regs.prettyPrintReg(u.reg, 8),
+                    }),
+                    .save_reg => |u| try writer.print("unwind: save {s} at {d}", .{
+                        regs.prettyPrintReg(u.reg, 8),
+                        u.offset,
+                    }),
+                    .stack_alloc => |u| try writer.print("unwind: alloc {d}", .{u.size}),
+                    .set_frame_pointer => |u| try writer.print("unwind: set_fp offset={d}", .{u.offset}),
+                }
+            },
+            .dummy_use => |p| {
+                try writer.print("dummy_use {s}", .{
+                    regs.prettyPrintReg(p.reg, 8),
+                });
+            },
+            .label_address => |p| {
+                try writer.print("lea label{d}, {s}", .{
+                    p.label.index,
+                    regs.prettyPrintReg(p.dst.toReg().toReg(), 8),
+                });
+            },
+            .sequence_point => {
+                try writer.writeAll("sequence_point");
+            },
+            .nop => |p| {
+                try writer.print("nop{d}", .{p.len});
+            },
+        }
+    }
+
+    /// Format instruction to a string (convenience wrapper).
+    pub fn format(self: Inst, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try self.printWithState(writer);
+    }
 };
+
+//=============================================================================
+// Helper functions for printing
+//=============================================================================
+
+fn prettyPrintPReg(preg: PReg) []const u8 {
+    // Physical register names
+    const enc = preg.index();
+    if (preg.class() == .int) {
+        return regs.prettyPrintReg(args.Reg.fromPReg(preg), 8);
+    } else {
+        return regs.prettyPrintReg(args.Reg.fromPReg(preg), 16);
+    }
+    _ = enc;
+}
+
+fn trapCodeName(tc: TrapCode) []const u8 {
+    return switch (tc) {
+        .stack_overflow => "stack_overflow",
+        .heap_out_of_bounds => "heap_oob",
+        .heap_misaligned => "heap_misaligned",
+        .table_out_of_bounds => "table_oob",
+        .indirect_call_to_null => "indirect_call_null",
+        .bad_signature => "bad_signature",
+        .integer_overflow => "int_overflow",
+        .integer_division_by_zero => "int_divz",
+        .bad_conversion_to_integer => "bad_int_conv",
+        .unreachable_code_reached => "unreachable",
+        .interrupt => "interrupt",
+        .user0 => "user0",
+        .user1 => "user1",
+        .always => "always",
+        .null_reference => "null_ref",
+        .null_i31_ref => "null_i31",
+        .array_out_of_bounds => "array_oob",
+    };
+}
+
+fn sseOpcodeName(op: SseOpcode) []const u8 {
+    return @tagName(op);
+}
+
+fn avx512OpcodeName(op: Avx512Opcode) []const u8 {
+    return @tagName(op);
+}
+
+fn atomicRmwOpName(op: AtomicRmwSeqOp) []const u8 {
+    return switch (op) {
+        .add => "add",
+        .sub => "sub",
+        .@"and" => "and",
+        .@"or" => "or",
+        .xor => "xor",
+        .xchg => "xchg",
+        .nand => "nand",
+        .umin => "umin",
+        .umax => "umax",
+        .smin => "smin",
+        .smax => "smax",
+    };
+}
+
+fn atomic128RmwOpName(op: Atomic128RmwSeqOp) []const u8 {
+    return switch (op) {
+        .add => "add",
+        .sub => "sub",
+        .@"and" => "and",
+        .@"or" => "or",
+        .xor => "xor",
+    };
+}
+
+fn fenceKindName(kind: FenceKind) []const u8 {
+    return switch (kind) {
+        .mfence => "mfence",
+        .lfence => "lfence",
+        .sfence => "sfence",
+    };
+}
+
+fn externalNameStr(name: ExternalName) []const u8 {
+    _ = name;
+    return "<extern>";
+}
 
 //=============================================================================
 // ALU opcodes
@@ -1350,4 +1933,40 @@ test "TrapCode values" {
     const testing = std.testing;
     try testing.expectEqual(@as(u16, 7), @intFromEnum(TrapCode.integer_division_by_zero));
     try testing.expectEqual(@as(u16, 0), @intFromEnum(TrapCode.stack_overflow));
+}
+
+test "Inst.printWithState" {
+    const testing = std.testing;
+    var buf: [256]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const writer = fbs.writer();
+
+    // Test NOP
+    const nop = Inst.genNop(3);
+    try nop.printWithState(writer);
+    try testing.expectEqualStrings("nop3", fbs.getWritten());
+
+    // Test ret
+    fbs.reset();
+    const ret = Inst{ .ret = .{ .stack_bytes_to_pop = 0 } };
+    try ret.printWithState(writer);
+    try testing.expectEqualStrings("ret", fbs.getWritten());
+
+    // Test ret with pop
+    fbs.reset();
+    const ret_pop = Inst{ .ret = .{ .stack_bytes_to_pop = 16 } };
+    try ret_pop.printWithState(writer);
+    try testing.expectEqualStrings("ret $16", fbs.getWritten());
+
+    // Test jmp_known
+    fbs.reset();
+    const jmp = Inst{ .jmp_known = .{ .dst = MachLabel{ .index = 5 } } };
+    try jmp.printWithState(writer);
+    try testing.expectEqualStrings("jmp label5", fbs.getWritten());
+
+    // Test ud2
+    fbs.reset();
+    const ud2 = Inst{ .ud2 = .{ .trap_code = .unreachable_code_reached } };
+    try ud2.printWithState(writer);
+    try testing.expectEqualStrings("ud2 ; unreachable", fbs.getWritten());
 }
