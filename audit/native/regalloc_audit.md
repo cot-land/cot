@@ -17,7 +17,7 @@
 | 6.4 | Machine Environment | lib.rs:1500-1550 | env.zig | ✅ Done | 4/4 |
 | 6.5 | Output | lib.rs:1546-1650 | output.zig | ✅ Done | 6/6 |
 | 6.6 | CFG Analysis | cfg.rs, postorder.rs, domtree.rs | cfg.zig | ✅ Done | 5/5 |
-| 6.7 | SSA Validation | ssa.rs | ssa.zig | ⏳ TODO | - |
+| 6.7 | SSA Validation | ssa.rs | ssa.zig | ✅ Done | 1/1 |
 | 6.8 | Index Set | indexset.rs | indexset.zig | ⏳ TODO | - |
 | 6.9 | Parallel Moves | moves.rs | moves.zig | ⏳ TODO | - |
 | 6.10 | Ion Data Structures | ion/data_structures.rs | ion/data.zig | ⏳ TODO | - |
@@ -363,12 +363,44 @@ Also provides `FunctionVTable` for runtime dispatch when needed.
 
 ---
 
-## Remaining Phases (TODO)
+## Phase 6.7: SSA Validation (ssa.zig)
 
-### Phase 6.7: SSA Validation (ssa.zig)
-- `validate_ssa()` function
-- Single definition check
-- Dominance verification
+**Source**: `src/ssa.rs`
+**Target**: `compiler/codegen/native/regalloc/ssa.zig`
+**Status**: ✅ Complete (~150 LOC, 1 test)
+
+### Function Mapping
+
+| Rust Function | Zig Function | Notes |
+|---------------|--------------|-------|
+| `validate_ssa()` | `validateSsa()` | Main validation function |
+
+### Validation Checks
+
+1. **Single Definition**: Each VReg defined exactly once (by block param or inst def)
+2. **Dominance**: Every use dominated by its definition (same block earlier, or dominating block)
+3. **Block Structure**:
+   - Every block ends with branch or ret
+   - No terminators in middle of block
+   - Branch args match successor block params
+4. **Entry Block**: Entry block has no block params
+
+### Error Types
+
+| Error | Description |
+|-------|-------------|
+| `VRegNotSequential` | VReg index >= num_vregs |
+| `MultipleDefs` | Same VReg defined twice |
+| `UseNotDominated` | Use not dominated by def |
+| `EmptyBlock` | Block has no instructions |
+| `BlockNotTerminated` | Last inst not branch/ret |
+| `BranchArgMismatch` | Branch args != successor params |
+| `TerminatorInMiddle` | Branch/ret not at end |
+| `EntryHasBlockParams` | Entry block has params |
+
+---
+
+## Remaining Phases (TODO)
 
 ### Phase 6.8: Index Set (indexset.zig)
 - Sparse-dense hybrid set
