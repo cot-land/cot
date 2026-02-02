@@ -29,9 +29,12 @@ const wasm = @import("codegen/wasm/wasm.zig"); // New Go-style package (for Link
 const wasm_gen = @import("codegen/wasm_gen.zig");
 const arc = @import("codegen/arc.zig"); // ARC runtime
 
-// Native codegen modules - will be added in Round 5
-// const arm64_codegen = @import("codegen/arm64.zig");
-// const amd64_codegen = @import("codegen/amd64.zig");
+// Native codegen modules (Cranelift-style AOT compiler)
+const native_compile = @import("codegen/native/compile.zig");
+const wasm_parser = @import("codegen/native/wasm_parser.zig");
+const wasm_to_clif = @import("codegen/native/wasm_to_clif/translator.zig");
+const macho = @import("codegen/native/macho.zig");
+const elf = @import("codegen/native/elf.zig");
 
 const Allocator = std.mem.Allocator;
 const Target = target_mod.Target;
@@ -246,22 +249,72 @@ pub const Driver = struct {
         }
 
         // Native target: AOT compilation path (Wasm → Native)
-        // NOTE: Native codegen is being rewritten with Cranelift-style architecture.
-        // See CRANELIFT_PORT_MASTER_PLAN.md for progress.
+        // Pipeline: Cot → Wasm → CLIF → VCode → Native
         //
-        // The previous implementation (Go-style SSA with phi nodes) has been removed
-        // because it was architecturally incompatible with Wasm→Native compilation.
-        // Cranelift uses block parameters instead of phi nodes, and has a proper
-        // machine instruction framework with regalloc2.
-        //
-        // TODO: Implement Cranelift-style pipeline:
-        // 1. Wasm → CLIF IR translation (Phase 2)
-        // 2. CLIF IR → MachInst lowering (Phase 3-5)
-        // 3. Register allocation (Phase 6)
-        // 4. Code emission (Phase 4-5)
+        // This implements the Cranelift-style architecture:
+        // 1. First compile to Wasm bytecode (standard path)
+        // 2. Parse the Wasm module
+        // 3. Translate Wasm → CLIF IR for each function
+        // 4. Lower CLIF → VCode (virtual registers)
+        // 5. Run register allocation
+        // 6. Emit machine code
+        // 7. Link into object file
+
         _ = source_file;
         _ = source_text;
-        pipeline_debug.log(.codegen, "driver: native codegen not yet implemented (Cranelift port in progress)", .{});
+
+        // Step 1: Generate Wasm bytecode first
+        pipeline_debug.log(.codegen, "driver: generating Wasm for native AOT compilation", .{});
+        const wasm_bytes = try self.generateWasmCode(funcs, type_reg);
+        defer self.allocator.free(wasm_bytes);
+
+        // Step 2: Call native code generation
+        return self.generateNativeCode(wasm_bytes);
+    }
+
+    /// Generate native machine code from Wasm bytecode.
+    /// Uses the Cranelift-style AOT compilation pipeline.
+    fn generateNativeCode(self: *Driver, wasm_bytes: []const u8) ![]u8 {
+        pipeline_debug.log(.codegen, "driver: AOT compiling {d} bytes of Wasm to native", .{wasm_bytes.len});
+
+        // Step 1: Parse Wasm module
+        var parser = wasm_parser.Parser.init(self.allocator, wasm_bytes);
+        var wasm_module = parser.parse() catch |e| {
+            pipeline_debug.log(.codegen, "driver: Wasm parse error: {any}", .{e});
+            return error.WasmParseError;
+        };
+        defer wasm_module.deinit();
+
+        pipeline_debug.log(.codegen, "driver: parsed Wasm module with {d} functions", .{wasm_module.code.len});
+
+        // Step 2: Compile each function
+        // TODO: When the full pipeline is complete, this will:
+        // - Translate each Wasm function to CLIF IR
+        // - Lower CLIF to VCode
+        // - Run register allocation
+        // - Emit machine code
+        //
+        // For now, we report that the pipeline is not yet complete.
+        // The individual components (compile.zig, VCode, regalloc) are implemented
+        // but the Wasm→CLIF translator needs more work to be fully functional.
+
+        pipeline_debug.log(.codegen, "driver: native codegen pipeline components ready, translator integration pending", .{});
+
+        // Placeholder: Report which target we would compile for
+        const arch_name: []const u8 = switch (self.target.arch) {
+            .arm64 => "ARM64",
+            .amd64 => "x86-64",
+            .wasm32 => "Wasm32",
+        };
+        const os_name: []const u8 = switch (self.target.os) {
+            .macos => "macOS",
+            .linux => "Linux",
+            .freestanding => "freestanding",
+        };
+        pipeline_debug.log(.codegen, "driver: target: {s} / {s}", .{ arch_name, os_name });
+
+        // For now, return error indicating the pipeline is partially complete
+        // The infrastructure is in place but the Wasm→CLIF translation needs integration
         return error.NativeCodegenNotImplemented;
     }
 

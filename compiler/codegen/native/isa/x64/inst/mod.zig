@@ -43,6 +43,13 @@ pub const Type = args.Type;
 pub const CallArgPair = args.CallArgPair;
 pub const CallArgList = args.CallArgList;
 
+// Import emit module for MachBuffer
+const emit_mod = @import("emit.zig");
+
+// Import regalloc types
+const regalloc_operand = @import("../../../regalloc/operand.zig");
+const Allocation = regalloc_operand.Allocation;
+
 // Re-export register functions
 pub const rax = regs.rax;
 pub const rcx = regs.rcx;
@@ -1016,6 +1023,717 @@ pub const Inst = union(enum) {
     }
 
     //=========================================================================
+    // Emit with allocations
+    //=========================================================================
+
+    /// Emit this instruction with register allocations applied.
+    /// Takes the allocations for this instruction's operands and emits
+    /// the instruction with virtual registers replaced by physical registers.
+    pub fn emitWithAllocs(
+        self: *const Inst,
+        sink: *emit_mod.MachBuffer,
+        allocs: []const Allocation,
+        emit_info: *const emit_mod.EmitInfo,
+    ) !void {
+        // Create a mutable copy of the instruction
+        var inst_copy = self.*;
+
+        // Apply allocations to the instruction's register operands
+        // The allocation order matches getOperands: defs first, then uses
+        var alloc_idx: usize = 0;
+
+        // Helper to apply allocation to Gpr
+        const applyAllocGpr = struct {
+            fn apply(gpr: Gpr, alloc: Allocation) Gpr {
+                if (alloc.isNone()) return gpr;
+                if (alloc.asReg()) |preg| {
+                    return Gpr.unwrapNew(Reg.fromPReg(preg));
+                }
+                return gpr;
+            }
+        }.apply;
+
+        // Helper to apply allocation to WritableGpr
+        const applyAllocWritableGpr = struct {
+            fn apply(wgpr: WritableGpr, alloc: Allocation) WritableGpr {
+                if (alloc.isNone()) return wgpr;
+                if (alloc.asReg()) |preg| {
+                    return WritableGpr{ .reg = Gpr.unwrapNew(Reg.fromPReg(preg)) };
+                }
+                return wgpr;
+            }
+        }.apply;
+
+        // Helper to apply allocation to Xmm
+        const applyAllocXmm = struct {
+            fn apply(xmm: Xmm, alloc: Allocation) Xmm {
+                if (alloc.isNone()) return xmm;
+                if (alloc.asReg()) |preg| {
+                    return Xmm.unwrapNew(Reg.fromPReg(preg));
+                }
+                return xmm;
+            }
+        }.apply;
+
+        // Helper to apply allocation to WritableXmm
+        const applyAllocWritableXmm = struct {
+            fn apply(wxmm: WritableXmm, alloc: Allocation) WritableXmm {
+                if (alloc.isNone()) return wxmm;
+                if (alloc.asReg()) |preg| {
+                    return WritableXmm{ .reg = Xmm.unwrapNew(Reg.fromPReg(preg)) };
+                }
+                return wxmm;
+            }
+        }.apply;
+
+        // Helper to apply allocation to Reg
+        const applyAllocReg = struct {
+            fn apply(r: Reg, alloc: Allocation) Reg {
+                if (alloc.isNone()) return r;
+                if (alloc.asReg()) |preg| {
+                    return Reg.fromPReg(preg);
+                }
+                return r;
+            }
+        }.apply;
+
+        // Helper to apply allocation to Writable(Reg)
+        const applyAllocWritableReg = struct {
+            fn apply(wr: Writable(Reg), alloc: Allocation) Writable(Reg) {
+                if (alloc.isNone()) return wr;
+                if (alloc.asReg()) |preg| {
+                    return Writable(Reg).fromReg(Reg.fromPReg(preg));
+                }
+                return wr;
+            }
+        }.apply;
+
+        // Apply allocations based on instruction type
+        switch (inst_copy) {
+            // Instructions with no register operands
+            .nop, .ret, .ud2, .fence, .hlt, .sequence_point => {},
+            .jmp_known, .jmp_cond, .jmp_cond_or, .winch_jmp_if => {},
+            .trap_if, .trap_if_and, .trap_if_or => {},
+
+            // Move instructions
+            .mov_r_r => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableGpr(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.src = applyAllocGpr(p.src, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .mov_from_preg => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableGpr(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .mov_to_preg => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.src = applyAllocGpr(p.src, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // ALU instructions
+            .alu_rmi_r => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableGpr(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                // GprMemImm src may have reg that needs allocation
+                switch (p.src.inner) {
+                    .reg => |*r| {
+                        if (alloc_idx < allocs.len) {
+                            r.* = applyAllocGpr(r.*, allocs[alloc_idx]);
+                            alloc_idx += 1;
+                        }
+                    },
+                    .mem => |*m| {
+                        alloc_idx += applyAllocSyntheticAmode(m, allocs[alloc_idx..]);
+                    },
+                    .imm => {},
+                }
+            },
+
+            .unary_rm_r => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableGpr(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                switch (p.src.inner) {
+                    .reg => |*r| {
+                        if (alloc_idx < allocs.len) {
+                            r.* = applyAllocGpr(r.*, allocs[alloc_idx]);
+                            alloc_idx += 1;
+                        }
+                    },
+                    .mem => |*m| {
+                        alloc_idx += applyAllocSyntheticAmode(m, allocs[alloc_idx..]);
+                    },
+                }
+            },
+
+            .shift_r => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableGpr(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .imm => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableGpr(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .movzx_rm_r, .movsx_rm_r => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableGpr(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                switch (p.src.inner) {
+                    .reg => |*r| {
+                        if (alloc_idx < allocs.len) {
+                            r.* = applyAllocGpr(r.*, allocs[alloc_idx]);
+                            alloc_idx += 1;
+                        }
+                    },
+                    .mem => |*m| {
+                        alloc_idx += applyAllocSyntheticAmode(m, allocs[alloc_idx..]);
+                    },
+                }
+            },
+
+            .mov_r_m => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.src = applyAllocGpr(p.src, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                alloc_idx += applyAllocSyntheticAmode(&p.dst, allocs[alloc_idx..]);
+            },
+
+            .mov_m_r => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableGpr(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                alloc_idx += applyAllocSyntheticAmode(&p.src, allocs[alloc_idx..]);
+            },
+
+            .lea => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableGpr(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                alloc_idx += applyAllocSyntheticAmode(&p.src, allocs[alloc_idx..]);
+            },
+
+            .cmp_rmi_r, .test_rmi_r => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocGpr(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                switch (p.src.inner) {
+                    .reg => |*r| {
+                        if (alloc_idx < allocs.len) {
+                            r.* = applyAllocGpr(r.*, allocs[alloc_idx]);
+                            alloc_idx += 1;
+                        }
+                    },
+                    .mem => |*m| {
+                        alloc_idx += applyAllocSyntheticAmode(m, allocs[alloc_idx..]);
+                    },
+                    .imm => {},
+                }
+            },
+
+            .setcc => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableGpr(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .cmove => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableGpr(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                switch (p.src.inner) {
+                    .reg => |*r| {
+                        if (alloc_idx < allocs.len) {
+                            r.* = applyAllocGpr(r.*, allocs[alloc_idx]);
+                            alloc_idx += 1;
+                        }
+                    },
+                    .mem => |*m| {
+                        alloc_idx += applyAllocSyntheticAmode(m, allocs[alloc_idx..]);
+                    },
+                }
+            },
+
+            .push64 => |*p| {
+                switch (p.src.inner) {
+                    .reg => |*r| {
+                        if (alloc_idx < allocs.len) {
+                            r.* = applyAllocGpr(r.*, allocs[alloc_idx]);
+                            alloc_idx += 1;
+                        }
+                    },
+                    .mem => |*m| {
+                        alloc_idx += applyAllocSyntheticAmode(m, allocs[alloc_idx..]);
+                    },
+                }
+            },
+
+            .pop64 => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableGpr(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // XMM instructions
+            .xmm_rm_r => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableXmm(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                switch (p.src.inner) {
+                    .reg => |*r| {
+                        if (alloc_idx < allocs.len) {
+                            r.* = applyAllocXmm(r.*, allocs[alloc_idx]);
+                            alloc_idx += 1;
+                        }
+                    },
+                    .mem => |*m| {
+                        alloc_idx += applyAllocSyntheticAmode(m, allocs[alloc_idx..]);
+                    },
+                }
+            },
+
+            .xmm_unary_rm_r, .xmm_unary_rm_r_evex => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableXmm(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                switch (p.src.inner) {
+                    .reg => |*r| {
+                        if (alloc_idx < allocs.len) {
+                            r.* = applyAllocXmm(r.*, allocs[alloc_idx]);
+                            alloc_idx += 1;
+                        }
+                    },
+                    .mem => |*m| {
+                        alloc_idx += applyAllocSyntheticAmode(m, allocs[alloc_idx..]);
+                    },
+                }
+            },
+
+            .xmm_rmi_xmm => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableXmm(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                switch (p.src) {
+                    .reg => |*r| {
+                        if (alloc_idx < allocs.len) {
+                            r.* = applyAllocXmm(r.*, allocs[alloc_idx]);
+                            alloc_idx += 1;
+                        }
+                    },
+                    .mem => |*m| {
+                        alloc_idx += applyAllocSyntheticAmode(m, allocs[alloc_idx..]);
+                    },
+                    .imm => {},
+                }
+            },
+
+            .xmm_rm_r_imm => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableXmm(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                switch (p.src.inner) {
+                    .reg => |*r| {
+                        if (alloc_idx < allocs.len) {
+                            r.* = applyAllocXmm(r.*, allocs[alloc_idx]);
+                            alloc_idx += 1;
+                        }
+                    },
+                    .mem => |*m| {
+                        alloc_idx += applyAllocSyntheticAmode(m, allocs[alloc_idx..]);
+                    },
+                }
+            },
+
+            .xmm_mov_r_m => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.src = applyAllocXmm(p.src, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                alloc_idx += applyAllocSyntheticAmode(&p.dst, allocs[alloc_idx..]);
+            },
+
+            .xmm_mov_m_r => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableXmm(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                alloc_idx += applyAllocSyntheticAmode(&p.src, allocs[alloc_idx..]);
+            },
+
+            .xmm_cmp_rm_r => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocXmm(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                switch (p.src.inner) {
+                    .reg => |*r| {
+                        if (alloc_idx < allocs.len) {
+                            r.* = applyAllocXmm(r.*, allocs[alloc_idx]);
+                            alloc_idx += 1;
+                        }
+                    },
+                    .mem => |*m| {
+                        alloc_idx += applyAllocSyntheticAmode(m, allocs[alloc_idx..]);
+                    },
+                }
+            },
+
+            .xmm_to_gpr => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableGpr(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.src = applyAllocXmm(p.src, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .gpr_to_xmm => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableXmm(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                switch (p.src.inner) {
+                    .reg => |*r| {
+                        if (alloc_idx < allocs.len) {
+                            r.* = applyAllocGpr(r.*, allocs[alloc_idx]);
+                            alloc_idx += 1;
+                        }
+                    },
+                    .mem => |*m| {
+                        alloc_idx += applyAllocSyntheticAmode(m, allocs[alloc_idx..]);
+                    },
+                }
+            },
+
+            .cvt_int_to_float => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableXmm(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                switch (p.src) {
+                    .reg => |*r| {
+                        if (alloc_idx < allocs.len) {
+                            r.* = applyAllocGpr(r.*, allocs[alloc_idx]);
+                            alloc_idx += 1;
+                        }
+                    },
+                    .mem => |*m| {
+                        alloc_idx += applyAllocSyntheticAmode(m, allocs[alloc_idx..]);
+                    },
+                }
+            },
+
+            .cvt_float_to_int => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableGpr(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                switch (p.src.inner) {
+                    .reg => |*r| {
+                        if (alloc_idx < allocs.len) {
+                            r.* = applyAllocXmm(r.*, allocs[alloc_idx]);
+                            alloc_idx += 1;
+                        }
+                    },
+                    .mem => |*m| {
+                        alloc_idx += applyAllocSyntheticAmode(m, allocs[alloc_idx..]);
+                    },
+                }
+            },
+
+            .jmp_table_seq => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.tmp1 = applyAllocWritableReg(p.tmp1, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.tmp2 = applyAllocWritableReg(p.tmp2, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.idx = applyAllocReg(p.idx, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .jmp_unknown => |*p| {
+                switch (p.target) {
+                    .reg => |*r| {
+                        if (alloc_idx < allocs.len) {
+                            r.* = applyAllocReg(r.*, allocs[alloc_idx]);
+                            alloc_idx += 1;
+                        }
+                    },
+                    .mem => |*m| {
+                        alloc_idx += applyAllocSyntheticAmode(m, allocs[alloc_idx..]);
+                    },
+                }
+            },
+
+            // Pseudo-instructions - these typically have fixed register assignments
+            .checked_srem_seq => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst_quotient = applyAllocWritableGpr(p.dst_quotient, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.dst_remainder = applyAllocWritableGpr(p.dst_remainder, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.divisor = applyAllocGpr(p.divisor, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.dividend_lo = applyAllocGpr(p.dividend_lo, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.dividend_hi = applyAllocGpr(p.dividend_hi, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .checked_srem_seq8 => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableGpr(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.divisor = applyAllocGpr(p.divisor, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.dividend = applyAllocGpr(p.dividend, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .xmm_uninitialized_value => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableXmm(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .gpr_uninitialized_value => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableGpr(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .xmm_min_max_seq => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableXmm(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.lhs = applyAllocXmm(p.lhs, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rhs = applyAllocXmm(p.rhs, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .cvt_uint64_to_float_seq => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableXmm(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.tmp_gpr1 = applyAllocWritableGpr(p.tmp_gpr1, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.tmp_gpr2 = applyAllocWritableGpr(p.tmp_gpr2, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.src = applyAllocGpr(p.src, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .cvt_float_to_sint_seq => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableGpr(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.tmp_xmm = applyAllocWritableXmm(p.tmp_xmm, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.tmp_gpr = applyAllocWritableGpr(p.tmp_gpr, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.src = applyAllocXmm(p.src, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .cvt_float_to_uint_seq => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableGpr(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.tmp_xmm = applyAllocWritableXmm(p.tmp_xmm, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.tmp_xmm2 = applyAllocWritableXmm(p.tmp_xmm2, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.tmp_gpr = applyAllocWritableGpr(p.tmp_gpr, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.src = applyAllocXmm(p.src, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .xmm_cmove => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableXmm(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.consequent = applyAllocXmm(p.consequent, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.alternative = applyAllocXmm(p.alternative, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .stack_probe_loop => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.tmp = applyAllocWritableGpr(p.tmp, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .mul => |*p| {
+                switch (p.src.inner) {
+                    .reg => |*r| {
+                        if (alloc_idx < allocs.len) {
+                            r.* = applyAllocGpr(r.*, allocs[alloc_idx]);
+                            alloc_idx += 1;
+                        }
+                    },
+                    .mem => |*m| {
+                        alloc_idx += applyAllocSyntheticAmode(m, allocs[alloc_idx..]);
+                    },
+                }
+            },
+
+            .div => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst_quotient = applyAllocWritableGpr(p.dst_quotient, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.dst_remainder = applyAllocWritableGpr(p.dst_remainder, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.dividend_lo = applyAllocGpr(p.dividend_lo, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.dividend_hi = applyAllocGpr(p.dividend_hi, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                switch (p.divisor.inner) {
+                    .reg => |*r| {
+                        if (alloc_idx < allocs.len) {
+                            r.* = applyAllocGpr(r.*, allocs[alloc_idx]);
+                            alloc_idx += 1;
+                        }
+                    },
+                    .mem => |*m| {
+                        alloc_idx += applyAllocSyntheticAmode(m, allocs[alloc_idx..]);
+                    },
+                }
+            },
+
+            .sign_extend_data => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.dst = applyAllocWritableGpr(p.dst, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.src = applyAllocGpr(p.src, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // Call instructions - args are fixed by ABI
+            .call_known, .call_unknown, .return_call_known, .return_call_unknown => {},
+
+            // These instructions have specific handling or don't need allocation changes
+            .load_ext_name, .args_rp_check, .elf_tls_get_addr, .macho_tls_get_addr => {},
+
+            // Load address variants
+            .lea_stack_addr, .virtual_sp_offset_adjust => {},
+
+            // Atomic operations
+            .atomic_rmw_seq, .lock_cmpxchg => {},
+
+            // SSE comparison
+            .xmm_rm_r_unaligned, .xmm_load_const => {},
+
+            // EVEX instructions
+            .evex_vbroadcast, .evex_vmov => {},
+        }
+
+        // Emit the instruction with resolved registers
+        var state = emit_mod.EmitState{};
+        emit_mod.emit(&inst_copy, sink, emit_info, &state);
+    }
+
+    //=========================================================================
     // Debug printing (print_with_state)
     //=========================================================================
 
@@ -1514,6 +2232,70 @@ pub const Inst = union(enum) {
         try self.printWithState(writer);
     }
 };
+
+//=============================================================================
+// Helper functions for register allocation
+//=============================================================================
+
+/// Apply allocations to a SyntheticAmode. Returns number of allocations consumed.
+fn applyAllocSyntheticAmode(amode: *SyntheticAmode, allocs: []const Allocation) usize {
+    var count: usize = 0;
+
+    switch (amode.*) {
+        .real_amode => |*a| {
+            count += applyAllocAmode(a, allocs);
+        },
+        .constant_offset => |*co| {
+            if (co.reg) |*r| {
+                if (count < allocs.len) {
+                    const alloc = allocs[count];
+                    if (!alloc.isNone()) {
+                        if (alloc.asReg()) |preg| {
+                            r.* = Reg.fromPReg(preg);
+                        }
+                    }
+                    count += 1;
+                }
+            }
+        },
+        .none_plus_offset, .nominal_sp_offset, .slot_offset => {},
+    }
+
+    return count;
+}
+
+/// Apply allocations to an Amode. Returns number of allocations consumed.
+fn applyAllocAmode(amode: *Amode, allocs: []const Allocation) usize {
+    var count: usize = 0;
+
+    // Base register
+    if (amode.base) |*base| {
+        if (count < allocs.len) {
+            const alloc = allocs[count];
+            if (!alloc.isNone()) {
+                if (alloc.asReg()) |preg| {
+                    base.* = Gpr.unwrapNew(Reg.fromPReg(preg));
+                }
+            }
+            count += 1;
+        }
+    }
+
+    // Index register
+    if (amode.index) |*idx| {
+        if (count < allocs.len) {
+            const alloc = allocs[count];
+            if (!alloc.isNone()) {
+                if (alloc.asReg()) |preg| {
+                    idx.* = Gpr.unwrapNew(Reg.fromPReg(preg));
+                }
+            }
+            count += 1;
+        }
+    }
+
+    return count;
+}
 
 //=============================================================================
 // Helper functions for printing

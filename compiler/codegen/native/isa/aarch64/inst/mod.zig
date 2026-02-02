@@ -64,6 +64,13 @@ const RegClass = regs_mod.RegClass;
 const Writable = regs_mod.Writable;
 const MachLabel = args.MachLabel;
 
+// Import emit module for MachBuffer
+const emit_mod = @import("emit.zig");
+
+// Import regalloc types
+const regalloc_operand = @import("../../../regalloc/operand.zig");
+const Allocation = regalloc_operand.Allocation;
+
 // Stub types
 pub const CallArgList = std.ArrayListUnmanaged(CallArgPair);
 
@@ -1415,7 +1422,890 @@ pub const Inst = union(enum) {
             .vector => unreachable,
         };
     }
+
+    /// Emit this instruction with register allocations applied.
+    /// Takes the allocations for this instruction's operands (in the order
+    /// they were collected by getOperands: defs first, then uses) and emits
+    /// the instruction with virtual registers replaced by physical registers.
+    pub fn emitWithAllocs(
+        self: *const Inst,
+        sink: *emit_mod.MachBuffer,
+        allocs: []const Allocation,
+        emit_info: *const emit_mod.EmitInfo,
+    ) !void {
+        // Create a mutable copy of the instruction
+        var inst_copy = self.*;
+
+        // Apply allocations to the instruction
+        // The allocation order matches getOperands: defs first, then uses
+        var alloc_idx: usize = 0;
+
+        switch (inst_copy) {
+            // Instructions with no register operands
+            .nop0, .nop4, .fence, .csdb, .brk, .ret => {},
+
+            .udf => {},
+            .word4 => {},
+            .word8 => {},
+            .bti => {},
+
+            // ALU operations: rd (def), rn (use), rm (use)
+            .alu_rrr => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rm = applyAlloc(p.rm, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // ALU with 4 registers: rd (def), rn (use), rm (use), ra (use)
+            .alu_rrrr => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rm = applyAlloc(p.rm, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.ra = applyAlloc(p.ra, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // ALU with immediate: rd (def), rn (use)
+            .alu_rr_imm12, .alu_rr_imm_logic, .alu_rr_imm_shift => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // ALU with shift: rd (def), rn (use), rm (use)
+            .alu_rrr_shift, .alu_rrr_extend => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rm = applyAlloc(p.rm, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // Bit operations: rd (def), rn (use)
+            .bit_rr => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // Loads: rd (def), mem (uses)
+            .uload8, .sload8, .uload16, .sload16, .uload32, .sload32, .uload64 => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                alloc_idx += applyAllocAMode(&p.mem, allocs[alloc_idx..]);
+            },
+
+            // Stores: rd (use), mem (uses)
+            .store8, .store16, .store32, .store64 => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAlloc(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                alloc_idx += applyAllocAMode(&p.mem, allocs[alloc_idx..]);
+            },
+
+            // Pair load: rt (def), rt2 (def), mem (uses)
+            .load_p64 => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rt = applyAllocWritable(p.rt, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rt2 = applyAllocWritable(p.rt2, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                alloc_idx += applyAllocPairAMode(&p.mem, allocs[alloc_idx..]);
+            },
+
+            // Pair store: rt (use), rt2 (use), mem (uses)
+            .store_p64 => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rt = applyAlloc(p.rt, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rt2 = applyAlloc(p.rt2, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                alloc_idx += applyAllocPairAMode(&p.mem, allocs[alloc_idx..]);
+            },
+
+            // Move: rd (def), rm (use)
+            .mov => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rm = applyAlloc(p.rm, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // Move from preg: rd (def) - preg is already physical
+            .mov_from_preg => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // Move to preg: rm (use) - preg is already physical
+            .mov_to_preg => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rm = applyAlloc(p.rm, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // Move wide: rd (def)
+            .mov_wide => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // Movk: rd (def/use - read-modify-write), rn is source for rd
+            .movk => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // Conditional select: rd (def), rn (use), rm (use)
+            .csel, .csneg => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rm = applyAlloc(p.rm, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // Conditional set: rd (def)
+            .cset, .csetm => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // Conditional compare: rn (use), rm (use)
+            .ccmp => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rm = applyAlloc(p.rm, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // Conditional compare immediate: rn (use)
+            .ccmp_imm => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // FPU moves: rd (def), rn (use)
+            .fpu_move32, .fpu_move64, .fpu_move128 => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // Extend: rd (def), rn (use)
+            .extend => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // Control flow - no register operands (labels only)
+            .jump, .cond_br => {},
+
+            // Test and branch: rn (use)
+            .test_bit_and_branch => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // Indirect branch: rn (use)
+            .indirect_br => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // Jump table sequence: ridx (use), rtmp1 (def), rtmp2 (def)
+            .jt_sequence => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rtmp1 = applyAllocWritable(p.rtmp1, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rtmp2 = applyAllocWritable(p.rtmp2, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.ridx = applyAlloc(p.ridx, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // Trap if: same as cond_br
+            .trap_if => {},
+
+            // ADR/ADRP: rd (def)
+            .adr, .adrp => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // Load address: rd (def), mem (uses)
+            .load_addr => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                alloc_idx += applyAllocAMode(&p.mem, allocs[alloc_idx..]);
+            },
+
+            // External symbol loads: rd (def)
+            .load_ext_name_got, .load_ext_name_near, .load_ext_name_far => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // FPU compare: rn (use), rm (use)
+            .fpu_cmp => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rm = applyAlloc(p.rm, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // FPU unary: rd (def), rn (use)
+            .fpu_rr, .fpu_round, .fpu_to_int, .int_to_fpu => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // FPU binary: rd (def), rn (use), rm (use)
+            .fpu_rrr => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rm = applyAlloc(p.rm, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // FPU ternary: rd (def), rn (use), rm (use), ra (use)
+            .fpu_rrrr => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rm = applyAlloc(p.rm, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.ra = applyAlloc(p.ra, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // FPU loads: rd (def), mem (uses)
+            .fpu_load32, .fpu_load64, .fpu_load128 => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                alloc_idx += applyAllocAMode(&p.mem, allocs[alloc_idx..]);
+            },
+
+            // FPU stores: rd (use), mem (uses)
+            .fpu_store32, .fpu_store64, .fpu_store128 => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAlloc(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                alloc_idx += applyAllocAMode(&p.mem, allocs[alloc_idx..]);
+            },
+
+            // Move to NZCV: rn (use)
+            .mov_to_nzcv => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // Move from NZCV: rd (def)
+            .mov_from_nzcv => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // Call: no register operands (target is label/address)
+            .call, .call_ind => {},
+
+            // Atomic operations
+            .atomic_rmw => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rt = applyAllocWritable(p.rt, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rs = applyAlloc(p.rs, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .atomic_rmw_loop => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.oldval = applyAllocWritable(p.oldval, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.scratch1 = applyAllocWritable(p.scratch1, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.scratch2 = applyAllocWritable(p.scratch2, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.addr = applyAlloc(p.addr, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.operand = applyAlloc(p.operand, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .atomic_cas => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rs = applyAlloc(p.rs, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rt = applyAlloc(p.rt, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .atomic_cas_loop => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.oldval = applyAllocWritable(p.oldval, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.scratch = applyAllocWritable(p.scratch, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.addr = applyAlloc(p.addr, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.expected = applyAlloc(p.expected, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.replacement = applyAlloc(p.replacement, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .ldaxr => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rt = applyAllocWritable(p.rt, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .stlxr => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rs = applyAllocWritable(p.rs, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rt = applyAlloc(p.rt, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .ldar => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rt = applyAllocWritable(p.rt, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .stlr => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rt = applyAlloc(p.rt, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            // Vector operations
+            .vec_rrr => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rm = applyAlloc(p.rm, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .vec_rrr_mod => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.ri = applyAlloc(p.ri, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rm = applyAlloc(p.rm, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .vec_misc, .vec_lanes => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .vec_shift_imm => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .vec_dup => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .vec_dup_imm => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .mov_to_vec => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.ri = applyAlloc(p.ri, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .mov_from_vec => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .vec_shift_imm_mod => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.ri = applyAlloc(p.ri, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .vec_extend, .vec_rr_long, .vec_rr_narrow => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .vec_rrr_long => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rm = applyAlloc(p.rm, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .vec_rrr_long_mod => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.ri = applyAlloc(p.ri, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rm = applyAlloc(p.rm, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .vec_rr_pair_long => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .vec_extract => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rm = applyAlloc(p.rm, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .vec_tbl => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rm = applyAlloc(p.rm, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+
+            .vec_tbl_ext => |*p| {
+                if (alloc_idx < allocs.len) {
+                    p.rd = applyAllocWritable(p.rd, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.ri = applyAlloc(p.ri, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rn = applyAlloc(p.rn, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+                if (alloc_idx < allocs.len) {
+                    p.rm = applyAlloc(p.rm, allocs[alloc_idx]);
+                    alloc_idx += 1;
+                }
+            },
+        }
+
+        // Emit the instruction with resolved registers
+        var state = emit_mod.EmitState{};
+        emit_mod.emit(&inst_copy, sink, emit_info, &state);
+    }
 };
+
+/// Apply an allocation to a register, returning the physical register.
+fn applyAlloc(reg: Reg, alloc: Allocation) Reg {
+    if (alloc.isNone()) {
+        // No allocation - register is already physical or unused
+        return reg;
+    }
+    if (alloc.asReg()) |preg| {
+        // Convert PReg to Reg
+        return Reg.fromPReg(preg);
+    }
+    // Stack allocation - should have been handled by regalloc edits
+    // Return original register (will cause emit error if virtual)
+    return reg;
+}
+
+/// Apply an allocation to a writable register.
+fn applyAllocWritable(reg: Writable(Reg), alloc: Allocation) Writable(Reg) {
+    return Writable(Reg).fromReg(applyAlloc(reg.toReg(), alloc));
+}
+
+/// Apply allocations to an addressing mode. Returns number of allocations consumed.
+fn applyAllocAMode(mem: *AMode, allocs: []const Allocation) usize {
+    var count: usize = 0;
+    switch (mem.*) {
+        .unscaled => |*m| {
+            if (count < allocs.len) {
+                m.rn = applyAlloc(m.rn, allocs[count]);
+                count += 1;
+            }
+        },
+        .unsigned_offset => |*m| {
+            if (count < allocs.len) {
+                m.rn = applyAlloc(m.rn, allocs[count]);
+                count += 1;
+            }
+        },
+        .reg_reg => |*m| {
+            if (count < allocs.len) {
+                m.rn = applyAlloc(m.rn, allocs[count]);
+                count += 1;
+            }
+            if (count < allocs.len) {
+                m.rm = applyAlloc(m.rm, allocs[count]);
+                count += 1;
+            }
+        },
+        .reg_scaled => |*m| {
+            if (count < allocs.len) {
+                m.rn = applyAlloc(m.rn, allocs[count]);
+                count += 1;
+            }
+            if (count < allocs.len) {
+                m.rm = applyAlloc(m.rm, allocs[count]);
+                count += 1;
+            }
+        },
+        .reg_scaled_extended => |*m| {
+            if (count < allocs.len) {
+                m.rn = applyAlloc(m.rn, allocs[count]);
+                count += 1;
+            }
+            if (count < allocs.len) {
+                m.rm = applyAlloc(m.rm, allocs[count]);
+                count += 1;
+            }
+        },
+        .reg_extended => |*m| {
+            if (count < allocs.len) {
+                m.rn = applyAlloc(m.rn, allocs[count]);
+                count += 1;
+            }
+            if (count < allocs.len) {
+                m.rm = applyAlloc(m.rm, allocs[count]);
+                count += 1;
+            }
+        },
+        .reg_offset => |*m| {
+            if (count < allocs.len) {
+                m.rn = applyAlloc(m.rn, allocs[count]);
+                count += 1;
+            }
+        },
+        // These modes don't use allocatable registers
+        .sp_offset, .fp_offset, .slot_offset, .incoming_arg,
+        .sp_pre_indexed, .sp_post_indexed, .label, .constant => {},
+    }
+    return count;
+}
+
+/// Apply allocations to a pair addressing mode. Returns number of allocations consumed.
+fn applyAllocPairAMode(mem: *PairAMode, allocs: []const Allocation) usize {
+    var count: usize = 0;
+    switch (mem.*) {
+        .signed_offset => |*m| {
+            if (count < allocs.len) {
+                m.reg = applyAlloc(m.reg, allocs[count]);
+                count += 1;
+            }
+        },
+        // SP modes don't use allocatable registers
+        .sp_pre_indexed, .sp_post_indexed => {},
+    }
+    return count;
+}
 
 fn countZeroHalfWords(value: u64, num_half_words: u8) usize {
     var val = value;
