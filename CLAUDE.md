@@ -115,8 +115,8 @@ The Go compiler is at `~/learning/go/src/cmd/`. Key files:
 | Phase 1-3 | ✅ Done | CLIF IR, Wasm translation, MachInst framework |
 | Phase 4 | ✅ Done | ARM64 backend (10,874 lines, all features) |
 | Phase 5 | ✅ Done | x86-64 backend (9,828 lines, 90% ARM64 parity) |
-| **Phase 6** | 🔄 In Progress | Register allocation (regalloc2 port) |
-| Phase 7 | Pending | Integration (wire into driver) |
+| Phase 6 | ✅ Done | Register allocation (regalloc2 port, type unification complete) |
+| **Phase 7** | 🔄 In Progress | Integration (wire into driver) |
 
 ---
 
@@ -125,8 +125,10 @@ The Go compiler is at `~/learning/go/src/cmd/`. Key files:
 | Document | Purpose |
 |----------|---------|
 | `CRANELIFT_PORT_MASTER_PLAN.md` | **Native AOT codegen - Cranelift port phases & tasks** |
-| `ROADMAP_PHASE2.md` | M17-M24 detailed plan with Go/Swift research |
+| `PHASE7_EXECUTION_PLAN.md` | **Phase 7 integration tasks (current work)** |
 | `WASM_BACKEND.md` | Wasm milestones M1-M16, implementation details |
+| `ROADMAP_PHASE2.md` | M17-M24 detailed plan with Go/Swift research |
+| `TESTING.md` | Testing strategy and test organization |
 | `VISION.md` | Language vision, strategy, roadmap |
 | `README.md` | Project overview and quick start |
 | `../bootstrap-0.2/DESIGN.md` | Technical architecture specification |
