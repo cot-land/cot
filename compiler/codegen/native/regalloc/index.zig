@@ -420,6 +420,23 @@ pub const PRegSet = struct {
         result.intersectFrom(other);
         return result;
     }
+
+    /// Find the maximum register index in the set.
+    /// Returns null if the set is empty.
+    pub fn maxPreg(self: PRegSet) ?PReg {
+        // Search from highest to lowest
+        var i: usize = LEN;
+        while (i > 0) {
+            i -= 1;
+            if (self.bits[i] != 0) {
+                // Find highest set bit: 63 - leading zeros
+                const bit: u6 = @intCast(63 - @clz(self.bits[i]));
+                const index: usize = @as(usize, bit) + i * 64;
+                return PReg.fromIndex(index);
+            }
+        }
+        return null;
+    }
 };
 
 pub const PRegSetIterator = struct {

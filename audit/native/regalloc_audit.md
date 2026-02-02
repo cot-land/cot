@@ -21,15 +21,14 @@
 | 6.8 | Index Set | indexset.rs | indexset.zig | ✅ Done | 7/7 |
 | 6.9 | Parallel Moves | moves.rs | moves.zig | ✅ Done | 7/7 |
 | 6.10 | Ion Data Structures | ion/data_structures.rs | ion_data.zig | ✅ Done | 6/6 |
-| 6.11 | Liveness Analysis | ion/liveranges.rs | liveness.zig | ✅ Done | 6/6 |
-| 6.12 | Liverange Building | ion/liveranges.rs | ion/liveranges.zig | ⏳ TODO | - |
-| 6.13 | Bundle Merging | ion/merge.rs | ion/merge.zig | ⏳ TODO | - |
-| 6.14 | Allocation Loop | ion/process.rs | ion/process.zig | ⏳ TODO | - |
-| 6.15 | Spill Allocation | ion/spill.rs | ion/spill.zig | ⏳ TODO | - |
-| 6.16 | Move Insertion | ion/moves.rs | ion/moves.zig | ⏳ TODO | - |
-| 6.17 | Requirements | ion/requirement.rs | ion/requirement.zig | ⏳ TODO | - |
-| 6.18 | Reg Traversal | ion/reg_traversal.rs | ion/traversal.zig | ⏳ TODO | - |
-| 6.19 | Public API | lib.rs | lib.zig | ⏳ TODO | - |
+| 6.11 | Liveness Analysis + Live Range Building | ion/liveranges.rs | liveness.zig | ✅ Done | 12/12 |
+| 6.12 | Bundle Merging | ion/merge.rs | ion/merge.zig | ⏳ TODO | - |
+| 6.13 | Allocation Loop | ion/process.rs | ion/process.zig | ⏳ TODO | - |
+| 6.14 | Spill Allocation | ion/spill.rs | ion/spill.zig | ⏳ TODO | - |
+| 6.15 | Move Insertion | ion/moves.rs | ion/moves.zig | ⏳ TODO | - |
+| 6.16 | Requirements | ion/requirement.rs | ion/requirement.zig | ⏳ TODO | - |
+| 6.17 | Reg Traversal | ion/reg_traversal.rs | ion/traversal.zig | ⏳ TODO | - |
+| 6.18 | Public API | lib.rs | lib.zig | ⏳ TODO | - |
 
 ---
 
@@ -565,17 +564,18 @@ Also provides `FunctionVTable` for runtime dispatch when needed.
 
 ---
 
-## Phase 6.11: Liveness Analysis (liveness.zig)
+## Phase 6.11: Liveness Analysis + Live Range Building (liveness.zig)
 
-**Source**: `src/ion/liveranges.rs`
+**Source**: `src/ion/liveranges.rs` (~915 lines)
 **Target**: `compiler/codegen/native/regalloc/liveness.zig`
-**Status**: ✅ Complete (~400 LOC, 6 tests)
+**Status**: ✅ Complete (~980 LOC, 12 tests)
+**Audit**: See `audit/native/liveranges_audit.md` for full function-by-function mapping
 
 ### Type Mapping
 
 | Rust Type | Zig Type | Notes |
 |-----------|----------|-------|
-| `SpillWeight` | `SpillWeight` | f32 wrapper with bfloat16-like encoding |
+| `SpillWeight` | `SpillWeight` | f32 wrapper with bfloat16-like encoding (>> 15) |
 | `spill_weight_from_constraint()` | `spillWeightFromConstraint()` | Compute weight from constraint/loop/def |
 
 ### LivenessContext Methods
@@ -588,7 +588,14 @@ Also provides `FunctionVTable` for runtime dispatch when needed.
 | `find_vreg_liverange_for_pos()` | `findVregLiverangeForPos()` | Find range at position |
 | `add_liverange_to_preg()` | `addLiverangeToPreg()` | Mark PReg busy |
 | `is_live_in()` | `isLiveIn()` | Check livein |
+
+### Top-Level Functions
+
+| Rust Function | Zig Function | Notes |
+|---------------|--------------|-------|
 | `compute_liveness()` | `computeLiveness()` | Worklist algorithm |
+| `build_liveranges()` | `buildLiveranges()` | ~403 line algorithm, all phases |
+| `fixup_multi_fixed_vregs()` | `fixupMultiFixedVregs()` | Multi-constraint handling |
 
 ### SpillWeight Encoding
 
@@ -625,16 +632,36 @@ where:
 
 ## Remaining Phases (TODO)
 
-### Phase 6.12-6.18: Ion Allocator
-- Live range building
-- Bundle merging
-- Allocation loop
-- Spill slot assignment
-- Move insertion
-- Requirements
-- Reg traversal
+### Phase 6.12: Bundle Merging (ion/merge.rs)
+- Merge compatible live ranges into bundles
+- Constraint compatibility checks
+- Spill set management
 
-### Phase 6.19: Public API (lib.zig)
+### Phase 6.13: Allocation Loop (ion/process.rs)
+- Priority queue processing
+- Register assignment
+- Eviction logic
+- Split decision making
+
+### Phase 6.14: Spill Allocation (ion/spill.rs)
+- Spill slot assignment
+- Stack frame layout
+- Multi-slot handling
+
+### Phase 6.15: Move Insertion (ion/moves.rs)
+- Insert moves at block boundaries
+- Resolve parallel moves
+- Handle shuffle cycles
+
+### Phase 6.16: Requirements (ion/requirement.rs)
+- Requirement propagation
+- Constraint satisfaction
+
+### Phase 6.17: Reg Traversal (ion/reg_traversal.rs)
+- Register iteration utilities
+- Preference ordering
+
+### Phase 6.18: Public API (lib.rs)
 - `run()` function
 - `RegallocOptions`
 - Integration with VCode
