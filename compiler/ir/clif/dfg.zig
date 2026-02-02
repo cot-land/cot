@@ -375,6 +375,8 @@ pub const Opcode = @import("instructions.zig").Opcode;
 
 /// Simplified instruction data storage for the DFG.
 /// Full InstructionData with all formats is in builder.zig.
+///
+/// Branch destination fields are used by blockorder.zig for CFG construction.
 pub const InstData = struct {
     /// Instruction opcode.
     opcode: Opcode,
@@ -382,12 +384,44 @@ pub const InstData = struct {
     args: ValueList,
     /// Controlling type variable (for polymorphic instructions).
     ctrl_type: Type,
+    /// Branch destination (for jump, fallthrough_return, etc).
+    dest: ?Block = null,
+    /// Then destination (for brif).
+    then_dest: ?Block = null,
+    /// Else destination (for brif).
+    else_dest: ?Block = null,
 
     pub const EMPTY: InstData = .{
         .opcode = .nop,
         .args = ValueList.EMPTY,
         .ctrl_type = Type.INVALID,
+        .dest = null,
+        .then_dest = null,
+        .else_dest = null,
     };
+
+    /// Get the single block destination (for jump instructions).
+    pub fn getBlockDest(self: InstData) ?Block {
+        return self.dest;
+    }
+
+    /// Get brif destinations (then and else blocks).
+    pub fn getBrifDests(self: InstData) ?struct { then_dest: Block, else_dest: Block } {
+        if (self.then_dest != null and self.else_dest != null) {
+            return .{
+                .then_dest = self.then_dest.?,
+                .else_dest = self.else_dest.?,
+            };
+        }
+        return null;
+    }
+
+    /// Get br_table data. Currently returns null (br_table not fully supported).
+    pub fn getBrTableData(self: InstData) ?struct { default: Block, targets: []const Block } {
+        // TODO: Implement br_table support with JumpTableData
+        _ = self;
+        return null;
+    }
 };
 
 // ============================================================================

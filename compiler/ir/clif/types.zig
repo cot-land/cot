@@ -296,6 +296,14 @@ pub const Type = struct {
         return self.eql(F16) or self.eql(F32) or self.eql(F64) or self.eql(F128);
     }
 
+    /// Get the register class for this type.
+    /// Used for register allocation.
+    pub fn regClass(self: Self) @import("../../codegen/native/machinst/reg.zig").RegClass {
+        if (self.isVector()) return .vector;
+        if (self.isFloat()) return .float;
+        return .int;
+    }
+
     /// Get log_2 of the number of lanes in this SIMD vector type.
     ///
     /// All SIMD types have a lane count that is a power of two and no larger than 256, so this

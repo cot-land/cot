@@ -11,26 +11,11 @@ pub const PReg = args.PReg;
 pub const RegClass = args.RegClass;
 pub const VReg = args.VReg;
 pub const RealReg = args.RealReg;
+// Import Writable from machinst for type compatibility
+pub const Writable = args.Writable;
 pub const OperandSize = args.OperandSize;
 pub const ScalarSize = args.ScalarSize;
 pub const VectorSize = args.VectorSize;
-
-// Writable wrapper type
-pub fn Writable(comptime T: type) type {
-    return struct {
-        reg: T,
-
-        const Self = @This();
-
-        pub fn fromReg(r: T) Self {
-            return .{ .reg = r };
-        }
-
-        pub fn toReg(self: Self) T {
-            return self.reg;
-        }
-    };
-}
 
 //=============================================================================
 // Registers, the Universe thereof, and printing
@@ -43,7 +28,7 @@ pub const PINNED_REG: u8 = 21;
 /// Get a reference to an X-register (integer register). Do not use
 /// this for xsp / xzr; we have two special registers for those.
 pub fn xreg(num: u8) Reg {
-    return Reg.fromRealReg(xregPreg(num));
+    return Reg.fromPReg(xregPreg(num));
 }
 
 /// Get the given X-register as a PReg.
@@ -76,7 +61,7 @@ pub fn writableVreg(num: u8) Writable(Reg) {
 /// Get a reference to the zero-register.
 pub fn zeroReg() Reg {
     const preg = PReg.init(31, .int);
-    return Reg.fromVReg(VReg.init(preg.index(), .int));
+    return Reg.fromVReg(VReg.init(@intCast(preg.index()), .int));
 }
 
 /// Get a writable reference to the zero-register (this discards a result).
@@ -95,7 +80,7 @@ pub fn writableZeroReg() Writable(Reg) {
 /// 6th bit (hw_enc & 31) to get the actual hardware register encoding.
 pub fn stackReg() Reg {
     const preg = PReg.init(31 + 32, .int);
-    return Reg.fromVReg(VReg.init(preg.index(), .int));
+    return Reg.fromVReg(VReg.init(@intCast(preg.index()), .int));
 }
 
 /// Get a writable reference to the stack-pointer register.

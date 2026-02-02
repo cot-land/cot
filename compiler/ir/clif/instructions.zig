@@ -253,6 +253,8 @@ pub const TrapCode = enum(u8) {
     integer_division_by_zero = 254,
     /// Failed float-to-int conversion.
     bad_conversion_to_integer = 255,
+    /// Code that was supposed to have been unreachable was reached.
+    unreachable_code_reached = 0,
     /// User-defined trap code 1.
     user1 = 1,
     /// User-defined trap code 2.
@@ -268,6 +270,7 @@ pub const TrapCode = enum(u8) {
             .heap_out_of_bounds => "heap_oob",
             .integer_division_by_zero => "int_divz",
             .bad_conversion_to_integer => "bad_toint",
+            .unreachable_code_reached => "unreachable",
             .user1 => "user1",
             .user2 => "user2",
         };

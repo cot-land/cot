@@ -63,200 +63,29 @@ const inst_mod = @import("inst.zig");
 pub const BlockIndex = inst_mod.BlockIndex;
 
 // =============================================================================
-// CLIF IR Type Stubs
-// These match the interfaces from compiler/ir/clif/ but are defined here
-// to keep machinst self-contained. In production, these would be imported.
+// CLIF IR Imports
+// Import real CLIF types from compiler/ir/clif/
+// Follows Cranelift pattern: use crate::ir::{Block, Function, Inst, Opcode};
 // =============================================================================
 
-/// An opaque reference to a basic block.
-/// Port of cranelift/codegen/src/ir/entities.rs Block
-pub const Block = struct {
-    index: u32,
+const clif = @import("../../../ir/clif/mod.zig");
 
-    pub const RESERVED: Block = .{ .index = std.math.maxInt(u32) };
+// Entity types
+pub const Block = clif.Block;
+pub const Inst = clif.Inst;
+pub const Value = clif.Value;
 
-    pub fn fromIndex(idx: u32) Block {
-        return .{ .index = idx };
-    }
+// Opcode
+pub const Opcode = clif.Opcode;
 
-    pub fn asU32(self: Block) u32 {
-        return self.index;
-    }
+// Data structures
+pub const InstData = clif.InstData;
+pub const DataFlowGraph = clif.DataFlowGraph;
+pub const Layout = clif.Layout;
+pub const Function = clif.Function;
 
-    pub fn eql(self: Block, other: Block) bool {
-        return self.index == other.index;
-    }
-
-    pub fn format(
-        self: Block,
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        try writer.print("block{d}", .{self.index});
-    }
-};
-
-/// An opaque reference to an instruction.
-/// Port of cranelift/codegen/src/ir/entities.rs Inst
-pub const Inst = struct {
-    index: u32,
-
-    pub const RESERVED: Inst = .{ .index = std.math.maxInt(u32) };
-
-    pub fn fromIndex(idx: u32) Inst {
-        return .{ .index = idx };
-    }
-
-    pub fn asU32(self: Inst) u32 {
-        return self.index;
-    }
-
-    pub fn eql(self: Inst, other: Inst) bool {
-        return self.index == other.index;
-    }
-};
-
-/// Instruction opcode.
-/// Subset of cranelift/codegen/src/ir/instructions.rs Opcode
-pub const Opcode = enum {
-    // Control flow
-    jump,
-    brif,
-    br_table,
-    @"return",
-    trap,
-    return_call,
-    return_call_indirect,
-    // Arithmetic (for completeness)
-    iadd,
-    isub,
-    imul,
-    // Other
-    nop,
-    iconst,
-    call,
-    call_indirect,
-
-    pub fn isBranch(self: Opcode) bool {
-        return switch (self) {
-            .jump, .brif, .br_table => true,
-            else => false,
-        };
-    }
-
-    pub fn isTerminator(self: Opcode) bool {
-        return switch (self) {
-            .jump, .brif, .br_table, .@"return", .trap, .return_call, .return_call_indirect => true,
-            else => false,
-        };
-    }
-};
-
-/// Instruction data - simplified representation.
-pub const InstructionData = struct {
-    opcode: Opcode,
-    // Destination block for jumps
-    dest: ?Block = null,
-    // For brif: then and else destinations
-    then_dest: ?Block = null,
-    else_dest: ?Block = null,
-    // For br_table: default and table
-    br_table_default: ?Block = null,
-    br_table_targets: []const Block = &.{},
-
-    pub fn getBlockDest(self: InstructionData) ?Block {
-        return self.dest;
-    }
-
-    pub fn getBrifDests(self: InstructionData) ?struct { then_dest: Block, else_dest: Block } {
-        if (self.then_dest != null and self.else_dest != null) {
-            return .{ .then_dest = self.then_dest.?, .else_dest = self.else_dest.? };
-        }
-        return null;
-    }
-
-    pub fn getBrTableData(self: InstructionData) ?struct { default: Block, targets: []const Block } {
-        if (self.br_table_default) |def| {
-            return .{ .default = def, .targets = self.br_table_targets };
-        }
-        return null;
-    }
-};
-
-/// Data flow graph - simplified.
-pub const DataFlowGraph = struct {
-    instructions: std.ArrayListUnmanaged(InstructionData) = .{},
-
-    pub fn getInstData(self: *const DataFlowGraph, inst: Inst) InstructionData {
-        if (inst.index < self.instructions.items.len) {
-            return self.instructions.items[inst.index];
-        }
-        return .{ .opcode = .nop };
-    }
-
-    pub fn deinit(self: *DataFlowGraph, allocator: Allocator) void {
-        self.instructions.deinit(allocator);
-    }
-};
-
-/// Block iterator.
-pub const BlockIterator = struct {
-    blocks: []const Block,
-    index: usize = 0,
-
-    pub fn next(self: *BlockIterator) ?Block {
-        if (self.index < self.blocks.len) {
-            const block = self.blocks[self.index];
-            self.index += 1;
-            return block;
-        }
-        return null;
-    }
-};
-
-/// Layout - simplified block/instruction ordering.
-pub const Layout = struct {
-    block_list: std.ArrayListUnmanaged(Block) = .{},
-    last_insts: std.AutoHashMapUnmanaged(Block, Inst) = .{},
-    cold_blocks_set: std.AutoHashMapUnmanaged(Block, void) = .{},
-
-    pub fn entryBlock(self: *const Layout) ?Block {
-        if (self.block_list.items.len > 0) {
-            return self.block_list.items[0];
-        }
-        return null;
-    }
-
-    pub fn blocks(self: *const Layout) BlockIterator {
-        return .{ .blocks = self.block_list.items };
-    }
-
-    pub fn lastInst(self: *const Layout, block: Block) ?Inst {
-        return self.last_insts.get(block);
-    }
-
-    pub fn isCold(self: *const Layout, block: Block) bool {
-        return self.cold_blocks_set.contains(block);
-    }
-
-    pub fn deinit(self: *Layout, allocator: Allocator) void {
-        self.block_list.deinit(allocator);
-        self.last_insts.deinit(allocator);
-        self.cold_blocks_set.deinit(allocator);
-    }
-};
-
-/// Function - simplified representation.
-pub const Function = struct {
-    layout: Layout = .{},
-    dfg: DataFlowGraph = .{},
-
-    pub fn deinit(self: *Function, allocator: Allocator) void {
-        self.layout.deinit(allocator);
-        self.dfg.deinit(allocator);
-    }
-};
+// Block iterator (from layout)
+pub const BlockIterator = clif.BlockIterator;
 
 // =============================================================================
 // SecondaryMap - entity map indexed by Block/Inst
@@ -516,7 +345,7 @@ pub fn visitBlockSuccs(
                 }
             }
         },
-        .@"return", .trap, .return_call, .return_call_indirect => {
+        .@"return", .trap => {
             // No successors for return/trap
         },
         else => {
@@ -899,7 +728,7 @@ pub const BlockLoweringOrder = struct {
                         }
                     }
 
-                    if (func.layout.isCold(o.block)) {
+                    if (func.layout.isBlockCold(o.block)) {
                         try self.cold_blocks.put(allocator, bindex, {});
                     }
 
@@ -922,7 +751,7 @@ pub const BlockLoweringOrder = struct {
                     }
 
                     // Inherit cold and indirect from successor
-                    if (func.layout.isCold(e.succ)) {
+                    if (func.layout.isBlockCold(e.succ)) {
                         try self.cold_blocks.put(allocator, bindex, {});
                     }
 
@@ -1120,40 +949,45 @@ test "LoweredBlock hash consistency" {
 test "DominatorTree RPO iterator" {
     const allocator = std.testing.allocator;
 
-    // Create a simple function with blocks 0 -> 1 -> 2
-    var func = Function{};
-    defer func.deinit(allocator);
+    // Create a simple function with blocks 0 -> 1 -> 2 using proper CLIF APIs
+    var func = Function.init(allocator);
+    defer func.deinit();
 
-    const block0 = Block.fromIndex(0);
-    const block1 = Block.fromIndex(1);
-    const block2 = Block.fromIndex(2);
+    // Create blocks
+    const block0 = try func.dfg.makeBlock();
+    const block1 = try func.dfg.makeBlock();
+    const block2 = try func.dfg.makeBlock();
 
-    try func.layout.block_list.append(allocator, block0);
-    try func.layout.block_list.append(allocator, block1);
-    try func.layout.block_list.append(allocator, block2);
+    // Add blocks to layout
+    try func.layout.appendBlock(allocator, block0);
+    try func.layout.appendBlock(allocator, block1);
+    try func.layout.appendBlock(allocator, block2);
 
     // Block 0 jumps to block 1
-    const inst0 = Inst.fromIndex(0);
-    try func.dfg.instructions.append(allocator, .{
+    const inst0 = try func.dfg.makeInstWithData(.{
         .opcode = .jump,
+        .args = clif.ValueList.EMPTY,
+        .ctrl_type = clif.Type.INVALID,
         .dest = block1,
     });
-    try func.layout.last_insts.put(allocator, block0, inst0);
+    try func.layout.appendInst(allocator, inst0, block0);
 
     // Block 1 jumps to block 2
-    const inst1 = Inst.fromIndex(1);
-    try func.dfg.instructions.append(allocator, .{
+    const inst1 = try func.dfg.makeInstWithData(.{
         .opcode = .jump,
+        .args = clif.ValueList.EMPTY,
+        .ctrl_type = clif.Type.INVALID,
         .dest = block2,
     });
-    try func.layout.last_insts.put(allocator, block1, inst1);
+    try func.layout.appendInst(allocator, inst1, block1);
 
     // Block 2 returns
-    const inst2 = Inst.fromIndex(2);
-    try func.dfg.instructions.append(allocator, .{
+    const inst2 = try func.dfg.makeInstWithData(.{
         .opcode = .@"return",
+        .args = clif.ValueList.EMPTY,
+        .ctrl_type = clif.Type.INVALID,
     });
-    try func.layout.last_insts.put(allocator, block2, inst2);
+    try func.layout.appendInst(allocator, inst2, block2);
 
     // Compute CFG and domtree
     var cfg = ControlFlowGraph.init(allocator);
@@ -1184,40 +1018,45 @@ test "DominatorTree RPO iterator" {
 test "BlockLoweringOrder simple linear CFG" {
     const allocator = std.testing.allocator;
 
-    // Create function: block0 -> block1 -> block2 (return)
-    var func = Function{};
-    defer func.deinit(allocator);
+    // Create function: block0 -> block1 -> block2 (return) using proper CLIF APIs
+    var func = Function.init(allocator);
+    defer func.deinit();
 
-    const block0 = Block.fromIndex(0);
-    const block1 = Block.fromIndex(1);
-    const block2 = Block.fromIndex(2);
+    // Create blocks
+    const block0 = try func.dfg.makeBlock();
+    const block1 = try func.dfg.makeBlock();
+    const block2 = try func.dfg.makeBlock();
 
-    try func.layout.block_list.append(allocator, block0);
-    try func.layout.block_list.append(allocator, block1);
-    try func.layout.block_list.append(allocator, block2);
+    // Add blocks to layout
+    try func.layout.appendBlock(allocator, block0);
+    try func.layout.appendBlock(allocator, block1);
+    try func.layout.appendBlock(allocator, block2);
 
     // Block 0 jumps to block 1
-    const inst0 = Inst.fromIndex(0);
-    try func.dfg.instructions.append(allocator, .{
+    const inst0 = try func.dfg.makeInstWithData(.{
         .opcode = .jump,
+        .args = clif.ValueList.EMPTY,
+        .ctrl_type = clif.Type.INVALID,
         .dest = block1,
     });
-    try func.layout.last_insts.put(allocator, block0, inst0);
+    try func.layout.appendInst(allocator, inst0, block0);
 
     // Block 1 jumps to block 2
-    const inst1 = Inst.fromIndex(1);
-    try func.dfg.instructions.append(allocator, .{
+    const inst1 = try func.dfg.makeInstWithData(.{
         .opcode = .jump,
+        .args = clif.ValueList.EMPTY,
+        .ctrl_type = clif.Type.INVALID,
         .dest = block2,
     });
-    try func.layout.last_insts.put(allocator, block1, inst1);
+    try func.layout.appendInst(allocator, inst1, block1);
 
     // Block 2 returns
-    const inst2 = Inst.fromIndex(2);
-    try func.dfg.instructions.append(allocator, .{
+    const inst2 = try func.dfg.makeInstWithData(.{
         .opcode = .@"return",
+        .args = clif.ValueList.EMPTY,
+        .ctrl_type = clif.Type.INVALID,
     });
-    try func.layout.last_insts.put(allocator, block2, inst2);
+    try func.layout.appendInst(allocator, inst2, block2);
 
     // Compute domtree
     var cfg = ControlFlowGraph.init(allocator);
@@ -1247,50 +1086,56 @@ test "BlockLoweringOrder diamond CFG no critical edges" {
 
     // Diamond: block0 -> block1, block0 -> block2, block1 -> block3, block2 -> block3
     // No critical edges because each predecessor has only one path to successors
-    var func = Function{};
-    defer func.deinit(allocator);
+    var func = Function.init(allocator);
+    defer func.deinit();
 
-    const block0 = Block.fromIndex(0);
-    const block1 = Block.fromIndex(1);
-    const block2 = Block.fromIndex(2);
-    const block3 = Block.fromIndex(3);
+    // Create blocks
+    const block0 = try func.dfg.makeBlock();
+    const block1 = try func.dfg.makeBlock();
+    const block2 = try func.dfg.makeBlock();
+    const block3 = try func.dfg.makeBlock();
 
-    try func.layout.block_list.append(allocator, block0);
-    try func.layout.block_list.append(allocator, block1);
-    try func.layout.block_list.append(allocator, block2);
-    try func.layout.block_list.append(allocator, block3);
+    // Add blocks to layout
+    try func.layout.appendBlock(allocator, block0);
+    try func.layout.appendBlock(allocator, block1);
+    try func.layout.appendBlock(allocator, block2);
+    try func.layout.appendBlock(allocator, block3);
 
     // Block 0: brif -> block1, block2
-    const inst0 = Inst.fromIndex(0);
-    try func.dfg.instructions.append(allocator, .{
+    const inst0 = try func.dfg.makeInstWithData(.{
         .opcode = .brif,
+        .args = clif.ValueList.EMPTY,
+        .ctrl_type = clif.Type.INVALID,
         .then_dest = block1,
         .else_dest = block2,
     });
-    try func.layout.last_insts.put(allocator, block0, inst0);
+    try func.layout.appendInst(allocator, inst0, block0);
 
     // Block 1: jump -> block3
-    const inst1 = Inst.fromIndex(1);
-    try func.dfg.instructions.append(allocator, .{
+    const inst1 = try func.dfg.makeInstWithData(.{
         .opcode = .jump,
+        .args = clif.ValueList.EMPTY,
+        .ctrl_type = clif.Type.INVALID,
         .dest = block3,
     });
-    try func.layout.last_insts.put(allocator, block1, inst1);
+    try func.layout.appendInst(allocator, inst1, block1);
 
     // Block 2: jump -> block3
-    const inst2 = Inst.fromIndex(2);
-    try func.dfg.instructions.append(allocator, .{
+    const inst2 = try func.dfg.makeInstWithData(.{
         .opcode = .jump,
+        .args = clif.ValueList.EMPTY,
+        .ctrl_type = clif.Type.INVALID,
         .dest = block3,
     });
-    try func.layout.last_insts.put(allocator, block2, inst2);
+    try func.layout.appendInst(allocator, inst2, block2);
 
     // Block 3: return
-    const inst3 = Inst.fromIndex(3);
-    try func.dfg.instructions.append(allocator, .{
+    const inst3 = try func.dfg.makeInstWithData(.{
         .opcode = .@"return",
+        .args = clif.ValueList.EMPTY,
+        .ctrl_type = clif.Type.INVALID,
     });
-    try func.layout.last_insts.put(allocator, block3, inst3);
+    try func.layout.appendInst(allocator, inst3, block3);
 
     var cfg = ControlFlowGraph.init(allocator);
     defer cfg.deinit();

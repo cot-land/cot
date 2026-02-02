@@ -8,6 +8,11 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+// Import CLIF IR types from machinst (which imports from compiler/ir/clif/)
+// Must be imported early so MachLabel can be used below
+const machinst = @import("../../machinst/mod.zig");
+const lower_mod = machinst.lower;
+
 // Import x86-64 instruction types from local modules
 const inst_mod = @import("inst/mod.zig");
 const Inst = inst_mod.Inst;
@@ -20,7 +25,8 @@ const ExtMode = inst_mod.args.ExtMode;
 const Amode = inst_mod.args.Amode;
 const SyntheticAmode = inst_mod.args.SyntheticAmode;
 const MemFlags = inst_mod.args.MemFlags;
-const MachLabel = inst_mod.args.MachLabel;
+// MachLabel from machinst (not local args.zig) for compatibility with Lower(I)
+const MachLabel = machinst.MachLabel;
 const Type = inst_mod.args.Type;
 const GprMem = inst_mod.args.GprMem;
 const GprMemImm = inst_mod.args.GprMemImm;
@@ -47,235 +53,51 @@ const CallConv = abi.CallConv;
 const RegClass = inst_mod.args.RegClass;
 
 // =============================================================================
-// CLIF IR Types (Stubs for standalone compilation)
-// In production, these come from machinst/lower.zig.
+// CLIF IR Types
+// Imported from machinst which imports from compiler/ir/clif/.
 // =============================================================================
 
 /// Opcode for CLIF instructions.
-pub const Opcode = enum {
-    nop,
-    iconst,
-    f32const,
-    f64const,
-    iadd,
-    isub,
-    ineg,
-    imul,
-    udiv,
-    sdiv,
-    urem,
-    srem,
-    band,
-    bor,
-    bxor,
-    bnot,
-    ishl,
-    ushr,
-    sshr,
-    rotl,
-    rotr,
-    clz,
-    ctz,
-    popcnt,
-    icmp,
-    fadd,
-    fsub,
-    fmul,
-    fdiv,
-    fneg,
-    fabs,
-    sqrt,
-    fcmp,
-    fmin,
-    fmax,
-    uextend,
-    sextend,
-    ireduce,
-    fcvt_to_sint,
-    fcvt_to_uint,
-    fcvt_from_sint,
-    fcvt_from_uint,
-    fpromote,
-    fdemote,
-    bitcast,
-    load,
-    store,
-    select,
-    copy,
-    @"return",
-    jump,
-    brif,
-    br_table,
-    call,
-    call_indirect,
-    trap,
-    trapnz,
-    trapz,
-    func_addr,
-    stack_addr,
-    global_value,
-    symbol_value,
-};
+pub const Opcode = lower_mod.Opcode;
 
 /// Integer condition codes.
-pub const IntCC = enum {
-    equal,
-    not_equal,
-    signed_less_than,
-    signed_greater_than_or_equal,
-    signed_greater_than,
-    signed_less_than_or_equal,
-    unsigned_less_than,
-    unsigned_greater_than_or_equal,
-    unsigned_greater_than,
-    unsigned_less_than_or_equal,
-};
+pub const IntCC = lower_mod.IntCC;
 
 /// Floating point condition codes.
-pub const FloatCC = enum {
-    ordered,
-    unordered,
-    equal,
-    not_equal,
-    less_than,
-    less_than_or_equal,
-    greater_than,
-    greater_than_or_equal,
-};
+pub const FloatCC = lower_mod.FloatCC;
 
-/// CLIF instruction reference (stub).
-pub const ClifInst = struct {
-    index: u32 = 0,
-};
+/// CLIF instruction reference.
+pub const ClifInst = lower_mod.Inst;
 
-/// CLIF value reference (stub).
-pub const Value = struct {
-    index: u32 = 0,
-};
+/// CLIF value reference.
+pub const Value = lower_mod.Value;
 
 /// Block index for lowered blocks.
-pub const BlockIndex = u32;
+pub const BlockIndex = lower_mod.BlockIndex;
 
 /// Value registers - multiple registers for a single value.
-pub fn ValueRegs(comptime T: type) type {
-    return struct {
-        regs: [2]?T = .{ null, null },
-
-        const Self = @This();
-
-        pub fn one(reg: T) Self {
-            return .{ .regs = .{ reg, null } };
-        }
-
-        pub fn only(self: Self) T {
-            return self.regs[0].?;
-        }
-    };
-}
+pub const ValueRegs = lower_mod.ValueRegs;
 
 /// Instruction output - vector of value register sets.
-pub const InstOutput = struct {
-    only: ?Writable(Reg) = null,
-};
+pub const InstOutput = lower_mod.InstOutput;
 
 /// Non-register input information.
-pub const NonRegInput = struct {
-    inst: ?ClifInst = null,
-    constant: ?u64 = null,
-};
+pub const NonRegInput = lower_mod.NonRegInput;
 
-/// CLIF type (stub matching the real one).
-pub const ClifType = enum {
-    I8,
-    I16,
-    I32,
-    I64,
-    I128,
-    F32,
-    F64,
+/// CLIF type - using the real Type from clif.
+pub const ClifType = lower_mod.Type;
 
-    pub fn bits(self: ClifType) u32 {
-        return switch (self) {
-            .I8 => 8,
-            .I16 => 16,
-            .I32 => 32,
-            .I64 => 64,
-            .I128 => 128,
-            .F32 => 32,
-            .F64 => 64,
-        };
-    }
-
-    pub fn bytes(self: ClifType) u32 {
-        return self.bits() / 8;
-    }
-
-    pub fn isFloat(self: ClifType) bool {
-        return self == .F32 or self == .F64;
-    }
-};
-
-/// Instruction data (stub).
-pub const InstructionData = struct {
-    opcode: Opcode,
-    args: []const Value,
-    results: []const Value,
-};
+/// Instruction data from dfg - the struct stored in dfg.insts.
+pub const InstData = lower_mod.InstData;
 
 // =============================================================================
-// Lower context stub
-// This matches the interface from machinst/lower.zig's Lower struct.
-// In production, this would be the actual Lower(Inst) type.
+// Lower context
+// This is the actual Lower(Inst) type from machinst/lower.zig.
 // =============================================================================
 
 /// Lowering context providing access to the function being lowered.
-pub const LowerCtx = struct {
-    allocator: Allocator,
-
-    /// Get instruction data for a CLIF instruction.
-    pub fn data(_: *LowerCtx, _: ClifInst) *const InstructionData {
-        return &placeholder_inst_data;
-    }
-
-    /// Get the type of an output.
-    pub fn outputTy(_: *LowerCtx, _: ClifInst, _: usize) ClifType {
-        return ClifType.I64;
-    }
-
-    /// Get the type of an input.
-    pub fn inputTy(_: *LowerCtx, _: ClifInst, _: usize) ClifType {
-        return ClifType.I64;
-    }
-
-    /// Put an input value into registers.
-    pub fn putInputInRegs(_: *LowerCtx, _: ClifInst, _: usize) ValueRegs(Reg) {
-        // Return a placeholder register
-        const vreg_val = VReg.init(200, .int);
-        return ValueRegs(Reg).one(Reg.fromVReg(vreg_val));
-    }
-
-    /// Get input as source or constant.
-    pub fn getInputAsSourceOrConst(_: *LowerCtx, _: ClifInst, _: usize) NonRegInput {
-        return .{ .inst = .none, .constant = null };
-    }
-
-    /// Allocate a temporary register.
-    pub fn allocTmp(_: *LowerCtx, _: ClifType) !ValueRegs(Writable(Reg)) {
-        const vreg_val = VReg.init(201, .int);
-        return ValueRegs(Writable(Reg)).one(Writable(Reg).fromReg(Reg.fromVReg(vreg_val)));
-    }
-
-    /// Emit a machine instruction.
-    pub fn emit(_: *LowerCtx, _: Inst) !void {
-        // Placeholder - would add to instruction buffer
-    }
-
-    var placeholder_inst_data = InstructionData{
-        .opcode = .nop,
-        .args = &[_]Value{},
-        .results = &[_]Value{},
-    };
-};
+/// This is the real Lower(Inst) type, not a stub.
+pub const LowerCtx = lower_mod.Lower(Inst);
 
 // =============================================================================
 // X64LowerBackend
@@ -344,11 +166,6 @@ pub const X64LowerBackend = struct {
             .rotl => self.lowerRotl(ctx, ir_inst),
             .rotr => self.lowerRotr(ctx, ir_inst),
 
-            // Bit counting
-            .clz => self.lowerClz(ctx, ir_inst),
-            .ctz => self.lowerCtz(ctx, ir_inst),
-            .popcnt => self.lowerPopcnt(ctx, ir_inst),
-
             // Integer comparison
             .icmp => self.lowerIcmp(ctx, ir_inst),
 
@@ -362,8 +179,6 @@ pub const X64LowerBackend = struct {
             .fabs => self.lowerFabs(ctx, ir_inst),
             .sqrt => self.lowerSqrt(ctx, ir_inst),
             .fcmp => self.lowerFcmp(ctx, ir_inst),
-            .fmin => self.lowerFmin(ctx, ir_inst),
-            .fmax => self.lowerFmax(ctx, ir_inst),
 
             // Conversions
             .uextend => self.lowerUextend(ctx, ir_inst),
@@ -410,17 +225,69 @@ pub const X64LowerBackend = struct {
             // Function address
             .func_addr => self.lowerFuncAddr(ctx, ir_inst),
 
-            // Stack operations
-            .stack_addr => self.lowerStackAddr(ctx, ir_inst),
-
-            // Global value
-            .global_value => self.lowerGlobalValue(ctx, ir_inst),
-
-            // Symbol address
-            .symbol_value => self.lowerSymbolValue(ctx, ir_inst),
-
             else => null,
         };
+    }
+
+    /// Lower a branch instruction.
+    /// Returns null if the branch type is not supported.
+    pub fn lowerBranch(
+        self: *const Self,
+        ctx: *LowerCtx,
+        ir_inst: ClifInst,
+        targets: []const MachLabel,
+    ) ?void {
+        _ = self;
+        const inst_data = ctx.data(ir_inst);
+        const opcode = inst_data.opcode;
+
+        switch (opcode) {
+            .jump => {
+                // Unconditional jump
+                const target = if (targets.len > 0) targets[0] else return null;
+                ctx.emit(Inst.genJump(target)) catch return null;
+            },
+            .brif => {
+                // Conditional branch
+                if (targets.len < 2) return null;
+                const taken = targets[0];
+                const not_taken = targets[1];
+
+                // Get the condition value
+                const cond_val = ctx.putInputInRegs(ir_inst, 0);
+                const cond_reg = cond_val.onlyReg() orelse return null;
+                const cond_gpr = Gpr.unwrapNew(cond_reg);
+
+                // Compare with zero using TEST (more efficient than CMP for this case)
+                ctx.emit(Inst{
+                    .test_rmi_r = .{
+                        .size = .size64,
+                        .src = GprMemImm.unwrapNew(RegMemImm.fromReg(cond_gpr.toReg())),
+                        .dst = cond_gpr,
+                    },
+                }) catch return null;
+
+                // Conditional jump (jump to taken if not zero)
+                ctx.emit(Inst{
+                    .jmp_cond = .{
+                        .cc = .nz,
+                        .target = taken,
+                    },
+                }) catch return null;
+
+                // Fallthrough or unconditional jump to not_taken
+                ctx.emit(Inst.genJump(not_taken)) catch return null;
+            },
+            .br_table => {
+                // Jump table - not yet implemented
+                return null;
+            },
+            .@"return" => {
+                // Return instruction
+                ctx.emit(Inst{ .ret = {} }) catch return null;
+            },
+            else => return null,
+        }
     }
 
     // =========================================================================

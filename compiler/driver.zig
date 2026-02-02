@@ -31,6 +31,7 @@ const arc = @import("codegen/arc.zig"); // ARC runtime
 
 // Native codegen modules (Cranelift-style AOT compiler)
 const native_compile = @import("codegen/native/compile.zig");
+const native_compiler = @import("codegen/native/compiler.zig");
 const wasm_parser = @import("codegen/native/wasm_parser.zig");
 const wasm_to_clif = @import("codegen/native/wasm_to_clif/translator.zig");
 const macho = @import("codegen/native/macho.zig");
@@ -287,20 +288,7 @@ pub const Driver = struct {
 
         pipeline_debug.log(.codegen, "driver: parsed Wasm module with {d} functions", .{wasm_module.code.len});
 
-        // Step 2: Compile each function
-        // TODO: When the full pipeline is complete, this will:
-        // - Translate each Wasm function to CLIF IR
-        // - Lower CLIF to VCode
-        // - Run register allocation
-        // - Emit machine code
-        //
-        // For now, we report that the pipeline is not yet complete.
-        // The individual components (compile.zig, VCode, regalloc) are implemented
-        // but the Wasm→CLIF translator needs more work to be fully functional.
-
-        pipeline_debug.log(.codegen, "driver: native codegen pipeline components ready, translator integration pending", .{});
-
-        // Placeholder: Report which target we would compile for
+        // Report which target we're compiling for
         const arch_name: []const u8 = switch (self.target.arch) {
             .arm64 => "ARM64",
             .amd64 => "x86-64",
@@ -313,9 +301,21 @@ pub const Driver = struct {
         };
         pipeline_debug.log(.codegen, "driver: target: {s} / {s}", .{ arch_name, os_name });
 
-        // For now, return error indicating the pipeline is partially complete
-        // The infrastructure is in place but the Wasm→CLIF translation needs integration
-        return error.NativeCodegenNotImplemented;
+        // Step 2: Compile module using the Cranelift-style compiler
+        var compiler = native_compiler.Compiler.initNative(self.allocator);
+        defer compiler.deinit();
+
+        const object_code = compiler.compileModule(&wasm_module) catch |e| {
+            pipeline_debug.log(.codegen, "driver: native compilation error: {any}", .{e});
+            // Return specific error or fallback
+            return switch (e) {
+                error.NotImplemented => error.NativeCodegenNotImplemented,
+                else => error.NativeCodegenNotImplemented,
+            };
+        };
+
+        pipeline_debug.log(.codegen, "driver: generated {d} bytes of native code", .{object_code.len});
+        return object_code;
     }
 
     /// Generate WebAssembly binary.

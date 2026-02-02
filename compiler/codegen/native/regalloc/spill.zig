@@ -386,7 +386,7 @@ pub const SpillContext = struct {
 
                 // Get a SpillSetRanges from the pool or create a new one
                 const ranges = if (self.scratch_spillset_pool.items.len > 0)
-                    self.scratch_spillset_pool.pop()
+                    self.scratch_spillset_pool.pop().?
                 else
                     SpillSetRanges.init();
 

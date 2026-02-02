@@ -8,6 +8,11 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+// Import CLIF IR types from machinst (which imports from compiler/ir/clif/)
+// Must be imported early so MachLabel can be used below
+const machinst = @import("../../machinst/mod.zig");
+const lower_mod = machinst.lower;
+
 // Import AArch64 instruction types from local modules
 const inst_mod = @import("inst/mod.zig");
 const Inst = inst_mod.Inst;
@@ -28,7 +33,8 @@ const MemFlags = inst_mod.MemFlags;
 const Imm12 = inst_mod.Imm12;
 const MoveWideConst = inst_mod.MoveWideConst;
 const MoveWideOp = inst_mod.MoveWideOp;
-const MachLabel = inst_mod.args.MachLabel;
+// MachLabel from machinst (not local args.zig) for compatibility with Lower(I)
+const MachLabel = machinst.MachLabel;
 const Type = inst_mod.Type;
 
 // Import register types from local modules
@@ -37,10 +43,6 @@ const Reg = regs.Reg;
 const VReg = regs.VReg;
 const Writable = regs.Writable;
 const zeroReg = regs.zeroReg;
-
-// Import CLIF IR types from machinst (which imports from compiler/ir/clif/)
-const machinst = @import("../../machinst/mod.zig");
-const lower_mod = machinst.lower;
 
 // =============================================================================
 // CLIF IR Types
@@ -78,62 +80,17 @@ pub const NonRegInput = lower_mod.NonRegInput;
 pub const ClifType = lower_mod.Type;
 
 /// Instruction data from machinst.
-pub const InstructionData = lower_mod.InstructionData;
+/// Instruction data from dfg - the struct stored in dfg.insts.
+pub const InstData = lower_mod.InstData;
 
 // =============================================================================
-// Lower context stub
-// This matches the interface from machinst/lower.zig's Lower struct.
-// In production, this would be the actual Lower(Inst) type.
+// Lower context
+// This is the actual Lower(Inst) type from machinst/lower.zig.
 // =============================================================================
 
 /// Lowering context providing access to the function being lowered.
-pub const LowerCtx = struct {
-    allocator: Allocator,
-
-    /// Get instruction data for a CLIF instruction.
-    pub fn data(_: *LowerCtx, _: ClifInst) *const InstructionData {
-        return &placeholder_inst_data;
-    }
-
-    /// Get the type of an output.
-    pub fn outputTy(_: *LowerCtx, _: ClifInst, _: usize) ClifType {
-        return ClifType.I64;
-    }
-
-    /// Get the type of an input.
-    pub fn inputTy(_: *LowerCtx, _: ClifInst, _: usize) ClifType {
-        return ClifType.I64;
-    }
-
-    /// Put an input value into registers.
-    pub fn putInputInRegs(_: *LowerCtx, _: ClifInst, _: usize) ValueRegs(Reg) {
-        // Return a placeholder register
-        const vreg_val = VReg.init(200, .int);
-        return ValueRegs(Reg).one(Reg.fromVReg(vreg_val));
-    }
-
-    /// Get input as source or constant.
-    pub fn getInputAsSourceOrConst(_: *LowerCtx, _: ClifInst, _: usize) NonRegInput {
-        return .{ .inst = .none, .constant = null };
-    }
-
-    /// Allocate a temporary register.
-    pub fn allocTmp(_: *LowerCtx, _: ClifType) !ValueRegs(Writable(Reg)) {
-        const vreg_val = VReg.init(201, .int);
-        return ValueRegs(Writable(Reg)).one(Writable(Reg).fromReg(Reg.fromVReg(vreg_val)));
-    }
-
-    /// Emit a machine instruction.
-    pub fn emit(_: *LowerCtx, _: Inst) !void {
-        // Placeholder - would add to instruction buffer
-    }
-
-    var placeholder_inst_data = InstructionData{
-        .opcode = .nop,
-        .args = &[_]Value{},
-        .results = &[_]Value{},
-    };
-};
+/// This is the real Lower(Inst) type, not a stub.
+pub const LowerCtx = lower_mod.Lower(Inst);
 
 // =============================================================================
 // AArch64LowerBackend
@@ -250,6 +207,9 @@ pub const AArch64LowerBackend = struct {
             // Stack operations
             .stack_load => self.lowerStackLoad(ctx, ir_inst),
             .stack_store => self.lowerStackStore(ctx, ir_inst),
+
+            // Unhandled opcodes - return null to indicate lowering failed
+            else => null,
         };
     }
 
@@ -314,7 +274,8 @@ pub const AArch64LowerBackend = struct {
     }
 
     /// Get the pinned register, if any.
-    pub fn maybePinnedReg(_: *const Self) ?Reg {
+    /// Returns machinst.Reg to match the lower.zig pinned_reg field type.
+    pub fn maybePinnedReg(_: *const Self) ?machinst.Reg {
         return null;
     }
 
@@ -337,7 +298,7 @@ pub const AArch64LowerBackend = struct {
         const dst_reg = dst.onlyReg() orelse return null;
 
         // Emit move wide instruction
-        if (MoveWideConst.maybe(value, size)) |imm| {
+        if (MoveWideConst.maybeFromU64(value)) |imm| {
             ctx.emit(Inst{
                 .mov_wide = .{
                     .op = .movz,
@@ -391,7 +352,7 @@ pub const AArch64LowerBackend = struct {
         // Check if we can use an immediate form
         const rhs_input = ctx.getInputAsSourceOrConst(ir_inst, 1);
         if (rhs_input.constant) |c| {
-            if (Imm12.maybe(@intCast(c))) |imm12| {
+            if (Imm12.maybeFromU64(@intCast(c))) |imm12| {
                 ctx.emit(Inst{
                     .alu_rr_imm12 = .{
                         .alu_op = .add,
@@ -1650,10 +1611,12 @@ pub const AArch64LowerBackend = struct {
 
         // TODO: Load actual function address
         // This is a placeholder using adr
+        // TODO: Load actual function address from GOT
+        // For now, use a placeholder pc-relative offset
         ctx.emit(Inst{
             .adr = .{
                 .rd = dst_reg,
-                .label = .{ .got_entry = 0 },
+                .label = .{ .pc_rel = 0 },
             },
         }) catch return null;
 
@@ -1722,16 +1685,9 @@ fn scalarSizeFromType(ty: ClifType) ?ScalarSize {
 }
 
 /// Convert ClifType to inst_mod.Type.
+/// Since both are now the same CLIF Type, just return the input.
 fn typeFromClif(ty: ClifType) Type {
-    return switch (ty.kind) {
-        .i8 => Type{ .kind = .i8 },
-        .i16 => Type{ .kind = .i16 },
-        .i32 => Type{ .kind = .i32 },
-        .i64 => Type{ .kind = .i64 },
-        .f32 => Type{ .kind = .f32 },
-        .f64 => Type{ .kind = .f64 },
-        .invalid => Type{ .kind = .i64 },
-    };
+    return ty;
 }
 
 /// Determine the FPU to int conversion operation.

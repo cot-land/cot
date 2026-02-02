@@ -85,6 +85,9 @@ pub const prettyPrintReg = regs.prettyPrintReg;
 pub const MachBuffer = emit.MachBuffer;
 pub const EmitState = emit.EmitState;
 
+// Re-export lowering backend
+pub const X64LowerBackend = lower.X64LowerBackend;
+
 // Settings (placeholder for now)
 pub const Settings = struct {
     /// Enable AVX instructions.

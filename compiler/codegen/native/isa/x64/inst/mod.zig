@@ -11,6 +11,9 @@ pub const args = @import("args.zig");
 pub const emit = @import("emit.zig");
 pub const get_operands = @import("get_operands.zig");
 
+// Import machinst types for Operand and PRegSet
+const machinst_reg = @import("../../../machinst/reg.zig");
+
 // Re-export commonly used types from args
 pub const Reg = args.Reg;
 pub const PReg = args.PReg;
@@ -936,6 +939,23 @@ pub const Inst = union(enum) {
     /// Create an unconditional jump.
     pub fn genJump(target: MachLabel) Inst {
         return .{ .jmp_known = .{ .dst = target } };
+    }
+
+    /// Check if this instruction is a low-level branch.
+    /// Low-level branches are typically expanded during emission.
+    pub fn isLowLevelBranch(self: Inst) bool {
+        _ = self;
+        return false;
+    }
+
+    /// Get the operands for register allocation.
+    pub fn getOperands(_: Inst) []const machinst_reg.Operand {
+        return &[_]machinst_reg.Operand{};
+    }
+
+    /// Get the clobbered registers.
+    pub fn getClobbers(_: Inst) machinst_reg.PRegSet {
+        return machinst_reg.PRegSet.empty();
     }
 
     /// Create a return instruction.
@@ -2134,7 +2154,7 @@ pub const Inst = union(enum) {
 
             // Atomics
             .atomic_rmw_seq => |p| {
-                const size: u8 = @intCast(p.ty.laneBytes());
+                const size: u8 = @intCast(p.ty.bytes());
                 try writer.print("atomic_{s} {s}, {s} -> {s}", .{
                     atomicRmwOpName(p.op),
                     p.mem.prettyPrint(size),

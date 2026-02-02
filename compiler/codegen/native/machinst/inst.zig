@@ -172,6 +172,13 @@ pub const Type = enum(u8) {
             else => false,
         };
     }
+
+    /// Get the register class for this type.
+    pub fn regClass(self: Self) @import("reg.zig").RegClass {
+        if (self.isVector()) return .vector;
+        if (self.isFloat()) return .float;
+        return .int;
+    }
 };
 
 // ============================================================================

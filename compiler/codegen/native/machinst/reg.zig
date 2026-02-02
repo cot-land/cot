@@ -126,6 +126,11 @@ pub const VReg = struct {
         return @intCast(self.bits & 0x3FFF_FFFF);
     }
 
+    /// Get the raw bits as u32 (for comparisons).
+    pub fn toU32(self: Self) u32 {
+        return self.bits;
+    }
+
     /// Get the register class.
     pub fn class(self: Self) RegClass {
         return RegClass.fromU8(@intCast(self.bits >> 30));
@@ -377,6 +382,11 @@ pub fn Writable(comptime T: type) type {
         /// Map the register to another type.
         pub fn map(self: Self, comptime U: type, f: fn (T) U) Writable(U) {
             return Writable(U){ .reg = f(self.reg) };
+        }
+
+        /// Create an invalid writable register.
+        pub fn invalid() Self {
+            return .{ .reg = T.invalid() };
         }
     };
 }

@@ -24,6 +24,9 @@ const Allocator = std.mem.Allocator;
 const reg_mod = @import("reg.zig");
 const inst_mod = @import("inst.zig");
 
+// Import CLIF types
+const clif = @import("../../../ir/clif/mod.zig");
+
 // Re-export key types from reg module
 pub const VReg = reg_mod.VReg;
 pub const Reg = reg_mod.Reg;
@@ -35,8 +38,8 @@ pub const RegClass = reg_mod.RegClass;
 pub const PRegSet = reg_mod.PRegSet;
 pub const SpillSlot = reg_mod.SpillSlot;
 
-// Re-export key types from inst module
-pub const Type = inst_mod.Type;
+// Re-export key types - use CLIF Type for proper integration
+pub const Type = clif.Type;
 pub const RelSourceLoc = inst_mod.RelSourceLoc;
 pub const MachLabel = inst_mod.MachLabel;
 pub const MachTerminator = inst_mod.MachTerminator;
@@ -118,35 +121,9 @@ pub const BackwardsInsnIndex = struct {
 };
 
 /// Index referring to a basic block in VCode.
-pub const BlockIndex = struct {
-    index_val: usize,
+/// Re-export from inst_mod for type unification with blockorder.
+pub const BlockIndex = inst_mod.BlockIndex;
 
-    const Self = @This();
-
-    pub fn new(i: usize) Self {
-        return .{ .index_val = i };
-    }
-
-    pub fn index(self: Self) usize {
-        return self.index_val;
-    }
-
-    pub fn invalid() Self {
-        return .{ .index_val = std.math.maxInt(usize) };
-    }
-
-    pub fn isValid(self: Self) bool {
-        return self.index_val != std.math.maxInt(usize);
-    }
-
-    pub fn eql(self: Self, other: Self) bool {
-        return self.index_val == other.index_val;
-    }
-
-    pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("Block({})", .{self.index_val});
-    }
-};
 
 /// Operand for register allocation.
 /// Mirrors regalloc2::Operand.
@@ -1099,7 +1076,13 @@ pub fn VCodeBuilder(comptime I: type) type {
         fn addBranchArgsForSucc(self: *Self, args: []const Reg) !void {
             const allocator = self.vcode.allocator;
             for (args) |arg| {
-                try self.vcode.branch_block_args.append(allocator, VReg.fromReg(arg));
+                // Convert Reg to VReg - the arg should be a virtual register
+                const vreg = if (arg.toVirtualReg()) |v|
+                    v.toVReg()
+                else
+                    // If it's a physical register, create a VReg with the same hw encoding
+                    VReg.init(@intCast(arg.toRealReg().?.hwEnc()), arg.class());
+                try self.vcode.branch_block_args.append(allocator, vreg);
             }
             const end = self.vcode.branch_block_args.items.len;
             try self.vcode.branch_block_arg_range.pushEnd(allocator, end);
@@ -1288,9 +1271,23 @@ pub fn VCodeBuilder(comptime I: type) type {
                 // This is a simplified version - full implementation would use OperandCollector
                 const operands = insn.getOperands();
                 for (operands) |op| {
-                    var resolved_op = op;
-                    resolved_op.vreg_val = vregs.resolveVregAlias(op.vreg_val);
-                    try self.vcode.operands.append(allocator, resolved_op);
+                    // Convert from reg.Operand to vcode.Operand
+                    const resolved_vreg = vregs.resolveVregAlias(op.vreg);
+                    const constraint: OperandConstraint = switch (op.constraint) {
+                        .reg => .any,
+                        .any => .any,
+                        .fixed_reg => |preg| .{ .fixed_reg = preg },
+                        .reuse => |idx| .{ .reuse = idx },
+                    };
+                    const kind: OperandKind = switch (op.kind) {
+                        .use => .use,
+                        .def => .def,
+                    };
+                    const pos: OperandPos = switch (op.pos) {
+                        .early => .early,
+                        .late => .late,
+                    };
+                    try self.vcode.operands.append(allocator, Operand.create(resolved_vreg, constraint, kind, pos));
                 }
 
                 const end = self.vcode.operands.items.len;

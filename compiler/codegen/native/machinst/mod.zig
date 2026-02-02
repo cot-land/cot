@@ -118,7 +118,7 @@ pub const MemFlags = struct {
 test "machinst module compiles" {
     const testing = std.testing;
     // Just verify the re-exports work
-    _ = MachLabel.fromU32(0);
+    _ = MachLabel.init(0);
     _ = PReg.init(0, .int);
     _ = VReg.init(0, .int);
     try testing.expect(true);

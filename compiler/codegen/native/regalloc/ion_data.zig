@@ -808,7 +808,9 @@ pub const InsertedMoves = struct {
 //=============================================================================
 
 pub const Edits = struct {
-    edits: std.ArrayListUnmanaged(struct { pos_prio: PosWithPrio, edit: Edit }),
+    pub const EditsItem = struct { pos_prio: PosWithPrio, edit: Edit };
+
+    edits: std.ArrayListUnmanaged(EditsItem),
 
     pub fn init() Edits {
         return .{ .edits = .{} };
@@ -833,11 +835,11 @@ pub const Edits = struct {
 
     pub fn sort(self: *Edits) void {
         std.mem.sort(
-            @TypeOf(self.edits.items[0]),
+            EditsItem,
             self.edits.items,
             {},
             struct {
-                fn lessThan(_: void, a: anytype, b: anytype) bool {
+                fn lessThan(_: void, a: EditsItem, b: EditsItem) bool {
                     return a.pos_prio.key() < b.pos_prio.key();
                 }
             }.lessThan,

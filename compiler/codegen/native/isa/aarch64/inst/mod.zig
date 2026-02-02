@@ -62,7 +62,11 @@ const PReg = regs_mod.PReg;
 const VReg = regs_mod.VReg;
 const RegClass = regs_mod.RegClass;
 const Writable = regs_mod.Writable;
-const MachLabel = args.MachLabel;
+
+// Import from machinst for unified types
+const machinst_inst = @import("../../../machinst/inst.zig");
+const machinst_reg = @import("../../../machinst/reg.zig");
+const MachLabel = machinst_inst.MachLabel;
 
 // Import emit module for MachBuffer
 const emit_mod = @import("emit.zig");
@@ -532,7 +536,7 @@ pub const AMode = union(enum) {
         return AMode{
             .unsigned_offset = .{
                 .rn = register,
-                .uimm12 = UImm12Scaled.zero(Type.i64),
+                .uimm12 = UImm12Scaled.zero(Type.I64),
             },
         };
     }
@@ -1363,24 +1367,24 @@ pub const Inst = union(enum) {
 
     /// Generic constructor for a load (zero-extending where appropriate).
     pub fn genLoad(into_reg: Writable(Reg), mem: AMode, ty: Type, flags: MemFlags) Inst {
-        return switch (ty.kind) {
-            .i8 => Inst{ .uload8 = .{ .rd = into_reg, .mem = mem, .flags = flags } },
-            .i16 => Inst{ .uload16 = .{ .rd = into_reg, .mem = mem, .flags = flags } },
-            .i32 => Inst{ .uload32 = .{ .rd = into_reg, .mem = mem, .flags = flags } },
-            .i64 => Inst{ .uload64 = .{ .rd = into_reg, .mem = mem, .flags = flags } },
-            else => unreachable,
-        };
+        // Use bits() for type comparison since CLIF Type is a struct, not enum
+        const bits_val = ty.bits();
+        if (bits_val <= 8) return Inst{ .uload8 = .{ .rd = into_reg, .mem = mem, .flags = flags } };
+        if (bits_val <= 16) return Inst{ .uload16 = .{ .rd = into_reg, .mem = mem, .flags = flags } };
+        if (bits_val <= 32) return Inst{ .uload32 = .{ .rd = into_reg, .mem = mem, .flags = flags } };
+        if (bits_val <= 64) return Inst{ .uload64 = .{ .rd = into_reg, .mem = mem, .flags = flags } };
+        unreachable;
     }
 
     /// Generic constructor for a store.
     pub fn genStore(mem: AMode, from_reg: Reg, ty: Type, flags: MemFlags) Inst {
-        return switch (ty.kind) {
-            .i8 => Inst{ .store8 = .{ .rd = from_reg, .mem = mem, .flags = flags } },
-            .i16 => Inst{ .store16 = .{ .rd = from_reg, .mem = mem, .flags = flags } },
-            .i32 => Inst{ .store32 = .{ .rd = from_reg, .mem = mem, .flags = flags } },
-            .i64 => Inst{ .store64 = .{ .rd = from_reg, .mem = mem, .flags = flags } },
-            else => unreachable,
-        };
+        // Use bits() for type comparison since CLIF Type is a struct, not enum
+        const bits_val = ty.bits();
+        if (bits_val <= 8) return Inst{ .store8 = .{ .rd = from_reg, .mem = mem, .flags = flags } };
+        if (bits_val <= 16) return Inst{ .store16 = .{ .rd = from_reg, .mem = mem, .flags = flags } };
+        if (bits_val <= 32) return Inst{ .store32 = .{ .rd = from_reg, .mem = mem, .flags = flags } };
+        if (bits_val <= 64) return Inst{ .store64 = .{ .rd = from_reg, .mem = mem, .flags = flags } };
+        unreachable;
     }
 
     /// Generate a jump to a label.
@@ -1421,6 +1425,28 @@ pub const Inst = union(enum) {
                 Inst{ .fpu_move64 = .{ .rd = to_reg, .rn = from_reg } },
             .vector => unreachable,
         };
+    }
+
+    /// Check if this is a "low-level" branch that should not appear in VCode.
+    /// Low-level branches are internal implementation details that get expanded
+    /// into real branch instructions during emission.
+    pub fn isLowLevelBranch(self: Inst) bool {
+        // AArch64 doesn't have low-level branches that need special handling.
+        // All branches in VCode are valid high-level branches.
+        _ = self;
+        return false;
+    }
+
+    /// Stub: Get operands for register allocation.
+    /// TODO: Implement proper operand collection via get_operands.zig
+    pub fn getOperands(_: Inst) []const machinst_reg.Operand {
+        return &[_]machinst_reg.Operand{};
+    }
+
+    /// Stub: Get clobbered registers.
+    /// TODO: Implement proper clobber tracking
+    pub fn getClobbers(_: Inst) machinst_reg.PRegSet {
+        return machinst_reg.PRegSet.empty();
     }
 
     /// Emit this instruction with register allocations applied.

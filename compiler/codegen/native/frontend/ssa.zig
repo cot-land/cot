@@ -493,7 +493,7 @@ pub const SSABuilder = struct {
 
     /// The main algorithm state machine.
     fn runStateMachine(self: *Self, func: *Function, variable: Variable, ty: Type) !Value {
-        while (self.calls.popOrNull()) |call| {
+        while (self.calls.pop()) |call| {
             switch (call) {
                 .use_var => |branch| {
                     const block = func.layout.instBlock(branch) orelse continue;
@@ -507,7 +507,7 @@ pub const SSABuilder = struct {
         }
 
         std.debug.assert(self.results.items.len == 1);
-        return self.results.pop();
+        return self.results.pop().?;
     }
 };
 

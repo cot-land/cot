@@ -5,115 +5,19 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-// Forward declare types that will be provided by machinst
-// These are stub types for now until machinst integration is complete
-pub const MachLabel = struct {
-    index: u32,
+// Import unified types from machinst for type compatibility
+const machinst_inst = @import("../../../machinst/inst.zig");
+const machinst_reg = @import("../../../machinst/reg.zig");
 
-    pub fn fromU32(i: u32) MachLabel {
-        return .{ .index = i };
-    }
+pub const MachLabel = machinst_inst.MachLabel;
+pub const Reg = machinst_reg.Reg;
+pub const VReg = machinst_reg.VReg;
+pub const RealReg = machinst_reg.RealReg;
+pub const PReg = machinst_reg.PReg;
+pub const RegClass = machinst_reg.RegClass;
+pub const Writable = machinst_reg.Writable;
 
-    pub fn asU32(self: MachLabel) u32 {
-        return self.index;
-    }
-};
-
-pub const RegClass = enum {
-    int,
-    float,
-    vector,
-};
-
-pub const Reg = struct {
-    bits: u32,
-
-    const CLASS_SHIFT = 30;
-    const CLASS_MASK: u32 = 0x3 << CLASS_SHIFT;
-    const INDEX_MASK: u32 = 0x3FFF_FFFF;
-
-    pub fn class(self: Reg) RegClass {
-        const cls_bits = (self.bits & CLASS_MASK) >> CLASS_SHIFT;
-        return switch (cls_bits) {
-            0 => .int,
-            1 => .float,
-            else => .vector,
-        };
-    }
-
-    pub fn fromRealReg(preg: PReg) Reg {
-        const cls_bits: u32 = switch (preg.class_val) {
-            .int => 0,
-            .float => 1,
-            .vector => 2,
-        };
-        return .{ .bits = (cls_bits << CLASS_SHIFT) | @as(u32, preg.index_val) };
-    }
-
-    pub fn fromPReg(preg: PReg) Reg {
-        return fromRealReg(preg);
-    }
-
-    pub fn fromVReg(vreg: VReg) Reg {
-        const cls_bits: u32 = switch (vreg.cls) {
-            .int => 0,
-            .float => 1,
-            .vector => 2,
-        };
-        return .{ .bits = (cls_bits << CLASS_SHIFT) | vreg.idx };
-    }
-
-    pub fn toRealReg(self: Reg) ?RealReg {
-        // For now, all regs are considered "real" in this stub
-        return RealReg{
-            .hw_enc_val = @truncate(self.bits & INDEX_MASK),
-            .cls = self.class(),
-        };
-    }
-};
-
-pub const VReg = struct {
-    idx: u32,
-    cls: RegClass,
-
-    pub fn init(idx_val: anytype, cls_val: RegClass) VReg {
-        return .{ .idx = @intCast(idx_val), .cls = cls_val };
-    }
-
-    pub fn index(self: VReg) usize {
-        return self.idx;
-    }
-};
-
-pub const RealReg = struct {
-    hw_enc_val: u8,
-    cls: RegClass,
-
-    pub fn hwEnc(self: RealReg) u8 {
-        return self.hw_enc_val;
-    }
-
-    pub fn class(self: RealReg) RegClass {
-        return self.cls;
-    }
-};
-
-pub const PReg = struct {
-    index_val: u8,
-    class_val: RegClass,
-
-    pub fn init(idx: u8, cls: RegClass) PReg {
-        return .{ .index_val = idx, .class_val = cls };
-    }
-
-    pub fn index(self: PReg) usize {
-        return self.index_val;
-    }
-
-    pub fn class(self: PReg) RegClass {
-        return self.class_val;
-    }
-};
+// Note: Old stub types removed. Using unified machinst types for compatibility.
 
 //=============================================================================
 // Instruction sub-components: shift and extend descriptors
@@ -665,9 +569,17 @@ pub const BranchTargetType = enum {
 };
 
 //=============================================================================
-// Stub Type for now (will be replaced with proper IR types)
+// Type - import from CLIF for type compatibility across the pipeline
 
-pub const Type = struct {
+const clif = @import("../../../../../ir/clif/mod.zig");
+pub const Type = clif.Type;
+
+// Note: The old stub Type has been removed. The code now uses
+// CLIF Type which has methods like eql(), bits(), isFloat(), etc.
+// and constants like I8, I16, I32, I64, F32, F64, etc.
+
+// Legacy stub for backwards compatibility (to be removed)
+const LegacyType = struct {
     kind: Kind,
 
     pub const Kind = enum(u8) {
@@ -683,18 +595,18 @@ pub const Type = struct {
         vec_i8x16,
     };
 
-    pub const @"i8" = Type{ .kind = .int8 };
-    pub const @"i16" = Type{ .kind = .int16 };
-    pub const @"i32" = Type{ .kind = .int32 };
-    pub const @"i64" = Type{ .kind = .int64 };
-    pub const @"i128" = Type{ .kind = .int128 };
-    pub const @"f16" = Type{ .kind = .float16 };
-    pub const @"f32" = Type{ .kind = .float32 };
-    pub const @"f64" = Type{ .kind = .float64 };
-    pub const @"f128" = Type{ .kind = .float128 };
-    pub const @"i8x16" = Type{ .kind = .vec_i8x16 };
+    pub const @"i8" = LegacyType{ .kind = .int8 };
+    pub const @"i16" = LegacyType{ .kind = .int16 };
+    pub const @"i32" = LegacyType{ .kind = .int32 };
+    pub const @"i64" = LegacyType{ .kind = .int64 };
+    pub const @"i128" = LegacyType{ .kind = .int128 };
+    pub const @"f16" = LegacyType{ .kind = .float16 };
+    pub const @"f32" = LegacyType{ .kind = .float32 };
+    pub const @"f64" = LegacyType{ .kind = .float64 };
+    pub const @"f128" = LegacyType{ .kind = .float128 };
+    pub const @"i8x16" = LegacyType{ .kind = .vec_i8x16 };
 
-    pub fn bits(self: Type) usize {
+    pub fn bits(self: LegacyType) usize {
         return switch (self.kind) {
             .int8 => 8,
             .int16, .float16 => 16,

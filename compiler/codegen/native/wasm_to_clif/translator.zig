@@ -381,7 +381,7 @@ pub const FuncTranslator = struct {
                 };
 
                 // Truncate stack to else params
-                f.truncateValueStackToElseParams(&self.state.stack);
+                frame.truncateValueStackToElseParams(&self.state.stack);
 
                 // Switch to else block
                 self.builder.switchToBlock(else_block);
@@ -761,7 +761,7 @@ pub const FuncTranslator = struct {
     // ========================================================================
 
     pub fn translateUnreachable(self: *Self) !void {
-        _ = try self.builder.ins().trap(clif.TrapCode.unreachable_code);
+        _ = try self.builder.ins().trap(clif.TrapCode.unreachable_code_reached);
         self.state.reachable = false;
     }
 };

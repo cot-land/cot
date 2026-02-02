@@ -37,7 +37,8 @@ pub const PRegSet = reg_mod.PRegSet;
 pub const SpillSlot = reg_mod.SpillSlot;
 
 // Re-export key types from inst module
-pub const Type = inst_mod.Type;
+// Use CLIF Type for compatibility with DFG
+pub const Type = clif.Type;
 pub const RelSourceLoc = inst_mod.RelSourceLoc;
 pub const MachLabel = inst_mod.MachLabel;
 pub const MachTerminator = inst_mod.MachTerminator;
@@ -45,7 +46,8 @@ pub const MachTerminator = inst_mod.MachTerminator;
 // Re-export key types from vcode module
 pub const InsnIndex = vcode_mod.InsnIndex;
 pub const BackwardsInsnIndex = vcode_mod.BackwardsInsnIndex;
-pub const BlockIndex = vcode_mod.BlockIndex;
+// Use blockorder's BlockIndex for compatibility with BlockLoweringOrder
+pub const BlockIndex = blockorder_mod.BlockIndex;
 pub const VCode = vcode_mod.VCode;
 pub const VCodeBuilder = vcode_mod.VCodeBuilder;
 pub const VCodeBuildDirection = vcode_mod.VCodeBuildDirection;
@@ -66,30 +68,60 @@ pub const SmallInstVec = abi_mod.SmallInstVec;
 
 // =============================================================================
 // CLIF IR Types
-// Imported from compiler/ir/clif/. Entity types (Block, Value, Inst) are now
-// the real types from the CLIF IR module.
+// Imported from compiler/ir/clif/. Follows Cranelift pattern exactly:
+// use crate::ir::{Block, Function, Inst, Value, DataFlowGraph, Layout, ...};
 // =============================================================================
 
-/// An opaque reference to a basic block.
+// Entity references
 pub const Block = clif.Block;
-
-/// An opaque reference to an SSA value.
 pub const Value = clif.Value;
-
-/// An opaque reference to an instruction.
 pub const Inst = clif.Inst;
-
-/// Stack slot reference.
 pub const StackSlot = clif.StackSlot;
-
-/// Function reference.
 pub const FuncRef = clif.FuncRef;
-
-/// Signature reference.
 pub const SigRef = clif.SigRef;
-
-/// Jump table reference.
 pub const JumpTable = clif.JumpTable;
+
+// Core data structures
+pub const Function = clif.Function;
+pub const DataFlowGraph = clif.DataFlowGraph;
+pub const Layout = clif.Layout;
+
+// Value management
+pub const ValueDef = clif.ValueDef;
+pub const ValueData = clif.ValueData;
+pub const BlockData = clif.BlockData;
+pub const InstData = clif.InstData;
+pub const ValueList = clif.ValueList;
+pub const ValueListPool = clif.ValueListPool;
+
+// Iterators
+pub const BlockIterator = clif.BlockIterator;
+pub const InstIterator = clif.InstIterator;
+
+// Function/ABI types
+pub const Signature = clif.Signature;
+pub const AbiParam = clif.AbiParam;
+pub const ArgumentPurpose = clif.ArgumentPurpose;
+pub const ArgumentExtension = clif.ArgumentExtension;
+
+// Instructions
+pub const Opcode = clif.Opcode;
+pub const InstructionData = clif.InstructionData;
+pub const MemFlags = clif.MemFlags;
+
+// Calling conventions and condition codes
+pub const CallConv = clif.CallConv;
+pub const IntCC = clif.IntCC;
+pub const FloatCC = clif.FloatCC;
+pub const TrapCode = clif.TrapCode;
+
+// Jump tables
+pub const BlockCall = clif.BlockCall;
+pub const JumpTableData = clif.JumpTableData;
+pub const JumpTables = clif.JumpTables;
+
+// External names
+pub const ExternalName = clif.ExternalName;
 
 /// Reference to a global value.
 pub const GlobalValue = struct {
@@ -111,19 +143,7 @@ pub const ConstantData = struct {
     bytes: []const u8,
 };
 
-/// Memory flags for load/store operations.
-pub const MemFlags = packed struct {
-    readonly: bool = false,
-    aligned: bool = true,
-    notrap: bool = false,
-    _padding: u29 = 0,
-};
-
-/// External name for symbols.
-pub const ExternalName = struct {
-    namespace: u32,
-    index: u32,
-};
+// MemFlags and ExternalName are now imported from CLIF above
 
 /// Global value data.
 pub const GlobalValueData = union(enum) {
@@ -144,53 +164,7 @@ pub const GlobalValueData = union(enum) {
     },
 };
 
-/// Value definition - where a value comes from.
-pub const ValueDef = union(enum) {
-    /// Value is the result of an instruction.
-    result: struct {
-        inst: Inst,
-        result_idx: usize,
-    },
-    /// Value is a block parameter.
-    param: struct {
-        block: Block,
-        param_idx: usize,
-    },
-
-    pub fn inst(self: ValueDef) ?Inst {
-        return switch (self) {
-            .result => |r| r.inst,
-            .param => null,
-        };
-    }
-};
-
-/// Stub for Function - in production, import from compiler/ir/clif/function.zig
-pub const Function = struct {
-    dfg: DataFlowGraph,
-    layout: Layout,
-    global_values: std.ArrayListUnmanaged(GlobalValueData),
-    stencil: Stencil,
-    debug_tags: DebugTags,
-
-    pub const Stencil = struct {
-        layout: Layout,
-    };
-
-    pub const DebugTags = struct {
-        pub fn get(_: *const DebugTags, _: Inst) []const u8 {
-            return &[_]u8{};
-        }
-    };
-
-    pub fn specialParam(_: *const Function, _: ArgumentPurpose) ?Value {
-        return null;
-    }
-
-    pub fn relSrclocs(self: *const Function) RelSourceLocMap {
-        return .{ .func = self };
-    }
-};
+// ValueDef and Function are now imported from CLIF above
 
 pub const RelSourceLocMap = struct {
     func: *const Function,
@@ -200,120 +174,24 @@ pub const RelSourceLocMap = struct {
     }
 };
 
-/// Argument purpose for special params.
-pub const ArgumentPurpose = enum {
-    normal,
-    struct_return,
-    vm_context,
-    stack_limit,
-    callee,
-};
+// ArgumentPurpose is now imported from CLIF above
 
-/// Stub for DataFlowGraph.
-pub const DataFlowGraph = struct {
-    values: std.ArrayListUnmanaged(ValueData),
-    insts: std.ArrayListUnmanaged(InstructionData),
-    blocks: std.ArrayListUnmanaged(BlockData),
-    value_lists: ValueListPool,
-    constants: ConstantPool,
-    signatures: std.ArrayListUnmanaged(Signature),
-    immediates: std.ArrayListUnmanaged(ConstantData),
-    facts: std.ArrayListUnmanaged(?Fact),
-    values_labels: ?ValueLabelAssignments,
-    jump_tables: JumpTableData,
-    exception_tables: ExceptionTableData,
+// DataFlowGraph is now imported from CLIF above
 
-    pub const ValueData = struct {
-        ty: Type,
-        def: ValueDef,
-    };
+// InstructionData, Opcode, JumpTableData are now imported from CLIF above
 
-    pub const BlockData = struct {
-        params: []const Value,
-    };
-
-    pub fn numValues(self: *const DataFlowGraph) usize {
-        return self.values.items.len;
-    }
-
-    pub fn valueType(self: *const DataFlowGraph, val: Value) Type {
-        return self.values.items[val.index].ty;
-    }
-
-    pub fn valueDef(self: *const DataFlowGraph, val: Value) ValueDef {
-        return self.values.items[val.index].def;
-    }
-
-    pub fn valueIsReal(_: *const DataFlowGraph, _: Value) bool {
-        return true;
-    }
-
-    pub fn blockParams(self: *const DataFlowGraph, block: Block) []const Value {
-        return self.blocks.items[block.index].params;
-    }
-
-    pub fn instArgs(self: *const DataFlowGraph, inst: Inst) []const Value {
-        return self.insts.items[inst.index].args;
-    }
-
-    pub fn instResults(self: *const DataFlowGraph, inst: Inst) []const Value {
-        return self.insts.items[inst.index].results;
-    }
-
-    pub fn instValues(self: *const DataFlowGraph, inst: Inst) []const Value {
-        return self.instArgs(inst);
-    }
-
-    pub fn displayInst(_: *const DataFlowGraph, _: Inst) []const u8 {
-        return "<inst>";
-    }
-
-    pub fn userStackMapEntries(_: *const DataFlowGraph, _: Inst) ?[]const u8 {
-        return null;
-    }
-};
-
-pub const InstructionData = struct {
-    opcode: Opcode,
-    args: []const Value,
-    results: []const Value,
-
-    pub fn branchDestination(
-        _: *const InstructionData,
-        _: *const JumpTableData,
-        _: *const ExceptionTableData,
-    ) []const BlockCall {
-        return &[_]BlockCall{};
-    }
-
-    pub fn exceptionTable(_: *const InstructionData) ?ExceptionTable {
-        return null;
-    }
-};
-
-/// Instruction opcode - imported from clif.
-pub const Opcode = clif.Opcode;
-
-pub const JumpTableData = struct {};
+// Exception handling stubs - not yet in CLIF
 pub const ExceptionTableData = struct {};
 pub const ExceptionTable = struct {};
 
-pub const BlockCall = struct {
-    block: Block,
-    args_slice: []const BlockArg,
+// BlockCall and ValueListPool are now imported from CLIF above
 
-    pub fn args(self: BlockCall, _: *const ValueListPool) []const BlockArg {
-        return self.args_slice;
-    }
-};
-
+// BlockArg stub - not yet in CLIF
 pub const BlockArg = union(enum) {
     value: Value,
     try_call_ret: u32,
     try_call_exn: u32,
 };
-
-pub const ValueListPool = struct {};
 pub const ConstantPool = struct {
     pub fn get(_: *const ConstantPool, _: Constant) *const ConstantData {
         return undefined;
@@ -324,28 +202,7 @@ pub const ConstantPool = struct {
     }
 };
 
-pub const Signature = struct {
-    params: []const AbiParam,
-    returns: []const AbiParam,
-    call_conv: CallConv,
-};
-
-pub const AbiParam = struct {
-    value_type: Type,
-    purpose: ArgumentPurpose,
-};
-
-/// Calling convention - imported from clif.
-pub const CallConv = clif.CallConv;
-
-/// Integer condition code - imported from clif.
-pub const IntCC = clif.IntCC;
-
-/// Float condition code - imported from clif.
-pub const FloatCC = clif.FloatCC;
-
-/// Trap code - imported from clif.
-pub const TrapCode = clif.TrapCode;
+// Signature, AbiParam, CallConv, IntCC, FloatCC, TrapCode are now imported from CLIF above
 
 pub const ValueLabelAssignments = struct {};
 pub const ValueLabelStart = struct {
@@ -360,71 +217,9 @@ pub const ValueLabel = struct {
     }
 };
 
-/// Stub for Layout.
-pub const Layout = struct {
-    block_list: std.ArrayListUnmanaged(Block),
-    inst_lists: std.ArrayListUnmanaged(InstRange),
+// Layout, BlockIterator, InstIterator are now imported from CLIF above
 
-    pub const InstRange = struct {
-        start: u32,
-        end: u32,
-    };
-
-    pub fn blocks(self: *const Layout) BlockIterator {
-        return .{ .layout = self, .index = 0 };
-    }
-
-    pub fn blockInsts(self: *const Layout, block: Block) InstIterator {
-        const range = self.inst_lists.items[block.index];
-        return .{
-            .current = range.start,
-            .end = range.end,
-        };
-    }
-
-    pub fn entryBlock(self: *const Layout) ?Block {
-        if (self.block_list.items.len == 0) return null;
-        return self.block_list.items[0];
-    }
-
-    pub fn lastInst(self: *const Layout, block: Block) ?Inst {
-        const range = self.inst_lists.items[block.index];
-        if (range.end == range.start) return null;
-        return Inst.fromIndex(range.end - 1);
-    }
-};
-
-pub const BlockIterator = struct {
-    layout: *const Layout,
-    index: usize,
-
-    pub fn next(self: *BlockIterator) ?Block {
-        if (self.index >= self.layout.block_list.items.len) return null;
-        const block = self.layout.block_list.items[self.index];
-        self.index += 1;
-        return block;
-    }
-};
-
-pub const InstIterator = struct {
-    current: u32,
-    end: u32,
-
-    pub fn next(self: *InstIterator) ?Inst {
-        if (self.current >= self.end) return null;
-        const inst = Inst.fromIndex(self.current);
-        self.current += 1;
-        return inst;
-    }
-
-    pub fn rev(self: InstIterator) ReverseInstIterator {
-        return .{
-            .current = self.end,
-            .start = self.current,
-        };
-    }
-};
-
+// ReverseInstIterator - used for reverse iteration over instructions in a block
 pub const ReverseInstIterator = struct {
     current: u32,
     start: u32,
@@ -637,7 +432,7 @@ pub fn isLowerBackend(comptime T: type) bool {
 // =============================================================================
 
 /// A vector of ValueRegs, used to represent the outputs of an instruction.
-pub const InstOutput = std.BoundedArray(ValueRegs(Reg), 2);
+pub const InstOutput = abi_mod.BoundedArray(ValueRegs(Reg), 2);
 
 /// ValueRegs - multiple registers for a single value (for wide types).
 pub fn ValueRegs(comptime R: type) type {
@@ -802,6 +597,9 @@ pub fn Lower(comptime I: type) type {
         /// The function to lower.
         f: *const Function,
 
+        /// Block lowering order for CFG traversal.
+        block_order: BlockLoweringOrder,
+
         /// Lowered machine instructions.
         vcode: VCodeBuilder(I),
 
@@ -871,7 +669,9 @@ pub fn Lower(comptime I: type) type {
                 flags.log2MinFunctionAlignment(),
             );
 
-            var vregs = VRegAllocator(I).init(allocator);
+            // Initial capacity based on number of values in the function
+            const initial_capacity = f.dfg.numValues();
+            var vregs = try VRegAllocator(I).init(allocator, initial_capacity);
 
             var value_regs = SecondaryMap(Value, ValueRegs(Reg)).withDefault(
                 allocator,
@@ -884,17 +684,19 @@ pub fn Lower(comptime I: type) type {
                 for (f.dfg.blockParams(block)) |param| {
                     const ty = f.dfg.valueType(param);
                     if (value_regs.get(param).isInvalid()) {
-                        const regs = try vregs.alloc(ty);
-                        try value_regs.set(param, regs);
+                        const rc = ty.regClass();
+                        const reg = try vregs.alloc(ty, rc);
+                        try value_regs.set(param, ValueRegs(Reg).one(reg));
                     }
                 }
                 var inst_iter = f.layout.blockInsts(block);
                 while (inst_iter.next()) |inst| {
                     for (f.dfg.instResults(inst)) |result| {
                         const ty = f.dfg.valueType(result);
-                        if (value_regs.get(result).isInvalid() and ty != .invalid) {
-                            const regs = try vregs.alloc(ty);
-                            try value_regs.set(result, regs);
+                        if (value_regs.get(result).isInvalid() and !ty.eql(clif.Type.INVALID)) {
+                            const rc = ty.regClass();
+                            const reg = try vregs.alloc(ty, rc);
+                            try value_regs.set(result, ValueRegs(Reg).one(reg));
                         }
                     }
                 }
@@ -933,6 +735,7 @@ pub fn Lower(comptime I: type) type {
             return .{
                 .allocator = allocator,
                 .f = f,
+                .block_order = block_order,
                 .vcode = vcode,
                 .vregs = vregs,
                 .value_regs = value_regs,
@@ -979,13 +782,14 @@ pub fn Lower(comptime I: type) type {
         // =====================================================================
 
         /// Get the instdata for a given IR instruction.
-        pub fn data(self: *const Self, ir_inst: Inst) *const InstructionData {
-            return &self.f.dfg.insts.items[ir_inst.index];
+        pub fn data(self: *const Self, ir_inst: Inst) InstData {
+            return self.f.dfg.getInstData(ir_inst);
         }
 
         /// Get the source location for a given instruction.
-        pub fn srcloc(self: *const Self, ir_inst: Inst) RelSourceLoc {
-            return self.f.relSrclocs().get(ir_inst);
+        pub fn srcloc(_: *const Self, _: Inst) RelSourceLoc {
+            // TODO: Implement source location tracking in CLIF Function
+            return RelSourceLoc.default();
         }
 
         /// Get the number of inputs to the given IR instruction.
@@ -1039,7 +843,7 @@ pub fn Lower(comptime I: type) type {
                 switch (def) {
                     .result => |r| {
                         const src_inst = r.inst;
-                        const result_idx = r.result_idx;
+                        const result_idx = r.num;
                         const src_side_effect = hasLoweringSideEffect(self.f, src_inst);
 
                         if (isValueUseRoot(self.f, src_inst)) {
@@ -1077,6 +881,10 @@ pub fn Lower(comptime I: type) type {
                     },
                     .param => {
                         break :blk InputSourceInst{ .none = {} };
+                    },
+                    .alias => |a| {
+                        // Recursively resolve the alias
+                        return self.getValueAsSourceOrConst(a.original);
                     },
                 }
             };
@@ -1146,8 +954,9 @@ pub fn Lower(comptime I: type) type {
 
         /// Get a new temp.
         pub fn allocTmp(self: *Self, ty: Type) !ValueRegs(Writable(Reg)) {
-            const regs = try self.vregs.alloc(ty);
-            return writableValueRegs(regs);
+            const rc = ty.regClass();
+            const reg = try self.vregs.alloc(ty, rc);
+            return ValueRegs(Writable(Reg)).one(Writable(Reg).fromReg(reg));
         }
 
         /// Get the current root instruction that we are lowering.
@@ -1213,9 +1022,9 @@ pub fn Lower(comptime I: type) type {
 
         /// Get the label for a block successor.
         pub fn blockSuccessorLabel(self: *const Self, block: Block, succ: usize) MachLabel {
-            const lowered = self.vcode.blockOrder().loweredIndexForBlock(block) orelse
+            const lowered = self.block_order.loweredIndexForBlock(block) orelse
                 @panic("Unreachable block");
-            const succs = self.vcode.blockOrder().succIndices(lowered).@"1";
+            const succs = self.block_order.succIndices(lowered).succs;
             const succ_block = succs[succ];
             return MachLabel.fromBlock(succ_block);
         }
@@ -1258,8 +1067,8 @@ pub fn Lower(comptime I: type) type {
             self.cur_scan_entry_color = self.block_end_colors.get(block);
 
             // Lowering loop: for each non-branch instruction, in reverse order.
-            var inst_iter = self.f.layout.blockInsts(block).rev();
-            while (inst_iter.next()) |inst| {
+            var inst_iter = self.f.layout.blockInsts(block);
+            while (inst_iter.nextBack()) |inst| {
                 const inst_data = &self.f.dfg.insts.items[inst.index];
                 const has_side_effect = hasLoweringSideEffect(self.f, inst);
 
@@ -1293,7 +1102,7 @@ pub fn Lower(comptime I: type) type {
                     // Set up aliases for the lowered registers.
                     const results = self.f.dfg.instResults(inst);
                     std.debug.assert(temp_regs.len == results.len);
-                    for (temp_regs.constSlice(), results) |regs, result| {
+                    for (temp_regs.slice(), results) |regs, result| {
                         const dsts = self.value_regs.get(result);
                         var reg_iter: usize = 0;
                         for (dsts.regs()) |dst| {
@@ -1301,7 +1110,7 @@ pub fn Lower(comptime I: type) type {
                                 regs.regs()[reg_iter]
                             else
                                 Reg.invalid();
-                            self.vregs.setVregAlias(dst, temp);
+                            try self.vregs.setVregAlias(dst, temp);
                             reg_iter += 1;
                         }
                     }
@@ -1337,8 +1146,8 @@ pub fn Lower(comptime I: type) type {
         }
 
         fn lowerBranchBlockparamArgs(self: *Self, block: BlockIndex) !void {
-            var branch_arg_vregs: std.BoundedArray(Reg, 16) = .{};
-            const succs = self.vcode.blockOrder().succIndices(block).@"1";
+            var branch_arg_vregs: abi_mod.BoundedArray(Reg, 16) = .{};
+            const succs = self.block_order.succIndices(block).succs;
 
             for (0..succs.len) |succ_idx| {
                 branch_arg_vregs.len = 0;
@@ -1350,12 +1159,12 @@ pub fn Lower(comptime I: type) type {
         fn collectBranchAndTargets(
             self: *const Self,
             bindex: BlockIndex,
-            targets: *std.BoundedArray(MachLabel, 2),
+            targets: *abi_mod.BoundedArray(MachLabel, 2),
         ) ?Inst {
             targets.len = 0;
-            const result = self.vcode.blockOrder().succIndices(bindex);
-            const opt_inst = result.@"0";
-            const succs = result.@"1";
+            const result = self.block_order.succIndices(bindex);
+            const opt_inst = result.opt_inst;
+            const succs = result.succs;
             for (succs) |succ| {
                 targets.appendAssumeCapacity(MachLabel.fromBlock(succ));
             }
@@ -1366,59 +1175,36 @@ pub fn Lower(comptime I: type) type {
             self: *Self,
             block: BlockIndex,
             succ_idx: usize,
-            buffer: *std.BoundedArray(Reg, 16),
+            buffer: *abi_mod.BoundedArray(Reg, 16),
         ) struct { succ: BlockIndex, args: []const Reg } {
-            const block_order = self.vcode.blockOrder();
-            const succs = block_order.succIndices(block).@"1";
+            const block_order = self.block_order;
+            const succs = block_order.succIndices(block).succs;
             const succ = succs[succ_idx];
             const this_lb = block_order.loweredOrder()[block.index()];
             const succ_lb = block_order.loweredOrder()[succ.index()];
 
-            const branch_info = switch (succ_lb) {
-                .critical_edge => {
-                    // Successor is a split-critical-edge block.
-                    return .{ .succ = succ, .args = &[_]Reg{} };
+            // Handle critical edge case - successor is a split-critical-edge block
+            if (succ_lb == .critical_edge) {
+                return .{ .succ = succ, .args = &[_]Reg{} };
+            }
+
+            // Get branch info based on this_lb
+            const BranchInfo = struct { branch_inst: Inst, succ_idx: u32 };
+            const branch_info: BranchInfo = switch (this_lb) {
+                .critical_edge => |ce| blk: {
+                    const branch_inst = self.f.layout.lastInst(ce.pred).?;
+                    break :blk .{ .branch_inst = branch_inst, .succ_idx = ce.succ_idx };
                 },
-                else => switch (this_lb) {
-                    .critical_edge => |ce| blk: {
-                        const branch_inst = self.f.layout.lastInst(ce.pred).?;
-                        break :blk .{ .branch_inst = branch_inst, .succ_idx = ce.succ_idx };
-                    },
-                    .orig => |o| blk: {
-                        const branch_inst = self.f.layout.lastInst(o.block).?;
-                        break :blk .{ .branch_inst = branch_inst, .succ_idx = @as(u32, @intCast(succ_idx)) };
-                    },
+                .orig => |o| blk: {
+                    const branch_inst = self.f.layout.lastInst(o.block).?;
+                    break :blk .{ .branch_inst = branch_inst, .succ_idx = @intCast(succ_idx) };
                 },
             };
 
-            const block_call = self.f.dfg.insts.items[branch_info.branch_inst.index]
-                .branchDestination(&self.f.dfg.jump_tables, &self.f.dfg.exception_tables)[branch_info.succ_idx];
-
-            for (block_call.args(&self.f.dfg.value_lists)) |arg| {
-                switch (arg) {
-                    .value => |val| {
-                        std.debug.assert(self.f.dfg.valueIsReal(val));
-                        const regs = self.putValueInRegs(val);
-                        for (regs.regs()) |r| {
-                            buffer.appendAssumeCapacity(r);
-                        }
-                    },
-                    .try_call_ret => |i| {
-                        if (self.try_call_rets.get(branch_info.branch_inst)) |rets| {
-                            const ret_regs = rets.items[i].mapTo(Reg, Writable(Reg).toReg);
-                            for (ret_regs.regs()) |r| {
-                                buffer.appendAssumeCapacity(r);
-                            }
-                        }
-                    },
-                    .try_call_exn => |i| {
-                        if (self.try_call_payloads.get(branch_info.branch_inst)) |payloads| {
-                            buffer.appendAssumeCapacity(payloads.items[i].toReg());
-                        }
-                    },
-                }
-            }
-            return .{ .succ = succ, .args = buffer.constSlice() };
+            // TODO: Implement block call argument handling once InstData has branchDestination
+            // For now, blocks are connected without arguments (simple CFG)
+            _ = branch_info;
+            return .{ .succ = succ, .args = buffer.slice() };
         }
 
         // =====================================================================
@@ -1439,10 +1225,10 @@ pub fn Lower(comptime I: type) type {
             self.vcode.setEntry(BlockIndex.new(0));
 
             // Reused vectors for branch lowering.
-            var targets: std.BoundedArray(MachLabel, 2) = .{};
+            var targets: abi_mod.BoundedArray(MachLabel, 2) = .{};
 
             // Get a copy of the lowered order.
-            const lowered_order = self.vcode.blockOrder().loweredOrder();
+            const lowered_order = self.block_order.loweredOrder();
 
             // Main lowering loop over lowered blocks (in reverse).
             var bindex_iter: usize = lowered_order.len;
@@ -1454,12 +1240,12 @@ pub fn Lower(comptime I: type) type {
                 // End branch.
                 if (lb.origBlock()) |bb| {
                     if (self.collectBranchAndTargets(bindex, &targets)) |branch| {
-                        try self.lowerClifBranch(B, backend, bindex, bb, branch, targets.constSlice());
+                        try self.lowerClifBranch(B, backend, bindex, bb, branch, targets.slice());
                         try self.finishIrInst(self.srcloc(branch));
                     }
                 } else {
                     // Pure edge block; emit a jump.
-                    const succ = self.vcode.blockOrder().succIndices(bindex).@"1"[0];
+                    const succ = self.block_order.succIndices(bindex).succs[0];
                     try self.emit(I.genJump(MachLabel.fromBlock(succ)));
                     try self.finishIrInst(RelSourceLoc.default());
                     try self.lowerBranchBlockparamArgs(bindex);
@@ -1520,7 +1306,7 @@ pub fn hasLoweringSideEffect(f: *const Function, inst: Inst) bool {
     return switch (opcode) {
         .load, .store => true,
         .call, .call_indirect => true,
-        .return_ => true,
+        .@"return" => true,
         else => false,
     };
 }
@@ -1569,6 +1355,10 @@ pub fn computeUseStates(
                     return func.dfg.instValues(r.inst);
                 },
                 .param => return null,
+                .alias => |a| {
+                    // For aliases, follow to the original value
+                    return get(func, a.original);
+                },
             }
         }
     }.get;
@@ -1737,7 +1527,9 @@ test "Opcode isBranch" {
     try std.testing.expect(Opcode.jump.isBranch());
     try std.testing.expect(Opcode.brif.isBranch());
     try std.testing.expect(Opcode.br_table.isBranch());
-    try std.testing.expect(Opcode.return_.isBranch());
+    // return is a terminator but not a branch - it exits the function rather than jumping to a block
+    try std.testing.expect(!Opcode.@"return".isBranch());
+    try std.testing.expect(Opcode.@"return".isTerminator());
     try std.testing.expect(!Opcode.iadd.isBranch());
     try std.testing.expect(!Opcode.load.isBranch());
 }

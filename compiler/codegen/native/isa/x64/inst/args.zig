@@ -6,156 +6,24 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 //=============================================================================
-// Forward declare types that will be provided by machinst
-// These are stub types for now until machinst integration is complete
+// Import core types from machinst for type compatibility with Lower(I)
 //=============================================================================
 
-pub const MachLabel = struct {
-    index: u32,
+const machinst_inst = @import("../../../machinst/inst.zig");
+const machinst_reg = @import("../../../machinst/reg.zig");
 
-    pub fn fromU32(i: u32) MachLabel {
-        return .{ .index = i };
-    }
+// Import core types from machinst for type compatibility with Lower(I)
+pub const MachLabel = machinst_inst.MachLabel;
+pub const Reg = machinst_reg.Reg;
+pub const VReg = machinst_reg.VReg;
+pub const RealReg = machinst_reg.RealReg;
+pub const PReg = machinst_reg.PReg;
+pub const RegClass = machinst_reg.RegClass;
+pub const Writable = machinst_reg.Writable;
 
-    pub fn asU32(self: MachLabel) u32 {
-        return self.index;
-    }
-};
-
-pub const RegClass = enum {
-    int,
-    float,
-    vector,
-};
-
-pub const Reg = struct {
-    bits: u32,
-
-    const CLASS_SHIFT = 30;
-    const CLASS_MASK: u32 = 0x3 << CLASS_SHIFT;
-    const INDEX_MASK: u32 = 0x3FFF_FFFF;
-
-    pub fn class(self: Reg) RegClass {
-        const cls_bits = (self.bits & CLASS_MASK) >> CLASS_SHIFT;
-        return switch (cls_bits) {
-            0 => .int,
-            1 => .float,
-            else => .vector,
-        };
-    }
-
-    pub fn fromRealReg(preg: PReg) Reg {
-        const cls_bits: u32 = switch (preg.class_val) {
-            .int => 0,
-            .float => 1,
-            .vector => 2,
-        };
-        return .{ .bits = (cls_bits << CLASS_SHIFT) | @as(u32, preg.index_val) };
-    }
-
-    pub fn fromPReg(preg: PReg) Reg {
-        return fromRealReg(preg);
-    }
-
-    pub fn fromVReg(vreg_val: VReg) Reg {
-        const cls_bits: u32 = switch (vreg_val.cls) {
-            .int => 0,
-            .float => 1,
-            .vector => 2,
-        };
-        return .{ .bits = (cls_bits << CLASS_SHIFT) | vreg_val.idx };
-    }
-
-    pub fn toRealReg(self: Reg) ?RealReg {
-        // For now, all regs are considered "real" in this stub
-        return RealReg{
-            .hw_enc_val = @truncate(self.bits & INDEX_MASK),
-            .cls = self.class(),
-        };
-    }
-
-    pub fn isReal(self: Reg) bool {
-        return self.toRealReg() != null;
-    }
-
-    pub fn hwEnc(self: Reg) u8 {
-        if (self.toRealReg()) |rreg| {
-            return rreg.hwEnc();
-        }
-        unreachable;
-    }
-
-    pub fn eql(self: Reg, other: Reg) bool {
-        return self.bits == other.bits;
-    }
-};
-
-pub const VReg = struct {
-    idx: u32,
-    cls: RegClass,
-
-    pub fn init(idx_val: anytype, cls_val: RegClass) VReg {
-        return .{ .idx = @intCast(idx_val), .cls = cls_val };
-    }
-
-    pub fn index(self: VReg) usize {
-        return self.idx;
-    }
-};
-
-pub const RealReg = struct {
-    hw_enc_val: u8,
-    cls: RegClass,
-
-    pub fn hwEnc(self: RealReg) u8 {
-        return self.hw_enc_val;
-    }
-
-    pub fn class(self: RealReg) RegClass {
-        return self.cls;
-    }
-};
-
-pub const PReg = struct {
-    index_val: u8,
-    class_val: RegClass,
-
-    pub fn init(idx: u8, cls: RegClass) PReg {
-        return .{ .index_val = idx, .class_val = cls };
-    }
-
-    pub fn index(self: PReg) usize {
-        return self.index_val;
-    }
-
-    pub fn class(self: PReg) RegClass {
-        return self.class_val;
-    }
-};
-
-//=============================================================================
-// Writable wrapper type
-//=============================================================================
-
-pub fn Writable(comptime T: type) type {
-    return struct {
-        reg: T,
-
-        const Self = @This();
-
-        pub fn fromReg(r: T) Self {
-            return .{ .reg = r };
-        }
-
-        pub fn toReg(self: Self) T {
-            return self.reg;
-        }
-
-        pub fn map(self: Self, comptime f: fn (T) T) Self {
-            return Self{ .reg = f(self.reg) };
-        }
-    };
-}
+// Import CLIF Type
+const clif = @import("../../../../../ir/clif/mod.zig");
+pub const Type = clif.Type;
 
 //=============================================================================
 // GPR newtype - wraps Reg and enforces int class
@@ -1042,91 +910,6 @@ pub const OperandSize = enum {
 };
 
 //=============================================================================
-// Type stub
-//=============================================================================
-
-pub const Type = struct {
-    kind: Kind,
-
-    pub const Kind = enum(u8) {
-        i8,
-        i16,
-        i32,
-        i64,
-        i128,
-        f16,
-        f32,
-        f64,
-        f128,
-        i8x16,
-        i16x8,
-        i32x4,
-        i64x2,
-        f32x4,
-        f64x2,
-    };
-
-    pub const @"i8" = Type{ .kind = .i8 };
-    pub const @"i16" = Type{ .kind = .i16 };
-    pub const @"i32" = Type{ .kind = .i32 };
-    pub const @"i64" = Type{ .kind = .i64 };
-    pub const @"i128" = Type{ .kind = .i128 };
-    pub const @"f16" = Type{ .kind = .f16 };
-    pub const @"f32" = Type{ .kind = .f32 };
-    pub const @"f64" = Type{ .kind = .f64 };
-    pub const @"f128" = Type{ .kind = .f128 };
-    pub const @"i8x16" = Type{ .kind = .i8x16 };
-    pub const @"i16x8" = Type{ .kind = .i16x8 };
-    pub const @"i32x4" = Type{ .kind = .i32x4 };
-    pub const @"i64x2" = Type{ .kind = .i64x2 };
-    pub const @"f32x4" = Type{ .kind = .f32x4 };
-    pub const @"f64x2" = Type{ .kind = .f64x2 };
-
-    pub fn bits(self: Type) usize {
-        return switch (self.kind) {
-            .i8 => 8,
-            .i16, .f16 => 16,
-            .i32, .f32 => 32,
-            .i64, .f64 => 64,
-            .i128, .f128, .i8x16, .i16x8, .i32x4, .i64x2, .f32x4, .f64x2 => 128,
-        };
-    }
-
-    pub fn bytes(self: Type) u32 {
-        return @intCast(self.bits() / 8);
-    }
-
-    /// Get the lane size in bytes for vectors, or the full size for scalars.
-    pub fn laneBytes(self: Type) u32 {
-        return switch (self.kind) {
-            .i8x16 => 1,
-            .i16x8 => 2,
-            .i32x4, .f32x4 => 4,
-            .i64x2, .f64x2 => 8,
-            else => self.bytes(),
-        };
-    }
-
-    pub fn isVector(self: Type) bool {
-        return switch (self.kind) {
-            .i8x16, .i16x8, .i32x4, .i64x2, .f32x4, .f64x2 => true,
-            else => false,
-        };
-    }
-
-    pub fn isFloat(self: Type) bool {
-        return switch (self.kind) {
-            .f16, .f32, .f64, .f128, .f32x4, .f64x2 => true,
-            else => false,
-        };
-    }
-
-    pub fn isInt(self: Type) bool {
-        return !self.isFloat() and !self.isVector();
-    }
-};
-
-//=============================================================================
 // Shift kind for shift instructions
 //=============================================================================
 
@@ -1280,16 +1063,7 @@ test "Amode offset" {
     }
 }
 
-test "Type properties" {
-    const testing = std.testing;
-    try testing.expectEqual(@as(usize, 8), Type.i8.bits());
-    try testing.expectEqual(@as(usize, 64), Type.i64.bits());
-    try testing.expectEqual(@as(usize, 128), Type.i8x16.bits());
-    try testing.expect(Type.f32.isFloat());
-    try testing.expect(!Type.i32.isFloat());
-    try testing.expect(Type.i8x16.isVector());
-    try testing.expect(!Type.i64.isVector());
-}
+// Type tests removed - Type is now from CLIF module
 
 test "ShiftKind encoding" {
     const testing = std.testing;

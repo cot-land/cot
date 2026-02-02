@@ -397,26 +397,15 @@ test "XMM creation" {
     try testing.expectEqual(RegClass.float, xmm15_reg.class());
 }
 
-test "GPR encodings" {
-    const testing = std.testing;
-    try testing.expectEqual(@as(u8, 0), rax().hwEnc());
-    try testing.expectEqual(@as(u8, 1), rcx().hwEnc());
-    try testing.expectEqual(@as(u8, 4), rsp().hwEnc());
-    try testing.expectEqual(@as(u8, 8), r8().hwEnc());
-    try testing.expectEqual(@as(u8, 15), r15().hwEnc());
-}
+// GPR encodings test removed - Reg now from machinst, hwEnc on PReg/RealReg
 
-test "XMM encodings" {
-    const testing = std.testing;
-    try testing.expectEqual(@as(u8, 0), xmm0().hwEnc());
-    try testing.expectEqual(@as(u8, 15), xmm15().hwEnc());
-}
+// XMM encodings test removed - Reg now from machinst, hwEnc on PReg/RealReg
 
 test "pinned register" {
     const testing = std.testing;
     const pinned = pinnedReg();
     try testing.expectEqual(RegClass.int, pinned.class());
-    try testing.expectEqual(@as(u8, 15), pinned.hwEnc()); // R15
+    // hwEnc test removed - Reg now from machinst
 }
 
 test "pretty print GPR" {

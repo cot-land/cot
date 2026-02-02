@@ -249,6 +249,11 @@ pub const Imm12 = struct {
     /// Handy 0-value constant.
     pub const ZERO = Imm12{ .bits_val = 0, .shift12 = false };
 
+    /// Return zero immediate.
+    pub fn zero() Imm12 {
+        return ZERO;
+    }
+
     /// Compute an Imm12 from raw bits, if possible.
     pub fn maybeFromU64(val: u64) ?Imm12 {
         if (val & ~@as(u64, 0xfff) == 0) {
@@ -303,12 +308,13 @@ pub const ImmLogic = struct {
     /// Compute an ImmLogic from raw bits, if possible.
     /// This is a port of VIXL's Assembler::IsImmLogical.
     pub fn maybeFromU64(original_value: u64, ty: Type) ?ImmLogic {
-        if (ty.kind != .int64 and ty.kind != .int32) {
+        const type_bits = ty.bits();
+        if (type_bits != 64 and type_bits != 32) {
             return null;
         }
         const operand_size = OperandSize.fromTy(ty);
 
-        var working_value = if (ty.kind == .int32) blk: {
+        var working_value = if (type_bits == 32) blk: {
             // To handle 32-bit logical immediates, repeat the input twice.
             const shifted = original_value << 32;
             break :blk shifted | (shifted >> 32);
@@ -794,13 +800,13 @@ test "ImmLogic basic values" {
     const testing = std.testing;
 
     // 0 should fail
-    try testing.expect(ImmLogic.maybeFromU64(0, Type.i64) == null);
+    try testing.expect(ImmLogic.maybeFromU64(0, Type.I64) == null);
 
     // All 1s should fail
-    try testing.expect(ImmLogic.maybeFromU64(std.math.maxInt(u64), Type.i64) == null);
+    try testing.expect(ImmLogic.maybeFromU64(std.math.maxInt(u64), Type.I64) == null);
 
     // 1 should succeed
-    const imm1 = ImmLogic.maybeFromU64(1, Type.i64);
+    const imm1 = ImmLogic.maybeFromU64(1, Type.I64);
     try testing.expect(imm1 != null);
     try testing.expectEqual(@as(u64, 1), imm1.?.value());
 }

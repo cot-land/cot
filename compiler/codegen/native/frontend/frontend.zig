@@ -230,10 +230,10 @@ pub const FunctionBuilder = struct {
 
     /// Register a new definition of a user variable.
     pub fn defVar(self: *Self, variable: Variable, val: Value) !void {
-        try self.tryDefVar(variable, val) catch |err| switch (err) {
+        self.tryDefVar(variable, val) catch |err| switch (err) {
             DefVariableError.TypeMismatch => @panic("type mismatch in def_var"),
             DefVariableError.DefinedBeforeDeclared => @panic("variable defined before declared"),
-            else => |e| return e,
+            else => return err,
         };
     }
 

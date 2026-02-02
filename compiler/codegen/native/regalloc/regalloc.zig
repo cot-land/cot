@@ -255,7 +255,7 @@ pub const Ctx = struct {
 /// and options, and returns the allocation output.
 pub fn run(
     allocator: std.mem.Allocator,
-    func: *const Function,
+    func: anytype,
     env: *const MachineEnv,
     options: RegallocOptions,
 ) !Output {
@@ -276,7 +276,7 @@ pub fn run(
 /// which can be more efficient for repeated allocations.
 pub fn runWithCtx(
     allocator: std.mem.Allocator,
-    func: *const Function,
+    func: anytype,
     env: *const MachineEnv,
     options: RegallocOptions,
     ctx: *Ctx,
@@ -287,7 +287,10 @@ pub fn runWithCtx(
     ctx.clear();
 
     // Phase 1: CFG analysis
-    try ctx.cfginfo.compute(allocator, func);
+    const FuncType = @TypeOf(func.*);
+    var scratch = cfg_mod.CFGInfoCtx.init();
+    defer scratch.deinit(allocator);
+    try ctx.cfginfo.compute(FuncType, func, &scratch, allocator);
 
     // Phase 2-5: Liveness, live ranges, merging, allocation
     // These phases require the full Function interface.
@@ -295,7 +298,7 @@ pub fn runWithCtx(
     // implementation would need the Function callbacks.
 
     // Initialize output with proper sizes
-    try ctx.output.initForFunc(allocator, func);
+    try ctx.output.initForFunc(FuncType, func, allocator);
 
     // Phase 6: Spillslot allocation
     var spill_ctx = SpillContext.init(
@@ -342,7 +345,10 @@ pub fn runWithCtx(
 
     // Copy edits to output
     for (edits.edits.items) |e| {
-        try ctx.output.edits.append(allocator, e.edit);
+        try ctx.output.edits.append(allocator, .{
+            .point = e.pos_prio.pos,
+            .edit = e.edit,
+        });
     }
 }
 

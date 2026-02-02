@@ -113,6 +113,22 @@ pub const Output = struct {
         };
     }
 
+    /// Initialize Output with pre-allocated arrays based on function size.
+    pub fn initForFunc(
+        self: *Output,
+        comptime Func: type,
+        func: *const Func,
+        allocator: std.mem.Allocator,
+    ) !void {
+        const num_insts = func.numInsts();
+        // Pre-allocate inst_alloc_offsets with enough space for all instructions + 1
+        try self.inst_alloc_offsets.resize(allocator, num_insts + 1);
+        // Initialize to 0 (will be filled in during allocation)
+        for (self.inst_alloc_offsets.items) |*offset| {
+            offset.* = 0;
+        }
+    }
+
     /// Free all allocated memory.
     pub fn deinit(self: *Output, allocator: std.mem.Allocator) void {
         self.edits.deinit(allocator);
