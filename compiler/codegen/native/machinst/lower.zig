@@ -77,6 +77,7 @@ pub const Block = clif.Block;
 pub const Value = clif.Value;
 pub const Inst = clif.Inst;
 pub const StackSlot = clif.StackSlot;
+pub const StackSlotData = clif.StackSlotData;
 pub const FuncRef = clif.FuncRef;
 pub const SigRef = clif.SigRef;
 pub const JumpTable = clif.JumpTable;
@@ -651,6 +652,13 @@ pub fn Lower(comptime I: type) type {
         /// Compilation flags.
         flags: Flags,
 
+        /// Byte offset to each sized stack slot.
+        /// Port of cranelift/codegen/src/machinst/abi.rs Callee.sized_stackslots
+        sized_stackslots: std.ArrayListUnmanaged(u32),
+
+        /// Total size of all stack slots (word-aligned).
+        stackslots_size: u32,
+
         // =====================================================================
         // Constructor
         // =====================================================================
@@ -732,6 +740,29 @@ pub fn Lower(comptime I: type) type {
 
             const value_ir_uses = try computeUseStates(allocator, f, null);
 
+            // Compute sized stackslot offsets.
+            // Port of cranelift/codegen/src/machinst/abi.rs Callee::new stackslot computation
+            var sized_stackslots = std.ArrayListUnmanaged(u32){};
+            var end_offset: u32 = 0;
+            const word_bytes: u32 = 8; // 64-bit word size
+
+            for (f.stack_slots.items) |slot_data| {
+                // Align to word boundary or requested alignment
+                const slot_align = @as(u32, 1) << @as(u5, @intCast(slot_data.align_shift));
+                const slot_alignment = @max(word_bytes, slot_align);
+                const mask = slot_alignment - 1;
+                const start_offset = (end_offset + mask) & ~mask;
+
+                // End offset is start + size
+                end_offset = start_offset + slot_data.size;
+
+                try sized_stackslots.append(allocator, start_offset);
+            }
+
+            // Word-align total stackslots size
+            const stackslots_mask = word_bytes - 1;
+            const stackslots_size = (end_offset + stackslots_mask) & ~stackslots_mask;
+
             return .{
                 .allocator = allocator,
                 .f = f,
@@ -753,6 +784,8 @@ pub fn Lower(comptime I: type) type {
                 .try_call_payloads = .{},
                 .pinned_reg = null,
                 .flags = flags,
+                .sized_stackslots = sized_stackslots,
+                .stackslots_size = stackslots_size,
             };
         }
 
@@ -767,6 +800,7 @@ pub fn Lower(comptime I: type) type {
             self.value_lowered_uses.deinit();
             self.inst_sunk.deinit(self.allocator);
             self.ir_insts.deinit(self.allocator);
+            self.sized_stackslots.deinit(self.allocator);
         }
 
         // =====================================================================
@@ -784,6 +818,34 @@ pub fn Lower(comptime I: type) type {
         /// Get the instdata for a given IR instruction.
         pub fn data(self: *const Self, ir_inst: Inst) InstData {
             return self.f.dfg.getInstData(ir_inst);
+        }
+
+        /// Get jump table data for a given jump table reference.
+        /// Port of cranelift/codegen/src/machinst/lower.rs jump_table_data
+        pub fn jumpTableData(self: *const Self, jt: JumpTable) ?*const JumpTableData {
+            return self.f.getJumpTable(jt);
+        }
+
+        /// Get stack slot data for a given stack slot reference.
+        /// Port of cranelift/codegen/src/machinst/lower.rs stack_slot_data
+        pub fn stackSlotData(self: *const Self, slot: StackSlot) ?*const StackSlotData {
+            return self.f.getStackSlot(slot);
+        }
+
+        /// Get the byte offset for a sized stack slot.
+        /// Port of cranelift/codegen/src/machinst/abi.rs Callee::sized_stackslot_offsets
+        pub fn sizedStackslotOffset(self: *const Self, slot: StackSlot) u32 {
+            const idx = slot.asU32();
+            if (idx < self.sized_stackslots.items.len) {
+                return self.sized_stackslots.items[idx];
+            }
+            // Fallback for invalid slot - shouldn't happen in well-formed IR
+            return 0;
+        }
+
+        /// Get total size of all stack slots (word-aligned).
+        pub fn totalStackslotsSize(self: *const Self) u32 {
+            return self.stackslots_size;
         }
 
         /// Get the source location for a given instruction.
@@ -1027,6 +1089,14 @@ pub fn Lower(comptime I: type) type {
             const succs = self.block_order.succIndices(lowered).succs;
             const succ_block = succs[succ];
             return MachLabel.fromBlock(succ_block);
+        }
+
+        /// Get the label for a CLIF block.
+        /// Port of cranelift/codegen/src/machinst/lower.rs block_label
+        /// Used by br_table lowering to convert jump table entries to labels.
+        pub fn blockLabel(self: *const Self, block: Block) ?MachLabel {
+            const lowered = self.block_order.loweredIndexForBlock(block) orelse return null;
+            return MachLabel.fromBlock(lowered);
         }
 
         // =====================================================================

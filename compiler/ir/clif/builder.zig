@@ -364,6 +364,34 @@ pub const FuncBuilder = struct {
             else => null,
         };
 
+        // Extract comparison condition codes if present
+        const intcc: ?IntCC = switch (data) {
+            .int_compare => |d| d.cond,
+            else => null,
+        };
+        const floatcc: ?FloatCC = switch (data) {
+            .float_compare => |d| d.cond,
+            else => null,
+        };
+
+        // Extract jump table for br_table
+        const jump_table: ?JumpTable = switch (data) {
+            .branch_table => |d| d.table,
+            else => null,
+        };
+
+        // Extract stack slot and offset for stack_load/stack_store
+        const stack_slot: ?StackSlot = switch (data) {
+            .stack_load => |d| d.slot,
+            .stack_store => |d| d.slot,
+            else => null,
+        };
+        const stack_offset: ?i32 = switch (data) {
+            .stack_load => |d| d.offset,
+            .stack_store => |d| d.offset,
+            else => null,
+        };
+
         // Extract args for the ValueList
         const args_slice: []const Value = switch (data) {
             .nullary => &[_]Value{},
@@ -412,6 +440,11 @@ pub const FuncBuilder = struct {
             .then_dest = then_dest,
             .else_dest = else_dest,
             .imm = imm,
+            .intcc = intcc,
+            .floatcc = floatcc,
+            .jump_table = jump_table,
+            .stack_slot = stack_slot,
+            .stack_offset = stack_offset,
         });
 
         // Create result value if needed

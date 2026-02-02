@@ -375,7 +375,10 @@ pub const BlockData = struct {
 
 /// Opcode - instruction operation type.
 /// This is a simplified version for DFG; full opcodes are in instructions.zig.
-pub const Opcode = @import("instructions.zig").Opcode;
+const instructions = @import("instructions.zig");
+pub const Opcode = instructions.Opcode;
+pub const IntCC = instructions.IntCC;
+pub const FloatCC = instructions.FloatCC;
 
 /// Simplified instruction data storage for the DFG.
 /// Full InstructionData with all formats is in builder.zig.
@@ -396,6 +399,16 @@ pub const InstData = struct {
     else_dest: ?Block = null,
     /// Immediate value (for iconst, iadd_imm, etc).
     imm: ?i64 = null,
+    /// Integer comparison condition code (for icmp).
+    intcc: ?IntCC = null,
+    /// Float comparison condition code (for fcmp).
+    floatcc: ?FloatCC = null,
+    /// Jump table reference (for br_table).
+    jump_table: ?JumpTable = null,
+    /// Stack slot reference (for stack_load/stack_store).
+    stack_slot: ?StackSlot = null,
+    /// Stack slot offset (for stack_load/stack_store).
+    stack_offset: ?i32 = null,
 
     pub const EMPTY: InstData = .{
         .opcode = .nop,
@@ -415,6 +428,31 @@ pub const InstData = struct {
     /// Get the immediate value as signed, if present.
     pub fn getImmediateSigned(self: InstData) ?i64 {
         return self.imm;
+    }
+
+    /// Get the integer comparison condition code (for icmp).
+    pub fn getIntCC(self: InstData) ?IntCC {
+        return self.intcc;
+    }
+
+    /// Get the float comparison condition code (for fcmp).
+    pub fn getFloatCC(self: InstData) ?FloatCC {
+        return self.floatcc;
+    }
+
+    /// Get the jump table reference (for br_table).
+    pub fn getJumpTable(self: InstData) ?JumpTable {
+        return self.jump_table;
+    }
+
+    /// Get the stack slot reference (for stack_load/stack_store).
+    pub fn getStackSlot(self: InstData) ?StackSlot {
+        return self.stack_slot;
+    }
+
+    /// Get the stack slot offset (for stack_load/stack_store).
+    pub fn getStackOffset(self: InstData) ?i32 {
+        return self.stack_offset;
     }
 
     /// Get the single block destination (for jump instructions).

@@ -83,6 +83,12 @@ pub const ClifType = lower_mod.Type;
 /// Instruction data from dfg - the struct stored in dfg.insts.
 pub const InstData = lower_mod.InstData;
 
+/// Stack slot reference.
+pub const StackSlot = lower_mod.StackSlot;
+
+/// Stack slot data (size, alignment, etc.).
+pub const StackSlotData = lower_mod.StackSlotData;
+
 // =============================================================================
 // Lower context
 // This is the actual Lower(Inst) type from machinst/lower.zig.
@@ -261,8 +267,68 @@ pub const AArch64LowerBackend = struct {
                 }) catch return null;
             },
             .br_table => {
-                // Jump table - not yet implemented
-                return null;
+                // Jump table lowering.
+                // Port of cranelift/codegen/src/isa/aarch64/lower.rs br_table lowering
+                //
+                // The jt_sequence pseudo-instruction handles:
+                // - Bounds check
+                // - Spectre mitigation
+                // - Table lookup
+                // - Indirect branch
+
+                // Get the index operand (input 0)
+                const idx_val = ctx.putInputInRegs(ir_inst, 0);
+                const idx_reg = idx_val.onlyReg() orelse return null;
+
+                // Get the jump table reference
+                const jt_ref = inst_data.getJumpTable() orelse return null;
+
+                // Look up the jump table data
+                const jt_data = ctx.jumpTableData(jt_ref) orelse return null;
+
+                // Get default target label
+                const default_block = jt_data.getDefaultBlock().getBlock();
+                const default_label = ctx.blockLabel(default_block) orelse return null;
+
+                // Get table entries
+                const table_entries = jt_data.asSlice();
+                const table_size = table_entries.len;
+
+                // If table is empty, just jump to default
+                if (table_size == 0) {
+                    ctx.emit(Inst{
+                        .jump = .{
+                            .dest = .{ .label = default_label },
+                        },
+                    }) catch return null;
+                    return;
+                }
+
+                // Allocate and populate targets array
+                const target_labels = ctx.allocator.alloc(MachLabel, table_size) catch return null;
+                for (table_entries, 0..) |entry, i| {
+                    const target_block = entry.getBlock();
+                    target_labels[i] = ctx.blockLabel(target_block) orelse return null;
+                }
+
+                // Allocate temp registers
+                // allocTmp returns ValueRegs(Writable(Reg)), onlyReg returns Writable(Reg)
+                const tmp1_regs = ctx.allocTmp(.I64) catch return null;
+                const tmp1_wreg = tmp1_regs.onlyReg() orelse return null;
+
+                const tmp2_regs = ctx.allocTmp(.I64) catch return null;
+                const tmp2_wreg = tmp2_regs.onlyReg() orelse return null;
+
+                // Emit the jump table sequence
+                ctx.emit(Inst{
+                    .jt_sequence = .{
+                        .ridx = idx_reg,
+                        .rtmp1 = tmp1_wreg,
+                        .rtmp2 = tmp2_wreg,
+                        .default = default_label,
+                        .targets = target_labels,
+                    },
+                }) catch return null;
             },
             .@"return" => {
                 // Return from function - move return values to ABI registers
@@ -1081,9 +1147,10 @@ pub const AArch64LowerBackend = struct {
             },
         }) catch return null;
 
-        // TODO: Get the actual condition code from the instruction data
-        // For now, default to eq
-        const cond = Cond.eq;
+        // Get the condition code from instruction data
+        const inst_data = ctx.data(ir_inst);
+        const intcc = inst_data.getIntCC() orelse return null;
+        const cond = condFromIntCC(intcc);
 
         // Conditional set
         ctx.emit(Inst{
@@ -1740,8 +1807,17 @@ pub const AArch64LowerBackend = struct {
         const dst = ctx.allocTmp(ty) catch return null;
         const dst_reg = dst.onlyReg() orelse return null;
 
-        // TODO: Get stack slot from instruction data
-        const mem = AMode{ .sp_offset = .{ .offset = 0 } };
+        // Get stack slot from instruction data
+        const inst_data = ctx.data(ir_inst);
+        const slot = inst_data.getStackSlot() orelse return null;
+        const extra_offset = inst_data.getStackOffset() orelse 0;
+
+        // Get the slot's byte offset from computed stackslot offsets
+        // Port of cranelift/codegen/src/machinst/abi.rs Callee::sized_stackslot_offsets
+        const slot_base_offset = ctx.sizedStackslotOffset(slot);
+        const slot_byte_offset = @as(i32, @intCast(slot_base_offset)) + extra_offset;
+
+        const mem = AMode{ .sp_offset = .{ .offset = slot_byte_offset } };
         const flags = MemFlags.empty;
 
         ctx.emit(Inst.genLoad(dst_reg, mem, typeFromClif(ty), flags)) catch return null;
@@ -1758,8 +1834,17 @@ pub const AArch64LowerBackend = struct {
         const val = ctx.putInputInRegs(ir_inst, 0);
         const val_reg = val.onlyReg() orelse return null;
 
-        // TODO: Get stack slot from instruction data
-        const mem = AMode{ .sp_offset = .{ .offset = 0 } };
+        // Get stack slot from instruction data
+        const inst_data = ctx.data(ir_inst);
+        const slot = inst_data.getStackSlot() orelse return null;
+        const extra_offset = inst_data.getStackOffset() orelse 0;
+
+        // Get the slot's byte offset from computed stackslot offsets
+        // Port of cranelift/codegen/src/machinst/abi.rs Callee::sized_stackslot_offsets
+        const slot_base_offset = ctx.sizedStackslotOffset(slot);
+        const slot_byte_offset = @as(i32, @intCast(slot_base_offset)) + extra_offset;
+
+        const mem = AMode{ .sp_offset = .{ .offset = slot_byte_offset } };
         const flags = MemFlags.empty;
 
         ctx.emit(Inst.genStore(mem, val_reg, typeFromClif(val_ty), flags)) catch return null;

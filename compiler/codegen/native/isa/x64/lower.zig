@@ -75,6 +75,18 @@ pub const Value = lower_mod.Value;
 /// Block index for lowered blocks.
 pub const BlockIndex = lower_mod.BlockIndex;
 
+/// Jump table reference.
+pub const JumpTable = lower_mod.JumpTable;
+
+/// Jump table data.
+pub const JumpTableData = lower_mod.JumpTableData;
+
+/// Stack slot reference.
+pub const StackSlot = lower_mod.StackSlot;
+
+/// Stack slot data (size, alignment, etc.).
+pub const StackSlotData = lower_mod.StackSlotData;
+
 /// Value registers - multiple registers for a single value.
 pub const ValueRegs = lower_mod.ValueRegs;
 
@@ -279,8 +291,84 @@ pub const X64LowerBackend = struct {
                 // jmp_cond already handles both branches, no fallthrough needed
             },
             .br_table => {
-                // Jump table - not yet implemented
-                return null;
+                // Jump table lowering.
+                // Port of cranelift/codegen/src/isa/x64/lower.rs br_table lowering
+                //
+                // The br_table instruction implements an indirect branch using a jump table.
+                // We emit:
+                //   cmp idx, table_size
+                //   jae default_label
+                //   jmp_table_seq idx, targets, default
+
+                // Get the index operand (input 0)
+                const idx_val = ctx.putInputInRegs(ir_inst, 0);
+                const idx_reg = idx_val.onlyReg() orelse return null;
+
+                // Get the jump table reference
+                const jt_ref = inst_data.getJumpTable() orelse return null;
+
+                // Look up the jump table data
+                const jt_data = ctx.jumpTableData(jt_ref) orelse return null;
+
+                // Get default target label
+                const default_block = jt_data.getDefaultBlock().getBlock();
+                const default_label = ctx.blockLabel(default_block) orelse return null;
+
+                // Get table size
+                const table_entries = jt_data.asSlice();
+                const table_size = table_entries.len;
+
+                // If table is empty, just jump to default
+                if (table_size == 0) {
+                    ctx.emit(Inst.genJump(default_label)) catch return null;
+                    return;
+                }
+
+                // Allocate and populate targets array
+                const target_labels = ctx.allocator.alloc(MachLabel, table_size) catch return null;
+                for (table_entries, 0..) |entry, i| {
+                    const target_block = entry.getBlock();
+                    target_labels[i] = ctx.blockLabel(target_block) orelse return null;
+                }
+
+                // Allocate temp registers
+                // allocTmp returns ValueRegs(Writable(Reg)), onlyReg returns Writable(Reg)
+                const tmp1_regs = ctx.allocTmp(.I64) catch return null;
+                const tmp1_wreg = tmp1_regs.onlyReg() orelse return null;
+
+                const tmp2_regs = ctx.allocTmp(.I64) catch return null;
+                const tmp2_wreg = tmp2_regs.onlyReg() orelse return null;
+
+                // Emit bounds check: cmp idx, table_size
+                const idx_gpr = Gpr.unwrapNew(idx_reg);
+                ctx.emit(Inst{
+                    .cmp_rmi_r = .{
+                        .size = .size64,
+                        .src = GprMemImm.unwrapNew(RegMemImm.fromImm(@intCast(table_size))),
+                        .dst = idx_gpr,
+                    },
+                }) catch return null;
+
+                // Emit conditional jump to default if out of bounds: jae default
+                // Using winch_jmp_if which is a one-way conditional jump (no not_taken)
+                // Note: .nb = "not below" = CF=0 = unsigned >= (same as jae)
+                ctx.emit(Inst{
+                    .winch_jmp_if = .{
+                        .cc = .nb, // jae = jnb: jump if not below (unsigned >=)
+                        .taken = default_label,
+                    },
+                }) catch return null;
+
+                // Emit the jump table sequence
+                ctx.emit(Inst{
+                    .jmp_table_seq = .{
+                        .idx = idx_reg,
+                        .tmp1 = tmp1_wreg,
+                        .tmp2 = tmp2_wreg,
+                        .default = default_label,
+                        .targets = target_labels,
+                    },
+                }) catch return null;
             },
             .@"return" => {
                 // Return instruction
@@ -686,10 +774,15 @@ pub const X64LowerBackend = struct {
         const dst_reg = dst.onlyReg() orelse return null;
         const dst_gpr = WritableGpr.fromReg(Gpr.unwrapNew(dst_reg.toReg()));
 
+        // Get the condition code from instruction data
+        const inst_data = ctx.data(ir_inst);
+        const intcc = inst_data.getIntCC() orelse return null;
+        const cc = ccFromIntCC(intcc);
+
         // SETCC
         ctx.emit(Inst{
             .setcc = .{
-                .cc = .z, // Placeholder - should be based on IntCC
+                .cc = cc,
                 .dst = dst_gpr,
             },
         }) catch return null;
