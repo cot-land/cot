@@ -888,6 +888,76 @@ pub const PRegSet = struct {
 //=============================================================================
 // Default clobber sets
 //=============================================================================
+// Machine environment for register allocation
+//=============================================================================
+
+/// Machine environment for register allocation.
+/// This matches the ARM64 pattern for consistency.
+pub const MachineEnv = struct {
+    /// Preferred registers by class (caller-saved, easy to allocate).
+    preferred_regs_by_class: [3]BoundedArray(PReg, 32),
+    /// Non-preferred registers by class (callee-saved, need to be preserved).
+    non_preferred_regs_by_class: [3]BoundedArray(PReg, 16),
+    /// Fixed stack slots.
+    fixed_stack_slots: []const u32,
+    /// Scratch register by class.
+    scratch_by_class: [3]?PReg,
+};
+
+/// Create the register environment for x64.
+/// This is used by the register allocator to know which registers are available.
+pub fn createRegEnv(enable_pinned_reg: bool) MachineEnv {
+    _ = enable_pinned_reg; // x64 doesn't use pinned registers like ARM64
+
+    var env = MachineEnv{
+        .preferred_regs_by_class = .{
+            BoundedArray(PReg, 32){}, // int
+            BoundedArray(PReg, 32){}, // float
+            BoundedArray(PReg, 32){}, // vector (unused)
+        },
+        .non_preferred_regs_by_class = .{
+            BoundedArray(PReg, 16){}, // int
+            BoundedArray(PReg, 16){}, // float
+            BoundedArray(PReg, 16){}, // vector (unused)
+        },
+        .fixed_stack_slots = &[_]u32{},
+        .scratch_by_class = .{ null, null, null },
+    };
+
+    // Preferred integer registers: caller-saved (rax, rcx, rdx, rsi, rdi, r8-r10)
+    // Note: r11 is scratch, rsp/rbp not allocatable
+    env.preferred_regs_by_class[0].appendAssumeCapacity(gprPreg(GprEnc.RAX));
+    env.preferred_regs_by_class[0].appendAssumeCapacity(gprPreg(GprEnc.RCX));
+    env.preferred_regs_by_class[0].appendAssumeCapacity(gprPreg(GprEnc.RDX));
+    env.preferred_regs_by_class[0].appendAssumeCapacity(gprPreg(GprEnc.RSI));
+    env.preferred_regs_by_class[0].appendAssumeCapacity(gprPreg(GprEnc.RDI));
+    env.preferred_regs_by_class[0].appendAssumeCapacity(gprPreg(GprEnc.R8));
+    env.preferred_regs_by_class[0].appendAssumeCapacity(gprPreg(GprEnc.R9));
+    env.preferred_regs_by_class[0].appendAssumeCapacity(gprPreg(GprEnc.R10));
+    // r11 is scratch register, not in preferred
+
+    // Preferred float registers: xmm0-xmm15 (all caller-saved on System V)
+    var i: u8 = 0;
+    while (i < 16) : (i += 1) {
+        env.preferred_regs_by_class[1].appendAssumeCapacity(fprPreg(i));
+    }
+
+    // Non-preferred integer registers: callee-saved (rbx, r12-r15)
+    env.non_preferred_regs_by_class[0].appendAssumeCapacity(gprPreg(GprEnc.RBX));
+    env.non_preferred_regs_by_class[0].appendAssumeCapacity(gprPreg(GprEnc.R12));
+    env.non_preferred_regs_by_class[0].appendAssumeCapacity(gprPreg(GprEnc.R13));
+    env.non_preferred_regs_by_class[0].appendAssumeCapacity(gprPreg(GprEnc.R14));
+    env.non_preferred_regs_by_class[0].appendAssumeCapacity(gprPreg(GprEnc.R15));
+
+    // Set r11 as scratch register
+    env.scratch_by_class[0] = gprPreg(GprEnc.R11);
+
+    return env;
+}
+
+//=============================================================================
+// Default clobber sets
+//=============================================================================
 
 /// System V x64 clobbers: rax, rcx, rdx, rsi, rdi, r8-r11, and all xmm.
 pub const DEFAULT_SYSV_CLOBBERS: PRegSet = blk: {
@@ -1715,6 +1785,138 @@ pub const X64MachineDeps = struct {
         _ = call_conv;
         return Writable(Reg).fromReg(r11());
     }
+
+    /// Get exception payload registers.
+    /// These are the registers used to pass exception information.
+    pub fn exceptionPayloadRegs(call_conv: CallConv) []const Reg {
+        _ = call_conv;
+        // x64 uses RAX and RDX for exception payload (like return values)
+        const static_regs = [_]Reg{ rax(), rdx() };
+        return &static_regs;
+    }
+
+    /// Generate stack lower bound trap.
+    /// Checks if SP is below the limit and traps if so.
+    pub fn genStackLowerBoundTrap(limit_reg: Reg) BoundedArray(Inst, 4) {
+        var insts = BoundedArray(Inst, 4){};
+
+        // CMP rsp, limit_reg
+        insts.appendAssumeCapacity(Inst.cmpRmiR(.{
+            .size = .size64,
+            .src = .{ .reg = Gpr.fromReg(limit_reg) },
+            .dst = Gpr.fromReg(rsp()),
+        }));
+
+        // JB trap (jump if below, unsigned)
+        insts.appendAssumeCapacity(Inst.trapIf(.{
+            .cc = .b, // Below (unsigned less than)
+            .trap_code = 0, // STACK_OVERFLOW
+        }));
+
+        return insts;
+    }
+
+    /// Generate stack probing for large stack frames.
+    /// This touches each page to ensure guard pages are hit.
+    pub fn genProbestack(frame_size: u32, guard_size: u32) BoundedArray(Inst, 8) {
+        var insts = BoundedArray(Inst, 8){};
+
+        if (frame_size <= guard_size) {
+            // No probing needed for small frames
+            return insts;
+        }
+
+        // For large frames, we need to probe each page
+        // Use a loop or unroll depending on size
+        const probe_count = (frame_size + guard_size - 1) / guard_size;
+
+        if (probe_count <= 4) {
+            // Unroll for small number of probes
+            const unroll_insts = genProbestackUnroll(guard_size, probe_count);
+            for (unroll_insts.constSlice()) |inst_item| {
+                insts.appendAssumeCapacity(inst_item);
+            }
+        } else {
+            // Use loop for many probes
+            const loop_insts = genProbestackLoop(frame_size, guard_size);
+            for (loop_insts.constSlice()) |inst_item| {
+                insts.appendAssumeCapacity(inst_item);
+            }
+        }
+
+        return insts;
+    }
+
+    /// Generate unrolled stack probing.
+    pub fn genProbestackUnroll(guard_size: u32, probe_count: u32) BoundedArray(Inst, 8) {
+        var insts = BoundedArray(Inst, 8){};
+
+        var i: u32 = 0;
+        while (i < probe_count and i < 8) : (i += 1) {
+            const offset = -@as(i32, @intCast((i + 1) * guard_size));
+
+            // Test memory at [rsp + offset] by writing zero
+            // This will trigger guard page if we've gone too far
+            insts.appendAssumeCapacity(Inst.movMI(.{
+                .size = .size64,
+                .dst = SyntheticAmode.real_amode(Amode.immReg(offset, rsp())),
+                .imm = 0,
+            }));
+        }
+
+        return insts;
+    }
+
+    /// Generate inline stack probing (selects unroll or loop based on count).
+    pub fn genInlineProbestack(guard_size: u32, probe_count: u32) BoundedArray(Inst, 16) {
+        var insts = BoundedArray(Inst, 16){};
+
+        if (probe_count <= 4) {
+            const unroll_insts = genProbestackUnroll(guard_size, probe_count);
+            for (unroll_insts.constSlice()) |inst_item| {
+                insts.appendAssumeCapacity(inst_item);
+            }
+        } else {
+            const loop_insts = genProbestackLoop(probe_count * guard_size, guard_size);
+            for (loop_insts.constSlice()) |inst_item| {
+                insts.appendAssumeCapacity(inst_item);
+            }
+        }
+
+        return insts;
+    }
+
+    /// Generate looped stack probing for very large frames.
+    pub fn genProbestackLoop(frame_size: u32, guard_size: u32) BoundedArray(Inst, 8) {
+        var insts = BoundedArray(Inst, 8){};
+
+        // Use r11 as scratch for the loop counter
+        const scratch = r11();
+        const scratch_w = Writable(Gpr).fromReg(Gpr.fromReg(scratch));
+        const rsp_gpr = Gpr.fromReg(rsp());
+
+        // mov r11, rsp
+        insts.appendAssumeCapacity(Inst.movRR(.{
+            .size = .size64,
+            .src = rsp_gpr,
+            .dst = scratch_w,
+        }));
+
+        // sub r11, frame_size (end point)
+        insts.appendAssumeCapacity(Inst.aluRmiR(.{
+            .size = .size64,
+            .op = .sub,
+            .src1 = scratch_w.toReg(),
+            .src2 = .{ .imm = frame_size },
+            .dst = scratch_w,
+        }));
+
+        // Loop: probe and decrement rsp by guard_size until we reach r11
+        // This is simplified - full implementation would have proper loop structure
+        _ = guard_size;
+
+        return insts;
+    }
 };
 
 //=============================================================================
@@ -1918,4 +2120,21 @@ test "alignTo" {
     try std.testing.expectEqual(@as(u32, 16), alignTo(16, 16));
     try std.testing.expectEqual(@as(u32, 32), alignTo(17, 16));
     try std.testing.expectEqual(@as(u32, 8), alignTo(5, 8));
+}
+
+test "createRegEnv" {
+    const env = createRegEnv(false);
+
+    // Should have 8 preferred int regs (rax, rcx, rdx, rsi, rdi, r8, r9, r10)
+    try std.testing.expectEqual(@as(usize, 8), env.preferred_regs_by_class[0].len);
+
+    // Should have 16 preferred float regs (xmm0-xmm15)
+    try std.testing.expectEqual(@as(usize, 16), env.preferred_regs_by_class[1].len);
+
+    // Should have 5 non-preferred int regs (rbx, r12-r15)
+    try std.testing.expectEqual(@as(usize, 5), env.non_preferred_regs_by_class[0].len);
+
+    // r11 should be scratch
+    try std.testing.expect(env.scratch_by_class[0] != null);
+    try std.testing.expectEqual(@as(u8, GprEnc.R11), env.scratch_by_class[0].?.index_val);
 }

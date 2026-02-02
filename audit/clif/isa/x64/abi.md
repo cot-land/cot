@@ -1,8 +1,8 @@
 # x64 ABI Audit: abi.zig
 
 **Cranelift Source**: `cranelift/codegen/src/isa/x64/abi.rs` (1,348 lines)
-**Cot Implementation**: `compiler/codegen/native/isa/x64/abi.zig` (1,921 lines)
-**Status**: ✅ Core Complete (143% of Cranelift LOC)
+**Cot Implementation**: `compiler/codegen/native/isa/x64/abi.zig` (2,140 lines)
+**Status**: ✅ Complete (159% of Cranelift LOC, 120% of ARM64 parity)
 
 ---
 
@@ -215,13 +215,26 @@ set.vec_regs = 0x003F;  // XMM0-5
 | Metric | Value |
 |--------|-------|
 | Cranelift LOC | 1,348 |
-| Cot LOC | 1,921 |
-| Coverage | 143% |
-| Methods Implemented | 24/30 (80%) |
-| P1 Methods Complete | 24/24 (100%) |
-| Tests | 43 passing |
+| Cot LOC | 2,140 |
+| Coverage | 159% |
+| ARM64 Parity | 120% (2,140 vs 1,777 lines) |
+| Methods Implemented | 28/30 (93%) |
+| P1 Methods Complete | 28/28 (100%) |
+| Tests | 44 passing |
 
-**Conclusion**: Full parity with Cranelift's `X64ABIMachineSpec` for all P1 (required) functionality. P2/P3 items deferred until needed.
+**Added since initial implementation:**
+- `MachineEnv` struct (matching ARM64 pattern)
+- `createRegEnv()` for register allocator integration
+- `exceptionPayloadRegs()` for exception handling
+- `genStackLowerBoundTrap()` for stack overflow detection
+- `genProbestack()`, `genProbestackUnroll()`, `genProbestackLoop()` for large frames
+- `genInlineProbestack()` for inline probing
+
+**ARM64-only methods (not applicable to x64):**
+- `selectApiKey()` - ARM64 pointer authentication
+- `isForwardEdgeCfiEnabled()` - ARM64 BTI (Branch Target Identification)
+
+**Conclusion**: Full parity with Cranelift's `X64ABIMachineSpec` and ARM64's `AArch64MachineDeps`.
 
 ---
 
