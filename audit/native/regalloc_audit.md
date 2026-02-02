@@ -22,13 +22,12 @@
 | 6.9 | Parallel Moves | moves.rs | moves.zig | ✅ Done | 7/7 |
 | 6.10 | Ion Data Structures | ion/data_structures.rs | ion_data.zig | ✅ Done | 6/6 |
 | 6.11 | Liveness Analysis + Live Range Building | ion/liveranges.rs | liveness.zig | ✅ Done | 12/12 |
-| 6.12 | Bundle Merging | ion/merge.rs | ion/merge.zig | ⏳ TODO | - |
-| 6.13 | Allocation Loop | ion/process.rs | ion/process.zig | ⏳ TODO | - |
-| 6.14 | Spill Allocation | ion/spill.rs | ion/spill.zig | ⏳ TODO | - |
-| 6.15 | Move Insertion | ion/moves.rs | ion/moves.zig | ⏳ TODO | - |
-| 6.16 | Requirements | ion/requirement.rs | ion/requirement.zig | ⏳ TODO | - |
-| 6.17 | Reg Traversal | ion/reg_traversal.rs | ion/traversal.zig | ⏳ TODO | - |
-| 6.18 | Public API | lib.rs | lib.zig | ⏳ TODO | - |
+| 6.12 | Bundle Merging + Requirements | ion/merge.rs, ion/requirement.rs | merge.zig | ✅ Done | 10/10 |
+| 6.13 | Allocation Loop | ion/process.rs | process.zig | ⏳ TODO | - |
+| 6.14 | Spill Allocation | ion/spill.rs | spill.zig | ⏳ TODO | - |
+| 6.15 | Move Insertion | ion/moves.rs | ion_moves.zig | ⏳ TODO | - |
+| 6.16 | Reg Traversal | ion/reg_traversal.rs | traversal.zig | ⏳ TODO | - |
+| 6.17 | Public API | lib.rs | regalloc.zig | ⏳ TODO | - |
 
 ---
 
@@ -630,12 +629,39 @@ where:
 
 ---
 
-## Remaining Phases (TODO)
+## Phase 6.12: Bundle Merging + Requirements (merge.zig)
 
-### Phase 6.12: Bundle Merging (ion/merge.rs)
-- Merge compatible live ranges into bundles
-- Constraint compatibility checks
-- Spill set management
+**Source**: `src/ion/merge.rs` (~440 lines) + `src/ion/requirement.rs` (~183 lines)
+**Target**: `compiler/codegen/native/regalloc/merge.zig`
+**Status**: ✅ Complete (~710 LOC, 10 tests)
+**Audit**: See `audit/native/merge_audit.md` for full function-by-function mapping
+
+### Type Mapping
+
+| Rust Type | Zig Type | Notes |
+|-----------|----------|-------|
+| `RequirementConflict` | `RequirementConflict` | Error type |
+| `RequirementConflictAt` | `RequirementConflictAt` | Tagged union with split point |
+| `Requirement` | `Requirement` | Tagged union with merge logic |
+
+### MergeContext Methods
+
+| Rust Method | Zig Method | Notes |
+|-------------|------------|-------|
+| `requirement_from_operand()` | `requirementFromOperand()` | Convert operand to requirement |
+| `compute_requirement()` | `computeRequirement()` | Compute bundle requirement |
+| `merge_bundle_requirements()` | `mergeBundleRequirements()` | Merge two bundles' requirements |
+| `merge_bundle_properties()` | `mergeBundleProperties()` | Transfer cached properties |
+| `merge_bundles()` | `mergeBundles()` | Main merge algorithm |
+| `merge_vreg_bundles()` | `mergeVregBundles()` | Create and merge vreg bundles |
+| `compute_bundle_prio()` | `computeBundlePrio()` | Calculate priority |
+| `compute_bundle_limit()` | `computeBundleLimit()` | Find min limit |
+| `recompute_bundle_properties()` | `recomputeBundleProperties()` | Recompute prio/weight/flags |
+| `queue_bundles()` | `queueBundles()` | Queue for allocation |
+
+---
+
+## Remaining Phases (TODO)
 
 ### Phase 6.13: Allocation Loop (ion/process.rs)
 - Priority queue processing
@@ -653,15 +679,11 @@ where:
 - Resolve parallel moves
 - Handle shuffle cycles
 
-### Phase 6.16: Requirements (ion/requirement.rs)
-- Requirement propagation
-- Constraint satisfaction
-
-### Phase 6.17: Reg Traversal (ion/reg_traversal.rs)
+### Phase 6.16: Reg Traversal (ion/reg_traversal.rs)
 - Register iteration utilities
 - Preference ordering
 
-### Phase 6.18: Public API (lib.rs)
+### Phase 6.17: Public API (lib.rs)
 - `run()` function
 - `RegallocOptions`
 - Integration with VCode
