@@ -18,7 +18,7 @@
 | 6.5 | Output | lib.rs:1546-1650 | output.zig | ✅ Done | 6/6 |
 | 6.6 | CFG Analysis | cfg.rs, postorder.rs, domtree.rs | cfg.zig | ✅ Done | 5/5 |
 | 6.7 | SSA Validation | ssa.rs | ssa.zig | ✅ Done | 1/1 |
-| 6.8 | Index Set | indexset.rs | indexset.zig | ⏳ TODO | - |
+| 6.8 | Index Set | indexset.rs | indexset.zig | ✅ Done | 7/7 |
 | 6.9 | Parallel Moves | moves.rs | moves.zig | ⏳ TODO | - |
 | 6.10 | Ion Data Structures | ion/data_structures.rs | ion/data.zig | ⏳ TODO | - |
 | 6.11 | Liveness Analysis | ion/liveranges.rs | ion/liveness.zig | ⏳ TODO | - |
@@ -400,11 +400,59 @@ Also provides `FunctionVTable` for runtime dispatch when needed.
 
 ---
 
-## Remaining Phases (TODO)
+## Phase 6.8: Index Set (indexset.zig)
 
-### Phase 6.8: Index Set (indexset.zig)
-- Sparse-dense hybrid set
-- O(1) insert, contains, remove
+**Source**: `src/indexset.rs`
+**Target**: `compiler/codegen/native/regalloc/indexset.zig`
+**Status**: ✅ Complete (~430 LOC, 7 tests)
+
+### Type Mapping
+
+| Rust Type | Zig Type | Rust Location | Notes |
+|-----------|----------|---------------|-------|
+| `SetBitsIter` | `SetBitsIter` | indexset.rs:287 | Iterator over set bits in u64 |
+| `AdaptiveMap` | `AdaptiveMap` | indexset.rs:21 | Hybrid small/large mode map |
+| `AdaptiveMap::Small` | `Mode.small` | indexset.rs:22-27 | Inline storage (12 entries) |
+| `AdaptiveMap::Large` | `Mode.large` | indexset.rs:28 | HashMap storage |
+| `AdaptiveMap::new()` | `AdaptiveMap.init()` | indexset.rs:33 | ✅ |
+| `AdaptiveMap::get_or_insert()` | `AdaptiveMap.getOrInsert()` | indexset.rs:42 | ✅ |
+| `AdaptiveMap::get_mut()` | `AdaptiveMap.getMut()` | indexset.rs:96 | ✅ |
+| `AdaptiveMap::get()` | `AdaptiveMap.get()` | indexset.rs:114 | ✅ |
+| `AdaptiveMap::iter()` | `AdaptiveMap.iterator()` | indexset.rs:135 | ✅ |
+| `AdaptiveMap::is_empty()` | `AdaptiveMap.isEmpty()` | indexset.rs:146 | ✅ |
+| `IndexSet` | `IndexSet` | indexset.rs:183 | Sparse bit set |
+| `IndexSet.elems` | `IndexSet.elems` | indexset.rs:184 | AdaptiveMap backing |
+| `IndexSet.cache` | `IndexSet.cache_key/cache_value` | indexset.rs:185 | Streaming cache |
+| `IndexSet::new()` | `IndexSet.init()` | indexset.rs:191 | ✅ |
+| `IndexSet::set()` | `IndexSet.set()` | indexset.rs:227 | ✅ |
+| `IndexSet::get()` | `IndexSet.get()` | indexset.rs:242 | ✅ |
+| `IndexSet::assign()` | `IndexSet.assign()` | indexset.rs:236 | ✅ |
+| `IndexSet::union_with()` | `IndexSet.unionWith()` | indexset.rs:251 | ✅ Returns changed |
+| `IndexSet::iter()` | `IndexSet.iter()` | indexset.rs:265 | ✅ |
+| `IndexSet::is_small()` | `IndexSet.isSmall()` | indexset.rs:274 | ✅ |
+| `IndexSet::is_empty()` | `IndexSet.isEmpty()` | indexset.rs:282 | ✅ |
+
+### Constants
+
+| Rust Constant | Zig Constant | Value | Notes |
+|---------------|--------------|-------|-------|
+| `SMALL_ELEMS` | `SMALL_ELEMS` | 12 | Max inline entries before expanding |
+| `BITS_PER_WORD` | `BITS_PER_WORD` | 64 | Bits per u64 word |
+| `INVALID` | `INVALID` | 0xffff_ffff | Sentinel for empty/invalid keys |
+
+### Algorithm Notes
+
+**Small Mode**: Stores up to 12 (key, value) pairs inline. Keys stored in fixed array, values in parallel array. When full, can reuse slots with zero values. Only expands to large mode when all 12 slots have non-zero values and a new key is needed.
+
+**Large Mode**: Uses `std.AutoHashMap(u32, u64)` for arbitrary capacity.
+
+**SetBitsIter**: Uses `@ctz` (count trailing zeros) to find lowest set bit, then clears it with `x & (x-1)`.
+
+**Cache**: One-entry cache for streaming access patterns. Invalidated when the cached word is modified.
+
+---
+
+## Remaining Phases (TODO)
 
 ### Phase 6.9: Parallel Moves (moves.zig)
 - Cycle detection in move graphs
