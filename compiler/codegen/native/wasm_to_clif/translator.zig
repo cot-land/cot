@@ -504,6 +504,87 @@ pub const FuncTranslator = struct {
         }
     }
 
+    /// Translate a br_table instruction.
+    /// Port of code_translator.rs Operator::BrTable handling.
+    pub fn translateBrTable(self: *Self, targets: []const u32, default: u32) !void {
+        // Find minimum depth to determine jump args count
+        var min_depth = default;
+        for (targets) |depth| {
+            if (depth < min_depth) {
+                min_depth = depth;
+            }
+        }
+
+        // Get number of values to pass through the branch
+        const jump_args_count = blk: {
+            const frame = self.state.getFrame(min_depth);
+            break :blk if (frame.isLoop())
+                frame.numParamValues()
+            else
+                frame.numReturnValues();
+        };
+
+        // Pop the selector value
+        const selector = self.state.pop1();
+
+        if (jump_args_count == 0) {
+            // No jump arguments - simple case
+            // Build jump table entries
+            const allocator = self.builder.getAllocator();
+            var jt_targets = try allocator.alloc(Block, targets.len);
+            defer allocator.free(jt_targets);
+
+            for (targets, 0..) |depth, i| {
+                const frame = self.state.getFrameMut(depth);
+                frame.setBranchedToExit();
+                jt_targets[i] = frame.brDestination();
+            }
+
+            // Default target
+            const default_frame = self.state.getFrameMut(default);
+            default_frame.setBranchedToExit();
+            const default_block = default_frame.brDestination();
+
+            // Create jump table and emit br_table
+            const jt = try self.builder.createJumpTable(default_block, jt_targets);
+            _ = try self.builder.ins().brTable(selector, jt);
+        } else {
+            // Jump arguments case - need to split edges
+            // For now, emit a series of conditional branches as fallback
+            // This matches Cranelift's edge-splitting approach but simplified
+
+            for (targets, 0..) |depth, i| {
+                const frame = self.state.getFrameMut(depth);
+                frame.setBranchedToExit();
+                const destination = frame.brDestination();
+                const args = self.state.peekn(jump_args_count);
+
+                // Create comparison: selector == i
+                const idx_val = try self.builder.ins().iconst(Type.I32, @intCast(i));
+                const cmp = try self.builder.ins().icmp(.eq, selector, idx_val);
+
+                // Create next block for fall-through
+                const next_block = try self.builder.createBlock();
+
+                // Conditional branch
+                _ = try self.builder.ins().brif(cmp, destination, args, next_block, &[_]Value{});
+
+                self.builder.switchToBlock(next_block);
+                try self.builder.sealBlock(next_block);
+            }
+
+            // Default case
+            const default_frame = self.state.getFrameMut(default);
+            default_frame.setBranchedToExit();
+            const default_dest = default_frame.brDestination();
+            const args = self.state.peekn(jump_args_count);
+            _ = try self.builder.ins().jump(default_dest, args);
+        }
+
+        self.state.popn(jump_args_count);
+        self.state.reachable = false;
+    }
+
     /// Translate a return instruction.
     pub fn translateReturn(self: *Self) !void {
         // Get function frame (bottom of control stack)

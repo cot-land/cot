@@ -21,6 +21,9 @@ pub const Type = types.Type;
 pub const SigRef = dfg_mod.SigRef;
 pub const FuncRef = dfg_mod.FuncRef;
 pub const StackSlot = dfg_mod.StackSlot;
+pub const JumpTable = dfg_mod.JumpTable;
+pub const JumpTableData = dfg_mod.JumpTableData;
+pub const BlockCall = dfg_mod.BlockCall;
 
 // ============================================================================
 // Calling Convention
@@ -512,6 +515,18 @@ pub const Function = struct {
         const idx = slot.asU32();
         if (idx >= self.stack_slots.items.len) return null;
         return &self.stack_slots.items[idx];
+    }
+
+    /// Create a jump table with the specified data.
+    ///
+    /// Port of cranelift/codegen/src/ir/function.rs:233-236
+    pub fn createJumpTable(self: *Self, data: JumpTableData) !JumpTable {
+        return self.dfg.jump_tables.create(data);
+    }
+
+    /// Get a jump table by reference.
+    pub fn getJumpTable(self: Self, jt: JumpTable) ?*const JumpTableData {
+        return self.dfg.jump_tables.get(jt);
     }
 };
 

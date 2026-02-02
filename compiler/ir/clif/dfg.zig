@@ -5,8 +5,12 @@
 
 const std = @import("std");
 const types = @import("types.zig");
+const jumptable_mod = @import("jumptable.zig");
 
 const Type = types.Type;
+pub const JumpTables = jumptable_mod.JumpTables;
+pub const JumpTableData = jumptable_mod.JumpTableData;
+pub const BlockCall = jumptable_mod.BlockCall;
 
 // ============================================================================
 // Entity Types
@@ -449,6 +453,10 @@ pub const DataFlowGraph = struct {
     /// Memory pool for value lists.
     value_lists: ValueListPool,
 
+    /// Jump tables used by br_table instructions.
+    /// Port of cranelift/codegen/src/ir/dfg.rs:167
+    jump_tables: JumpTables,
+
     /// Number of instructions created (for generating Inst IDs).
     inst_count: u32,
 
@@ -462,6 +470,7 @@ pub const DataFlowGraph = struct {
             .insts = .{},
             .results = .{},
             .value_lists = ValueListPool.init(allocator),
+            .jump_tables = JumpTables.init(allocator),
             .inst_count = 0,
         };
     }
@@ -472,6 +481,7 @@ pub const DataFlowGraph = struct {
         self.insts.deinit(self.allocator);
         self.results.deinit(self.allocator);
         self.value_lists.deinit();
+        self.jump_tables.deinit();
     }
 
     pub fn clear(self: *Self) void {
@@ -480,6 +490,7 @@ pub const DataFlowGraph = struct {
         self.insts.clearRetainingCapacity();
         self.results.clearRetainingCapacity();
         self.value_lists.clear();
+        self.jump_tables.clear();
         self.inst_count = 0;
     }
 

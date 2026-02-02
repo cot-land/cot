@@ -27,6 +27,9 @@ pub const FuncRef = clif.FuncRef;
 pub const SigRef = clif.SigRef;
 pub const Signature = clif.Signature;
 pub const AbiParam = clif.AbiParam;
+pub const JumpTable = clif.JumpTable;
+pub const JumpTableData = clif.JumpTableData;
+pub const BlockCall = clif.BlockCall;
 
 /// Block status for tracking construction progress.
 const BlockStatus = enum {
@@ -305,6 +308,37 @@ pub const FunctionBuilder = struct {
     /// Import an external function.
     pub fn importFunction(self: *Self, data: clif.ExtFuncData) !FuncRef {
         return self.func.importFunction(self.func_ctx.allocator, data);
+    }
+
+    // ========================================================================
+    // Jump Tables
+    // Port of cranelift/frontend/src/frontend.rs create_jump_table
+    // ========================================================================
+
+    /// Create a jump table for br_table instruction.
+    ///
+    /// Port of cranelift/frontend/src/frontend.rs
+    pub fn createJumpTable(self: *Self, default_block: Block, targets: []const Block) !JumpTable {
+        // Build JumpTableData with BlockCalls
+        const allocator = self.func_ctx.allocator;
+
+        // Create default block call
+        const default_call = BlockCall.init(default_block);
+
+        // Create jump table data
+        var jt_data = JumpTableData.init(default_call);
+
+        // Add target entries
+        for (targets) |target| {
+            try jt_data.push(allocator, BlockCall.init(target));
+        }
+
+        return self.func.createJumpTable(jt_data);
+    }
+
+    /// Get allocator for external use.
+    pub fn getAllocator(self: Self) std.mem.Allocator {
+        return self.func_ctx.allocator;
     }
 
     // ========================================================================
@@ -700,6 +734,29 @@ pub const FuncInstBuilder = struct {
     pub fn trap(self: Self, code: clif.TrapCode) !Inst {
         _ = code;
         return self.buildTerminator();
+    }
+
+    /// Branch table instruction.
+    ///
+    /// Port of cranelift/codegen/src/ir/instructions.rs br_table
+    pub fn brTable(self: Self, selector: Value, jt: JumpTable) !Inst {
+        _ = selector;
+
+        // Get the jump table to declare successors
+        if (self.builder.func.getJumpTable(jt)) |jt_data| {
+            // Declare default block as successor
+            const inst = try self.buildTerminator();
+            try self.builder.declareSuccessor(jt_data.default_block.block, inst);
+
+            // Declare all target blocks as successors
+            for (jt_data.entries.items) |entry| {
+                try self.builder.declareSuccessor(entry.block, inst);
+            }
+
+            return inst;
+        } else {
+            return self.buildTerminator();
+        }
     }
 
     // ========================================================================

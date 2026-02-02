@@ -179,6 +179,7 @@ pub const WasmFuncTranslator = struct {
             .end => try translator.translateEnd(),
             .br => |depth| try translator.translateBr(depth),
             .br_if => |depth| try translator.translateBrIf(depth),
+            .br_table => |data| try translator.translateBrTable(data.targets, data.default),
             .return_op => try translator.translateReturn(),
             .unreachable_op => try translator.translateUnreachable(),
             .nop => {},
@@ -241,6 +242,12 @@ pub const BlockData = struct {
     results: usize,
 };
 
+/// Data for br_table instruction
+pub const BrTableData = struct {
+    targets: []const u32,
+    default: u32,
+};
+
 pub const WasmOperator = union(enum) {
     // Control flow
     block: BlockData,
@@ -250,6 +257,7 @@ pub const WasmOperator = union(enum) {
     end,
     br: u32,
     br_if: u32,
+    br_table: BrTableData,
     return_op,
     unreachable_op,
     nop,

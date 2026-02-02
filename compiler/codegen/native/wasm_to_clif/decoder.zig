@@ -285,6 +285,7 @@ pub const WasmOp = union(enum) {
             .end => .end,
             .br => |d| WasmOperator{ .br = d },
             .br_if => |d| WasmOperator{ .br_if = d },
+            .br_table => |d| WasmOperator{ .br_table = .{ .targets = d.targets, .default = d.default } },
             .return_op => .return_op,
             .unreachable_op => .unreachable_op,
             .nop => .nop,
