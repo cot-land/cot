@@ -352,10 +352,67 @@ pub const FuncBuilder = struct {
 
     /// Insert an instruction at the end of the current block.
     fn insertInst(self: *Self, data: InstructionData, result_type: ?Type) !struct { inst: Inst, result: ?Value } {
-        _ = data; // Instruction data storage TBD
         const block = self.current_block orelse return error.NoCurrentBlock;
         const inst = self.dfg.makeInst();
         try self.layout.appendInst(self.allocator, inst, block);
+
+        // Store instruction data in DFG
+        // Extract immediate value if present
+        const imm: ?i64 = switch (data) {
+            .unary_imm => |d| d.imm,
+            .binary_imm64 => |d| d.imm,
+            else => null,
+        };
+
+        // Extract args for the ValueList
+        const args_slice: []const Value = switch (data) {
+            .nullary => &[_]Value{},
+            .unary => |d| &[_]Value{d.arg},
+            .unary_imm, .unary_ieee32, .unary_ieee64 => &[_]Value{},
+            .binary => |d| &d.args,
+            .binary_imm64 => |d| &[_]Value{d.arg},
+            .ternary => |d| &d.args,
+            .int_compare => |d| &d.args,
+            .float_compare => |d| &d.args,
+            .jump => &[_]Value{}, // args in ValueList
+            .brif => |d| &[_]Value{d.arg},
+            .branch_table => |d| &[_]Value{d.arg},
+            .call => &[_]Value{}, // args in ValueList
+            .call_indirect => |d| &[_]Value{d.callee}, // callee + args
+            .trap => &[_]Value{},
+            .cond_trap => |d| &[_]Value{d.arg},
+            .load => |d| &[_]Value{d.arg},
+            .store => |d| &d.args,
+            .stack_load => &[_]Value{},
+            .stack_store => |d| &[_]Value{d.arg},
+            .func_addr => &[_]Value{},
+        };
+
+        const args = try self.dfg.value_lists.alloc(args_slice);
+
+        // Extract branch destinations
+        const dest: ?dfg_mod.Block = switch (data) {
+            .jump => |d| d.destination,
+            else => null,
+        };
+        const then_dest: ?dfg_mod.Block = switch (data) {
+            .brif => |d| d.then_block,
+            else => null,
+        };
+        const else_dest: ?dfg_mod.Block = switch (data) {
+            .brif => |d| d.else_block,
+            else => null,
+        };
+
+        try self.dfg.setInstData(inst, .{
+            .opcode = data.opcode(),
+            .args = args,
+            .ctrl_type = result_type orelse Type.INVALID,
+            .dest = dest,
+            .then_dest = then_dest,
+            .else_dest = else_dest,
+            .imm = imm,
+        });
 
         // Create result value if needed
         var result: ?Value = null;

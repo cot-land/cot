@@ -290,15 +290,19 @@ pub const AArch64LowerBackend = struct {
         const ty = ctx.outputTy(ir_inst, 0);
         const size = operandSizeFromType(ty) orelse return null;
 
-        // Get constant value from instruction (placeholder - would extract from data)
-        const value: u64 = 0; // TODO: extract from inst_data
+        // Get constant value - first try the constant map (populated during init),
+        // then fall back to instruction data
+        const value: u64 = ctx.getConstant(ir_inst) orelse
+            ctx.data(ir_inst).getImmediate() orelse
+            return null;
 
         // Allocate destination register
         const dst = ctx.allocTmp(ty) catch return null;
         const dst_reg = dst.onlyReg() orelse return null;
 
-        // Emit move wide instruction
+        // Emit move wide instruction(s) to load the constant
         if (MoveWideConst.maybeFromU64(value)) |imm| {
+            // Simple case: fits in single movz
             ctx.emit(Inst{
                 .mov_wide = .{
                     .op = .movz,
@@ -308,16 +312,57 @@ pub const AArch64LowerBackend = struct {
                 },
             }) catch return null;
         } else {
-            // For larger constants, we need multiple instructions
-            // This is a simplified version - full implementation would use multiple movk
+            // Larger constant: use movz for low bits, then movk for higher bits
+            // Start with movz for bits 0-15
             ctx.emit(Inst{
                 .mov_wide = .{
                     .op = .movz,
                     .rd = dst_reg,
-                    .imm = MoveWideConst.maybeWithShift(@truncate(value), 0) orelse return null,
+                    .imm = MoveWideConst.maybeWithShift(@truncate(value & 0xFFFF), 0) orelse return null,
                     .size = size,
                 },
             }) catch return null;
+
+            // Add movk for bits 16-31 if non-zero
+            const bits_16_31: u16 = @truncate((value >> 16) & 0xFFFF);
+            if (bits_16_31 != 0) {
+                ctx.emit(Inst{
+                    .mov_wide = .{
+                        .op = .movk,
+                        .rd = dst_reg,
+                        .imm = MoveWideConst.maybeWithShift(bits_16_31, 16) orelse return null,
+                        .size = size,
+                    },
+                }) catch return null;
+            }
+
+            // Add movk for bits 32-47 if non-zero (64-bit only)
+            if (size == .size64) {
+                const bits_32_47: u16 = @truncate((value >> 32) & 0xFFFF);
+                if (bits_32_47 != 0) {
+                    ctx.emit(Inst{
+                        .mov_wide = .{
+                            .op = .movk,
+                            .rd = dst_reg,
+                            .imm = MoveWideConst.maybeWithShift(bits_32_47, 32) orelse return null,
+                            .size = size,
+                        },
+                    }) catch return null;
+                }
+
+                // Add movk for bits 48-63 if non-zero
+                const bits_48_63: u16 = @truncate((value >> 48) & 0xFFFF);
+                if (bits_48_63 != 0) {
+                    ctx.emit(Inst{
+                        .mov_wide = .{
+                            .op = .movk,
+                            .rd = dst_reg,
+                            .imm = MoveWideConst.maybeWithShift(bits_48_63, 48) orelse return null,
+                            .size = size,
+                        },
+                    }) catch return null;
+                }
+            }
         }
 
         var output = InstOutput{};

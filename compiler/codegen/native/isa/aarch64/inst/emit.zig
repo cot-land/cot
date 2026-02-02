@@ -511,9 +511,20 @@ fn encConditionalBr(taken: BranchTarget, kind: CondBrKind) u32 {
 /// Encode a move-wide instruction.
 pub fn encMoveWide(op: MoveWideOp, rd: Writable(Reg), imm_const: MoveWideConst, size: OperandSize) u32 {
     std.debug.assert(imm_const.shift <= 0b11);
+
+    // MOVK has a different base opcode (0x72800000) than MOVZ/MOVN (0x12800000)
+    if (op == .movk) {
+        return 0x72800000 |
+            (@as(u32, size.sfBit()) << 31) |
+            (@as(u32, imm_const.shift) << 21) |
+            (@as(u32, imm_const.bits_val) << 5) |
+            machregToGpr(rd.toReg());
+    }
+
     const op_bits: u32 = switch (op) {
         .movn => 0b00,
         .movz => 0b10,
+        .movk => unreachable, // Handled above
     };
     return 0x12800000 |
         (@as(u32, size.sfBit()) << 31) |

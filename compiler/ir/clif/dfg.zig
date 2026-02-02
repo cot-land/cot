@@ -394,6 +394,8 @@ pub const InstData = struct {
     then_dest: ?Block = null,
     /// Else destination (for brif).
     else_dest: ?Block = null,
+    /// Immediate value (for iconst, iadd_imm, etc).
+    imm: ?i64 = null,
 
     pub const EMPTY: InstData = .{
         .opcode = .nop,
@@ -402,7 +404,18 @@ pub const InstData = struct {
         .dest = null,
         .then_dest = null,
         .else_dest = null,
+        .imm = null,
     };
+
+    /// Get the immediate value as unsigned, if present.
+    pub fn getImmediate(self: InstData) ?u64 {
+        return if (self.imm) |v| @bitCast(v) else null;
+    }
+
+    /// Get the immediate value as signed, if present.
+    pub fn getImmediateSigned(self: InstData) ?i64 {
+        return self.imm;
+    }
 
     /// Get the single block destination (for jump instructions).
     pub fn getBlockDest(self: InstData) ?Block {

@@ -280,6 +280,8 @@ pub const MoveWideOp = enum {
     movz,
     /// Move with NOT (MOVN).
     movn,
+    /// Move with keep (MOVK) - inserts 16-bit value at specified position.
+    movk,
 };
 
 /// Atomic read-modify-write operations.

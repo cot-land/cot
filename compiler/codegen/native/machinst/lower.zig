@@ -1313,10 +1313,10 @@ pub fn hasLoweringSideEffect(f: *const Function, inst: Inst) bool {
 
 /// Check if an instruction is a 64-bit constant.
 pub fn isConstant64Bit(f: *const Function, inst: Inst) ?u64 {
-    const opcode = f.dfg.insts.items[inst.index].opcode;
-    if (opcode == .iconst) {
-        // Would extract the constant value from the instruction.
-        return null; // Placeholder
+    const inst_data = f.dfg.getInstData(inst);
+    if (inst_data.opcode == .iconst) {
+        // Extract the constant value from the immediate field
+        return inst_data.getImmediate();
     }
     return null;
 }
