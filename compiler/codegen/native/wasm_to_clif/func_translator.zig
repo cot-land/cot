@@ -312,6 +312,62 @@ pub const WasmFuncTranslator = struct {
             // Port of code_translator.rs:654-717
             .call => |idx| try translator.translateCall(idx),
             .call_indirect => |data| try translator.translateCallIndirect(data.type_index, data.table_index),
+
+            // Float constants
+            .f32_const => |val| try translator.translateF32Const(val),
+            .f64_const => |val| try translator.translateF64Const(val),
+
+            // Float arithmetic (binary)
+            .f32_add, .f64_add => try translator.translateFAdd(),
+            .f32_sub, .f64_sub => try translator.translateFSub(),
+            .f32_mul, .f64_mul => try translator.translateFMul(),
+            .f32_div, .f64_div => try translator.translateFDiv(),
+            .f32_min, .f64_min => try translator.translateFMin(),
+            .f32_max, .f64_max => try translator.translateFMax(),
+            .f32_copysign, .f64_copysign => try translator.translateFCopysign(),
+
+            // Float arithmetic (unary)
+            .f32_abs, .f64_abs => try translator.translateFAbs(),
+            .f32_neg, .f64_neg => try translator.translateFNeg(),
+            .f32_ceil, .f64_ceil => try translator.translateFCeil(),
+            .f32_floor, .f64_floor => try translator.translateFFloor(),
+            .f32_trunc, .f64_trunc => try translator.translateFTrunc(),
+            .f32_nearest, .f64_nearest => try translator.translateFNearest(),
+            .f32_sqrt, .f64_sqrt => try translator.translateFSqrt(),
+
+            // Float comparisons
+            .f32_eq, .f64_eq => try translator.translateFEq(),
+            .f32_ne, .f64_ne => try translator.translateFNe(),
+            .f32_lt, .f64_lt => try translator.translateFLt(),
+            .f32_gt, .f64_gt => try translator.translateFGt(),
+            .f32_le, .f64_le => try translator.translateFLe(),
+            .f32_ge, .f64_ge => try translator.translateFGe(),
+
+            // Float truncation to int
+            .i32_trunc_f32_s, .i32_trunc_f64_s => try translator.translateTruncFS(Type.I32),
+            .i32_trunc_f32_u, .i32_trunc_f64_u => try translator.translateTruncFU(Type.I32),
+            .i64_trunc_f32_s, .i64_trunc_f64_s => try translator.translateTruncFS(Type.I64),
+            .i64_trunc_f32_u, .i64_trunc_f64_u => try translator.translateTruncFU(Type.I64),
+
+            // Int to float conversion
+            .f32_convert_i32_s, .f32_convert_i64_s => try translator.translateConvertFS(Type.F32),
+            .f32_convert_i32_u, .f32_convert_i64_u => try translator.translateConvertFU(Type.F32),
+            .f64_convert_i32_s, .f64_convert_i64_s => try translator.translateConvertFS(Type.F64),
+            .f64_convert_i32_u, .f64_convert_i64_u => try translator.translateConvertFU(Type.F64),
+
+            // Float promotion/demotion
+            .f32_demote_f64 => try translator.translateF32DemoteF64(),
+            .f64_promote_f32 => try translator.translateF64PromoteF32(),
+
+            // Reinterpret
+            .i32_reinterpret_f32 => try translator.translateReinterpret(Type.I32, Type.F32),
+            .i64_reinterpret_f64 => try translator.translateReinterpret(Type.I64, Type.F64),
+            .f32_reinterpret_i32 => try translator.translateReinterpret(Type.F32, Type.I32),
+            .f64_reinterpret_i64 => try translator.translateReinterpret(Type.F64, Type.I64),
+
+            // Memory size and grow
+            .memory_size => |mem_idx| try translator.translateMemorySize(mem_idx),
+            .memory_grow => |mem_idx| try translator.translateMemoryGrow(mem_idx),
         }
     }
 };
@@ -355,6 +411,8 @@ pub const WasmOperator = union(enum) {
     // Constants
     i32_const: i32,
     i64_const: i64,
+    f32_const: f32,
+    f64_const: f64,
 
     // Arithmetic i32/i64 (unified - CLIF instructions are type-agnostic)
     // Port of code_translator.rs:1193-1268
@@ -414,10 +472,90 @@ pub const WasmOperator = union(enum) {
     i32_ge_u,
     i64_ge_u,
 
-    // Conversions
+    // Arithmetic f32
+    f32_add,
+    f32_sub,
+    f32_mul,
+    f32_div,
+    f32_min,
+    f32_max,
+    f32_abs,
+    f32_neg,
+    f32_ceil,
+    f32_floor,
+    f32_trunc,
+    f32_nearest,
+    f32_sqrt,
+    f32_copysign,
+
+    // Arithmetic f64
+    f64_add,
+    f64_sub,
+    f64_mul,
+    f64_div,
+    f64_min,
+    f64_max,
+    f64_abs,
+    f64_neg,
+    f64_ceil,
+    f64_floor,
+    f64_trunc,
+    f64_nearest,
+    f64_sqrt,
+    f64_copysign,
+
+    // Comparison f32
+    f32_eq,
+    f32_ne,
+    f32_lt,
+    f32_gt,
+    f32_le,
+    f32_ge,
+
+    // Comparison f64
+    f64_eq,
+    f64_ne,
+    f64_lt,
+    f64_gt,
+    f64_le,
+    f64_ge,
+
+    // Conversions - integer
     i32_wrap_i64,
     i64_extend_i32_s,
     i64_extend_i32_u,
+
+    // Conversions - float truncation
+    i32_trunc_f32_s,
+    i32_trunc_f32_u,
+    i32_trunc_f64_s,
+    i32_trunc_f64_u,
+    i64_trunc_f32_s,
+    i64_trunc_f32_u,
+    i64_trunc_f64_s,
+    i64_trunc_f64_u,
+
+    // Conversions - float promotion/demotion
+    f32_convert_i32_s,
+    f32_convert_i32_u,
+    f32_convert_i64_s,
+    f32_convert_i64_u,
+    f64_convert_i32_s,
+    f64_convert_i32_u,
+    f64_convert_i64_s,
+    f64_convert_i64_u,
+    f32_demote_f64,
+    f64_promote_f32,
+
+    // Reinterpret
+    i32_reinterpret_f32,
+    i64_reinterpret_f64,
+    f32_reinterpret_i32,
+    f64_reinterpret_i64,
+
+    // Memory operations
+    memory_size: u32,
+    memory_grow: u32,
 
     // Parametric
     drop,

@@ -918,9 +918,10 @@ pub fn VCode(comptime I: type) type {
                 const from_reg = reg_mod.Reg.fromPReg(from_preg);
                 const to_reg = reg_mod.Writable(reg_mod.Reg).fromReg(reg_mod.Reg.fromPReg(to_preg));
 
-                // Use I64 type as default (covers most cases)
-                // TODO: Get actual type from vreg_types when available
-                const ty = Type.I64;
+                // Get the canonical type from the register class
+                // This ensures float registers get F64 type, int registers get I64, etc.
+                // Ported from Cranelift's canonical_type_for_rc pattern
+                const ty = Inst.canonicalTypeForRc(from_preg.class());
 
                 // Generate and emit the move instruction
                 const move_inst = Inst.genMove(to_reg, from_reg, ty);
@@ -938,8 +939,8 @@ pub fn VCode(comptime I: type) type {
                 // Convert PReg to Reg
                 const to_reg = reg_mod.Writable(reg_mod.Reg).fromReg(reg_mod.Reg.fromPReg(to_preg));
 
-                // Use I64 type (most common for spills)
-                const ty = Type.I64;
+                // Get the canonical type from the register class
+                const ty = Inst.canonicalTypeForRc(to_preg.class());
 
                 // Generate and emit the load instruction
                 const load_inst = Inst.genLoadStack(to_reg, slot_offset, ty);
@@ -955,8 +956,8 @@ pub fn VCode(comptime I: type) type {
                 // Convert PReg to Reg
                 const from_reg = reg_mod.Reg.fromPReg(from_preg);
 
-                // Use I64 type (most common for spills)
-                const ty = Type.I64;
+                // Get the canonical type from the register class
+                const ty = Inst.canonicalTypeForRc(from_preg.class());
 
                 // Generate and emit the store instruction
                 const store_inst = Inst.genStoreStack(from_reg, slot_offset, ty);

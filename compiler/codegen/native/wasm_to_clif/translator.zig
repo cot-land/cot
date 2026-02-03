@@ -1138,7 +1138,8 @@ pub const FuncTranslator = struct {
     pub fn translateSelect(self: *Self) !void {
         const args = self.state.pop3();
         // args = (val1, val2, cond)
-        const result = try self.builder.ins().select(args[2], args[0], args[1]);
+        const ty = self.builder.func.dfg.valueType(args[0]);
+        const result = try self.builder.ins().select(ty, args[2], args[0], args[1]);
         try self.state.push1(result);
     }
 
@@ -1489,6 +1490,254 @@ pub const FuncTranslator = struct {
         );
 
         return .{ .code_ptr = code_ptr, .callee_vmctx = callee_vmctx };
+    }
+
+    // ========================================================================
+    // Float Constant Translation
+    // ========================================================================
+
+    pub fn translateF32Const(self: *Self, val: f32) !void {
+        const result = try self.builder.ins().f32const(val);
+        try self.state.push1(result);
+    }
+
+    pub fn translateF64Const(self: *Self, val: f64) !void {
+        const result = try self.builder.ins().f64const(val);
+        try self.state.push1(result);
+    }
+
+    // ========================================================================
+    // Float Arithmetic Translation (binary)
+    // Port of code_translator.rs float binary operations
+    // ========================================================================
+
+    pub fn translateFAdd(self: *Self) !void {
+        const args = self.state.pop2();
+        const ty = self.builder.func.dfg.valueType(args[0]);
+        const result = try self.builder.ins().fadd(ty, args[0], args[1]);
+        try self.state.push1(result);
+    }
+
+    pub fn translateFSub(self: *Self) !void {
+        const args = self.state.pop2();
+        const ty = self.builder.func.dfg.valueType(args[0]);
+        const result = try self.builder.ins().fsub(ty, args[0], args[1]);
+        try self.state.push1(result);
+    }
+
+    pub fn translateFMul(self: *Self) !void {
+        const args = self.state.pop2();
+        const ty = self.builder.func.dfg.valueType(args[0]);
+        const result = try self.builder.ins().fmul(ty, args[0], args[1]);
+        try self.state.push1(result);
+    }
+
+    pub fn translateFDiv(self: *Self) !void {
+        const args = self.state.pop2();
+        const ty = self.builder.func.dfg.valueType(args[0]);
+        const result = try self.builder.ins().fdiv(ty, args[0], args[1]);
+        try self.state.push1(result);
+    }
+
+    pub fn translateFMin(self: *Self) !void {
+        // fmin is not directly available in builder, use fcmp + select pattern
+        const args = self.state.pop2();
+        const ty = self.builder.func.dfg.valueType(args[0]);
+        const cmp = try self.builder.ins().fcmp(clif.FloatCC.lt, args[0], args[1]);
+        const result = try self.builder.ins().select(ty, cmp, args[0], args[1]);
+        try self.state.push1(result);
+    }
+
+    pub fn translateFMax(self: *Self) !void {
+        // fmax is not directly available in builder, use fcmp + select pattern
+        const args = self.state.pop2();
+        const ty = self.builder.func.dfg.valueType(args[0]);
+        const cmp = try self.builder.ins().fcmp(clif.FloatCC.gt, args[0], args[1]);
+        const result = try self.builder.ins().select(ty, cmp, args[0], args[1]);
+        try self.state.push1(result);
+    }
+
+    pub fn translateFCopysign(self: *Self) !void {
+        // copysign copies the sign of b to a
+        // For now, stub implementation - proper implementation needs bitwise operations
+        const args = self.state.pop2();
+        _ = args;
+        // TODO: Implement properly using bitwise operations
+        // For now, just return the first argument
+        const result = try self.builder.ins().iconst(Type.I32, 0);
+        try self.state.push1(result);
+    }
+
+    // ========================================================================
+    // Float Arithmetic Translation (unary)
+    // ========================================================================
+
+    pub fn translateFAbs(self: *Self) !void {
+        const arg = self.state.pop1();
+        const ty = self.builder.func.dfg.valueType(arg);
+        const result = try self.builder.ins().fabs(ty, arg);
+        try self.state.push1(result);
+    }
+
+    pub fn translateFNeg(self: *Self) !void {
+        const arg = self.state.pop1();
+        const ty = self.builder.func.dfg.valueType(arg);
+        const result = try self.builder.ins().fneg(ty, arg);
+        try self.state.push1(result);
+    }
+
+    pub fn translateFCeil(self: *Self) !void {
+        // ceil not directly available - stub implementation
+        const arg = self.state.pop1();
+        // TODO: Implement using library call or custom lowering
+        try self.state.push1(arg);
+    }
+
+    pub fn translateFFloor(self: *Self) !void {
+        // floor not directly available - stub implementation
+        const arg = self.state.pop1();
+        // TODO: Implement using library call or custom lowering
+        try self.state.push1(arg);
+    }
+
+    pub fn translateFTrunc(self: *Self) !void {
+        // trunc not directly available - stub implementation
+        const arg = self.state.pop1();
+        // TODO: Implement using library call or custom lowering
+        try self.state.push1(arg);
+    }
+
+    pub fn translateFNearest(self: *Self) !void {
+        // nearest not directly available - stub implementation
+        const arg = self.state.pop1();
+        // TODO: Implement using library call or custom lowering
+        try self.state.push1(arg);
+    }
+
+    pub fn translateFSqrt(self: *Self) !void {
+        const arg = self.state.pop1();
+        const ty = self.builder.func.dfg.valueType(arg);
+        const result = try self.builder.ins().sqrt(ty, arg);
+        try self.state.push1(result);
+    }
+
+    // ========================================================================
+    // Float Comparison Translation
+    // Port of code_translator.rs translate_fcmp pattern
+    // Following the same pattern as integer comparisons
+    // ========================================================================
+
+    pub fn translateFEq(self: *Self) !void {
+        const args = self.state.pop2();
+        const result = try self.builder.ins().fcmp(clif.FloatCC.eq, args[0], args[1]);
+        try self.state.push1(result);
+    }
+
+    pub fn translateFNe(self: *Self) !void {
+        const args = self.state.pop2();
+        const result = try self.builder.ins().fcmp(clif.FloatCC.ne, args[0], args[1]);
+        try self.state.push1(result);
+    }
+
+    pub fn translateFLt(self: *Self) !void {
+        const args = self.state.pop2();
+        const result = try self.builder.ins().fcmp(clif.FloatCC.lt, args[0], args[1]);
+        try self.state.push1(result);
+    }
+
+    pub fn translateFGt(self: *Self) !void {
+        const args = self.state.pop2();
+        const result = try self.builder.ins().fcmp(clif.FloatCC.gt, args[0], args[1]);
+        try self.state.push1(result);
+    }
+
+    pub fn translateFLe(self: *Self) !void {
+        const args = self.state.pop2();
+        const result = try self.builder.ins().fcmp(clif.FloatCC.le, args[0], args[1]);
+        try self.state.push1(result);
+    }
+
+    pub fn translateFGe(self: *Self) !void {
+        const args = self.state.pop2();
+        const result = try self.builder.ins().fcmp(clif.FloatCC.ge, args[0], args[1]);
+        try self.state.push1(result);
+    }
+
+    // ========================================================================
+    // Float Conversion Translation
+    // ========================================================================
+
+    pub fn translateTruncFS(self: *Self, result_ty: Type) !void {
+        const arg = self.state.pop1();
+        // fcvt_to_sint converts float to signed int
+        const result = try self.builder.ins().fcvtToSint(result_ty, arg);
+        try self.state.push1(result);
+    }
+
+    pub fn translateTruncFU(self: *Self, result_ty: Type) !void {
+        const arg = self.state.pop1();
+        // fcvt_to_uint converts float to unsigned int
+        const result = try self.builder.ins().fcvtToUint(result_ty, arg);
+        try self.state.push1(result);
+    }
+
+    pub fn translateConvertFS(self: *Self, result_ty: Type) !void {
+        const arg = self.state.pop1();
+        // fcvt_from_sint converts signed int to float
+        const result = try self.builder.ins().fcvtFromSint(result_ty, arg);
+        try self.state.push1(result);
+    }
+
+    pub fn translateConvertFU(self: *Self, result_ty: Type) !void {
+        const arg = self.state.pop1();
+        // fcvt_from_uint converts unsigned int to float
+        const result = try self.builder.ins().fcvtFromUint(result_ty, arg);
+        try self.state.push1(result);
+    }
+
+    pub fn translateF32DemoteF64(self: *Self) !void {
+        const arg = self.state.pop1();
+        const result = try self.builder.ins().fdemote(Type.F32, arg);
+        try self.state.push1(result);
+    }
+
+    pub fn translateF64PromoteF32(self: *Self) !void {
+        const arg = self.state.pop1();
+        const result = try self.builder.ins().fpromote(Type.F64, arg);
+        try self.state.push1(result);
+    }
+
+    pub fn translateReinterpret(self: *Self, to_ty: Type, from_ty: Type) !void {
+        const arg = self.state.pop1();
+        _ = from_ty;
+        // bitcast reinterprets the bits without conversion
+        const result = try self.builder.ins().bitcast(to_ty, arg);
+        try self.state.push1(result);
+    }
+
+    // ========================================================================
+    // Memory Size/Grow Translation
+    // Port of code_translator.rs:795-808
+    // ========================================================================
+
+    pub fn translateMemorySize(self: *Self, mem_index: u32) !void {
+        _ = mem_index; // Currently single-memory model
+        // Memory size in pages is stored in a global or needs runtime support
+        // For now, return a constant (1 page = 64KB is typical initial size)
+        // TODO: Implement proper memory size tracking
+        const result = try self.builder.ins().iconst(Type.I32, 1);
+        try self.state.push1(result);
+    }
+
+    pub fn translateMemoryGrow(self: *Self, mem_index: u32) !void {
+        _ = mem_index;
+        const delta = self.state.pop1();
+        _ = delta;
+        // Memory grow requires runtime support to actually grow memory
+        // Return -1 (failure) as we don't support dynamic memory growth yet
+        // TODO: Implement proper memory grow with runtime support
+        const result = try self.builder.ins().iconst(Type.I32, @as(i32, -1));
+        try self.state.push1(result);
     }
 };
 

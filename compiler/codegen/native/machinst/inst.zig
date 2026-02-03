@@ -485,6 +485,12 @@ pub fn SmallVec(comptime T: type, comptime inline_capacity: usize) type {
 
         const Self = @This();
 
+        /// Error types for SmallVec operations.
+        pub const Error = error{
+            OutOfMemory,
+            NoAllocator,
+        };
+
         pub fn init() Self {
             return .{
                 .inline_buf = undefined,
@@ -540,15 +546,23 @@ pub fn SmallVec(comptime T: type, comptime inline_capacity: usize) type {
             return self.inline_buf[0..self.inline_len];
         }
 
-        pub fn push(self: *Self, item: T) void {
+        /// Push with proper error handling.
+        /// Returns error.NoAllocator if heap allocation is needed but no allocator was provided.
+        /// Returns error.OutOfMemory if allocation fails.
+        pub fn push(self: *Self, item: T) Error!void {
             if (self.heap_buf) |buf| {
                 // Already on heap - grow if needed
                 if (self.heap_len >= self.heap_cap) {
-                    const alloc = self.allocator orelse @panic("SmallVec needs allocator for heap growth");
-                    const new_cap = self.heap_cap * 2;
+                    const alloc = self.allocator orelse return error.NoAllocator;
+
+                    // Check for overflow before doubling
+                    const new_cap = std.math.mul(usize, self.heap_cap, 2) catch {
+                        return error.OutOfMemory;
+                    };
+
                     const old_slice = buf[0..self.heap_cap];
-                    // Always allocate new buffer and copy (simpler than trying resize)
-                    const new_buf = alloc.alloc(T, new_cap) catch @panic("SmallVec OOM");
+                    // Allocate new buffer and copy
+                    const new_buf = alloc.alloc(T, new_cap) catch return error.OutOfMemory;
                     @memcpy(new_buf[0..self.heap_len], buf[0..self.heap_len]);
                     alloc.free(old_slice);
                     self.heap_buf = new_buf.ptr;
@@ -562,15 +576,26 @@ pub fn SmallVec(comptime T: type, comptime inline_capacity: usize) type {
                 self.inline_len += 1;
             } else {
                 // Promote to heap
-                const alloc = self.allocator orelse @panic("SmallVec needs allocator for heap promotion");
+                const alloc = self.allocator orelse return error.NoAllocator;
                 const new_cap = inline_capacity * 2;
-                const heap = alloc.alloc(T, new_cap) catch @panic("SmallVec OOM");
+                const heap = alloc.alloc(T, new_cap) catch return error.OutOfMemory;
                 @memcpy(heap[0..inline_capacity], self.inline_buf[0..inline_capacity]);
                 heap[inline_capacity] = item;
                 self.heap_buf = heap.ptr;
                 self.heap_cap = new_cap;
                 self.heap_len = inline_capacity + 1;
             }
+        }
+
+        /// Push that panics on error (for places where OOM is unrecoverable).
+        /// Use this when working in code paths where error handling isn't possible.
+        pub fn pushAssumeCapacity(self: *Self, item: T) void {
+            self.push(item) catch |err| {
+                switch (err) {
+                    error.NoAllocator => @panic("SmallVec needs allocator for heap promotion"),
+                    error.OutOfMemory => @panic("SmallVec out of memory"),
+                }
+            };
         }
 
         pub fn clear(self: *Self) void {
@@ -1269,9 +1294,10 @@ test "SmallVec basic" {
     try testing.expect(sv.isEmpty());
     try testing.expectEqual(@as(usize, 0), sv.len());
 
-    sv.push(1);
-    sv.push(2);
-    sv.push(3);
+    // These stay within inline capacity (4), so no allocator needed
+    try sv.push(1);
+    try sv.push(2);
+    try sv.push(3);
 
     try testing.expectEqual(@as(usize, 3), sv.len());
     try testing.expect(!sv.isEmpty());
@@ -1283,4 +1309,41 @@ test "SmallVec basic" {
 
     sv.clear();
     try testing.expect(sv.isEmpty());
+}
+
+test "SmallVec with allocator" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var sv = SmallVec(u32, 2).initWithAllocator(allocator);
+    defer sv.deinit();
+
+    // Fill inline capacity
+    try sv.push(1);
+    try sv.push(2);
+    try testing.expectEqual(@as(usize, 2), sv.len());
+
+    // This should promote to heap (exceeds inline capacity of 2)
+    try sv.push(3);
+    try testing.expectEqual(@as(usize, 3), sv.len());
+
+    // Verify values
+    const items = sv.items();
+    try testing.expectEqual(@as(u32, 1), items[0]);
+    try testing.expectEqual(@as(u32, 2), items[1]);
+    try testing.expectEqual(@as(u32, 3), items[2]);
+}
+
+test "SmallVec no allocator error" {
+    const testing = std.testing;
+
+    var sv = SmallVec(u32, 2).init(); // No allocator
+
+    // Fill inline capacity - should work
+    try sv.push(1);
+    try sv.push(2);
+
+    // Try to exceed capacity without allocator - should fail
+    const result = sv.push(3);
+    try testing.expectError(error.NoAllocator, result);
 }

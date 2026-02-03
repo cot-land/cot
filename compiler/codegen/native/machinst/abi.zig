@@ -933,19 +933,32 @@ pub fn Callee(comptime M: type) type {
         }
 
         /// Generate a spill instruction.
+        /// Spills a register value to a stack slot.
+        /// Ported from Cranelift's gen_spill in abi.rs.
         pub fn genSpill(self: *const Self, to: SpillSlot, from: RealReg) I {
-            _ = self;
-            _ = to;
-            _ = from;
-            @panic("genSpill not implemented");
+            // Get the spillslot offset from the frame layout
+            const slot_offset = self.getSpillslotOffset(to);
+            // Get the canonical type for this register class
+            const ty = I.canonicalTypeForRc(from.class());
+            // Convert RealReg to Reg for the store instruction
+            const from_reg = Reg.fromRealReg(PReg.init(from.hwEnc(), from.class()));
+            // Generate a store to the stack slot
+            return I.genStoreStack(from_reg, slot_offset, ty);
         }
 
         /// Generate a reload instruction.
+        /// Reloads a value from a stack slot into a register.
+        /// Ported from Cranelift's gen_reload in abi.rs.
         pub fn genReload(self: *const Self, to: Writable(RealReg), from: SpillSlot) I {
-            _ = self;
-            _ = to;
-            _ = from;
-            @panic("genReload not implemented");
+            // Get the spillslot offset from the frame layout
+            const slot_offset = self.getSpillslotOffset(from);
+            // Get the canonical type for this register class
+            const ty = I.canonicalTypeForRc(to.toReg().class());
+            // Convert Writable(RealReg) to Writable(Reg) for the load instruction
+            const to_preg = PReg.init(to.toReg().hwEnc(), to.toReg().class());
+            const to_reg = Writable(Reg).fromReg(Reg.fromRealReg(to_preg));
+            // Generate a load from the stack slot
+            return I.genLoadStack(to_reg, slot_offset, ty);
         }
 
         /// Get the frame slot metadata.

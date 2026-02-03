@@ -33,6 +33,7 @@ pub const JumpTableData = clif.JumpTableData;
 pub const BlockCall = clif.BlockCall;
 pub const GlobalValue = clif.GlobalValue;
 pub const GlobalValueData = clif.GlobalValueData;
+pub const FloatCC = clif.FloatCC;
 
 /// Block status for tracking construction progress.
 const BlockStatus = enum {
@@ -570,6 +571,17 @@ pub const FuncInstBuilder = struct {
         });
     }
 
+    /// FloatCompare format: floating-point comparison (fcmp)
+    fn FloatCompare(self: Self, opcode: clif.Opcode, cond: FloatCC, a: Value, b: Value) !BuildResult {
+        const args = try self.builder.func.dfg.value_lists.alloc(&[_]Value{ a, b });
+        return self.buildWithInstData(Type.I8, .{
+            .opcode = opcode,
+            .args = args,
+            .ctrl_type = Type.I8,
+            .floatcc = cond,
+        });
+    }
+
     /// Load format: memory load
     fn Load(self: Self, opcode: clif.Opcode, ty: Type, flags: clif.MemFlags, addr: Value, offset: i32) !BuildResult {
         _ = flags; // TODO: store flags in InstData
@@ -818,12 +830,64 @@ pub const FuncInstBuilder = struct {
     }
 
     // ========================================================================
+    // Float Arithmetic
+    // ========================================================================
+
+    /// Float addition.
+    pub fn fadd(self: Self, ty: Type, a: Value, b: Value) !Value {
+        const r = try self.Binary(.fadd, ty, a, b);
+        return r.result.?;
+    }
+
+    /// Float subtraction.
+    pub fn fsub(self: Self, ty: Type, a: Value, b: Value) !Value {
+        const r = try self.Binary(.fsub, ty, a, b);
+        return r.result.?;
+    }
+
+    /// Float multiplication.
+    pub fn fmul(self: Self, ty: Type, a: Value, b: Value) !Value {
+        const r = try self.Binary(.fmul, ty, a, b);
+        return r.result.?;
+    }
+
+    /// Float division.
+    pub fn fdiv(self: Self, ty: Type, a: Value, b: Value) !Value {
+        const r = try self.Binary(.fdiv, ty, a, b);
+        return r.result.?;
+    }
+
+    /// Float absolute value.
+    pub fn fabs(self: Self, ty: Type, arg: Value) !Value {
+        const r = try self.Unary(.fabs, ty, arg);
+        return r.result.?;
+    }
+
+    /// Float negation.
+    pub fn fneg(self: Self, ty: Type, arg: Value) !Value {
+        const r = try self.Unary(.fneg, ty, arg);
+        return r.result.?;
+    }
+
+    /// Float square root.
+    pub fn sqrt(self: Self, ty: Type, arg: Value) !Value {
+        const r = try self.Unary(.sqrt, ty, arg);
+        return r.result.?;
+    }
+
+    // ========================================================================
     // Comparisons
     // ========================================================================
 
     /// Integer comparison.
     pub fn icmp(self: Self, cond: clif.IntCC, a: Value, b: Value) !Value {
         const r = try self.IntCompare(.icmp, cond, a, b);
+        return r.result.?;
+    }
+
+    /// Float comparison.
+    pub fn fcmp(self: Self, cond: FloatCC, a: Value, b: Value) !Value {
+        const r = try self.FloatCompare(.fcmp, cond, a, b);
         return r.result.?;
     }
 
@@ -846,6 +910,48 @@ pub const FuncInstBuilder = struct {
     /// Reduce integer width.
     pub fn ireduce(self: Self, ty: Type, arg: Value) !Value {
         const r = try self.Unary(.ireduce, ty, arg);
+        return r.result.?;
+    }
+
+    /// Convert float to signed integer.
+    pub fn fcvtToSint(self: Self, ty: Type, arg: Value) !Value {
+        const r = try self.Unary(.fcvt_to_sint, ty, arg);
+        return r.result.?;
+    }
+
+    /// Convert float to unsigned integer.
+    pub fn fcvtToUint(self: Self, ty: Type, arg: Value) !Value {
+        const r = try self.Unary(.fcvt_to_uint, ty, arg);
+        return r.result.?;
+    }
+
+    /// Convert signed integer to float.
+    pub fn fcvtFromSint(self: Self, ty: Type, arg: Value) !Value {
+        const r = try self.Unary(.fcvt_from_sint, ty, arg);
+        return r.result.?;
+    }
+
+    /// Convert unsigned integer to float.
+    pub fn fcvtFromUint(self: Self, ty: Type, arg: Value) !Value {
+        const r = try self.Unary(.fcvt_from_uint, ty, arg);
+        return r.result.?;
+    }
+
+    /// Promote F32 to F64.
+    pub fn fpromote(self: Self, ty: Type, arg: Value) !Value {
+        const r = try self.Unary(.fpromote, ty, arg);
+        return r.result.?;
+    }
+
+    /// Demote F64 to F32.
+    pub fn fdemote(self: Self, ty: Type, arg: Value) !Value {
+        const r = try self.Unary(.fdemote, ty, arg);
+        return r.result.?;
+    }
+
+    /// Bitcast (reinterpret bits without conversion).
+    pub fn bitcast(self: Self, ty: Type, arg: Value) !Value {
+        const r = try self.Unary(.bitcast, ty, arg);
         return r.result.?;
     }
 
@@ -1017,11 +1123,11 @@ pub const FuncInstBuilder = struct {
         return r.inst;
     }
 
-    /// Select between two values.
-    pub fn select(self: Self, cond: Value, if_true: Value, if_false: Value) !Value {
+    /// Select between two values based on condition.
+    pub fn select(self: Self, ty: Type, cond: Value, if_true: Value, if_false: Value) !Value {
         _ = cond;
         _ = if_false;
-        const ty = self.builder.func.dfg.valueType(if_true);
+        _ = if_true;
         const r = try self.build(ty);
         return r.result.?;
     }

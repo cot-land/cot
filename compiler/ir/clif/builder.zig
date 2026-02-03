@@ -1013,6 +1013,51 @@ pub const FuncBuilder = struct {
         }, ty);
         return r.result.?;
     }
+
+    // ========================================================================
+    // Float-Int Conversions
+    // Port of cranelift conversion instructions
+    // ========================================================================
+
+    /// Convert float to signed integer (truncating toward zero).
+    pub fn fcvtToSint(self: *Self, ty: Type, arg: Value) !Value {
+        const r = try self.insertInst(.{
+            .unary = .{ .opcode = .fcvt_to_sint, .arg = arg },
+        }, ty);
+        return r.result.?;
+    }
+
+    /// Convert float to unsigned integer (truncating toward zero).
+    pub fn fcvtToUint(self: *Self, ty: Type, arg: Value) !Value {
+        const r = try self.insertInst(.{
+            .unary = .{ .opcode = .fcvt_to_uint, .arg = arg },
+        }, ty);
+        return r.result.?;
+    }
+
+    /// Convert signed integer to float.
+    pub fn fcvtFromSint(self: *Self, ty: Type, arg: Value) !Value {
+        const r = try self.insertInst(.{
+            .unary = .{ .opcode = .fcvt_from_sint, .arg = arg },
+        }, ty);
+        return r.result.?;
+    }
+
+    /// Convert unsigned integer to float.
+    pub fn fcvtFromUint(self: *Self, ty: Type, arg: Value) !Value {
+        const r = try self.insertInst(.{
+            .unary = .{ .opcode = .fcvt_from_uint, .arg = arg },
+        }, ty);
+        return r.result.?;
+    }
+
+    /// Bitwise reinterpret of value without conversion.
+    pub fn bitcast(self: *Self, ty: Type, arg: Value) !Value {
+        const r = try self.insertInst(.{
+            .unary = .{ .opcode = .bitcast, .arg = arg },
+        }, ty);
+        return r.result.?;
+    }
 };
 
 // ============================================================================

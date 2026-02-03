@@ -914,6 +914,18 @@ pub const Inst = union(enum) {
         return .{ .jmp_known = .{ .dst = target } };
     }
 
+    /// Get the canonical type for a register class.
+    /// This is used for spill/reload operations where we need a type
+    /// that can hold any value in that register class.
+    /// Ported from Cranelift's canonical_type_for_rc.
+    pub fn canonicalTypeForRc(rc: RegClass) Type {
+        return switch (rc) {
+            .int => Type.I64,
+            .float => Type.F64,
+            .vector => Type.I8X16,
+        };
+    }
+
     /// Generate a load from a stack slot.
     /// Used for spill reloads during register allocation.
     pub fn genLoadStack(into_reg: Writable(Reg), slot_offset: i64, ty: Type) Inst {

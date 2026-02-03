@@ -1508,6 +1508,18 @@ pub const Inst = union(enum) {
         };
     }
 
+    /// Get the canonical type for a register class.
+    /// This is used for spill/reload operations where we need a type
+    /// that can hold any value in that register class.
+    /// Ported from Cranelift's canonical_type_for_rc.
+    pub fn canonicalTypeForRc(rc: RegClass) Type {
+        return switch (rc) {
+            .int => Type.I64,
+            .float => Type.F64,
+            .vector => Type.I8X16,
+        };
+    }
+
     /// LabelUse type for this instruction type (for MachBuffer parameterization).
     /// Matches Cranelift's pattern where VCodeInst trait has associated LabelUse type.
     pub const LabelUse = emit_mod.AArch64LabelUse;
