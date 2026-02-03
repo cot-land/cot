@@ -63,6 +63,11 @@ pub const Gpr = struct {
     pub fn hwEnc(self: Gpr) u8 {
         return self.reg.hwEnc();
     }
+
+    /// Get a mutable pointer to the underlying Reg.
+    pub fn regMut(self: *Gpr) *Reg {
+        return &self.reg;
+    }
 };
 
 /// Writable GPR.
@@ -108,6 +113,11 @@ pub const Xmm = struct {
     /// Get the hardware encoding.
     pub fn hwEnc(self: Xmm) u8 {
         return self.reg.hwEnc();
+    }
+
+    /// Get a mutable pointer to the underlying Reg.
+    pub fn regMut(self: *Xmm) *Reg {
+        return &self.reg;
     }
 };
 

@@ -110,6 +110,9 @@ pub const Ctx = struct {
     // === Scratch pool for SpillSetRanges ===
     scratch_spillset_pool: std.ArrayListUnmanaged(ion_data.SpillSetRanges),
 
+    // === Scratch buffer for conflict detection ===
+    scratch_conflicts: std.ArrayListUnmanaged(LiveBundleIndex),
+
     // === Output ===
     output: Output,
 
@@ -139,6 +142,7 @@ pub const Ctx = struct {
             .multi_fixed_reg_fixups = .{},
             .extra_spillslots_by_class = .{ .{}, .{}, .{} },
             .scratch_spillset_pool = .{},
+            .scratch_conflicts = .{},
             .output = Output.init(),
             .stats = .{},
             .spill_stats = .{},
@@ -194,6 +198,8 @@ pub const Ctx = struct {
         }
         self.scratch_spillset_pool.deinit(self.allocator);
 
+        self.scratch_conflicts.deinit(self.allocator);
+
         self.output.deinit(self.allocator);
     }
 
@@ -242,6 +248,8 @@ pub const Ctx = struct {
         for (&self.extra_spillslots_by_class) |*e| {
             e.clearRetainingCapacity();
         }
+
+        self.scratch_conflicts.clearRetainingCapacity();
 
         self.output.clear();
         self.stats = .{};
@@ -422,7 +430,7 @@ pub fn runWithCtx(
         &ctx.spilled_bundles,
         env,
         &ctx.output.num_spillslots,
-        &ctx.spilled_bundles, // scratch_conflicts
+        &ctx.scratch_conflicts, // scratch_conflicts - must be separate from spilled_bundles!
         &ctx.scratch_spillset_pool,
         &ctx.spill_stats,
         .{},

@@ -1306,24 +1306,22 @@ pub fn VCodeBuilder(comptime I: type) type {
             const allocator = self.vcode.allocator;
 
             // Use the ISA's getOperands via the visitor pattern
+            // Reference: cranelift/codegen/src/machinst/vcode.rs:530-540
             const GetOperands = I.get_operands;
-            var visitor = GetOperands.OperandVisitor.init(allocator);
-            defer visitor.deinit();
+            var collector_state = GetOperands.OperandVisitor.CollectorState.init(allocator);
+            defer collector_state.deinit();
+            var visitor = GetOperands.OperandVisitor.initCollector(&collector_state);
 
             for (self.vcode.insts.items, 0..) |*insn, i| {
-                // Clear visitor for this instruction
-                visitor.uses.clearRetainingCapacity();
-                visitor.defs.clearRetainingCapacity();
-                visitor.fixed_uses.clearRetainingCapacity();
-                visitor.fixed_defs.clearRetainingCapacity();
-                visitor.clobbers.clearRetainingCapacity();
+                // Clear collector for this instruction
+                collector_state.clear();
 
                 // Collect operands using the visitor pattern
                 GetOperands.getOperands(insn, &visitor);
 
                 // Convert defs (definitions go first in operand order)
                 // Only add virtual registers - physical registers don't need allocation
-                for (visitor.defs.items) |def_reg| {
+                for (collector_state.defs.items) |def_reg| {
                     const reg = def_reg.toReg();
                     if (reg.isVirtual()) {
                         const vreg = vregs.resolveVregAlias(reg.toVReg());
@@ -1332,7 +1330,7 @@ pub fn VCodeBuilder(comptime I: type) type {
                 }
 
                 // Convert fixed defs (virtual regs with fixed physical register constraints)
-                for (visitor.fixed_defs.items) |fixed_def| {
+                for (collector_state.fixed_defs.items) |fixed_def| {
                     const reg = fixed_def.vreg.toReg();
                     if (reg.isVirtual()) {
                         const vreg = vregs.resolveVregAlias(reg.toVReg());
@@ -1341,7 +1339,7 @@ pub fn VCodeBuilder(comptime I: type) type {
                 }
 
                 // Convert uses - only virtual registers need allocation
-                for (visitor.uses.items) |use_reg| {
+                for (collector_state.uses.items) |use_reg| {
                     if (use_reg.isVirtual()) {
                         const vreg = vregs.resolveVregAlias(use_reg.toVReg());
                         try self.vcode.operands.append(allocator, Operand.new(vreg, .any, .use, .early));
@@ -1349,7 +1347,7 @@ pub fn VCodeBuilder(comptime I: type) type {
                 }
 
                 // Convert fixed uses (virtual regs with fixed physical register constraints)
-                for (visitor.fixed_uses.items) |fixed_use| {
+                for (collector_state.fixed_uses.items) |fixed_use| {
                     if (fixed_use.vreg.isVirtual()) {
                         const vreg = vregs.resolveVregAlias(fixed_use.vreg.toVReg());
                         try self.vcode.operands.append(allocator, Operand.new(vreg, .{ .fixed_reg = fixed_use.preg }, .use, .early));
@@ -1359,10 +1357,10 @@ pub fn VCodeBuilder(comptime I: type) type {
                 const end = self.vcode.operands.items.len;
                 try self.vcode.operand_ranges.pushEnd(allocator, end);
 
-                // Collect clobbers from the visitor
-                if (visitor.clobbers.items.len > 0) {
+                // Collect clobbers from the collector
+                if (collector_state.clobbers.items.len > 0) {
                     var clobber_set = PRegSet.empty();
-                    for (visitor.clobbers.items) |preg| {
+                    for (collector_state.clobbers.items) |preg| {
                         clobber_set.add(preg);
                     }
                     try self.vcode.clobbers.put(allocator, InsnIndex.new(i), clobber_set);

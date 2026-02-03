@@ -270,6 +270,12 @@ pub const FuncTranslator = struct {
         const entry_block = try self.builder.createBlock();
         const exit_block = try self.builder.createBlock();
 
+        // Add block params to exit block for function returns.
+        // Reference: wasmtime/crates/cranelift/src/translate/func_translator.rs:86-87
+        //   let exit_block = builder.create_block();
+        //   builder.append_block_params_for_function_returns(exit_block);
+        try self.builder.appendBlockParamsForFunctionReturns(exit_block);
+
         // Switch to entry block
         self.builder.switchToBlock(entry_block);
 
