@@ -595,6 +595,10 @@ pub fn ReturnCallInfo(comptime T: type) type {
 
 /// AArch64 machine instruction.
 pub const Inst = union(enum) {
+    // Reference to the get_operands module for register allocation.
+    // This allows generic code to access I.get_operands.getOperands() and I.get_operands.OperandVisitor.
+    pub const get_operands = @import("get_operands.zig");
+
     // Zero-length NOP (for alignment).
     nop0,
 

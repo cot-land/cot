@@ -583,6 +583,84 @@ pub const Function = struct {
     pub fn numGlobalValues(self: Self) usize {
         return self.global_values.items.len;
     }
+
+    // ========================================================================
+    // Debug Utilities
+    // D3: Layout vs DFG comparison utility for diagnosing block insertion issues
+    // ========================================================================
+
+    /// Result of comparing Layout to DFG blocks.
+    pub const LayoutDfgComparison = struct {
+        dfg_block_count: usize,
+        layout_block_count: usize,
+        blocks_in_dfg_not_layout: std.ArrayListUnmanaged(Block),
+        entry_block: ?Block,
+        is_consistent: bool,
+
+        pub fn deinit(self: *LayoutDfgComparison, allocator: std.mem.Allocator) void {
+            self.blocks_in_dfg_not_layout.deinit(allocator);
+        }
+    };
+
+    /// Compare Layout blocks to DFG blocks and identify discrepancies.
+    /// This is critical for diagnosing the 0-byte emission bug where blocks
+    /// exist in DFG but not in Layout.
+    pub fn compareLayoutToDfg(self: Self) LayoutDfgComparison {
+        const allocator = self.dfg.allocator;
+        var result = LayoutDfgComparison{
+            .dfg_block_count = self.dfg.blocks.items.len,
+            .layout_block_count = 0,
+            .blocks_in_dfg_not_layout = .{},
+            .entry_block = self.layout.entryBlock(),
+            .is_consistent = true,
+        };
+
+        // Count blocks in Layout
+        var layout_iter = self.layout.blocks();
+        while (layout_iter.next()) |_| {
+            result.layout_block_count += 1;
+        }
+
+        // Find blocks in DFG but not in Layout
+        for (self.dfg.blocks.items, 0..) |_, idx| {
+            const block = Block.fromIndex(@intCast(idx));
+            if (!self.layout.isBlockInserted(block)) {
+                result.blocks_in_dfg_not_layout.append(allocator, block) catch {};
+                result.is_consistent = false;
+            }
+        }
+
+        return result;
+    }
+
+    /// Log Layout vs DFG comparison to debug output.
+    pub fn logLayoutComparison(self: Self, comptime pipeline_debug: type) void {
+        var comparison = self.compareLayoutToDfg();
+        defer comparison.deinit(self.dfg.allocator);
+
+        pipeline_debug.log(.codegen, "=== Layout vs DFG Comparison ===", .{});
+        pipeline_debug.log(.codegen, "  DFG blocks: {d}", .{comparison.dfg_block_count});
+        pipeline_debug.log(.codegen, "  Layout blocks: {d}", .{comparison.layout_block_count});
+
+        if (comparison.entry_block) |entry| {
+            pipeline_debug.log(.codegen, "  Entry block: {d}", .{entry.index});
+        } else {
+            pipeline_debug.log(.codegen, "  Entry block: NULL (CRITICAL!)", .{});
+        }
+
+        if (comparison.blocks_in_dfg_not_layout.items.len > 0) {
+            pipeline_debug.log(.codegen, "  Blocks in DFG but NOT in Layout:", .{});
+            for (comparison.blocks_in_dfg_not_layout.items) |block| {
+                pipeline_debug.log(.codegen, "    - Block {d}", .{block.index});
+            }
+        }
+
+        if (comparison.is_consistent) {
+            pipeline_debug.log(.codegen, "  Status: CONSISTENT", .{});
+        } else {
+            pipeline_debug.log(.codegen, "  Status: INCONSISTENT - blocks missing from Layout!", .{});
+        }
+    }
 };
 
 // ============================================================================

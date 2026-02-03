@@ -310,6 +310,10 @@ pub const UnwindInst = union(enum) {
 /// wraps the cranelift-assembler-x64 types. In our Zig port, we define the
 /// common instructions directly and implement encoding in emit.zig.
 pub const Inst = union(enum) {
+    // Reference to the get_operands module for register allocation.
+    // This allows generic code to access I.get_operands.getOperands() and I.get_operands.OperandVisitor.
+    pub const get_operands = @import("get_operands.zig");
+
     //=========================================================================
     // Pseudo-instructions (expanded during emission)
     //=========================================================================

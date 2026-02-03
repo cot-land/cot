@@ -264,6 +264,7 @@ pub const FuncTranslator = struct {
     /// Initialize for translating a function.
     ///
     /// Sets up the entry block, exit block, and local variables.
+    /// F1 Fix: Explicitly ensures entry block is in Layout.
     pub fn initializeFunction(self: *Self, num_params: u32, num_locals: u32, param_types: []const Type, local_types: []const Type, num_returns: usize) !void {
         // Create entry and exit blocks
         const entry_block = try self.builder.createBlock();
@@ -273,7 +274,16 @@ pub const FuncTranslator = struct {
         self.builder.switchToBlock(entry_block);
 
         // Add function parameters to entry block
+        // Note: This must be done while block is still pristine
         try self.builder.appendBlockParamsForFunctionParams(entry_block);
+
+        // F1 CRITICAL FIX: Explicitly ensure entry block is in Layout
+        // Cranelift adds blocks to Layout when first instruction is inserted via
+        // ensureInsertedBlock(). However, if num_locals==0 and the first Wasm
+        // instruction doesn't trigger instruction insertion, the entry block
+        // may never be added to Layout. This explicit call guarantees it.
+        // Reference: cranelift-frontend/src/frontend.rs ensure_inserted_block()
+        try self.builder.ensureInsertedBlock();
 
         // Seal entry block (no predecessors except function entry)
         try self.builder.sealBlock(entry_block);
@@ -389,6 +399,9 @@ pub const FuncTranslator = struct {
         // code_translator.rs lines 430-431.
         self.builder.switchToBlock(loop_body);
 
+        // F1 Fix: Ensure loop body block is in Layout after switching
+        try self.builder.ensureInsertedBlock();
+
         // Pop old values and push block params
         self.state.popn(num_params);
         const loop_params = self.builder.blockParams(loop_body);
@@ -441,6 +454,9 @@ pub const FuncTranslator = struct {
         self.builder.switchToBlock(then_block);
         try self.builder.sealBlock(then_block);
 
+        // F1 Fix: Ensure then block is in Layout after switching
+        try self.builder.ensureInsertedBlock();
+
         // Pop old values and push block params
         self.state.popn(num_params);
         const then_params = self.builder.blockParams(then_block);
@@ -477,6 +493,9 @@ pub const FuncTranslator = struct {
                 // Switch to else block
                 self.builder.switchToBlock(else_block);
                 try self.builder.sealBlock(else_block);
+
+                // F1 Fix: Ensure else block is in Layout after switching
+                try self.builder.ensureInsertedBlock();
 
                 // Push block params
                 const else_params = self.builder.blockParams(else_block);
@@ -531,13 +550,24 @@ pub const FuncTranslator = struct {
             self.builder.switchToBlock(next_block);
             try self.builder.sealBlock(next_block);
 
-            // Push block params as results
-            const next_params = self.builder.blockParams(next_block);
-            for (next_params) |param| {
-                try self.state.push1(param);
-            }
+            // F1 Fix: Ensure next block is in Layout after switching
+            try self.builder.ensureInsertedBlock();
 
-            self.state.reachable = true;
+            // Check if this is the function-level end (control stack empty)
+            // If so, we need to emit a return instruction from the exit block
+            if (self.state.controlStackLen() == 0) {
+                // Function-level end - emit return with the results
+                const next_params = self.builder.blockParams(next_block);
+                _ = try self.builder.ins().return_(next_params);
+                self.state.reachable = false;
+            } else {
+                // Nested block end - push block params as results
+                const next_params = self.builder.blockParams(next_block);
+                for (next_params) |param| {
+                    try self.state.push1(param);
+                }
+                self.state.reachable = true;
+            }
         } else {
             self.state.reachable = false;
         }
@@ -592,6 +622,9 @@ pub const FuncTranslator = struct {
         // Switch to next block
         self.builder.switchToBlock(next_block);
         try self.builder.sealBlock(next_block);
+
+        // F1 Fix: Ensure next block is in Layout after switching
+        try self.builder.ensureInsertedBlock();
 
         // Replace stack values with block params
         self.state.popn(return_count);
@@ -668,6 +701,9 @@ pub const FuncTranslator = struct {
 
                 self.builder.switchToBlock(next_block);
                 try self.builder.sealBlock(next_block);
+
+                // F1 Fix: Ensure block is in Layout after switching
+                try self.builder.ensureInsertedBlock();
             }
 
             // Default case

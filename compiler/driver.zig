@@ -462,6 +462,26 @@ pub const Driver = struct {
             pipeline_debug.log(.codegen, "driver: translated function {d} to CLIF ({d} blocks, {d} insts)", .{ func_idx, num_blocks, num_insts });
 
             // ----------------------------------------------------------------
+            // D1/D3: Layout verification - ensure blocks are in Layout, not just DFG
+            // Reference: Cranelift requires blocks in Layout for compilation
+            // Uses the D3 Layout vs DFG comparison utility
+            // ----------------------------------------------------------------
+            clif_func.logLayoutComparison(pipeline_debug);
+
+            const layout_block_count = blk: {
+                var count: usize = 0;
+                var layout_iter = clif_func.layout.blocks();
+                while (layout_iter.next()) |_| count += 1;
+                break :blk count;
+            };
+
+            if (layout_block_count == 0 and num_blocks > 0) {
+                pipeline_debug.log(.codegen, "CRITICAL: Blocks exist in DFG but Layout is EMPTY!", .{});
+                pipeline_debug.log(.codegen, "This indicates ensureInsertedBlock() was never called during translation", .{});
+                // Don't return error yet - let's see what compilation produces
+            }
+
+            // ----------------------------------------------------------------
             // Step 2c: Compile CLIF to native
             // Reference: cranelift/codegen/src/machinst/compile.rs compile()
             // ----------------------------------------------------------------

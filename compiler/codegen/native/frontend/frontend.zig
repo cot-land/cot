@@ -8,6 +8,7 @@
 const std = @import("std");
 const ssa_mod = @import("ssa.zig");
 const variable_mod = @import("variable.zig");
+const pipeline_debug = @import("../../../pipeline_debug.zig");
 
 // Re-export
 pub const SSABuilder = ssa_mod.SSABuilder;
@@ -135,19 +136,25 @@ pub const FunctionBuilder = struct {
     // ========================================================================
 
     /// Creates a new Block and returns its reference.
+    /// Port of cranelift-frontend/src/frontend.rs create_block()
     pub fn createBlock(self: *Self) !Block {
         const block = try self.func.dfg.makeBlock();
         try self.func_ctx.ssa.declareBlock(block);
         try self.func_ctx.status.put(self.func_ctx.allocator, block, .empty);
+        pipeline_debug.log(.codegen, "createBlock: created block {d} in DFG (status=empty, NOT in Layout yet)", .{block.index});
         return block;
     }
 
     /// After the call to this function, new instructions will be inserted into the designated
     /// block, in the order they are declared.
+    /// Port of cranelift-frontend/src/frontend.rs switch_to_block()
     pub fn switchToBlock(self: *Self, block: Block) void {
         // Check that previous block is properly filled (in debug mode)
         if (self.position) |prev| {
             std.debug.assert(self.isPristine(prev) or self.isFilled(prev));
+            pipeline_debug.log(.codegen, "switchToBlock: switching from block {d} to block {d}", .{ prev.index, block.index });
+        } else {
+            pipeline_debug.log(.codegen, "switchToBlock: switching to block {d} (no previous block)", .{block.index});
         }
 
         // Cannot switch to a filled block
@@ -171,14 +178,23 @@ pub const FunctionBuilder = struct {
     }
 
     /// Make sure that the current block is inserted in the layout.
+    /// Port of cranelift-frontend/src/frontend.rs ensure_inserted_block()
     pub fn ensureInsertedBlock(self: *Self) !void {
-        const block = self.position orelse return;
+        const block = self.position orelse {
+            pipeline_debug.log(.codegen, "ensureInsertedBlock: position is NULL, returning early", .{});
+            return;
+        };
+
         if (self.isPristine(block)) {
             if (!self.func.layout.isBlockInserted(block)) {
+                pipeline_debug.log(.codegen, "ensureInsertedBlock: adding block {d} to Layout (was pristine, not in layout)", .{block.index});
                 try self.func.layout.appendBlock(self.func_ctx.allocator, block);
+            } else {
+                pipeline_debug.log(.codegen, "ensureInsertedBlock: block {d} already in Layout (was pristine)", .{block.index});
             }
             try self.func_ctx.status.put(self.func_ctx.allocator, block, .partial);
         } else {
+            pipeline_debug.log(.codegen, "ensureInsertedBlock: block {d} not pristine, skipping layout insert", .{block.index});
             std.debug.assert(!self.isFilled(block));
         }
     }
@@ -365,10 +381,34 @@ pub const FunctionBuilder = struct {
         // Verify all blocks are sealed and filled (in debug mode)
         var iter = self.func_ctx.status.iterator();
         while (iter.next()) |entry| {
-            if (!self.isPristine(entry.key_ptr.*)) {
-                std.debug.assert(self.func_ctx.ssa.isSealed(entry.key_ptr.*));
-                std.debug.assert(self.isFilled(entry.key_ptr.*));
+            const block = entry.key_ptr.*;
+            const status = entry.value_ptr.*;
+
+            if (!self.isPristine(block)) {
+                std.debug.assert(self.func_ctx.ssa.isSealed(block));
+                std.debug.assert(self.isFilled(block));
+
+                // F3 Fix: Verify non-pristine blocks are in Layout
+                // This catches the bug where blocks have instructions but aren't compiled
+                if (status == .partial or status == .filled) {
+                    const is_in_layout = self.func.layout.isBlockInserted(block);
+                    if (!is_in_layout) {
+                        pipeline_debug.log(.codegen, "FINALIZE ERROR: Block {d} has status {s} but is NOT in Layout!", .{
+                            block.index,
+                            @tagName(status),
+                        });
+                    }
+                    std.debug.assert(is_in_layout);
+                }
             }
+        }
+
+        // Log final Layout state
+        const layout_entry = self.func.layout.entryBlock();
+        if (layout_entry) |entry| {
+            pipeline_debug.log(.codegen, "finalize: Layout entry block = {d}", .{entry.index});
+        } else {
+            pipeline_debug.log(.codegen, "finalize: WARNING - Layout has no entry block!", .{});
         }
 
         // Clear context for reuse
@@ -440,10 +480,16 @@ pub const FuncInstBuilder = struct {
     // Helper for instruction insertion
     // ========================================================================
 
-    fn build(self: Self, result_type: ?Type) !struct { inst: Inst, result: ?Value } {
+    fn build(self: Self, result_type: ?Type) !BuildResult {
+        return self.buildWithInstData(result_type, clif.dfg_mod.InstData.EMPTY);
+    }
+
+    /// Build instruction with DFG InstData (the actual storage format).
+    fn buildWithInstData(self: Self, result_type: ?Type, data: clif.dfg_mod.InstData) !BuildResult {
         try self.builder.ensureInsertedBlock();
 
         const inst = self.builder.func.dfg.makeInst();
+        try self.builder.func.dfg.setInstData(inst, data);
         try self.builder.func.layout.appendInst(self.builder.func_ctx.allocator, inst, self.block);
 
         var result: ?Value = null;
@@ -454,14 +500,183 @@ pub const FuncInstBuilder = struct {
         return .{ .inst = inst, .result = result };
     }
 
+    // ========================================================================
+    // Format Constructors (copied from Cranelift's gen_inst.rs pattern)
+    // Each format creates the appropriate InstData and calls buildWithInstData
+    // ========================================================================
+
+    /// Result type for instruction building
+    const BuildResult = struct { inst: Inst, result: ?Value };
+
+    /// UnaryImm format: immediate only (iconst)
+    fn UnaryImm(self: Self, opcode: clif.Opcode, ty: Type, imm: i64) !BuildResult {
+        return self.buildWithInstData(ty, .{
+            .opcode = opcode,
+            .args = clif.ValueList.EMPTY,
+            .ctrl_type = ty,
+            .imm = imm,
+        });
+    }
+
+    /// UnaryIeee32 format: 32-bit float immediate (f32const)
+    /// Note: For now, store as i64 bit pattern since InstData doesn't have f32 field
+    fn UnaryIeee32(self: Self, opcode: clif.Opcode, imm: f32) !BuildResult {
+        return self.buildWithInstData(Type.F32, .{
+            .opcode = opcode,
+            .args = clif.ValueList.EMPTY,
+            .ctrl_type = Type.F32,
+            .imm = @as(i64, @bitCast(@as(u64, @as(u32, @bitCast(imm))))),
+        });
+    }
+
+    /// UnaryIeee64 format: 64-bit float immediate (f64const)
+    fn UnaryIeee64(self: Self, opcode: clif.Opcode, imm: f64) !BuildResult {
+        return self.buildWithInstData(Type.F64, .{
+            .opcode = opcode,
+            .args = clif.ValueList.EMPTY,
+            .ctrl_type = Type.F64,
+            .imm = @bitCast(imm),
+        });
+    }
+
+    /// Unary format: single value operand (ineg, fneg, copy, etc.)
+    fn Unary(self: Self, opcode: clif.Opcode, ty: Type, arg: Value) !BuildResult {
+        const args = try self.builder.func.dfg.value_lists.alloc(&[_]Value{arg});
+        return self.buildWithInstData(ty, .{
+            .opcode = opcode,
+            .args = args,
+            .ctrl_type = ty,
+        });
+    }
+
+    /// Binary format: two value operands (iadd, isub, imul, etc.)
+    fn Binary(self: Self, opcode: clif.Opcode, ty: Type, a: Value, b: Value) !BuildResult {
+        const args = try self.builder.func.dfg.value_lists.alloc(&[_]Value{ a, b });
+        return self.buildWithInstData(ty, .{
+            .opcode = opcode,
+            .args = args,
+            .ctrl_type = ty,
+        });
+    }
+
+    /// IntCompare format: integer comparison (icmp)
+    fn IntCompare(self: Self, opcode: clif.Opcode, cond: clif.IntCC, a: Value, b: Value) !BuildResult {
+        const args = try self.builder.func.dfg.value_lists.alloc(&[_]Value{ a, b });
+        return self.buildWithInstData(Type.I8, .{
+            .opcode = opcode,
+            .args = args,
+            .ctrl_type = Type.I8,
+            .intcc = cond,
+        });
+    }
+
+    /// Load format: memory load
+    fn Load(self: Self, opcode: clif.Opcode, ty: Type, flags: clif.MemFlags, addr: Value, offset: i32) !BuildResult {
+        _ = flags; // TODO: store flags in InstData
+        const args = try self.builder.func.dfg.value_lists.alloc(&[_]Value{addr});
+        return self.buildWithInstData(ty, .{
+            .opcode = opcode,
+            .args = args,
+            .ctrl_type = ty,
+            .stack_offset = offset,
+        });
+    }
+
+    /// Store format: memory store (no result)
+    fn Store(self: Self, opcode: clif.Opcode, flags: clif.MemFlags, val: Value, addr: Value, offset: i32) !BuildResult {
+        _ = flags; // TODO: store flags in InstData
+        const args = try self.builder.func.dfg.value_lists.alloc(&[_]Value{ val, addr });
+        return self.buildWithInstData(null, .{
+            .opcode = opcode,
+            .args = args,
+            .ctrl_type = Type.INVALID,
+            .stack_offset = offset,
+        });
+    }
+
+    /// StackLoad format: load from stack slot
+    fn StackLoad(self: Self, opcode: clif.Opcode, ty: Type, slot: StackSlot, offset: i32) !BuildResult {
+        return self.buildWithInstData(ty, .{
+            .opcode = opcode,
+            .args = clif.ValueList.EMPTY,
+            .ctrl_type = ty,
+            .stack_slot = slot,
+            .stack_offset = offset,
+        });
+    }
+
+    /// StackStore format: store to stack slot (no result)
+    fn StackStore(self: Self, opcode: clif.Opcode, val: Value, slot: StackSlot, offset: i32) !BuildResult {
+        const args = try self.builder.func.dfg.value_lists.alloc(&[_]Value{val});
+        return self.buildWithInstData(null, .{
+            .opcode = opcode,
+            .args = args,
+            .ctrl_type = Type.INVALID,
+            .stack_slot = slot,
+            .stack_offset = offset,
+        });
+    }
+
     fn buildTerminator(self: Self) !Inst {
+        return self.buildTerminatorWithInstData(clif.dfg_mod.InstData.EMPTY);
+    }
+
+    fn buildTerminatorWithInstData(self: Self, data: clif.dfg_mod.InstData) !Inst {
         try self.builder.ensureInsertedBlock();
 
         const inst = self.builder.func.dfg.makeInst();
+        try self.builder.func.dfg.setInstData(inst, data);
         try self.builder.func.layout.appendInst(self.builder.func_ctx.allocator, inst, self.block);
         try self.builder.fillCurrentBlock();
 
         return inst;
+    }
+
+    // Terminator format constructors
+
+    /// Jump format: unconditional jump
+    fn JumpFmt(self: Self, opcode: clif.Opcode, destination: Block, args: []const Value) !Inst {
+        const vlist = try self.builder.func.dfg.value_lists.alloc(args);
+        return self.buildTerminatorWithInstData(.{
+            .opcode = opcode,
+            .args = vlist,
+            .ctrl_type = Type.INVALID,
+            .dest = destination,
+        });
+    }
+
+    /// Brif format: conditional branch
+    fn BrifFmt(self: Self, opcode: clif.Opcode, cond: Value, then_block: Block, then_args: []const Value, else_block: Block, else_args: []const Value) !Inst {
+        // For brif, we store condition in args, and then/else blocks in dest fields
+        _ = then_args; // TODO: handle block args
+        _ = else_args;
+        const vlist = try self.builder.func.dfg.value_lists.alloc(&[_]Value{cond});
+        return self.buildTerminatorWithInstData(.{
+            .opcode = opcode,
+            .args = vlist,
+            .ctrl_type = Type.INVALID,
+            .then_dest = then_block,
+            .else_dest = else_block,
+        });
+    }
+
+    /// Nullary terminator format: return, trap
+    fn NullaryTerminator(self: Self, opcode: clif.Opcode) !Inst {
+        return self.buildTerminatorWithInstData(.{
+            .opcode = opcode,
+            .args = clif.ValueList.EMPTY,
+            .ctrl_type = Type.INVALID,
+        });
+    }
+
+    /// MultiAry terminator format: return with values
+    fn MultiAryTerminator(self: Self, opcode: clif.Opcode, args: []const Value) !Inst {
+        const vlist = try self.builder.func.dfg.value_lists.alloc(args);
+        return self.buildTerminatorWithInstData(.{
+            .opcode = opcode,
+            .args = vlist,
+            .ctrl_type = Type.INVALID,
+        });
     }
 
     // ========================================================================
@@ -470,22 +685,19 @@ pub const FuncInstBuilder = struct {
 
     /// Integer constant.
     pub fn iconst(self: Self, ty: Type, imm: i64) !Value {
-        _ = imm;
-        const r = try self.build(ty);
+        const r = try self.UnaryImm(.iconst, ty, imm);
         return r.result.?;
     }
 
     /// 32-bit float constant.
     pub fn f32const(self: Self, imm: f32) !Value {
-        _ = imm;
-        const r = try self.build(Type.F32);
+        const r = try self.UnaryIeee32(.f32const, imm);
         return r.result.?;
     }
 
     /// 64-bit float constant.
     pub fn f64const(self: Self, imm: f64) !Value {
-        _ = imm;
-        const r = try self.build(Type.F64);
+        const r = try self.UnaryIeee64(.f64const, imm);
         return r.result.?;
     }
 
@@ -495,57 +707,50 @@ pub const FuncInstBuilder = struct {
 
     /// Integer addition.
     pub fn iadd(self: Self, a: Value, b: Value) !Value {
-        _ = b;
         const ty = self.builder.func.dfg.valueType(a);
-        const r = try self.build(ty);
+        const r = try self.Binary(.iadd, ty, a, b);
         return r.result.?;
     }
 
     /// Integer subtraction.
     pub fn isub(self: Self, a: Value, b: Value) !Value {
-        _ = b;
         const ty = self.builder.func.dfg.valueType(a);
-        const r = try self.build(ty);
+        const r = try self.Binary(.isub, ty, a, b);
         return r.result.?;
     }
 
     /// Integer multiplication.
     pub fn imul(self: Self, a: Value, b: Value) !Value {
-        _ = b;
         const ty = self.builder.func.dfg.valueType(a);
-        const r = try self.build(ty);
+        const r = try self.Binary(.imul, ty, a, b);
         return r.result.?;
     }
 
     /// Signed division.
     pub fn sdiv(self: Self, a: Value, b: Value) !Value {
-        _ = b;
         const ty = self.builder.func.dfg.valueType(a);
-        const r = try self.build(ty);
+        const r = try self.Binary(.sdiv, ty, a, b);
         return r.result.?;
     }
 
     /// Unsigned division.
     pub fn udiv(self: Self, a: Value, b: Value) !Value {
-        _ = b;
         const ty = self.builder.func.dfg.valueType(a);
-        const r = try self.build(ty);
+        const r = try self.Binary(.udiv, ty, a, b);
         return r.result.?;
     }
 
     /// Signed remainder.
     pub fn srem(self: Self, a: Value, b: Value) !Value {
-        _ = b;
         const ty = self.builder.func.dfg.valueType(a);
-        const r = try self.build(ty);
+        const r = try self.Binary(.srem, ty, a, b);
         return r.result.?;
     }
 
     /// Unsigned remainder.
     pub fn urem(self: Self, a: Value, b: Value) !Value {
-        _ = b;
         const ty = self.builder.func.dfg.valueType(a);
-        const r = try self.build(ty);
+        const r = try self.Binary(.urem, ty, a, b);
         return r.result.?;
     }
 
@@ -555,65 +760,57 @@ pub const FuncInstBuilder = struct {
 
     /// Bitwise AND.
     pub fn band(self: Self, a: Value, b: Value) !Value {
-        _ = b;
         const ty = self.builder.func.dfg.valueType(a);
-        const r = try self.build(ty);
+        const r = try self.Binary(.band, ty, a, b);
         return r.result.?;
     }
 
     /// Bitwise OR.
     pub fn bor(self: Self, a: Value, b: Value) !Value {
-        _ = b;
         const ty = self.builder.func.dfg.valueType(a);
-        const r = try self.build(ty);
+        const r = try self.Binary(.bor, ty, a, b);
         return r.result.?;
     }
 
     /// Bitwise XOR.
     pub fn bxor(self: Self, a: Value, b: Value) !Value {
-        _ = b;
         const ty = self.builder.func.dfg.valueType(a);
-        const r = try self.build(ty);
+        const r = try self.Binary(.bxor, ty, a, b);
         return r.result.?;
     }
 
     /// Shift left.
     pub fn ishl(self: Self, a: Value, b: Value) !Value {
-        _ = b;
         const ty = self.builder.func.dfg.valueType(a);
-        const r = try self.build(ty);
+        const r = try self.Binary(.ishl, ty, a, b);
         return r.result.?;
     }
 
     /// Unsigned shift right.
     pub fn ushr(self: Self, a: Value, b: Value) !Value {
-        _ = b;
         const ty = self.builder.func.dfg.valueType(a);
-        const r = try self.build(ty);
+        const r = try self.Binary(.ushr, ty, a, b);
         return r.result.?;
     }
 
     /// Signed shift right.
     pub fn sshr(self: Self, a: Value, b: Value) !Value {
-        _ = b;
         const ty = self.builder.func.dfg.valueType(a);
-        const r = try self.build(ty);
+        const r = try self.Binary(.sshr, ty, a, b);
         return r.result.?;
     }
 
     /// Rotate left.
     pub fn rotl(self: Self, a: Value, b: Value) !Value {
-        _ = b;
         const ty = self.builder.func.dfg.valueType(a);
-        const r = try self.build(ty);
+        const r = try self.Binary(.rotl, ty, a, b);
         return r.result.?;
     }
 
     /// Rotate right.
     pub fn rotr(self: Self, a: Value, b: Value) !Value {
-        _ = b;
         const ty = self.builder.func.dfg.valueType(a);
-        const r = try self.build(ty);
+        const r = try self.Binary(.rotr, ty, a, b);
         return r.result.?;
     }
 
@@ -623,10 +820,7 @@ pub const FuncInstBuilder = struct {
 
     /// Integer comparison.
     pub fn icmp(self: Self, cond: clif.IntCC, a: Value, b: Value) !Value {
-        _ = cond;
-        _ = a;
-        _ = b;
-        const r = try self.build(Type.I8);
+        const r = try self.IntCompare(.icmp, cond, a, b);
         return r.result.?;
     }
 
@@ -636,22 +830,19 @@ pub const FuncInstBuilder = struct {
 
     /// Zero extend.
     pub fn uextend(self: Self, ty: Type, arg: Value) !Value {
-        _ = arg;
-        const r = try self.build(ty);
+        const r = try self.Unary(.uextend, ty, arg);
         return r.result.?;
     }
 
     /// Sign extend.
     pub fn sextend(self: Self, ty: Type, arg: Value) !Value {
-        _ = arg;
-        const r = try self.build(ty);
+        const r = try self.Unary(.sextend, ty, arg);
         return r.result.?;
     }
 
     /// Reduce integer width.
     pub fn ireduce(self: Self, ty: Type, arg: Value) !Value {
-        _ = arg;
-        const r = try self.build(ty);
+        const r = try self.Unary(.ireduce, ty, arg);
         return r.result.?;
     }
 
@@ -661,37 +852,25 @@ pub const FuncInstBuilder = struct {
 
     /// Load from memory.
     pub fn load(self: Self, ty: Type, flags: clif.MemFlags, addr: Value, offset: i32) !Value {
-        _ = flags;
-        _ = addr;
-        _ = offset;
-        const r = try self.build(ty);
+        const r = try self.Load(.load, ty, flags, addr, offset);
         return r.result.?;
     }
 
     /// Store to memory.
     pub fn store(self: Self, flags: clif.MemFlags, val: Value, addr: Value, offset: i32) !Inst {
-        _ = flags;
-        _ = val;
-        _ = addr;
-        _ = offset;
-        const r = try self.build(null);
+        const r = try self.Store(.store, flags, val, addr, offset);
         return r.inst;
     }
 
     /// Load from stack slot.
     pub fn stackLoad(self: Self, ty: Type, slot: StackSlot, offset: i32) !Value {
-        _ = slot;
-        _ = offset;
-        const r = try self.build(ty);
+        const r = try self.StackLoad(.stack_load, ty, slot, offset);
         return r.result.?;
     }
 
     /// Store to stack slot.
     pub fn stackStore(self: Self, val: Value, slot: StackSlot, offset: i32) !Inst {
-        _ = val;
-        _ = slot;
-        _ = offset;
-        const r = try self.build(null);
+        const r = try self.StackStore(.stack_store, val, slot, offset);
         return r.inst;
     }
 
@@ -701,18 +880,14 @@ pub const FuncInstBuilder = struct {
 
     /// Unconditional jump.
     pub fn jump(self: Self, destination: Block, args: []const Value) !Inst {
-        _ = args;
-        const inst = try self.buildTerminator();
+        const inst = try self.JumpFmt(.jump, destination, args);
         try self.builder.declareSuccessor(destination, inst);
         return inst;
     }
 
     /// Conditional branch.
     pub fn brif(self: Self, cond: Value, then_block: Block, then_args: []const Value, else_block: Block, else_args: []const Value) !Inst {
-        _ = cond;
-        _ = then_args;
-        _ = else_args;
-        const inst = try self.buildTerminator();
+        const inst = try self.BrifFmt(.brif, cond, then_block, then_args, else_block, else_args);
         try self.builder.declareSuccessor(then_block, inst);
         if (!then_block.eql(else_block)) {
             try self.builder.declareSuccessor(else_block, inst);
@@ -722,13 +897,19 @@ pub const FuncInstBuilder = struct {
 
     /// Return from function.
     pub fn return_(self: Self, args: []const Value) !Inst {
-        _ = args;
-        return self.buildTerminator();
+        if (args.len == 0) {
+            return self.NullaryTerminator(.@"return");
+        } else {
+            return self.MultiAryTerminator(.@"return", args);
+        }
     }
 
     /// Call a function.
     pub fn call(self: Self, func_ref: FuncRef, args: []const Value) !struct { inst: Inst, results: []const Value } {
         _ = args;
+
+        // F2 Fix: Must ensure block is in Layout before adding instructions
+        try self.builder.ensureInsertedBlock();
 
         // Get the signature to determine return types
         const ext_func = self.builder.func.getExtFunc(func_ref) orelse
@@ -754,6 +935,9 @@ pub const FuncInstBuilder = struct {
     pub fn callIndirect(self: Self, sig_ref: SigRef, callee: Value, args: []const Value) !struct { inst: Inst, results: []const Value } {
         _ = args;
         _ = callee;
+
+        // F2 Fix: Must ensure block is in Layout before adding instructions
+        try self.builder.ensureInsertedBlock();
 
         // Get the signature to determine return types
         const sig = self.builder.func.getSignature(sig_ref) orelse

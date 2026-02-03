@@ -611,3 +611,156 @@ test "translate function with if-else" {
     // Should have created blocks for if/else structure
     try testing.expect(func.layout.entryBlock() != null);
 }
+
+// ============================================================================
+// V1: E2E Layout Population Tests
+// These tests verify the F1 fix - that all blocks are properly added to Layout
+// ============================================================================
+
+test "V1: Layout populated for simple return function" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var func = Function.init(allocator);
+    defer func.deinit();
+
+    var ft = WasmFuncTranslator.initWithoutGlobals(allocator);
+    defer ft.deinit();
+
+    // Simple function: () -> i32 { return 42 }
+    const signature = FuncSignature{
+        .params = &[_]WasmValType{},
+        .results = &[_]WasmValType{.i32},
+    };
+
+    const operators = [_]WasmOperator{
+        .{ .i32_const = 42 },
+        .end,
+    };
+
+    try ft.translateFunction(&func, signature, &[_]LocalDecl{}, &operators);
+
+    // Critical verification: Layout must have entry block
+    const entry = func.layout.entryBlock();
+    try testing.expect(entry != null);
+
+    // Count blocks in Layout
+    var layout_count: usize = 0;
+    var layout_iter = func.layout.blocks();
+    while (layout_iter.next()) |_| layout_count += 1;
+
+    // Must have at least entry block in Layout
+    try testing.expect(layout_count >= 1);
+
+    // DFG block count should match or exceed Layout (exit block may not be in Layout if unreachable)
+    try testing.expect(func.dfg.blocks.items.len >= layout_count);
+}
+
+test "V1: Layout populated for function with no locals" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var func = Function.init(allocator);
+    defer func.deinit();
+
+    var ft = WasmFuncTranslator.initWithoutGlobals(allocator);
+    defer ft.deinit();
+
+    // Function with params but no locals: (i32) -> i32 { return param }
+    const signature = FuncSignature{
+        .params = &[_]WasmValType{.i32},
+        .results = &[_]WasmValType{.i32},
+    };
+
+    const operators = [_]WasmOperator{
+        .{ .local_get = 0 },
+        .end,
+    };
+
+    try ft.translateFunction(&func, signature, &[_]LocalDecl{}, &operators);
+
+    // This specifically tests F1 fix - entry block must be in Layout
+    // even when there are no local variable initializations
+    const entry = func.layout.entryBlock();
+    try testing.expect(entry != null);
+}
+
+test "V1: Layout consistent for branching function" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var func = Function.init(allocator);
+    defer func.deinit();
+
+    var ft = WasmFuncTranslator.initWithoutGlobals(allocator);
+    defer ft.deinit();
+
+    // Function with br_if: (i32) -> i32 { if param { return 1 } else { return 0 } }
+    // Uses a block with results=0, then pushes result after the block
+    const signature = FuncSignature{
+        .params = &[_]WasmValType{.i32},
+        .results = &[_]WasmValType{.i32},
+    };
+
+    const operators = [_]WasmOperator{
+        // block (results=0) - just for control flow
+        .{ .block = .{ .params = 0, .results = 0 } },
+        .{ .local_get = 0 }, // condition
+        .{ .br_if = 0 }, // branch out if param is true (no values needed)
+        .{ .i32_const = 0 }, // false case: return 0
+        .{ .br = 1 }, // skip to function end
+        .end,
+        // After block: true case
+        .{ .i32_const = 1 }, // true case: return 1
+        .end,
+    };
+
+    try ft.translateFunction(&func, signature, &[_]LocalDecl{}, &operators);
+
+    // Verify entry block exists
+    try testing.expect(func.layout.entryBlock() != null);
+
+    // Count Layout blocks - should have multiple due to branching
+    var layout_count: usize = 0;
+    var layout_iter = func.layout.blocks();
+    while (layout_iter.next()) |_| layout_count += 1;
+
+    // br_if creates additional blocks
+    try testing.expect(layout_count >= 2);
+}
+
+test "V1: Compare Layout vs DFG block counts" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var func = Function.init(allocator);
+    defer func.deinit();
+
+    var ft = WasmFuncTranslator.initWithoutGlobals(allocator);
+    defer ft.deinit();
+
+    const signature = FuncSignature{
+        .params = &[_]WasmValType{},
+        .results = &[_]WasmValType{.i32},
+    };
+
+    const operators = [_]WasmOperator{
+        .{ .i32_const = 42 },
+        .end,
+    };
+
+    try ft.translateFunction(&func, signature, &[_]LocalDecl{}, &operators);
+
+    // Use the D3 comparison utility
+    var comparison = func.compareLayoutToDfg();
+    defer comparison.deinit(allocator);
+
+    // Entry block must exist
+    try testing.expect(comparison.entry_block != null);
+
+    // Layout should have at least one block
+    try testing.expect(comparison.layout_block_count >= 1);
+
+    // Log discrepancies (for debugging, doesn't fail test)
+    // Unreachable blocks (like exit block) may be in DFG but not Layout - that's OK
+}

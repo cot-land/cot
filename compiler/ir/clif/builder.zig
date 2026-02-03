@@ -60,6 +60,8 @@ pub const InstructionFormat = enum {
     /// Global value computation.
     /// Port of cranelift UnaryGlobalValue format.
     unary_global_value,
+    /// Multiple values (return with args, etc.).
+    multi_ary,
 };
 
 // ============================================================================
@@ -217,6 +219,12 @@ pub const InstructionData = union(enum) {
         offset: i32,
     },
 
+    /// Multiple values (return with args, etc.).
+    multi_ary: struct {
+        opcode: Opcode,
+        args: ValueList,
+    },
+
     /// Function address.
     func_addr: struct {
         opcode: Opcode,
@@ -261,6 +269,7 @@ pub const InstructionData = union(enum) {
             .stack_store => |d| d.opcode,
             .func_addr => |d| d.opcode,
             .unary_global_value => |d| d.opcode,
+            .multi_ary => |d| d.opcode,
         };
     }
 
@@ -290,6 +299,7 @@ pub const InstructionData = union(enum) {
             .stack_store => .stack_store,
             .func_addr => .func_addr,
             .unary_global_value => .unary_global_value,
+            .multi_ary => .multi_ary,
         };
     }
 };
@@ -449,6 +459,7 @@ pub const FuncBuilder = struct {
             .stack_store => |d| &[_]Value{d.arg},
             .func_addr => &[_]Value{},
             .unary_global_value => &[_]Value{}, // no value args, just GlobalValue ref
+            .multi_ary => &[_]Value{}, // args in ValueList
         };
 
         const args = try self.dfg.value_lists.alloc(args_slice);

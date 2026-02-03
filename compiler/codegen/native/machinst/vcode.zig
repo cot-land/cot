@@ -131,65 +131,17 @@ pub const BlockIndex = inst_mod.BlockIndex;
 
 
 /// Operand for register allocation.
-/// Mirrors regalloc2::Operand.
-pub const Operand = struct {
-    vreg_val: VReg,
-    constraint_val: OperandConstraint,
-    kind_val: OperandKind,
-    pos_val: OperandPos,
-
-    const Self = @This();
-
-    pub fn create(v: VReg, constraint: OperandConstraint, kind: OperandKind, pos: OperandPos) Self {
-        return .{
-            .vreg_val = v,
-            .constraint_val = constraint,
-            .kind_val = kind,
-            .pos_val = pos,
-        };
-    }
-
-    pub fn getVReg(self: Self) VReg {
-        return self.vreg_val;
-    }
-
-    pub fn getConstraint(self: Self) OperandConstraint {
-        return self.constraint_val;
-    }
-
-    pub fn getKind(self: Self) OperandKind {
-        return self.kind_val;
-    }
-
-    pub fn getPos(self: Self) OperandPos {
-        return self.pos_val;
-    }
-};
+/// Uses the regalloc Operand type directly for compatibility.
+pub const Operand = regalloc_operand.Operand;
 
 /// Operand constraint for register allocation.
-pub const OperandConstraint = union(enum) {
-    /// Any register in the class is allowed.
-    any: void,
-    /// A specific fixed register is required.
-    fixed_reg: PReg,
-    /// Register must be reused from another operand.
-    reuse: usize,
-    /// Stack slot is allowed.
-    stack: void,
-};
+pub const OperandConstraint = regalloc_operand.OperandConstraint;
 
 /// Operand kind - use or def.
-pub const OperandKind = enum {
-    use,
-    def,
-    use_def,
-};
+pub const OperandKind = regalloc_operand.OperandKind;
 
-/// Operand position - before or after the instruction.
-pub const OperandPos = enum {
-    early,
-    late,
-};
+/// Operand position (early/late).
+pub const OperandPos = regalloc_operand.OperandPos;
 
 /// A range in a Ranges structure.
 pub const Range = struct {
@@ -206,63 +158,117 @@ pub const Range = struct {
 };
 
 /// A structure to store ranges efficiently.
-/// Each entry stores the end index; the start is implicitly the previous entry's end.
+/// Port of Cranelift's ranges.rs - stores contiguous index ranges.
+/// All ranges are represented by adjacent pairs in the list; we explicitly
+/// store the starting index (always 0) so that get() can simply read
+/// ranges[index]..ranges[index+1].
 pub const Ranges = struct {
-    ends: std.ArrayListUnmanaged(usize),
+    ranges: std.ArrayListUnmanaged(u32),
+    reverse: bool,
 
     const Self = @This();
 
     pub fn init() Self {
-        return .{ .ends = .{} };
+        return .{ .ranges = .{}, .reverse = false };
     }
 
     pub fn withCapacity(allocator: Allocator, capacity: usize) !Self {
-        var ends = std.ArrayListUnmanaged(usize){};
-        try ends.ensureTotalCapacity(allocator, capacity);
-        return .{ .ends = ends };
+        var ranges = std.ArrayListUnmanaged(u32){};
+        // Account for the extra 0 element we'll add
+        const actual_capacity = if (capacity > 0) capacity + 1 else 0;
+        try ranges.ensureTotalCapacity(allocator, actual_capacity);
+        return .{ .ranges = ranges, .reverse = false };
     }
 
     pub fn deinit(self: *Self, allocator: Allocator) void {
-        self.ends.deinit(allocator);
+        self.ranges.deinit(allocator);
     }
 
     pub fn reserve(self: *Self, allocator: Allocator, additional: usize) !void {
-        try self.ends.ensureUnusedCapacity(allocator, additional);
+        var actual_additional = additional;
+        if (actual_additional > 0 and self.ranges.items.len == 0) {
+            actual_additional += 1; // Account for the explicit 0 start
+        }
+        try self.ranges.ensureUnusedCapacity(allocator, actual_additional);
     }
 
+    /// Add a new range which begins at the end of the previous range
+    /// and ends at the specified offset, exclusive.
     pub fn pushEnd(self: *Self, allocator: Allocator, end: usize) !void {
-        try self.ends.append(allocator, end);
+        std.debug.assert(!self.reverse);
+        // To keep this implementation simple we explicitly store the
+        // starting index, which is always 0, so that all ranges are
+        // represented by adjacent pairs in the list. But we add it
+        // lazily so that an empty list doesn't have to allocate.
+        if (self.ranges.items.len == 0) {
+            try self.ranges.append(allocator, 0);
+        }
+        try self.ranges.append(allocator, @intCast(end));
     }
 
+    /// Number of ranges in this list.
     pub fn len(self: Self) usize {
-        return self.ends.items.len;
+        if (self.ranges.items.len == 0) return 0;
+        return self.ranges.items.len - 1;
     }
 
-    pub fn get(self: Self, idx: usize) Range {
-        const start = if (idx == 0) 0 else self.ends.items[idx - 1];
-        const end = self.ends.items[idx];
-        return .{ .start = start, .end = end };
-    }
-
-    /// Reverse the index order (for backward-to-forward conversion).
-    pub fn reverseIndex(self: *Self) void {
-        std.mem.reverse(usize, self.ends.items);
-    }
-
-    /// Reverse the target values (for backward-to-forward conversion).
-    pub fn reverseTarget(self: *Self, n: usize) void {
-        for (self.ends.items) |*end| {
-            end.* = n - end.*;
+    fn mapIndex(self: Self, index: usize) usize {
+        if (self.reverse) {
+            // These subtractions can't overflow because callers
+            // enforce that 0 <= index < self.len()
+            return self.len() - 1 - index;
+        } else {
+            return index;
         }
     }
 
+    /// Get the range at the specified index.
+    pub fn get(self: Self, idx: usize) Range {
+        const length = self.len();
+        std.debug.assert(idx < length);
+        const mapped_idx = self.mapIndex(idx);
+        return .{
+            .start = self.ranges.items[mapped_idx],
+            .end = self.ranges.items[mapped_idx + 1],
+        };
+    }
+
+    /// Reverse the index order (for backward-to-forward conversion).
+    /// This is a logical reversal using the reverse flag - constant time.
+    pub fn reverseIndex(self: *Self) void {
+        self.reverse = !self.reverse;
+    }
+
+    /// Reverse the target values (for backward-to-forward conversion).
+    /// This transforms endpoints from backward order to forward order and
+    /// puts them back in ascending order (which means indices are now backwards).
+    /// Port of Cranelift's ranges.rs reverse_target().
+    pub fn reverseTarget(self: *Self, n: usize) void {
+        const target_len: u32 = @intCast(n);
+        // The last endpoint added should equal the target length.
+        // Port of: debug_assert_eq!(target_len, *self.ranges.last().unwrap_or(&0));
+        const expected_last: u32 = if (self.ranges.items.len > 0)
+            self.ranges.items[self.ranges.items.len - 1]
+        else
+            0;
+        std.debug.assert(target_len == expected_last);
+        // Transform each endpoint: end = n - end
+        for (self.ranges.items) |*end| {
+            end.* = target_len - end.*;
+        }
+        // Put endpoints back in ascending order, but that means
+        // now our indexes are backwards.
+        std.mem.reverse(u32, self.ranges.items);
+        self.reverseIndex();
+    }
+
     pub const Iterator = struct {
-        ranges: *const Ranges,
+        ranges_ptr: *const Ranges,
         idx: usize,
 
         pub fn next(self: *Iterator) ?struct { usize, Range } {
-            if (self.idx >= self.ranges.len()) return null;
-            const range = self.ranges.get(self.idx);
+            if (self.idx >= self.ranges_ptr.len()) return null;
+            const range = self.ranges_ptr.get(self.idx);
             const result = .{ self.idx, range };
             self.idx += 1;
             return result;
@@ -270,7 +276,7 @@ pub const Ranges = struct {
     };
 
     pub fn iter(self: *const Self) Iterator {
-        return .{ .ranges = self, .idx = 0 };
+        return .{ .ranges_ptr = self, .idx = 0 };
     }
 };
 
@@ -746,8 +752,8 @@ pub fn VCode(comptime I: type) type {
         /// Does a given instruction define any facts?
         pub fn instDefinesFacts(self: *const Self, inst_idx: InsnIndex) bool {
             for (self.instOperands(inst_idx)) |op| {
-                if (op.getKind() == .def) {
-                    if (self.facts.items[op.getVReg().vreg()]) |_| {
+                if (op.kind() == .def) {
+                    if (self.facts.items[op.vreg().vreg()]) |_| {
                         return true;
                     }
                 }
@@ -1299,42 +1305,79 @@ pub fn VCodeBuilder(comptime I: type) type {
         fn collectOperands(self: *Self, vregs: *VRegAllocator(I)) !void {
             const allocator = self.vcode.allocator;
 
-            for (self.vcode.insts.items, 0..) |*insn, i| {
-                // Push operands from the instruction onto the operand list.
-                // We rename through the vreg alias table as we collect the operands.
+            // Use the ISA's getOperands via the visitor pattern
+            const GetOperands = I.get_operands;
+            var visitor = GetOperands.OperandVisitor.init(allocator);
+            defer visitor.deinit();
 
-                // Call the instruction's getOperands method
-                // This is a simplified version - full implementation would use OperandCollector
-                const operands = insn.getOperands();
-                for (operands) |op| {
-                    // Convert from reg.Operand to vcode.Operand
-                    const resolved_vreg = vregs.resolveVregAlias(op.vreg());
-                    const constraint: OperandConstraint = switch (op.constraint()) {
-                        .reg => .any,
-                        .any => .any,
-                        .stack => .any,
-                        .fixed_reg => |preg| .{ .fixed_reg = preg },
-                        .reuse => |idx| .{ .reuse = idx },
-                        .limit => .any,
-                    };
-                    const kind: OperandKind = switch (op.kind()) {
-                        .use => .use,
-                        .def => .def,
-                    };
-                    const pos: OperandPos = switch (op.pos()) {
-                        .early => .early,
-                        .late => .late,
-                    };
-                    try self.vcode.operands.append(allocator, Operand.create(resolved_vreg, constraint, kind, pos));
+            for (self.vcode.insts.items, 0..) |*insn, i| {
+                // Clear visitor for this instruction
+                visitor.uses.clearRetainingCapacity();
+                visitor.defs.clearRetainingCapacity();
+                visitor.fixed_uses.clearRetainingCapacity();
+                visitor.fixed_defs.clearRetainingCapacity();
+                visitor.clobbers.clearRetainingCapacity();
+
+                // Collect operands using the visitor pattern
+                GetOperands.getOperands(insn, &visitor);
+
+                // Convert defs (definitions go first in operand order)
+                // Only add virtual registers - physical registers don't need allocation
+                for (visitor.defs.items) |def_reg| {
+                    const reg = def_reg.toReg();
+                    if (reg.isVirtual()) {
+                        const vreg = vregs.resolveVregAlias(reg.toVReg());
+                        try self.vcode.operands.append(allocator, Operand.new(vreg, .any, .def, .late));
+                    }
+                }
+
+                // Convert fixed defs (virtual regs with fixed physical register constraints)
+                for (visitor.fixed_defs.items) |fixed_def| {
+                    const reg = fixed_def.vreg.toReg();
+                    if (reg.isVirtual()) {
+                        const vreg = vregs.resolveVregAlias(reg.toVReg());
+                        try self.vcode.operands.append(allocator, Operand.new(vreg, .{ .fixed_reg = fixed_def.preg }, .def, .late));
+                    }
+                }
+
+                // Convert uses - only virtual registers need allocation
+                for (visitor.uses.items) |use_reg| {
+                    if (use_reg.isVirtual()) {
+                        const vreg = vregs.resolveVregAlias(use_reg.toVReg());
+                        try self.vcode.operands.append(allocator, Operand.new(vreg, .any, .use, .early));
+                    }
+                }
+
+                // Convert fixed uses (virtual regs with fixed physical register constraints)
+                for (visitor.fixed_uses.items) |fixed_use| {
+                    if (fixed_use.vreg.isVirtual()) {
+                        const vreg = vregs.resolveVregAlias(fixed_use.vreg.toVReg());
+                        try self.vcode.operands.append(allocator, Operand.new(vreg, .{ .fixed_reg = fixed_use.preg }, .use, .early));
+                    }
                 }
 
                 const end = self.vcode.operands.items.len;
                 try self.vcode.operand_ranges.pushEnd(allocator, end);
 
-                // Check for clobbers
-                const clobbers = insn.getClobbers();
-                if (!clobbers.isEmpty()) {
-                    try self.vcode.clobbers.put(allocator, InsnIndex.new(i), clobbers);
+                // Collect clobbers from the visitor
+                if (visitor.clobbers.items.len > 0) {
+                    var clobber_set = PRegSet.empty();
+                    for (visitor.clobbers.items) |preg| {
+                        clobber_set.add(preg);
+                    }
+                    try self.vcode.clobbers.put(allocator, InsnIndex.new(i), clobber_set);
+                }
+
+                // Also check instruction's getClobbers method
+                const inst_clobbers = insn.getClobbers();
+                if (!inst_clobbers.isEmpty()) {
+                    if (self.vcode.clobbers.get(InsnIndex.new(i))) |existing| {
+                        var merged = existing;
+                        merged.unionFrom(inst_clobbers);
+                        try self.vcode.clobbers.put(allocator, InsnIndex.new(i), merged);
+                    } else {
+                        try self.vcode.clobbers.put(allocator, InsnIndex.new(i), inst_clobbers);
+                    }
                 }
             }
 
@@ -1840,12 +1883,12 @@ test "Ranges basic operations" {
 
 test "Operand creation" {
     const vreg = VReg.init(10, .int);
-    const op = Operand.create(vreg, .any, .def, .late);
+    const op = Operand.new(vreg, .any, .def, .late);
 
-    try std.testing.expectEqual(vreg.bits, op.getVReg().bits);
-    try std.testing.expectEqual(OperandConstraint.any, op.getConstraint());
-    try std.testing.expectEqual(OperandKind.def, op.getKind());
-    try std.testing.expectEqual(OperandPos.late, op.getPos());
+    try std.testing.expectEqual(vreg.bits, op.vreg().bits);
+    try std.testing.expectEqual(OperandConstraint.any, op.constraint());
+    try std.testing.expectEqual(OperandKind.def, op.kind());
+    try std.testing.expectEqual(OperandPos.late, op.pos());
 }
 
 test "VCodeConstants basic operations" {

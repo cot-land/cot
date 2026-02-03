@@ -987,9 +987,11 @@ pub fn Lower(comptime I: type) type {
         }
 
         /// Is any result of this instruction needed?
+        /// Uses the pre-computed value_ir_uses, not value_lowered_uses which is
+        /// incremented during lowering.
         fn isAnyInstResultNeeded(self: *const Self, inst: Inst) bool {
             for (self.f.dfg.instResults(inst)) |result| {
-                if (self.value_lowered_uses.get(result) > 0) {
+                if (self.value_ir_uses.get(result) != .unused) {
                     return true;
                 }
             }
@@ -1177,8 +1179,9 @@ pub fn Lower(comptime I: type) type {
                     }
                 }
 
-                // Skip branches (handled separately).
-                if (inst_data.opcode.isBranch()) {
+                // Skip terminators (handled separately in lowerClifBranch).
+                // Terminators include return, trap, jump, brif, br_table.
+                if (inst_data.opcode.isTerminator()) {
                     continue;
                 }
 

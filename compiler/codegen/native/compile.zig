@@ -301,6 +301,7 @@ fn compileAArch64(
     var vcode = try lower_ctx.lower(aarch64.AArch64LowerBackend, &lower_backend);
     defer vcode.deinit();
 
+
     // Phase 4: Run register allocation
     const regalloc_output_val = try runRegalloc(allocator, &vcode, &backend.machine_env);
     defer {
@@ -777,4 +778,153 @@ test "e2e: ObjectModule generates valid ELF header" {
     try std.testing.expectEqual(@as(u8, 'E'), output.items[1]);
     try std.testing.expectEqual(@as(u8, 'L'), output.items[2]);
     try std.testing.expectEqual(@as(u8, 'F'), output.items[3]);
+}
+
+// ============================================================================
+// V2: E2E Compilation Output Tests
+// These tests verify the full pipeline produces non-zero output
+// ============================================================================
+
+test "V2: compile CLIF function produces non-zero output" {
+    const allocator = std.testing.allocator;
+
+    // Import FunctionBuilder to create a proper CLIF function
+    const frontend_mod = @import("frontend/mod.zig");
+    const FunctionBuilder = frontend_mod.FunctionBuilder;
+    const FunctionBuilderContext = frontend_mod.FunctionBuilderContext;
+    const Type = frontend_mod.Type;
+
+    // Create CLIF function
+    var func = clif.Function.init(allocator);
+    defer func.deinit();
+
+    // Set up function signature: () -> i32
+    try func.signature.returns.append(allocator, clif.AbiParam.init(Type.I32));
+
+    // Create function builder
+    var ctx = FunctionBuilderContext.init(allocator);
+    defer ctx.deinit();
+
+    var builder = FunctionBuilder.init(&func, &ctx);
+
+    // Create entry block
+    const entry_block = try builder.createBlock();
+    builder.switchToBlock(entry_block);
+    try builder.sealBlock(entry_block);
+
+    // Add instruction: iconst 42
+    const val = try builder.ins().iconst(Type.I32, 42);
+
+    // Add instruction: return val
+    _ = try builder.ins().return_(&[_]frontend_mod.Value{val});
+
+    // Finalize the function
+    builder.finalize();
+
+    // CRITICAL: Verify Layout has entry block before compilation
+    try std.testing.expect(func.layout.entryBlock() != null);
+
+    // Count Layout blocks
+    var layout_count: usize = 0;
+    var iter = func.layout.blocks();
+    while (iter.next()) |_| layout_count += 1;
+    try std.testing.expect(layout_count >= 1);
+
+    // Compile the function
+    const isa = detectNativeIsa();
+    var ctrl_plane = ControlPlane.init();
+
+    const compiled = compile(allocator, &func, isa, &ctrl_plane) catch |e| {
+        std.debug.print("Compilation failed: {}\n", .{e});
+        return e;
+    };
+    defer {
+        var compiled_mut = compiled;
+        compiled_mut.deinit();
+    }
+
+    // V2 Critical assertion: compiled code must be non-zero
+    const code_size = compiled.codeSize();
+    if (code_size == 0) {
+        std.debug.print("ERROR: Compiled code size is 0!\n", .{});
+        std.debug.print("  Layout block count: {}\n", .{layout_count});
+        std.debug.print("  DFG block count: {}\n", .{func.dfg.blocks.items.len});
+        std.debug.print("  DFG inst count: {}\n", .{func.dfg.insts.items.len});
+    }
+    try std.testing.expect(code_size > 0);
+}
+
+test "V2: compile function with control flow produces non-zero output" {
+    const allocator = std.testing.allocator;
+
+    const frontend_mod = @import("frontend/mod.zig");
+    const FunctionBuilder = frontend_mod.FunctionBuilder;
+    const FunctionBuilderContext = frontend_mod.FunctionBuilderContext;
+    const Type = frontend_mod.Type;
+
+    var func = clif.Function.init(allocator);
+    defer func.deinit();
+
+    // Function: (i32) -> i32
+    try func.signature.params.append(allocator, clif.AbiParam.init(Type.I32));
+    try func.signature.returns.append(allocator, clif.AbiParam.init(Type.I32));
+
+    var ctx = FunctionBuilderContext.init(allocator);
+    defer ctx.deinit();
+
+    var builder = FunctionBuilder.init(&func, &ctx);
+
+    // Create blocks
+    const entry = try builder.createBlock();
+    const then_block = try builder.createBlock();
+    const else_block = try builder.createBlock();
+    const merge_block = try builder.createBlock();
+
+    // Entry block: branch based on param
+    builder.switchToBlock(entry);
+    try builder.appendBlockParamsForFunctionParams(entry);
+    try builder.sealBlock(entry);
+
+    const param = builder.blockParams(entry)[0];
+    _ = try builder.ins().brif(param, then_block, &.{}, else_block, &.{});
+
+    // Then block: return 1
+    builder.switchToBlock(then_block);
+    try builder.sealBlock(then_block);
+    const one = try builder.ins().iconst(Type.I32, 1);
+    _ = try builder.ins().jump(merge_block, &[_]frontend_mod.Value{one});
+
+    // Else block: return 0
+    builder.switchToBlock(else_block);
+    try builder.sealBlock(else_block);
+    const zero = try builder.ins().iconst(Type.I32, 0);
+    _ = try builder.ins().jump(merge_block, &[_]frontend_mod.Value{zero});
+
+    // Merge block: return result
+    _ = try builder.appendBlockParam(merge_block, Type.I32);
+    builder.switchToBlock(merge_block);
+    try builder.sealBlock(merge_block);
+    const result = builder.blockParams(merge_block)[0];
+    _ = try builder.ins().return_(&[_]frontend_mod.Value{result});
+
+    builder.finalize();
+
+    // Verify Layout
+    try std.testing.expect(func.layout.entryBlock() != null);
+
+    // Compile
+    const isa = detectNativeIsa();
+    var ctrl_plane = ControlPlane.init();
+
+    const compiled = compile(allocator, &func, isa, &ctrl_plane) catch |e| {
+        std.debug.print("Compilation failed: {}\n", .{e});
+        return e;
+    };
+    defer {
+        var compiled_mut = compiled;
+        compiled_mut.deinit();
+    }
+
+    // Must produce non-zero output
+    try std.testing.expect(compiled.codeSize() > 0);
 }

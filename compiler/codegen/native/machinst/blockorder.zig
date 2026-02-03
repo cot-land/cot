@@ -738,7 +738,9 @@ pub const BlockLoweringOrder = struct {
 
                     if (func.layout.lastInst(o.block)) |last| {
                         const inst_data = func.dfg.getInstData(last);
-                        if (inst_data.opcode.isTerminator() and inst_data.opcode.isBranch()) {
+                        // All terminators need to be lowered (not just branches).
+                        // This includes return, trap, jump, brif, br_table.
+                        if (inst_data.opcode.isTerminator()) {
                             opt_inst = last;
                         }
                     }

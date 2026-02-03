@@ -29,7 +29,6 @@ pub const ssa_func = @import("ssa/func.zig");
 pub const ssa_dom = @import("ssa/dom.zig");
 pub const ssa_test_helpers = @import("ssa/test_helpers.zig");
 pub const ssa_debug = @import("ssa/debug.zig");
-pub const ssa_compile = @import("ssa/compile.zig");
 pub const ssa_schedule = @import("ssa/passes/schedule.zig");
 pub const ssa_lower_wasm = @import("ssa/passes/lower_wasm.zig");
 pub const ssa_layout = @import("ssa/passes/layout.zig");

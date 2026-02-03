@@ -247,8 +247,10 @@ pub fn getOperands(inst: *const Inst, collector: *OperandVisitor) void {
             collector.regDef(p.rd);
         },
         .movk => |p| {
-            collector.regReuseDef(p.rd, 0);
+            // Port of Cranelift: collector.reg_use(rn); collector.reg_reuse_def(rd, 0);
+            // The use comes first, then reuse_def refers to operand index 0 (the use).
             collector.regUse(p.rn);
+            collector.regReuseDef(p.rd, 0);
         },
         .mov_from_preg => |p| {
             collector.regDef(p.rd);
@@ -450,12 +452,15 @@ pub fn getOperands(inst: *const Inst, collector: *OperandVisitor) void {
 
         // Atomics
         .atomic_rmw => |p| {
-            collector.regDef(p.rt);
+            // Port of Cranelift: reg_use(rs); reg_def(rt); reg_use(rn);
             collector.regUse(p.rs);
+            collector.regDef(p.rt);
             collector.regUse(p.rn);
         },
         .atomic_cas => |p| {
-            collector.regReuseDef(p.rd, 0);
+            // Port of Cranelift: reg_reuse_def(rd, 1); reg_use(rs); reg_use(rt); reg_use(rn);
+            collector.regReuseDef(p.rd, 1); // reuse `rs`.
+            collector.regUse(p.rs);
             collector.regUse(p.rt);
             collector.regUse(p.rn);
         },
