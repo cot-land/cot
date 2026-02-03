@@ -96,6 +96,8 @@ pub const WasmOp = union(enum) {
     i64_store32: MemArg,
     memory_size: u32,
     memory_grow: u32,
+    memory_copy: struct { dst: u32, src: u32 },
+    memory_fill: u32,
 
     // ========================================================================
     // Arithmetic i32
@@ -294,6 +296,8 @@ pub const WasmOp = union(enum) {
             .local_get => |d| WasmOperator{ .local_get = d },
             .local_set => |d| WasmOperator{ .local_set = d },
             .local_tee => |d| WasmOperator{ .local_tee = d },
+            .global_get => |d| WasmOperator{ .global_get = d },
+            .global_set => |d| WasmOperator{ .global_set = d },
 
             // Constants
             .i32_const => |d| WasmOperator{ .i32_const = d },
@@ -626,7 +630,33 @@ pub const Decoder = struct {
             wasm.Op.i64_extend16_s => .i64_extend16_s,
             wasm.Op.i64_extend32_s => .i64_extend32_s,
 
+            // Multi-byte opcodes (0xFC prefix)
+            0xFC => try self.decodeMultiByteOp(),
+
             else => return DecodeError.InvalidOpcode,
+        };
+    }
+
+    /// Decode multi-byte opcodes (0xFC prefix).
+    /// Reference: Wasm bulk memory and table operations.
+    fn decodeMultiByteOp(self: *Self) !WasmOp {
+        const sub_opcode = self.readU32();
+        return switch (sub_opcode) {
+            0x0A => blk: {
+                // memory.copy dst_memidx src_memidx
+                const dst = self.readU32();
+                const src = self.readU32();
+                break :blk WasmOp{ .memory_copy = .{ .dst = dst, .src = src } };
+            },
+            0x0B => blk: {
+                // memory.fill memidx
+                const mem_idx = self.readU32();
+                break :blk WasmOp{ .memory_fill = mem_idx };
+            },
+            else => {
+                std.debug.print("Unknown multi-byte opcode: 0xFC 0x{X}\n", .{sub_opcode});
+                return DecodeError.InvalidOpcode;
+            },
         };
     }
 

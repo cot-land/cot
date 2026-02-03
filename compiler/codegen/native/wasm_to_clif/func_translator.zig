@@ -17,6 +17,7 @@ pub const Value = stack_mod.Value;
 pub const TranslationState = stack_mod.TranslationState;
 pub const FuncTranslator = translator_mod.FuncTranslator;
 pub const WasmOpcode = translator_mod.WasmOpcode;
+pub const WasmGlobalType = translator_mod.WasmGlobalType;
 pub const Type = frontend_mod.Type;
 pub const Function = frontend_mod.Function;
 pub const FunctionBuilder = frontend_mod.FunctionBuilder;
@@ -79,15 +80,23 @@ pub const WasmFuncTranslator = struct {
     allocator: std.mem.Allocator,
     /// Reusable builder context.
     builder_ctx: FunctionBuilderContext,
+    /// Module-level globals (for type lookup during translation).
+    globals: []const WasmGlobalType,
 
     const Self = @This();
 
-    /// Create a new translator.
-    pub fn init(allocator: std.mem.Allocator) Self {
+    /// Create a new translator with module-level globals.
+    pub fn init(allocator: std.mem.Allocator, globals: []const WasmGlobalType) Self {
         return .{
             .allocator = allocator,
             .builder_ctx = FunctionBuilderContext.init(allocator),
+            .globals = globals,
         };
+    }
+
+    /// Create a new translator without globals (backwards compatibility).
+    pub fn initWithoutGlobals(allocator: std.mem.Allocator) Self {
+        return init(allocator, &[_]WasmGlobalType{});
     }
 
     /// Deallocate storage.
@@ -121,8 +130,8 @@ pub const WasmFuncTranslator = struct {
         // 2. Set up function builder
         var builder = FunctionBuilder.init(func, &self.builder_ctx);
 
-        // 3. Create translator
-        var translator = FuncTranslator.init(self.allocator, &builder);
+        // 3. Create translator with globals for type lookup
+        var translator = FuncTranslator.init(self.allocator, &builder, self.globals);
         defer translator.deinit();
 
         // 4. Calculate total number of locals (params + declared locals)
@@ -168,26 +177,49 @@ pub const WasmFuncTranslator = struct {
     }
 
     /// Translate a single Wasm operator.
+    /// Following Cranelift's pattern (code_translator.rs:129-131 and translate_unreachable_operator),
+    /// we check reachability before translating operators. Unreachable control flow operators
+    /// push placeholder entries onto the control stack but don't emit code.
     fn translateOperator(self: *Self, translator: *FuncTranslator, op: WasmOperator) !void {
         _ = self;
+
+        // Handle unreachable code specially (Cranelift: translate_unreachable_operator)
+        if (!translator.state.reachable) {
+            switch (op) {
+                // Control flow operators still need to update control stack
+                .block => |data| return try translator.translateUnreachableBlock(data.params, data.results),
+                .loop => |data| return try translator.translateUnreachableBlock(data.params, data.results),
+                .if_op => |data| return try translator.translateUnreachableIf(data.params, data.results),
+                .else_op => return try translator.translateElse(),
+                .end => return try translator.translateEnd(),
+                // All other operators are skipped when unreachable
+                else => return,
+            }
+        }
+
+        // Normal (reachable) operator translation
         switch (op) {
-            // Control flow
+            // Control flow - block structure
             .block => |data| try translator.translateBlock(data.params, data.results),
             .loop => |data| try translator.translateLoop(data.params, data.results),
             .if_op => |data| try translator.translateIf(data.params, data.results),
             .else_op => try translator.translateElse(),
             .end => try translator.translateEnd(),
+            .nop => {},
+
+            // Control flow - branching (sets reachable=false)
             .br => |depth| try translator.translateBr(depth),
             .br_if => |depth| try translator.translateBrIf(depth),
             .br_table => |data| try translator.translateBrTable(data.targets, data.default),
             .return_op => try translator.translateReturn(),
             .unreachable_op => try translator.translateUnreachable(),
-            .nop => {},
 
             // Variables
             .local_get => |idx| try translator.translateLocalGet(idx),
             .local_set => |idx| try translator.translateLocalSet(idx),
             .local_tee => |idx| try translator.translateLocalTee(idx),
+            .global_get => |idx| try translator.translateGlobalGet(idx),
+            .global_set => |idx| try translator.translateGlobalSet(idx),
 
             // Constants
             .i32_const => |val| try translator.translateI32Const(val),
@@ -266,6 +298,8 @@ pub const WasmOperator = union(enum) {
     local_get: u32,
     local_set: u32,
     local_tee: u32,
+    global_get: u32,
+    global_set: u32,
 
     // Constants
     i32_const: i32,
@@ -320,7 +354,7 @@ test "translate simple function: (i32, i32) -> i32 { local.get 0 + local.get 1 }
     var func = Function.init(allocator);
     defer func.deinit();
 
-    var ft = WasmFuncTranslator.init(allocator);
+    var ft = WasmFuncTranslator.initWithoutGlobals(allocator);
     defer ft.deinit();
 
     const signature = FuncSignature{
@@ -348,7 +382,7 @@ test "translate function with local: () -> i32 { local i32; local.set 0 = 42; lo
     var func = Function.init(allocator);
     defer func.deinit();
 
-    var ft = WasmFuncTranslator.init(allocator);
+    var ft = WasmFuncTranslator.initWithoutGlobals(allocator);
     defer ft.deinit();
 
     const signature = FuncSignature{
@@ -380,7 +414,7 @@ test "translate function with block" {
     var func = Function.init(allocator);
     defer func.deinit();
 
-    var ft = WasmFuncTranslator.init(allocator);
+    var ft = WasmFuncTranslator.initWithoutGlobals(allocator);
     defer ft.deinit();
 
     const signature = FuncSignature{
@@ -409,7 +443,7 @@ test "translate function with block" {
 //     var func = Function.init(allocator);
 //     defer func.deinit();
 //
-//     var ft = WasmFuncTranslator.init(allocator);
+//     var ft = WasmFuncTranslator.initWithoutGlobals(allocator);
 //     defer ft.deinit();
 //
 //     const signature = FuncSignature{
@@ -437,7 +471,7 @@ test "translate function with if-else" {
     var func = Function.init(allocator);
     defer func.deinit();
 
-    var ft = WasmFuncTranslator.init(allocator);
+    var ft = WasmFuncTranslator.initWithoutGlobals(allocator);
     defer ft.deinit();
 
     const signature = FuncSignature{

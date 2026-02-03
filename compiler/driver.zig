@@ -326,8 +326,18 @@ pub const Driver = struct {
             compiled_funcs.deinit(self.allocator);
         }
 
-        // Create reusable translator context
-        var func_translator = wasm_func_translator.WasmFuncTranslator.init(self.allocator);
+        // Convert module globals to translator format for type lookup
+        var globals_converted = try self.allocator.alloc(wasm_func_translator.WasmGlobalType, wasm_module.globals.len);
+        defer self.allocator.free(globals_converted);
+        for (wasm_module.globals, 0..) |g, i| {
+            globals_converted[i] = .{
+                .val_type = convertToTranslatorValType(g.val_type),
+                .mutable = g.mutable,
+            };
+        }
+
+        // Create reusable translator context with globals
+        var func_translator = wasm_func_translator.WasmFuncTranslator.init(self.allocator, globals_converted);
         defer func_translator.deinit();
 
         // Select ISA based on target
@@ -421,7 +431,10 @@ pub const Driver = struct {
                 return error.WasmTranslationError;
             };
 
-            pipeline_debug.log(.codegen, "driver: translated function {d} to CLIF", .{func_idx});
+            // Debug: check CLIF function size
+            const num_blocks = clif_func.dfg.blocks.items.len;
+            const num_insts = clif_func.dfg.insts.items.len;
+            pipeline_debug.log(.codegen, "driver: translated function {d} to CLIF ({d} blocks, {d} insts)", .{ func_idx, num_blocks, num_insts });
 
             // ----------------------------------------------------------------
             // Step 2c: Compile CLIF to native
@@ -696,7 +709,7 @@ pub const Driver = struct {
 // Helper functions for type conversion (used by native codegen)
 // ============================================================================
 
-/// Convert a single wasm ValType to WasmValType.
+/// Convert a single wasm ValType to WasmValType (for function signatures).
 fn convertWasmValType(val_type: wasm_old.ValType) wasm_func_translator.WasmValType {
     return switch (val_type) {
         .i32 => .i32,
@@ -705,6 +718,20 @@ fn convertWasmValType(val_type: wasm_old.ValType) wasm_func_translator.WasmValTy
         .f64 => .f64,
         .funcref => .funcref,
         .externref => .externref,
+    };
+}
+
+/// Convert wasm ValType to translator's global WasmValType.
+/// The translator uses a simpler enum (i32/i64/f32/f64) for globals.
+fn convertToTranslatorValType(val_type: wasm_old.ValType) @import("codegen/native/wasm_to_clif/translator.zig").WasmValType {
+    const TranslatorValType = @import("codegen/native/wasm_to_clif/translator.zig").WasmValType;
+    return switch (val_type) {
+        .i32 => TranslatorValType.i32,
+        .i64 => TranslatorValType.i64,
+        .f32 => TranslatorValType.f32,
+        .f64 => TranslatorValType.f64,
+        // Reference types default to i64 (pointer size)
+        .funcref, .externref => TranslatorValType.i64,
     };
 }
 

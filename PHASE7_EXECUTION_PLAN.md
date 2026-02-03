@@ -1,296 +1,370 @@
 # Phase 7: Integration Execution Plan
 
-**Last Updated**: 2026-02-02
-**Status**: In Progress
-
-## Overview
-
-This document provides a detailed execution plan for completing Phase 7 (Integration) of the Cranelift port. It includes an audit proving parity with Cranelift and a task list for wiring all ported components together.
+**Last Updated**: 2026-02-03 (Full Audit + Root Cause Analysis)
+**Status**: In Progress - Root Cause Identified
 
 ---
 
-## Part 1: Cranelift Port Audit
+## Executive Summary
 
-### Summary Statistics
-
-| Component | Files | Lines of Code | Tests | Status |
-|-----------|-------|---------------|-------|--------|
-| CLIF IR (`ir/clif/`) | 8 | 4,954 | 40 | 100% Complete |
-| Wasm→CLIF (`wasm_to_clif/`) | 3 | 1,962 | 19 | ~60% Complete |
-| MachInst Framework (`machinst/`) | 7 | ~9,000 | 67 | 100% Complete |
-| ARM64 Backend (`isa/aarch64/`) | 7 | ~8,500 | 100+ | 95% Complete |
-| x64 Backend (`isa/x64/`) | 7 | ~8,400 | 140 | 95% Complete |
-| Register Allocator (`regalloc/`) | 16 | ~6,400 | 75 | 100% Complete |
-| Integration (`compile.zig`) | 1 | 719 | 10 | 80% Complete |
-| Frontend (`frontend/`) | 4 | ~1,200 | - | 100% Complete |
-| **TOTAL** | **53** | **~41,135** | **451+** | **~90%** |
-
-### File-by-File Audit
-
-#### CLIF IR (`compiler/ir/clif/`)
-
-| File | LOC | Cranelift Source | Parity |
-|------|-----|------------------|--------|
-| types.zig | 593 | ir/types.rs | 100% |
-| instructions.zig | 554 | ir/instructions.rs | 100% |
-| dfg.zig | 812 | ir/dfg.rs | 100% |
-| layout.zig | 947 | ir/layout.rs | 100% |
-| function.zig | 601 | ir/function.rs | 100% |
-| builder.zig | 917 | ir/builder.rs | 100% |
-| jumptable.zig | 362 | ir/jumptable.rs | 100% |
-| mod.zig | 168 | - | 100% |
-
-#### Wasm→CLIF (`compiler/codegen/native/wasm_to_clif/`)
-
-| File | LOC | Cranelift Source | Parity | Notes |
-|------|-----|------------------|--------|-------|
-| translator.zig | 921 | translate/code_translator.rs | ~60% | Needs memory ops |
-| stack.zig | 600 | translate/stack.rs | 100% | Complete |
-| func_translator.zig | 441 | translate/func_translator.rs | ~80% | Needs integration |
-
-**Gap Analysis**:
-- Memory instructions (load/store) not yet implemented
-- Global variable handling incomplete
-- Function calls need ABI integration
-
-#### MachInst Framework (`compiler/codegen/native/machinst/`)
-
-| File | LOC | Cranelift Source | Parity |
-|------|-----|------------------|--------|
-| inst.zig | ~800 | machinst/mod.rs | 100% |
-| vcode.zig | ~1,800 | machinst/vcode.rs | 100% |
-| reg.zig | ~600 | machinst/reg.rs | 100% |
-| abi.zig | ~1,200 | machinst/abi.rs | 100% |
-| buffer.zig | ~1,500 | machinst/buffer.rs | 100% |
-| blockorder.zig | ~1,500 | machinst/blockorder.rs | 100% |
-| lower.zig | ~1,600 | machinst/lower.rs | 100% |
-
-#### ARM64 Backend (`compiler/codegen/native/isa/aarch64/`)
-
-| File | LOC | Cranelift Source | Parity |
-|------|-----|------------------|--------|
-| inst/mod.zig | ~1,500 | isa/aarch64/inst/mod.rs | 100% |
-| inst/args.zig | ~1,200 | isa/aarch64/inst/args.rs | 100% |
-| inst/regs.zig | ~300 | isa/aarch64/inst/regs.rs | 100% |
-| inst/imms.zig | ~400 | isa/aarch64/inst/imms.rs | 100% |
-| inst/emit.zig | ~1,500 | isa/aarch64/inst/emit.rs | 95% |
-| inst/get_operands.zig | ~400 | isa/aarch64/inst/mod.rs | 100% |
-| lower.zig | ~1,800 | isa/aarch64/lower.rs | 95% |
-| abi.zig | ~1,700 | isa/aarch64/abi.rs | 100% |
-| mod.zig | ~200 | - | 100% |
-
-**Gap Analysis**:
-- Some rare instruction variants use BRK fallback
-- Full print_with_state() not implemented (debug only)
-
-#### x64 Backend (`compiler/codegen/native/isa/x64/`)
-
-| File | LOC | Cranelift Source | Parity |
-|------|-----|------------------|--------|
-| inst/mod.zig | ~1,350 | isa/x64/inst/mod.rs | 100% |
-| inst/args.zig | ~1,240 | isa/x64/inst/args.rs | 100% |
-| inst/regs.zig | ~480 | isa/x64/inst/regs.rs | 100% |
-| inst/emit.zig | ~2,330 | isa/x64/inst/emit.rs | 95% |
-| inst/get_operands.zig | ~670 | isa/x64/inst/mod.rs | 100% |
-| lower.zig | ~1,480 | isa/x64/lower.rs | 95% |
-| abi.zig | ~750 | isa/x64/abi.rs | 100% |
-| mod.zig | ~130 | - | 100% |
-
-#### Register Allocator (`compiler/codegen/native/regalloc/`)
-
-| File | LOC | Cranelift Source | Parity |
-|------|-----|------------------|--------|
-| index.zig | ~200 | regalloc2 core types | 100% |
-| operand.zig | ~760 | regalloc2 operand.rs | 100% |
-| func.zig | ~200 | regalloc2 function.rs | 100% |
-| env.zig | ~230 | regalloc2 env.rs | 100% |
-| output.zig | ~400 | regalloc2 output.rs | 100% |
-| cfg.zig | ~420 | regalloc2 cfg.rs | 100% |
-| ssa.zig | ~200 | regalloc2 ssa.rs | 100% |
-| indexset.zig | ~430 | regalloc2 indexset.rs | 100% |
-| moves.zig | ~450 | regalloc2 moves.rs | 100% |
-| ion_data.zig | ~750 | regalloc2 ion/data.rs | 100% |
-| liveness.zig | ~620 | regalloc2 ion/liveranges.rs | 100% |
-| merge.zig | ~710 | regalloc2 ion/merge.rs | 100% |
-| process.zig | ~1,500 | regalloc2 ion/process.rs | 100% |
-| spill.zig | ~580 | regalloc2 ion/spill.rs | 100% |
-| ion_moves.zig | ~810 | regalloc2 ion/moves.rs | 100% |
-| regalloc.zig | ~390 | regalloc2 lib.rs | 100% |
+The native codegen pipeline is wired but crashes on simple programs. Root cause: `toBasicOperator()` skips global variable operations (`global.get`, `global.set`), causing stack underflow when translating Wasm functions that use stack pointer manipulation.
 
 ---
 
-## Part 2: Legacy Code to Remove
+## Part 1: Root Cause Analysis
 
-These files are from the old architecture and should be removed after Phase 7 is complete:
+### The Crash
 
-| File | LOC | Reason |
-|------|-----|--------|
-| `codegen/native/arm64_asm.zig` | 989 | Replaced by `isa/aarch64/inst/emit.zig` |
-| `codegen/native/amd64_asm.zig` | 1,628 | Replaced by `isa/x64/inst/emit.zig` |
-| `codegen/native/amd64_regs.zig` | 218 | Replaced by `isa/x64/inst/regs.zig` |
-| `codegen/native/abi.zig` | 16 | Stub; replaced by `isa/*/abi.zig` |
-| **TOTAL** | **2,851** | |
-
-**Action**: Remove these files AFTER Phase 7 end-to-end tests pass.
-
----
-
-## Part 3: Integration Blockers
-
-### Current State
-
-The integration blocker is at `driver.zig:306`:
-```zig
-// Native AOT compilation not yet integrated.
-// See CRANELIFT_PORT_MASTER_PLAN.md for implementation status.
-// Integration requires: wasm_to_clif translation + native_compile pipeline.
-return error.NativeCodegenNotImplemented;
+```bash
+$ echo 'fn main() i32 { return 42; }' | cot -
+panic: integer overflow in stack.zig:289 (stack underflow in peek1)
 ```
 
-### What Needs to Happen
+### Why It Happens
 
-1. **Wasm → CLIF Translation**: Use `wasm_to_clif/func_translator.zig`
-2. **CLIF → Native Compilation**: Use `compile.zig`
-3. **Object File Generation**: Use `macho.zig` or `elf.zig`
+1. Cot generates Wasm that uses `global.get 0` (stack pointer)
+2. `decoder.zig` decodes `global.get` into WasmOp
+3. `toBasicOperator()` returns `null` for `global.get` (not implemented)
+4. The operator is skipped in driver.zig line 407
+5. Subsequent operators expect a value on stack → **underflow**
 
-### The Missing Link
+### Proof
 
-The `func_translator.zig` already has `WasmFuncTranslator` that:
-- Takes `WasmOperator` enums (from wasm_parser)
-- Has `translateOperator()` for each Wasm opcode
-- Produces CLIF IR via the builder
+```
+[codegen] driver: translating function 0
+[codegen] driver: decoded 26 operators
+panic: stack underflow
+```
 
-The gap is wiring this into driver.zig's `generateNativeCode()` function.
+Function 0 (likely ARC runtime) uses globals. When globals are skipped, the stack state is corrupted.
 
 ---
 
-## Part 4: Execution Tasks
+## Part 2: Cranelift Port Audit (Verified)
 
-### Task 7.1: Wire Wasm→CLIF Translation (CRITICAL)
+### Line Counts (Actual vs Documented)
 
-**Objective**: Connect wasm_parser output to func_translator
+| Component | Actual LOC | Old Doc LOC | Difference |
+|-----------|------------|-------------|------------|
+| CLIF IR | 5,149 | 4,954 | +195 |
+| Wasm→CLIF | 2,950 | 1,962 | +988 |
+| MachInst | 9,365 | ~9,000 | +365 |
+| ARM64 | 12,283 | ~8,500 | +3,783 |
+| x64 | 11,957 | ~8,400 | +3,557 |
+| Regalloc | 11,011 | ~6,400 | +4,611 |
+| Frontend | 1,628 | ~1,200 | +428 |
+| **TOTAL** | **~55,089** | ~41,135 | **+13,954** |
 
-**Files**:
-- `driver.zig` - generateNativeCode()
-- `wasm_to_clif/func_translator.zig` - WasmFuncTranslator
+### Parity Status
 
-**Steps**:
-1. Parse each function from wasm_module.code
-2. Create WasmFuncTranslator for each function
-3. Feed Wasm opcodes to translateOperator()
-4. Get CLIF Function from translator
+| Component | Status | Blocking Issues |
+|-----------|--------|-----------------|
+| CLIF IR | 100% ✅ | None |
+| Wasm→CLIF | **~40%** ❌ | Missing: globals, memory, calls, floats, i64 |
+| MachInst | 95% ✅ | Placeholder prologue/epilogue |
+| ARM64 | 90% ✅ | Call lowering placeholders |
+| x64 | 85% ✅ | Regalloc handling incomplete |
+| Regalloc | 100% ✅ | None |
 
-**Cranelift Reference**: `wasmtime/cranelift/src/compiler.rs` - `translate_function()`
+---
 
-### Task 7.2: Complete Memory Instructions
+## Part 3: Systematic Task Execution
 
-**Objective**: Implement load/store in translator.zig
+### Task 7.1: Add Global Variable Support [BLOCKING]
 
-**Missing Opcodes**:
-- `i32.load`, `i64.load`, `f32.load`, `f64.load`
-- `i32.store`, `i64.store`, `f32.store`, `f64.store`
-- Various load variants (8/16 bit, signed/unsigned)
+**Status**: ❌ Not Started
+**Priority**: P0 - Must fix first
+**Estimated Scope**: ~50 lines
 
-**Cranelift Reference**: `code_translator.rs` translate_load/translate_store
+#### Cranelift Reference
 
-### Task 7.3: Wire CLIF→Native Compilation
+**File**: `~/learning/wasmtime/crates/cranelift/src/translate/code_translator.rs`
 
-**Objective**: Connect CLIF Function to compile.zig
-
-**Files**:
-- `driver.zig` - after Wasm→CLIF
-- `compile.zig` - compile()
-
-**Code Pattern**:
-```zig
-// After translating all functions to CLIF:
-for (clif_functions) |clif_func| {
-    const compiled = try native_compile.compile(
-        allocator,
-        &clif_func,
-        native_compile.detectNativeIsa(),
-        &ctrl_plane,
-    );
-    // Collect machine code
+```rust
+// Lines 202-213
+Operator::GlobalGet { global_index } => {
+    environ.translate_global_get(builder, srcloc, *global_index)?;
+}
+Operator::GlobalSet { global_index } => {
+    environ.translate_global_set(builder, srcloc, *global_index)?;
 }
 ```
 
-### Task 7.4: Complete VCode Emission
+**File**: `~/learning/wasmtime/crates/cranelift/src/translate/environ/spec.rs`
 
-**Objective**: Replace placeholder emit functions with real implementation
+```rust
+fn translate_global_get(&mut self, ...) -> ... {
+    // Load from global memory location
+}
+```
 
-**Files**:
-- `compile.zig` - emitCodeAArch64(), emitCodeX64()
-- `isa/aarch64/inst/emit.zig` - emit()
-- `isa/x64/inst/emit.zig` - emit()
+#### Implementation Steps
 
-**Current State**: Emit functions return placeholder `ret` instruction
+**Step 1.1**: Add to `toBasicOperator()` in `decoder.zig`
+
+```zig
+// Line ~296, after local_tee
+.global_get => |d| WasmOperator{ .global_get = d },
+.global_set => |d| WasmOperator{ .global_set = d },
+```
+
+**Step 1.2**: Add to `WasmOperator` enum in `func_translator.zig`
+
+```zig
+// In WasmOperator union
+global_get: u32,
+global_set: u32,
+```
+
+**Step 1.3**: Add translation case in `func_translator.zig:translateOperator()`
+
+```zig
+.global_get => |idx| try translator.translateGlobalGet(idx),
+.global_set => |idx| try translator.translateGlobalSet(idx),
+```
+
+**Step 1.4**: Implement in `translator.zig`
+
+```zig
+pub fn translateGlobalGet(self: *Self, global_index: u32) !void {
+    // For now, treat globals as memory locations
+    // Load from global address = global_base + global_index * 8
+    const global_addr = try self.builder.ins().iconst(Type.I64, @intCast(global_index * 8));
+    const value = try self.builder.ins().load(Type.I64, .{}, global_addr, 0);
+    try self.state.push1(value);
+}
+
+pub fn translateGlobalSet(self: *Self, global_index: u32) !void {
+    const value = self.state.pop1();
+    const global_addr = try self.builder.ins().iconst(Type.I64, @intCast(global_index * 8));
+    _ = try self.builder.ins().store(.{}, value, global_addr, 0);
+}
+```
+
+#### Verification
+
+```bash
+# Should no longer crash with stack underflow
+echo 'fn main() i32 { return 42; }' | cot -
+```
+
+---
+
+### Task 7.2: Add Memory Instructions [HIGH PRIORITY]
+
+**Status**: ❌ Not Started
+**Priority**: P1
+**Estimated Scope**: ~150 lines
+
+#### Cranelift Reference
+
+**File**: `~/learning/wasmtime/crates/cranelift/src/translate/code_translator.rs:3680-3724`
+
+```rust
+fn translate_load(
+    memarg: &MemArg,
+    opcode: ir::Opcode,
+    result_ty: Type,
+    builder: &mut FunctionBuilder,
+    environ: &mut FuncEnvironment<'_>,
+) -> WasmResult<Reachability<()>> {
+    let (flags, wasm_index, base) = prepare_addr(memarg, ...)?;
+    let (load, dfg) = builder.ins().Load(opcode, result_ty, flags, Offset32::new(0), base);
+    environ.stacks.push1(dfg.first_result(load));
+    Ok(Reachability::Reachable(()))
+}
+
+fn translate_store(
+    memarg: &MemArg,
+    opcode: ir::Opcode,
+    builder: &mut FunctionBuilder,
+    environ: &mut FuncEnvironment<'_>,
+) -> WasmResult<()> {
+    let val = environ.stacks.pop1();
+    let (flags, wasm_index, base) = prepare_addr(memarg, ...)?;
+    builder.ins().Store(opcode, val_ty, flags, Offset32::new(0), val, base);
+    Ok(())
+}
+```
+
+#### Implementation Steps
+
+**Step 2.1**: Add MemArg to WasmOperator in `func_translator.zig`
+
+```zig
+pub const MemArg = struct {
+    align_: u32,
+    offset: u32,
+};
+
+pub const WasmOperator = union(enum) {
+    // ... existing fields ...
+    i32_load: MemArg,
+    i64_load: MemArg,
+    f32_load: MemArg,
+    f64_load: MemArg,
+    i32_store: MemArg,
+    i64_store: MemArg,
+    f32_store: MemArg,
+    f64_store: MemArg,
+    // Add load variants (i32_load8_s, etc.)
+};
+```
+
+**Step 2.2**: Add to `toBasicOperator()` in `decoder.zig`
+
+```zig
+.i32_load => |d| WasmOperator{ .i32_load = .{ .align_ = d.align_, .offset = d.offset } },
+.i64_load => |d| WasmOperator{ .i64_load = .{ .align_ = d.align_, .offset = d.offset } },
+// ... etc for all memory ops
+```
+
+**Step 2.3**: Add translation cases in `func_translator.zig`
+
+```zig
+.i32_load => |m| try translator.translateLoad(Type.I32, m),
+.i64_load => |m| try translator.translateLoad(Type.I64, m),
+.i32_store => |m| try translator.translateStore(Type.I32, m),
+// ... etc
+```
+
+**Step 2.4**: Implement in `translator.zig`
+
+```zig
+pub fn translateLoad(self: *Self, ty: Type, memarg: MemArg) !void {
+    const addr = self.state.pop1();
+    // Add offset to address
+    const offset_val = try self.builder.ins().iconst(Type.I64, @intCast(memarg.offset));
+    const effective_addr = try self.builder.ins().iadd(addr, offset_val);
+    const value = try self.builder.ins().load(ty, .{}, effective_addr, 0);
+    try self.state.push1(value);
+}
+
+pub fn translateStore(self: *Self, ty: Type, memarg: MemArg) !void {
+    const value = self.state.pop1();
+    const addr = self.state.pop1();
+    const offset_val = try self.builder.ins().iconst(Type.I64, @intCast(memarg.offset));
+    const effective_addr = try self.builder.ins().iadd(addr, offset_val);
+    _ = try self.builder.ins().store(.{}, value, effective_addr, 0);
+}
+```
+
+#### Verification
+
+```bash
+# Test with memory operations
+echo 'fn main() i32 { var x: i32 = 42; return x; }' | cot -
+```
+
+---
+
+### Task 7.3: Add Call Instructions [HIGH PRIORITY]
+
+**Status**: ❌ Not Started
+**Priority**: P1
+**Estimated Scope**: ~100 lines
+
+#### Cranelift Reference
+
+**File**: `~/learning/wasmtime/crates/cranelift/src/translate/code_translator.rs:654-677`
+
+```rust
+Operator::Call { function_index } => {
+    let (_, num_args) = environ.translate_call(builder, srcloc, function_index, sig_ref, &args)?;
+    // Push results onto stack
+}
+```
+
+#### Implementation Steps
+
+**Step 3.1**: Add to WasmOperator
+
+```zig
+call: u32,  // function index
+call_indirect: CallIndirectData,
+```
+
+**Step 3.2**: Add to `toBasicOperator()`
+
+```zig
+.call => |d| WasmOperator{ .call = d },
+.call_indirect => |d| WasmOperator{ .call_indirect = d },
+```
+
+**Step 3.3**: Implement translateCall
+
+```zig
+pub fn translateCall(self: *Self, func_index: u32) !void {
+    // Get function signature from module
+    // Pop args from stack
+    // Emit call instruction
+    // Push results
+}
+```
+
+---
+
+### Task 7.4: Add i64 Arithmetic [MEDIUM PRIORITY]
+
+**Status**: ❌ Not Started
+**Priority**: P2
+**Estimated Scope**: ~50 lines
+
+#### Implementation
+
+Add to `toBasicOperator()` and translator:
+- i64_add, i64_sub, i64_mul, i64_div_s, i64_div_u
+- i64_rem_s, i64_rem_u, i64_and, i64_or, i64_xor
+- i64_shl, i64_shr_s, i64_shr_u
+- i64_eq, i64_ne, i64_lt_s, etc.
+
+These follow exact same pattern as i32 ops.
+
+---
+
+### Task 7.5: Add Float Operations [LOW PRIORITY]
+
+**Status**: ❌ Not Started
+**Priority**: P3
+**Estimated Scope**: ~100 lines
+
+Add f32 and f64 arithmetic, comparison, and conversion operations.
+
+---
+
+### Task 7.6: Fix Object File Generation [MEDIUM PRIORITY]
+
+**Status**: ❌ Not Started
+**Priority**: P2
+**Estimated Scope**: ~50 lines
+
+**Current State**: `generateMachO()` and `generateElf()` return raw bytes
 
 **Required**:
-1. Iterate through VCode instructions
-2. Apply register allocations
-3. Call ISA-specific emit for each instruction
-4. Collect bytes into MachBuffer
+1. Wire `macho.zig` for proper Mach-O generation
+2. Wire `elf.zig` for proper ELF generation
+3. Add symbol tables
 
-### Task 7.5: Wire Object File Generation
+---
 
-**Objective**: Wrap machine code in Mach-O or ELF
+### Task 7.7: End-to-End Tests
 
-**Files**:
-- `driver.zig` - after compilation
-- `macho.zig` - Mach-O generation
-- `elf.zig` - ELF generation
+**Blocked by**: Tasks 7.1-7.3
 
-**Existing Code**: Both files already have working implementations
+| Test | Description | Status |
+|------|-------------|--------|
+| 7.7a | `return 42` | ❌ Blocked by 7.1 |
+| 7.7b | `return 10 + 32` | ❌ Blocked by 7.1 |
+| 7.7c | `if (true) { return 1; }` | ❌ Blocked by 7.1 |
+| 7.7d | Function calls | ❌ Blocked by 7.3 |
 
-### Task 7.6: End-to-End Test - Return 42
+---
 
-**Test Case**:
-```cot
-fn main() i32 {
-    return 42;
-}
-```
+### Task 7.8: Remove Legacy Code
 
-**Expected**: Running the compiled binary returns exit code 42
+**Blocked by**: Task 7.7 (all tests passing)
 
-### Task 7.7: End-to-End Test - Arithmetic
-
-**Test Case**:
-```cot
-fn main() i32 {
-    return 10 + 32;
-}
-```
-
-### Task 7.8: End-to-End Test - Control Flow
-
-**Test Case**:
-```cot
-fn main() i32 {
-    if (true) {
-        return 1;
-    } else {
-        return 0;
-    }
-}
-```
-
-### Task 7.9: End-to-End Test - Function Calls
-
-**Test Case**:
-```cot
-fn add(a: i32, b: i32) i32 {
-    return a + b;
-}
-fn main() i32 {
-    return add(20, 22);
-}
-```
-
-### Task 7.10: Clean Up Legacy Code
-
-After all tests pass, remove:
+Remove:
 - `codegen/native/arm64_asm.zig`
 - `codegen/native/amd64_asm.zig`
 - `codegen/native/amd64_regs.zig`
@@ -298,157 +372,107 @@ After all tests pass, remove:
 
 ---
 
-## Part 5: Implementation Order
+## Part 4: Execution Order
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  7.1: Wire Wasm→CLIF Translation                            │
-│  - Parse Wasm functions from module                         │
-│  - Create WasmFuncTranslator per function                   │
-│  - Feed opcodes, get CLIF Functions                         │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│  7.2: Complete Memory Instructions (if needed)              │
-│  - Add load/store to translator.zig                         │
-│  - Test with memory-using programs                          │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│  7.3: Wire CLIF→Native Compilation                          │
-│  - Call compile.compile() with CLIF Functions               │
-│  - Get CompiledCode back                                    │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│  7.4: Complete VCode Emission                               │
-│  - Replace placeholder emitCodeAArch64/X64                  │
-│  - Use ISA emit.zig for actual instruction bytes            │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│  7.5: Wire Object File Generation                           │
-│  - Wrap machine code in Mach-O/ELF                          │
-│  - Use existing macho.zig/elf.zig                           │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│  7.6-7.9: End-to-End Tests                                  │
-│  - Return 42, Arithmetic, Control Flow, Function Calls      │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│  7.10: Clean Up Legacy Code                                 │
-│  - Remove arm64_asm.zig, amd64_asm.zig, etc.                │
-└─────────────────────────────────────────────────────────────┘
+PHASE 1: UNBLOCK (Task 7.1)
+├── Add global_get/global_set to toBasicOperator
+├── Add translation methods
+├── Verify: no more stack underflow
+│
+PHASE 2: CORE WASM OPS (Tasks 7.2-7.4)
+├── Memory instructions (load/store)
+├── Call instructions
+├── i64 arithmetic
+│
+PHASE 3: COMPLETENESS (Tasks 7.5-7.6)
+├── Float operations
+├── Object file generation
+│
+PHASE 4: VERIFICATION (Task 7.7)
+├── return 42
+├── Arithmetic
+├── Control flow
+├── Function calls
+│
+PHASE 5: CLEANUP (Task 7.8)
+└── Remove legacy code
 ```
 
 ---
 
-## Part 6: Cranelift Parity Verification
+## Part 5: Checklist
 
-### What Cranelift Does
+### Task 7.1: Global Variables - COMPLETE
+- [x] Add `global_get` to `toBasicOperator()` in decoder.zig
+- [x] Add `global_set` to `toBasicOperator()` in decoder.zig
+- [x] Add `global_get` to WasmOperator enum in func_translator.zig
+- [x] Add `global_set` to WasmOperator enum in func_translator.zig
+- [x] Add translation case for `global_get` in translateOperator
+- [x] Add translation case for `global_set` in translateOperator
+- [x] Implement `translateGlobalGet()` in translator.zig (with proper type lookup from module)
+- [x] Implement `translateGlobalSet()` in translator.zig
+- [x] Test: Stack underflow panic fixed, all 7 functions translate to CLIF
 
-From `wasmtime/cranelift/src/compiler.rs`:
+**Additional work completed:**
+- [x] Added unreachable code handling (translateUnreachableBlock, translateUnreachableIf)
+- [x] Added multi-byte opcode (0xFC prefix) handling for memory.copy/memory.fill
+- [x] Added WasmGlobalType struct for passing module globals to translator
+- [x] Updated driver to convert and pass globals to translator
 
-```rust
-fn translate_function(&self, wasm_func: &FunctionBody) -> Result<CompiledFunction> {
-    // 1. Create CLIF function
-    let mut func = ir::Function::new();
+### Task 7.2: Memory Instructions
+- [ ] Add MemArg struct to func_translator.zig
+- [ ] Add all load variants to WasmOperator
+- [ ] Add all store variants to WasmOperator
+- [ ] Add to toBasicOperator() for each memory op
+- [ ] Add translation cases
+- [ ] Implement translateLoad()
+- [ ] Implement translateStore()
+- [ ] Test with memory-using code
 
-    // 2. Translate Wasm → CLIF
-    let mut func_env = FuncEnvironment::new(...);
-    self.wasm_translator.translate(&mut func, wasm_func, &mut func_env)?;
+### Task 7.3: Call Instructions
+- [ ] Add call to WasmOperator
+- [ ] Add call_indirect to WasmOperator
+- [ ] Add to toBasicOperator()
+- [ ] Implement translateCall()
+- [ ] Implement translateCallIndirect()
+- [ ] Test with function calls
 
-    // 3. Compile CLIF → native
-    let compiled = self.isa.compile_function(&func, ...)?;
+### Task 7.4: i64 Arithmetic
+- [ ] Add all i64 ops to toBasicOperator()
+- [ ] Add translation methods
+- [ ] Test
 
-    Ok(compiled)
-}
-```
+### Task 7.5: Float Operations
+- [ ] Add f32/f64 ops to toBasicOperator()
+- [ ] Add translation methods
+- [ ] Test
 
-From `cranelift/codegen/src/machinst/compile.rs`:
+### Task 7.6: Object Files
+- [ ] Wire macho.zig properly
+- [ ] Wire elf.zig properly
+- [ ] Add symbol tables
 
-```rust
-pub fn compile<B: MachBackend>(func: &Function, isa: &dyn TargetIsa) -> Result<CompiledCode> {
-    // 1. Compute block order
-    let block_order = BlockLoweringOrder::new(func, ...)?;
+### Task 7.7: End-to-End Tests
+- [ ] return 42 works
+- [ ] Arithmetic works
+- [ ] Control flow works
+- [ ] Function calls work
 
-    // 2. Lower CLIF → VCode
-    let lower = Lower::new(func, ...)?;
-    let vcode = lower.lower()?;
-
-    // 3. Register allocation
-    let regalloc_result = regalloc2::run(&vcode, ...)?;
-
-    // 4. Emit machine code
-    let result = vcode.emit(&regalloc_result, ...)?;
-
-    Ok(result)
-}
-```
-
-### What Cot Has
-
-| Cranelift Component | Cot Equivalent | Status |
-|---------------------|----------------|--------|
-| `ir::Function` | `ir/clif/function.zig` | ✅ Complete |
-| `FuncTranslator` | `wasm_to_clif/func_translator.zig` | ✅ Complete |
-| `BlockLoweringOrder` | `machinst/blockorder.zig` | ✅ Complete |
-| `Lower` | `machinst/lower.zig` | ✅ Complete |
-| `VCode` | `machinst/vcode.zig` | ✅ Complete |
-| `regalloc2::run` | `regalloc/regalloc.zig` | ✅ Complete |
-| `VCode::emit` | Placeholder in `compile.zig` | 🔄 Needs work |
-| `compile()` | `compile.zig::compile()` | ✅ Structure complete |
-| Driver integration | `driver.zig` | ❌ Not wired |
-
-### Parity Summary
-
-**Infrastructure Parity**: 95%+ complete
-
-**Integration Parity**: ~50% complete (the pipeline exists but isn't wired)
-
-**The Gap**: The pipeline components exist but aren't connected. Task 7.1-7.5 will achieve full parity.
+### Task 7.8: Cleanup
+- [ ] All tests pass
+- [ ] Remove legacy files
 
 ---
 
-## Part 7: Success Criteria
+## Appendix: Cranelift Source References
 
-Phase 7 is complete when:
-
-1. ✅ All 451+ existing tests pass
-2. ⏳ `cot --target=native test.cot` produces working executables
-3. ⏳ End-to-end tests pass (return 42, arithmetic, control flow, function calls)
-4. ⏳ Legacy code removed (arm64_asm.zig, amd64_asm.zig, etc.)
-5. ⏳ Audit document updated with final LOC counts
-
----
-
-## Appendix: Quick Reference
-
-### Key Files to Modify
-
-1. **driver.zig:306** - Replace `return error.NativeCodegenNotImplemented`
-2. **compile.zig:504-555** - Replace placeholder emit functions
-3. **func_translator.zig** - May need memory instruction additions
-
-### Key Functions to Study
-
-1. `WasmFuncTranslator.translateOperator()` - Wasm → CLIF
-2. `compile.compile()` - CLIF → Native orchestration
-3. `Lower.lower()` - CLIF → VCode
-4. `regalloc.run()` - Register allocation
-5. `MachBuffer.finish()` - Code finalization
-
-### Test Commands
-
-```bash
-# Run all tests
-zig build test
-
-# Test specific module
-zig test compiler/codegen/native/compile.zig
-
-# Debug output
-COT_DEBUG=codegen zig build test
-```
+| Topic | File | Lines |
+|-------|------|-------|
+| Global get/set | code_translator.rs | 202-213 |
+| Memory load | code_translator.rs | 3680-3700 |
+| Memory store | code_translator.rs | 3703-3724 |
+| Call | code_translator.rs | 654-677 |
+| Call indirect | code_translator.rs | 677-714 |
+| Stack management | stack.rs | - |
+| Function init | func_translator.rs | 71-131 |

@@ -160,6 +160,33 @@ pub const WasmOpcode = enum(u8) {
 };
 
 // ============================================================================
+// Global Type Information
+// Used to track types of module-level globals
+// ============================================================================
+
+/// Wasm global value type (matches wasm_parser.GlobalType simplified)
+pub const WasmGlobalType = struct {
+    val_type: WasmValType,
+    mutable: bool,
+};
+
+pub const WasmValType = enum {
+    i32,
+    i64,
+    f32,
+    f64,
+
+    pub fn toClifType(self: WasmValType) Type {
+        return switch (self) {
+            .i32 => Type.I32,
+            .i64 => Type.I64,
+            .f32 => Type.F32,
+            .f64 => Type.F64,
+        };
+    }
+};
+
+// ============================================================================
 // FuncTranslator
 // Port of wasmtime func_translator.rs
 //
@@ -173,19 +200,27 @@ pub const FuncTranslator = struct {
     builder: *FunctionBuilder,
     /// Local variable mappings (Wasm local index -> Variable).
     locals: std.ArrayListUnmanaged(Variable),
+    /// Module-level globals (for type lookup).
+    globals: []const WasmGlobalType,
     /// Allocator for dynamic storage.
     allocator: std.mem.Allocator,
 
     const Self = @This();
 
-    /// Create a new translator.
-    pub fn init(allocator: std.mem.Allocator, builder: *FunctionBuilder) Self {
+    /// Create a new translator with module-level globals information.
+    pub fn init(allocator: std.mem.Allocator, builder: *FunctionBuilder, globals: []const WasmGlobalType) Self {
         return .{
             .state = TranslationState.init(allocator),
             .builder = builder,
             .locals = .{},
+            .globals = globals,
             .allocator = allocator,
         };
+    }
+
+    /// Create a new translator without globals (backwards compatibility).
+    pub fn initWithoutGlobals(allocator: std.mem.Allocator, builder: *FunctionBuilder) Self {
+        return init(allocator, builder, &[_]WasmGlobalType{});
     }
 
     /// Deallocate storage.
@@ -274,6 +309,27 @@ pub const FuncTranslator = struct {
         }
 
         try self.state.pushBlock(next, num_params, num_results);
+    }
+
+    /// Handle block/loop when unreachable (Cranelift: translate_unreachable_operator).
+    /// Pushes a placeholder control stack entry without emitting code.
+    pub fn translateUnreachableBlock(self: *Self, num_params: usize, num_results: usize) !void {
+        // Create a dummy block for the control stack
+        const placeholder = try self.builder.createBlock();
+        try self.state.pushBlock(placeholder, num_params, num_results);
+    }
+
+    /// Handle if when unreachable (Cranelift: translate_unreachable_operator).
+    /// Pushes a placeholder if frame without emitting code or popping condition.
+    pub fn translateUnreachableIf(self: *Self, num_params: usize, num_results: usize) !void {
+        // Create placeholder blocks
+        const placeholder = try self.builder.createBlock();
+        // Push a placeholder if frame - no actual branches are emitted
+        const else_data = ElseData{ .no_else = .{
+            .branch_inst = Inst.RESERVED,
+            .placeholder = placeholder,
+        } };
+        try self.state.pushIf(placeholder, else_data, num_params, num_results);
     }
 
     /// Translate a loop instruction.
@@ -631,6 +687,65 @@ pub const FuncTranslator = struct {
     }
 
     // ========================================================================
+    // Global Variable Translation
+    // Port of code_translator.rs translate_global_get/set
+    //
+    // Cranelift implementation (func_environ.rs:3134) handles globals via:
+    // 1. Constant globals: emit iconst/fconst with the constant value
+    // 2. Memory globals: load from global_value address with proper type
+    //
+    // We look up the actual global type from the module's globals array.
+    // ========================================================================
+
+    /// Translate global.get
+    /// Globals are treated as memory locations at a fixed base address.
+    /// The type is determined from the module's globals array.
+    pub fn translateGlobalGet(self: *Self, global_index: u32) !void {
+        // Get global type from module info (default to i64 for safety)
+        const global_val_type: WasmValType = if (global_index < self.globals.len)
+            self.globals[global_index].val_type
+        else
+            .i64;
+        const global_type = global_val_type.toClifType();
+
+        // Compute stride based on type size
+        const stride: i64 = switch (global_val_type) {
+            .i32, .f32 => 4,
+            .i64, .f64 => 8,
+        };
+
+        // Compute global address: global_base (0x10000) + global_index * stride
+        const global_base: i64 = 0x10000;
+        const global_addr_val: i64 = global_base + @as(i64, global_index) * stride;
+        const addr = try self.builder.ins().iconst(Type.I64, global_addr_val);
+        const value = try self.builder.ins().load(global_type, clif.MemFlags.DEFAULT, addr, 0);
+        try self.state.push1(value);
+    }
+
+    /// Translate global.set
+    pub fn translateGlobalSet(self: *Self, global_index: u32) !void {
+        const value = self.state.pop1();
+
+        // Get global type from module info (default to i64 for safety)
+        const global_val_type: WasmValType = if (global_index < self.globals.len)
+            self.globals[global_index].val_type
+        else
+            .i64;
+
+        // Compute stride based on type size
+        const stride: i64 = switch (global_val_type) {
+            .i32, .f32 => 4,
+            .i64, .f64 => 8,
+        };
+
+        // Compute global address: global_base (0x10000) + global_index * stride
+        const global_base: i64 = 0x10000;
+        const global_addr_val: i64 = global_base + @as(i64, global_index) * stride;
+        const addr = try self.builder.ins().iconst(Type.I64, global_addr_val);
+        _ = try self.builder.ins().store(clif.MemFlags.DEFAULT, value, addr, 0);
+    }
+
+    // ========================================================================
     // Constant Translation
     // ========================================================================
 
@@ -862,7 +977,7 @@ test "translate i32.const and i32.add with FunctionBuilder" {
     defer ctx.deinit();
 
     var builder = FunctionBuilder.init(&func, &ctx);
-    var translator = FuncTranslator.init(allocator, &builder);
+    var translator = FuncTranslator.initWithoutGlobals(allocator, &builder);
     defer translator.deinit();
 
     try translator.initializeFunctionSimple(0, 0, 1);
@@ -889,7 +1004,7 @@ test "translate block and end with FunctionBuilder" {
     defer ctx.deinit();
 
     var builder = FunctionBuilder.init(&func, &ctx);
-    var translator = FuncTranslator.init(allocator, &builder);
+    var translator = FuncTranslator.initWithoutGlobals(allocator, &builder);
     defer translator.deinit();
 
     try translator.initializeFunctionSimple(0, 0, 0);
@@ -914,7 +1029,7 @@ test "translate loop with FunctionBuilder" {
     defer ctx.deinit();
 
     var builder = FunctionBuilder.init(&func, &ctx);
-    var translator = FuncTranslator.init(allocator, &builder);
+    var translator = FuncTranslator.initWithoutGlobals(allocator, &builder);
     defer translator.deinit();
 
     try translator.initializeFunctionSimple(0, 0, 0);
@@ -941,7 +1056,7 @@ test "translate br with FunctionBuilder" {
     defer ctx.deinit();
 
     var builder = FunctionBuilder.init(&func, &ctx);
-    var translator = FuncTranslator.init(allocator, &builder);
+    var translator = FuncTranslator.initWithoutGlobals(allocator, &builder);
     defer translator.deinit();
 
     try translator.initializeFunctionSimple(0, 0, 0);
@@ -963,7 +1078,7 @@ test "translate local.get and local.set with FunctionBuilder" {
     defer ctx.deinit();
 
     var builder = FunctionBuilder.init(&func, &ctx);
-    var translator = FuncTranslator.init(allocator, &builder);
+    var translator = FuncTranslator.initWithoutGlobals(allocator, &builder);
     defer translator.deinit();
 
     try translator.initializeFunctionSimple(0, 2, 0);
@@ -989,7 +1104,7 @@ test "translate comparison with FunctionBuilder" {
     defer ctx.deinit();
 
     var builder = FunctionBuilder.init(&func, &ctx);
-    var translator = FuncTranslator.init(allocator, &builder);
+    var translator = FuncTranslator.initWithoutGlobals(allocator, &builder);
     defer translator.deinit();
 
     try translator.initializeFunctionSimple(0, 0, 0);
