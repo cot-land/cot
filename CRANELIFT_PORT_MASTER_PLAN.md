@@ -1065,7 +1065,7 @@ All audit documents are in `audit/native/`:
 
 ## Phase 7: Integration
 
-**STATUS**: 🟡 Ready to Start
+**STATUS**: 🟡 In Progress (Task 7.1 Complete)
 
 ### 7.0 Overview
 
@@ -1094,49 +1094,170 @@ driver.zig: generateNativeCode()
   └─ macho/elf: Wrap in object file
 ```
 
-### 7.1 Directory Structure
+### 7.1 GlobalValue Infrastructure ✅ COMPLETE
+
+The GlobalValue infrastructure is now fully ported from Cranelift:
+
+**CLIF IR Layer:**
+- `GlobalValue` entity type with RESERVED sentinel
+- `GlobalValueData` enum (vmcontext, load, iadd_imm, symbol, dyn_scale_target_const)
+- `Function.global_values` table
+- `global_value` opcode and instruction format
+- `FuncBuilder.globalValue()` and `FuncInstBuilder.globalValue()` builder methods
+
+**Wasm Translation Layer:**
+- `FuncEnvironment` for per-function global variable management
+- `GlobalVariable` enum (Constant, Memory) following Cranelift's spec.rs
+- `ConstantValue` enum (i32, i64, f32, f64)
+- `translateGlobalGet/Set` using proper GlobalValue chain (vmctx → iadd_imm → load/store)
+
+**Machine Code Lowering:**
+- `global_value` instruction lowering following Cranelift's legalizer pattern
+- Recursive `materializeGlobalValue` for handling GlobalValueData chains
+- Support for vmcontext, iadd_imm, load, and symbol variants
+
+**Files Modified:**
+- `compiler/ir/clif/dfg.zig` - GlobalValue entity, GlobalValueData enum
+- `compiler/ir/clif/function.zig` - global_values table
+- `compiler/ir/clif/instructions.zig` - global_value opcode
+- `compiler/ir/clif/builder.zig` - globalValue() builder method
+- `compiler/codegen/native/frontend/frontend.zig` - FuncInstBuilder.globalValue()
+- `compiler/codegen/native/wasm_to_clif/func_environ.zig` - NEW: FuncEnvironment
+- `compiler/codegen/native/wasm_to_clif/translator.zig` - translateGlobalGet/Set
+- `compiler/codegen/native/isa/aarch64/lower.zig` - global_value lowering
+- `compiler/codegen/native/machinst/lower.zig` - GlobalValue imports
+
+### 7.2 Phase 7 Task Checklist
+
+**Completed:**
+- [x] **7.1** GlobalValue infrastructure (CLIF types, FuncEnvironment, lowering)
+
+**Remaining Tasks:**
+
+#### 7.2 Memory Instructions
+Add load/store instruction translation from Wasm to CLIF.
+
+**Cranelift Reference:** `code_translator.rs:3680-3724`
+
+Implementation:
+- Add `MemArg` struct to `func_translator.zig`
+- Add `i32_load`, `i64_load`, `i32_store`, `i64_store` to WasmOperator
+- Implement `translateLoad()` and `translateStore()` in translator.zig
+- Handle memory offset calculation and effective address
+
+**Estimated scope:** ~150 lines
+
+#### 7.3 Call Instructions
+Add function call translation.
+
+**Cranelift Reference:** `code_translator.rs:654-714`
+
+Implementation:
+- Add `call`, `call_indirect` to WasmOperator
+- Implement `translateCall()` - pop args, emit call, push results
+- Wire function signature lookup from module
+
+**Estimated scope:** ~100 lines
+
+#### 7.4 i64 Arithmetic
+Add 64-bit integer operations.
+
+Implementation (follows same pattern as i32):
+- Add `i64_add`, `i64_sub`, `i64_mul`, `i64_div_s/u`, `i64_rem_s/u`
+- Add `i64_and`, `i64_or`, `i64_xor`, `i64_shl`, `i64_shr_s/u`
+- Add `i64_eq`, `i64_ne`, `i64_lt_s/u`, `i64_gt_s/u`, `i64_le_s/u`, `i64_ge_s/u`
+
+**Estimated scope:** ~50 lines
+
+#### 7.5 VCode-to-Regalloc2 Adapter
+Create the adapter that bridges VCode with regalloc2.
+
+**Cranelift Reference:** `machinst/compile.rs`
+
+Implementation:
+- Implement `regalloc::Function` trait for VCode
+- Map VReg/PReg between VCode and regalloc2
+- Handle block parameters and instruction operands
+
+**Estimated scope:** ~300 lines
+
+#### 7.6 Emit with Regalloc Output
+Apply register allocations during emission.
+
+**Cranelift Reference:** `machinst/vcode.rs:emit()`
+
+Implementation:
+- Iterate VCode instructions
+- Replace virtual registers with physical allocations
+- Insert moves from regalloc2 edits
+- Emit to MachBuffer
+
+**Estimated scope:** ~200 lines
+
+#### 7.7 Object File Generation
+Wire MachBuffer output to proper Mach-O/ELF generation.
+
+Implementation:
+- Connect `macho.zig` for Mach-O output on macOS
+- Connect `elf.zig` for ELF output on Linux
+- Add symbol tables for function exports
+- Handle relocations
+
+**Estimated scope:** ~100 lines
+
+#### 7.8 End-to-End Tests
+Verify the full pipeline works.
+
+Tests to pass:
+- [ ] `return 42` - basic compilation
+- [ ] `return 10 + 32` - arithmetic
+- [ ] `if (true) { return 1 }` - control flow
+- [ ] Function calls - direct calls
+- [ ] Memory operations - load/store
+
+### 7.3 Execution Order
+
+```
+Phase A: Complete Wasm Translation (Tasks 7.2-7.4)
+├── 7.2 Memory instructions (load/store)
+├── 7.3 Call instructions
+└── 7.4 i64 arithmetic
+
+Phase B: Wire Regalloc (Tasks 7.5-7.6)
+├── 7.5 VCode-to-regalloc2 adapter
+└── 7.6 Emit with regalloc output
+
+Phase C: Object Files (Task 7.7)
+└── 7.7 Mach-O/ELF generation
+
+Phase D: Verification (Task 7.8)
+└── 7.8 End-to-end tests
+```
+
+### 7.4 Directory Structure
 
 ```
 compiler/codegen/native/
-├── compile.zig          # NEW: Main compile orchestration (Phase 7.1)
-├── context.zig          # NEW: Compilation context (Phase 7.2)
 ├── wasm_parser.zig      # EXISTING: Parse Wasm binary
 ├── wasm_to_clif/        # EXISTING: Wasm → CLIF translation
+│   ├── translator.zig   # Main translation logic
+│   ├── func_environ.zig # GlobalValue/FuncEnvironment (NEW)
+│   ├── stack.zig        # Control stack
+│   └── func_translator.zig
+├── frontend/            # EXISTING: CLIF builder
 ├── machinst/            # EXISTING: Machine instruction framework
 │   ├── vcode.zig        # VCode container
 │   ├── buffer.zig       # MachBuffer for emission
 │   └── lower.zig        # Lowering framework
 ├── isa/
 │   ├── aarch64/         # EXISTING: ARM64 backend
-│   │   ├── lower.zig    # CLIF → ARM64 MachInst
+│   │   ├── lower.zig    # CLIF → ARM64 MachInst (includes global_value)
 │   │   ├── emit.zig     # ARM64 MachInst → bytes
 │   │   └── abi.zig      # ARM64 ABI
 │   └── x64/             # EXISTING: x86-64 backend
-│       ├── lower.zig    # CLIF → x64 MachInst
-│       ├── emit.zig     # x64 MachInst → bytes
-│       └── abi.zig      # x64 ABI
 ├── regalloc/            # EXISTING: Register allocator
 └── macho.zig, elf.zig   # EXISTING: Object file formats
 ```
-
-### 7.2 Phase 7 Task Checklist
-
-See `PHASE7_EXECUTION_PLAN.md` for detailed implementation plan.
-
-Summary checklist:
-- [ ] **7.1** Create compile.zig - main orchestration
-- [ ] **7.2** Create context.zig - compilation context
-- [ ] **7.3** Implement VCode-to-regalloc2 adapter
-- [ ] **7.4** Implement emit with regalloc output
-- [ ] **7.5** Wire into driver.zig
-- [ ] **7.6** End-to-end test: return 42
-- [ ] **7.7** End-to-end test: arithmetic
-- [ ] **7.8** End-to-end test: control flow
-- [ ] **7.9** End-to-end test: function calls
-- [ ] **7.10** End-to-end test: memory operations
-- [ ] **7.11** Object file generation (Mach-O/ELF)
-- [ ] **7.12** Create audit documents
-- [ ] **7.13** Commit: "Phase 7: Integrate Cranelift-style native pipeline"
 
 ---
 
@@ -1164,31 +1285,36 @@ Summary checklist:
 | 4: ARM64 | ✅ Complete | 23/23 | ~15,000 |
 | 5: x86-64 | ✅ Complete | 16/16 | ~8,400 |
 | 6: Regalloc | ✅ Complete | 19/19 | ~6,400 |
-| 7: Integration | 🟡 Ready | 0/13 | ~2,000 est |
+| 7: Integration | 🟡 In Progress | 1/8 | ~2,500 est |
 | 8: Self-Hosting | Not Started | 0/4 | TBD |
-| **TOTAL** | | **137/156** | **~43,300** |
+| **TOTAL** | | **138/157** | **~55,000** |
 
 ### What's Done
 
 All infrastructure is in place:
-- **CLIF IR**: Complete type system, DFG, instructions, layout, builder
-- **Wasm→CLIF**: Complete translator with control flow, arithmetic, locals
+- **CLIF IR**: Complete type system, DFG, instructions, layout, builder, GlobalValue
+- **Wasm→CLIF**: Complete translator with control flow, arithmetic, locals, globals
 - **MachInst Framework**: VCode, buffer, ABI, lowering framework
-- **ARM64 Backend**: Full instruction set, emission, lowering, ABI
+- **ARM64 Backend**: Full instruction set, emission, lowering, ABI, global_value lowering
 - **x86-64 Backend**: Full instruction set, emission, lowering, ABI
 - **Register Allocator**: Complete Ion backtracking allocator from regalloc2
 
 ### What Remains
 
-**Phase 7: Integration** - Wire everything together:
-1. Create `compile.zig` orchestration module
-2. Implement VCode ↔ regalloc2 adapter
-3. Implement emission with physical registers
-4. Wire into driver.zig
-5. End-to-end tests
-6. Object file generation
+**Phase 7: Integration** (see section 7.2 above for detailed plan):
 
-See `PHASE7_EXECUTION_PLAN.md` for detailed implementation plan.
+| Task | Description | Status |
+|------|-------------|--------|
+| 7.1 | GlobalValue infrastructure | ✅ Complete |
+| 7.2 | Memory instructions (load/store) | ❌ Not Started |
+| 7.3 | Call instructions | ❌ Not Started |
+| 7.4 | i64 arithmetic | ❌ Not Started |
+| 7.5 | VCode-to-regalloc2 adapter | ❌ Not Started |
+| 7.6 | Emit with regalloc output | ❌ Not Started |
+| 7.7 | Object file generation (Mach-O/ELF) | ❌ Not Started |
+| 7.8 | End-to-end tests | ❌ Not Started |
+
+**Estimated remaining work:** ~900 lines of code
 
 ### Estimated LOC Summary
 

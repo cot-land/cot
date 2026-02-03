@@ -45,16 +45,7 @@ Cot Source → Frontend → IR → SSA → lower_wasm.zig → wasm/ package → 
 | Memory | ✅ Done | load/store, SP global, frames |
 | Structs | ✅ Done | off_ptr for field access |
 
-### In Progress (M13)
-
-| Component | Status | Notes |
-|-----------|--------|-------|
-| slice_len | ⏳ SSA only | Needs gen.zig implementation |
-| slice_ptr | ⏳ SSA only | Needs gen.zig implementation |
-| slice_make | ⏳ SSA only | Needs gen.zig implementation |
-| bounds_check | ⏳ SSA only | Needs gen.zig implementation |
-
-### Completed (M14-M15)
+### Completed (M13-M15)
 
 | Component | Status | Notes |
 |-----------|--------|-------|
@@ -140,7 +131,8 @@ WebAssembly.instantiate(wasm).then(r=>console.log(r.instance.exports.main()));'
 
 ## Next Steps
 
-1. **M13: Arrays/Slices** - Implement slice_len, slice_ptr, bounds_check in gen.zig
-2. **M14: Strings** - Implement string ops, data section in link.zig
-3. **M15: ARC** - Implement retain/release calls, runtime integration
-4. **M16: Browser** - Import section for JS interop
+All Wasm backend milestones (M1-M16) are complete. Future work includes:
+
+1. **M17: Frontend ARC** - Emit retain/release calls automatically in frontend
+2. **M18: Heap allocation** - `new` keyword, `cot_alloc` integration
+3. **Native AOT** - Complete Phase 7 integration (see `CRANELIFT_PORT_MASTER_PLAN.md`)
