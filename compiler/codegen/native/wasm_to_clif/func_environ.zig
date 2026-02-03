@@ -30,6 +30,46 @@ pub const HeapData = heap_mod.HeapData;
 pub const MemArg = heap_mod.MemArg;
 
 // ============================================================================
+// TableData
+// Port of cranelift table handling
+// ============================================================================
+
+/// Table data for WebAssembly tables.
+///
+/// Similar to HeapData but for function tables (funcref tables).
+pub const TableData = struct {
+    /// GlobalValue that computes the base address of the table.
+    base: GlobalValue,
+
+    /// GlobalValue that computes the address of the table bound.
+    bound: GlobalValue,
+
+    /// Size of each table element in bytes (typically 8 for funcref on 64-bit).
+    element_size: u32,
+};
+
+// ============================================================================
+// VMFuncRef Layout
+// Port of wasmtime VM layout for function references
+// ============================================================================
+
+/// VMFuncRef offsets.
+/// A funcref in Wasmtime's representation contains:
+/// - wasm_call: pointer to the Wasm-calling-convention entry point
+/// - vmctx: pointer to the callee's VMContext
+/// - type_index: the type ID for runtime signature checking
+pub const VMFuncRefOffsets = struct {
+    /// Offset of wasm_call function pointer.
+    pub const wasm_call: i32 = 0;
+    /// Offset of vmctx pointer.
+    pub const vmctx: i32 = 8;
+    /// Offset of type_index.
+    pub const type_index: i32 = 16;
+    /// Total size of a VMFuncRef.
+    pub const size: u32 = 24;
+};
+
+// ============================================================================
 // ConstantValue
 // Port of wasmtime_environ::GlobalConstValue
 // ============================================================================
@@ -112,6 +152,14 @@ pub const FuncEnvironment = struct {
     /// Port of func_environ.rs func_refs/sig_refs fields.
     func_refs: std.AutoHashMapUnmanaged(u32, FuncRef),
 
+    /// Cached table data per wasm table index.
+    /// Port of func_environ.rs tables field.
+    tables: std.AutoHashMapUnmanaged(u32, TableData),
+
+    /// Cached type IDs per wasm type index.
+    /// Maps type_index -> GlobalValue for the type ID location.
+    type_ids: std.AutoHashMapUnmanaged(u32, GlobalValue),
+
     const Self = @This();
 
     /// Create a new function environment.
@@ -123,6 +171,8 @@ pub const FuncEnvironment = struct {
             .globals = .{},
             .heaps = .{},
             .func_refs = .{},
+            .tables = .{},
+            .type_ids = .{},
         };
     }
 
@@ -131,6 +181,8 @@ pub const FuncEnvironment = struct {
         self.globals.deinit(self.allocator);
         self.heaps.deinit(self.allocator);
         self.func_refs.deinit(self.allocator);
+        self.tables.deinit(self.allocator);
+        self.type_ids.deinit(self.allocator);
     }
 
     /// Clear cached state for reuse.
@@ -139,6 +191,8 @@ pub const FuncEnvironment = struct {
         self.globals.clearRetainingCapacity();
         self.heaps.clearRetainingCapacity();
         self.func_refs.clearRetainingCapacity();
+        self.tables.clearRetainingCapacity();
+        self.type_ids.clearRetainingCapacity();
     }
 
     /// Get or create the VMContext global value.
@@ -315,6 +369,83 @@ pub const FuncEnvironment = struct {
         const func_ref = try func.importFunction(self.allocator, ext_func);
         try self.func_refs.put(self.allocator, function_index, func_ref);
         return func_ref;
+    }
+
+    /// Get or create TableData for a Wasm table.
+    ///
+    /// Port of func_environ.rs:get_or_create_table()
+    ///
+    /// Creates GlobalValue references for the table's base address and bound.
+    pub fn getOrCreateTable(self: *Self, func: *Function, table_index: u32) !*TableData {
+        // Check cache first
+        if (self.tables.getPtr(table_index)) |table| return table;
+
+        const vmctx = try self.vmctxVal(func);
+
+        // VMContext layout for tables (simplified):
+        // Table base is at vmctx + table_data_offset + table_index * table_stride + 0
+        // Table bound is at vmctx + table_data_offset + table_index * table_stride + 8
+        const table_data_offset: i64 = 0x30000; // After heaps
+        const table_stride: i64 = 24; // base (8) + bound (8) + flags (8)
+
+        const base_offset = table_data_offset + @as(i64, table_index) * table_stride;
+        const bound_offset = base_offset + 8;
+
+        // Create GlobalValue for table base address
+        const base_gv = try func.createGlobalValue(.{
+            .iadd_imm = .{
+                .base = vmctx,
+                .offset = base_offset,
+                .global_type = self.pointer_type,
+            },
+        });
+
+        // Create GlobalValue for table bound address
+        const bound_gv = try func.createGlobalValue(.{
+            .iadd_imm = .{
+                .base = vmctx,
+                .offset = bound_offset,
+                .global_type = self.pointer_type,
+            },
+        });
+
+        const table = TableData{
+            .base = base_gv,
+            .bound = bound_gv,
+            .element_size = VMFuncRefOffsets.size, // Each element is a funcref
+        };
+
+        try self.tables.put(self.allocator, table_index, table);
+        return self.tables.getPtr(table_index).?;
+    }
+
+    /// Get or create a GlobalValue for a type ID location.
+    ///
+    /// Port of func_environ.rs:module_interned_to_shared_ty()
+    ///
+    /// The type ID is stored in a type IDs array in vmctx.
+    pub fn getOrCreateTypeIdGV(self: *Self, func: *Function, type_index: u32) !GlobalValue {
+        // Check cache first
+        if (self.type_ids.get(type_index)) |gv| return gv;
+
+        const vmctx = try self.vmctxVal(func);
+
+        // VMContext layout for type IDs:
+        // Type IDs array is at vmctx + type_ids_offset
+        // Each type ID is a u32
+        const type_ids_offset: i64 = 0x40000; // After tables
+        const offset = type_ids_offset + @as(i64, type_index) * 4;
+
+        const gv = try func.createGlobalValue(.{
+            .iadd_imm = .{
+                .base = vmctx,
+                .offset = offset,
+                .global_type = Type.I32, // Type IDs are u32
+            },
+        });
+
+        try self.type_ids.put(self.allocator, type_index, gv);
+        return gv;
     }
 };
 

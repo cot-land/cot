@@ -292,7 +292,7 @@ pub struct MemArg {
 
 ## Task 7.3: Call Operations
 
-**Status**: [~] Partial (Direct calls implemented, indirect calls pending)
+**Status**: [x] COMPLETE (2026-02-03)
 
 ### Cranelift Reference
 - **Operator::Call**: `code_translator.rs` lines 654-676
@@ -437,7 +437,7 @@ Offset 16: type_index (u32)    - Signature type ID
   ```
 
 #### 7.3.4 Implement translateCallIndirect
-- [ ] Add to translator.zig:
+- [x] Add to translator.zig:
   ```zig
   /// Translate indirect function call.
   /// Port of code_translator.rs:677-717

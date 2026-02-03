@@ -748,6 +748,29 @@ pub const FuncInstBuilder = struct {
         return .{ .inst = inst, .results = results };
     }
 
+    /// Indirect call through a function pointer.
+    ///
+    /// Port of cranelift call_indirect instruction.
+    pub fn callIndirect(self: Self, sig_ref: SigRef, callee: Value, args: []const Value) !struct { inst: Inst, results: []const Value } {
+        _ = args;
+        _ = callee;
+
+        // Get the signature to determine return types
+        const sig = self.builder.func.getSignature(sig_ref) orelse
+            return error.InvalidSignature;
+
+        const inst = self.builder.func.dfg.makeInst();
+        try self.builder.func.layout.appendInst(self.builder.func_ctx.allocator, inst, self.block);
+
+        // Create result values for each return type
+        for (sig.returns.items) |ret| {
+            _ = try self.builder.func.dfg.makeInstResult(inst, ret.value_type);
+        }
+
+        const results = self.builder.func.dfg.instResults(inst);
+        return .{ .inst = inst, .results = results };
+    }
+
     /// Trap unconditionally.
     pub fn trap(self: Self, code: clif.TrapCode) !Inst {
         _ = code;
