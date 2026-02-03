@@ -24,6 +24,11 @@ pub const StackSlot = dfg_mod.StackSlot;
 pub const JumpTable = dfg_mod.JumpTable;
 pub const JumpTableData = dfg_mod.JumpTableData;
 pub const BlockCall = dfg_mod.BlockCall;
+pub const GlobalValue = dfg_mod.GlobalValue;
+
+// Import GlobalValueData from globalvalue.zig
+const globalvalue_mod = @import("globalvalue.zig");
+pub const GlobalValueData = globalvalue_mod.GlobalValueData;
 
 // ============================================================================
 // Calling Convention
@@ -377,6 +382,8 @@ pub const ExtFuncData = struct {
 // ============================================================================
 
 /// Intermediate representation of a function.
+///
+/// Port of cranelift/codegen/src/ir/function.rs
 pub const Function = struct {
     /// Name of this function.
     name: []const u8,
@@ -399,6 +406,15 @@ pub const Function = struct {
     /// Imported signatures for indirect calls.
     signatures: std.ArrayListUnmanaged(Signature),
 
+    /// Global value definitions.
+    ///
+    /// Global values can represent various kinds of addresses that are computed
+    /// at runtime: VM context pointers, addresses loaded from other global values,
+    /// offsets from global values, and symbolic references resolved by the linker.
+    ///
+    /// Port of cranelift/codegen/src/ir/function.rs:174
+    global_values: std.ArrayListUnmanaged(GlobalValueData),
+
     const Self = @This();
 
     /// Create a new empty function.
@@ -411,6 +427,7 @@ pub const Function = struct {
             .layout = .{},
             .ext_funcs = .{},
             .signatures = .{},
+            .global_values = .{},
         };
     }
 
@@ -424,6 +441,7 @@ pub const Function = struct {
             .layout = .{},
             .ext_funcs = .{},
             .signatures = .{},
+            .global_values = .{},
         };
     }
 
@@ -439,6 +457,7 @@ pub const Function = struct {
             sig.deinit(allocator);
         }
         self.signatures.deinit(allocator);
+        self.global_values.deinit(allocator);
     }
 
     /// Clear all data structures.
@@ -450,6 +469,7 @@ pub const Function = struct {
         self.layout.clear();
         self.ext_funcs.clearRetainingCapacity();
         self.signatures.clearRetainingCapacity();
+        self.global_values.clearRetainingCapacity();
     }
 
     /// Get the entry block, or null if function is empty.
@@ -527,6 +547,41 @@ pub const Function = struct {
     /// Get a jump table by reference.
     pub fn getJumpTable(self: Self, jt: JumpTable) ?*const JumpTableData {
         return self.dfg.jump_tables.get(jt);
+    }
+
+    // ========================================================================
+    // Global Values
+    // Port of cranelift/codegen/src/ir/function.rs global value methods
+    // ========================================================================
+
+    /// Create a new global value with the specified data.
+    ///
+    /// Returns a GlobalValue reference that can be used with the `global_value`
+    /// instruction to compute the value at runtime.
+    ///
+    /// Port of cranelift/codegen/src/ir/function.rs:180-183
+    pub fn createGlobalValue(self: *Self, data: GlobalValueData) !GlobalValue {
+        const allocator = self.dfg.allocator;
+        const idx: u32 = @intCast(self.global_values.items.len);
+        try self.global_values.append(allocator, data);
+        return GlobalValue.fromIndex(idx);
+    }
+
+    /// Get the data for a global value.
+    ///
+    /// Port of cranelift/codegen/src/ir/function.rs:185-187
+    pub fn getGlobalValueData(self: Self, gv: GlobalValue) GlobalValueData {
+        return self.global_values.items[gv.asU32()];
+    }
+
+    /// Check if a global value is valid.
+    pub fn globalValueIsValid(self: Self, gv: GlobalValue) bool {
+        return gv.asU32() < self.global_values.items.len;
+    }
+
+    /// Get the number of global values.
+    pub fn numGlobalValues(self: Self) usize {
+        return self.global_values.items.len;
     }
 };
 

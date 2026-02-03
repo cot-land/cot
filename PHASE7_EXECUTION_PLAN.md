@@ -1,13 +1,21 @@
 # Phase 7: Integration Execution Plan
 
-**Last Updated**: 2026-02-03 (Full Audit + Root Cause Analysis)
-**Status**: In Progress - Root Cause Identified
+**Last Updated**: 2026-02-03 (Task 7.1 Functional + Arch Fix Plan Created)
+**Status**: In Progress - Task 7.1 functional, architectural alignment pending
 
 ---
 
 ## Executive Summary
 
-The native codegen pipeline is wired but crashes on simple programs. Root cause: `toBasicOperator()` skips global variable operations (`global.get`, `global.set`), causing stack underflow when translating Wasm functions that use stack pointer manipulation.
+**Task 7.1 is now functional** - the stack underflow crash is fixed and all 7 functions translate to CLIF successfully. However, the implementation uses architectural shortcuts that deviate from Cranelift's design.
+
+**See `PHASE7_TASK71_ARCH_FIX.md`** for the detailed execution plan to align with Cranelift's GlobalValue architecture (11 subtasks).
+
+**Remaining issue**: Native emit produces 0 bytes (Task 7.6), causing linker error "undefined symbol: main".
+
+### Original Root Cause (FIXED)
+
+The original crash was caused by `toBasicOperator()` skipping `global.get`/`global.set`, causing stack underflow.
 
 ---
 
@@ -403,7 +411,7 @@ PHASE 5: CLEANUP (Task 7.8)
 
 ## Part 5: Checklist
 
-### Task 7.1: Global Variables - COMPLETE
+### Task 7.1: Global Variables - FUNCTIONAL (Arch Fix Pending)
 - [x] Add `global_get` to `toBasicOperator()` in decoder.zig
 - [x] Add `global_set` to `toBasicOperator()` in decoder.zig
 - [x] Add `global_get` to WasmOperator enum in func_translator.zig
@@ -419,6 +427,23 @@ PHASE 5: CLEANUP (Task 7.8)
 - [x] Added multi-byte opcode (0xFC prefix) handling for memory.copy/memory.fill
 - [x] Added WasmGlobalType struct for passing module globals to translator
 - [x] Updated driver to convert and pass globals to translator
+
+**⚠️ ARCHITECTURAL FIX IN PROGRESS - See `PHASE7_TASK71_ARCH_FIX.md`**
+
+**Phase 1: CLIF IR Types - COMPLETE ✅**
+- [x] Task A: Add GlobalValue entity type to dfg.zig
+- [x] Task B: Add GlobalValueData enum (globalvalue.zig)
+- [x] Task C: Add global_values table to Function
+- [x] Task D: Add global_value opcode
+- [x] Task E: Add global_value instruction format (unary_global_value)
+- [x] Task F: Add GlobalValue to InstData
+- [x] Task G: Update FuncBuilder insertInst + add globalValue() method
+
+**Phase 2-4: Pending**
+- [ ] Task H: Update Frontend FuncInstBuilder
+- [ ] Task I: Create FuncEnvironment for global management
+- [ ] Task J: Update translateGlobalGet/Set to use GlobalValue
+- [ ] Task K: Update MachInst lower for global_value
 
 ### Task 7.2: Memory Instructions
 - [ ] Add MemArg struct to func_translator.zig

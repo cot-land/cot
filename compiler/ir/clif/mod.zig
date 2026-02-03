@@ -31,6 +31,7 @@ pub const layout_mod = @import("layout.zig");
 pub const function_mod = @import("function.zig");
 pub const builder_mod = @import("builder.zig");
 pub const jumptable_mod = @import("jumptable.zig");
+pub const globalvalue_mod = @import("globalvalue.zig");
 
 // =============================================================================
 // Type System (from types.zig)
@@ -64,6 +65,7 @@ pub const StackSlot = dfg_mod.StackSlot;
 pub const FuncRef = dfg_mod.FuncRef;
 pub const SigRef = dfg_mod.SigRef;
 pub const JumpTable = dfg_mod.JumpTable;
+pub const GlobalValue = dfg_mod.GlobalValue;
 
 // =============================================================================
 // Value Management (from dfg.zig)
@@ -118,6 +120,15 @@ pub const FuncBuilder = builder_mod.FuncBuilder;
 pub const BlockCall = jumptable_mod.BlockCall;
 pub const JumpTableData = jumptable_mod.JumpTableData;
 pub const JumpTables = jumptable_mod.JumpTables;
+
+// =============================================================================
+// Global Values (from globalvalue.zig)
+// Port of cranelift/codegen/src/ir/globalvalue.rs
+// =============================================================================
+
+pub const GlobalValueData = globalvalue_mod.GlobalValueData;
+pub const Offset32 = globalvalue_mod.Offset32;
+pub const Imm64 = globalvalue_mod.Imm64;
 
 // =============================================================================
 // Tests

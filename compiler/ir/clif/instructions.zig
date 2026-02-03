@@ -438,6 +438,20 @@ pub const Opcode = enum {
     stack_store,
 
     // ------------------------------------------------------------------------
+    // Global Values
+    // Port of cranelift/codegen/src/ir/instructions.rs
+    // ------------------------------------------------------------------------
+
+    /// Compute the value of global GV.
+    ///
+    /// global_value is a pseudo-instruction that turns into machine code
+    /// to compute the value of global GV. The result is the address of
+    /// the global value, which can then be used with load/store instructions.
+    ///
+    /// Port of cranelift Opcode::GlobalValue
+    global_value,
+
+    // ------------------------------------------------------------------------
     // Select/Conditional
     // ------------------------------------------------------------------------
 

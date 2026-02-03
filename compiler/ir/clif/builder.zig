@@ -26,6 +26,7 @@ pub const FuncRef = dfg_mod.FuncRef;
 pub const SigRef = dfg_mod.SigRef;
 pub const StackSlot = dfg_mod.StackSlot;
 pub const JumpTable = dfg_mod.JumpTable;
+pub const GlobalValue = dfg_mod.GlobalValue;
 
 // ============================================================================
 // Instruction Formats
@@ -56,6 +57,9 @@ pub const InstructionFormat = enum {
     stack_load,
     stack_store,
     func_addr,
+    /// Global value computation.
+    /// Port of cranelift UnaryGlobalValue format.
+    unary_global_value,
 };
 
 // ============================================================================
@@ -219,6 +223,16 @@ pub const InstructionData = union(enum) {
         func_ref: FuncRef,
     },
 
+    /// Global value computation.
+    ///
+    /// Port of cranelift UnaryGlobalValue format.
+    /// The global_value instruction takes a GlobalValue reference and
+    /// produces the computed address as a Value.
+    unary_global_value: struct {
+        opcode: Opcode,
+        global_value: GlobalValue,
+    },
+
     const Self = @This();
 
     /// Get the opcode of this instruction.
@@ -246,6 +260,7 @@ pub const InstructionData = union(enum) {
             .stack_load => |d| d.opcode,
             .stack_store => |d| d.opcode,
             .func_addr => |d| d.opcode,
+            .unary_global_value => |d| d.opcode,
         };
     }
 
@@ -274,6 +289,7 @@ pub const InstructionData = union(enum) {
             .stack_load => .stack_load,
             .stack_store => .stack_store,
             .func_addr => .func_addr,
+            .unary_global_value => .unary_global_value,
         };
     }
 };
@@ -404,6 +420,12 @@ pub const FuncBuilder = struct {
             else => null,
         };
 
+        // Extract global_value for global_value instruction
+        const global_value: ?GlobalValue = switch (data) {
+            .unary_global_value => |d| d.global_value,
+            else => null,
+        };
+
         // Extract args for the ValueList
         const args_slice: []const Value = switch (data) {
             .nullary => &[_]Value{},
@@ -426,6 +448,7 @@ pub const FuncBuilder = struct {
             .stack_load => &[_]Value{},
             .stack_store => |d| &[_]Value{d.arg},
             .func_addr => &[_]Value{},
+            .unary_global_value => &[_]Value{}, // no value args, just GlobalValue ref
         };
 
         const args = try self.dfg.value_lists.alloc(args_slice);
@@ -459,6 +482,7 @@ pub const FuncBuilder = struct {
             .stack_offset = stack_offset,
             .func_ref = func_ref,
             .sig_ref = sig_ref,
+            .global_value = global_value,
         });
 
         // Create result value if needed
@@ -956,6 +980,25 @@ pub const FuncBuilder = struct {
     pub fn funcAddr(self: *Self, ty: Type, func_ref: FuncRef) !Value {
         const r = try self.insertInst(.{
             .func_addr = .{ .opcode = .func_addr, .func_ref = func_ref },
+        }, ty);
+        return r.result.?;
+    }
+
+    // ========================================================================
+    // Global Values
+    // Port of cranelift/codegen/src/ir/builder.rs global_value
+    // ========================================================================
+
+    /// Compute the value of a global variable.
+    ///
+    /// The `gv` argument must refer to a `GlobalValue` that has been declared
+    /// in the function using `Function.createGlobalValue()`. This instruction
+    /// produces a value containing the computed address of the global value.
+    ///
+    /// Port of cranelift InstBuilder::global_value
+    pub fn globalValue(self: *Self, ty: Type, gv: GlobalValue) !Value {
+        const r = try self.insertInst(.{
+            .unary_global_value = .{ .opcode = .global_value, .global_value = gv },
         }, ty);
         return r.result.?;
     }

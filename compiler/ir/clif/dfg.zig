@@ -195,6 +195,49 @@ pub const JumpTable = struct {
     }
 };
 
+/// An opaque reference to a global value.
+///
+/// A `GlobalValue` is a [`Value`] that will be live across the entire
+/// function lifetime. It can be preloaded from other global values.
+///
+/// Port of cranelift/codegen/src/ir/entities.rs:160-188
+pub const GlobalValue = struct {
+    index: u32,
+
+    pub const RESERVED: GlobalValue = .{ .index = std.math.maxInt(u32) };
+
+    pub fn fromIndex(index: u32) GlobalValue {
+        return .{ .index = index };
+    }
+
+    pub fn asU32(self: GlobalValue) u32 {
+        return self.index;
+    }
+
+    pub fn eql(self: GlobalValue, other: GlobalValue) bool {
+        return self.index == other.index;
+    }
+
+    /// Create a new global value reference from its number.
+    /// This method is for use by the parser.
+    pub fn withNumber(n: u32) ?GlobalValue {
+        if (n < std.math.maxInt(u32)) {
+            return GlobalValue{ .index = n };
+        } else {
+            return null;
+        }
+    }
+
+    pub fn format(
+        self: GlobalValue,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        try writer.print("gv{d}", .{self.index});
+    }
+};
+
 // ============================================================================
 // Value List
 // ============================================================================
@@ -413,6 +456,9 @@ pub const InstData = struct {
     func_ref: ?FuncRef = null,
     /// Signature reference (for call_indirect).
     sig_ref: ?SigRef = null,
+    /// Global value reference (for global_value instruction).
+    /// Port of cranelift instruction global value operand.
+    global_value: ?GlobalValue = null,
 
     pub const EMPTY: InstData = .{
         .opcode = .nop,
@@ -467,6 +513,13 @@ pub const InstData = struct {
     /// Get the signature reference (for call_indirect).
     pub fn getSigRef(self: InstData) ?SigRef {
         return self.sig_ref;
+    }
+
+    /// Get the global value reference (for global_value instruction).
+    ///
+    /// Port of cranelift instruction global value operand access.
+    pub fn getGlobalValue(self: InstData) ?GlobalValue {
+        return self.global_value;
     }
 
     /// Get the single block destination (for jump instructions).
