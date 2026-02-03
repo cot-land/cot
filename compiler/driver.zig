@@ -38,6 +38,7 @@ const wasm_func_translator = @import("codegen/native/wasm_to_clif/func_translato
 const clif = @import("ir/clif/mod.zig");
 const macho = @import("codegen/native/macho.zig");
 const elf = @import("codegen/native/elf.zig");
+const object_module = @import("codegen/native/object_module.zig");
 
 const Allocator = std.mem.Allocator;
 const Target = target_mod.Target;
@@ -474,49 +475,134 @@ pub const Driver = struct {
     }
 
     /// Generate Mach-O object file from compiled functions.
+    /// Uses ObjectModule to bridge CompiledCode to Mach-O format.
     fn generateMachO(self: *Driver, compiled_funcs: []const native_compile.CompiledCode, exports: []const wasm_parser.Export) ![]u8 {
-        _ = exports;
+        var module = object_module.ObjectModule.initWithTarget(
+            self.allocator,
+            .macos,
+            .aarch64,
+        );
+        defer module.deinit();
 
-        // Collect all machine code into a single text section
-        var total_size: usize = 0;
-        for (compiled_funcs) |cf| {
-            total_size += cf.codeSize();
+        // Build export name map for function lookup
+        var export_names = std.StringHashMap(u32).init(self.allocator);
+        defer export_names.deinit();
+        for (exports, 0..) |exp, i| {
+            if (exp.kind == .func) {
+                try export_names.put(exp.name, @intCast(i));
+            }
         }
 
-        var code = try self.allocator.alloc(u8, total_size);
-        var offset: usize = 0;
-        for (compiled_funcs) |cf| {
-            const code_bytes = cf.code();
-            @memcpy(code[offset..][0..code_bytes.len], code_bytes);
-            offset += code_bytes.len;
+        // Declare and define each function
+        for (compiled_funcs, 0..) |*cf, i| {
+            // Determine function name from exports, or generate one
+            var func_name: []const u8 = undefined;
+            var found_name = false;
+            for (exports) |exp| {
+                if (exp.kind == .func and exp.index == i) {
+                    func_name = exp.name;
+                    found_name = true;
+                    break;
+                }
+            }
+            if (!found_name) {
+                // Generate internal name
+                func_name = try std.fmt.allocPrint(self.allocator, "_func_{d}", .{i});
+            }
+
+            // Prefix with underscore for Mach-O convention
+            const mangled_name = try std.fmt.allocPrint(self.allocator, "_{s}", .{func_name});
+            defer self.allocator.free(mangled_name);
+
+            // Determine linkage
+            const linkage: object_module.Linkage = if (std.mem.eql(u8, func_name, "main"))
+                .Export
+            else if (found_name)
+                .Export
+            else
+                .Local;
+
+            // Declare the function
+            const func_id = try module.declareFunction(mangled_name, linkage);
+
+            // Register external name for relocation resolution
+            try module.declareExternalName(@intCast(i), mangled_name);
+
+            // Define the function with its compiled code
+            try module.defineFunction(func_id, cf);
         }
 
-        // For now, return raw code - full Mach-O generation will use macho.zig
-        // TODO: Use macho.zig to wrap in proper Mach-O format
-        return code;
+        // Write to memory buffer
+        var output = std.ArrayListUnmanaged(u8){};
+        defer output.deinit(self.allocator);
+        try module.finish(output.writer(self.allocator));
+
+        return output.toOwnedSlice(self.allocator);
     }
 
     /// Generate ELF object file from compiled functions.
+    /// Uses ObjectModule to bridge CompiledCode to ELF format.
     fn generateElf(self: *Driver, compiled_funcs: []const native_compile.CompiledCode, exports: []const wasm_parser.Export) ![]u8 {
-        _ = exports;
+        var module = object_module.ObjectModule.initWithTarget(
+            self.allocator,
+            .linux,
+            .x86_64,
+        );
+        defer module.deinit();
 
-        // Collect all machine code into a single text section
-        var total_size: usize = 0;
-        for (compiled_funcs) |cf| {
-            total_size += cf.codeSize();
+        // Build export name map for function lookup
+        var export_names = std.StringHashMap(u32).init(self.allocator);
+        defer export_names.deinit();
+        for (exports, 0..) |exp, i| {
+            if (exp.kind == .func) {
+                try export_names.put(exp.name, @intCast(i));
+            }
         }
 
-        var code = try self.allocator.alloc(u8, total_size);
-        var offset: usize = 0;
-        for (compiled_funcs) |cf| {
-            const code_bytes = cf.code();
-            @memcpy(code[offset..][0..code_bytes.len], code_bytes);
-            offset += code_bytes.len;
+        // Declare and define each function
+        for (compiled_funcs, 0..) |*cf, i| {
+            // Determine function name from exports, or generate one
+            var func_name: []const u8 = undefined;
+            var found_name = false;
+            for (exports) |exp| {
+                if (exp.kind == .func and exp.index == i) {
+                    func_name = exp.name;
+                    found_name = true;
+                    break;
+                }
+            }
+            if (!found_name) {
+                // Generate internal name
+                func_name = try std.fmt.allocPrint(self.allocator, "func_{d}", .{i});
+            }
+
+            // ELF doesn't need underscore prefix (unlike Mach-O)
+            const mangled_name = func_name;
+
+            // Determine linkage
+            const linkage: object_module.Linkage = if (std.mem.eql(u8, func_name, "main"))
+                .Export
+            else if (found_name)
+                .Export
+            else
+                .Local;
+
+            // Declare the function
+            const func_id = try module.declareFunction(mangled_name, linkage);
+
+            // Register external name for relocation resolution
+            try module.declareExternalName(@intCast(i), mangled_name);
+
+            // Define the function with its compiled code
+            try module.defineFunction(func_id, cf);
         }
 
-        // For now, return raw code - full ELF generation will use elf.zig
-        // TODO: Use elf.zig to wrap in proper ELF format
-        return code;
+        // Write to memory buffer
+        var output = std.ArrayListUnmanaged(u8){};
+        defer output.deinit(self.allocator);
+        try module.finish(output.writer(self.allocator));
+
+        return output.toOwnedSlice(self.allocator);
     }
 
     /// Generate WebAssembly binary.
