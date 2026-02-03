@@ -30,6 +30,7 @@ pub const Block = struct {
         return self.index;
     }
 
+
     /// Create an invalid block.
     pub inline fn invalid() Block {
         return .{ .index = INVALID };
@@ -91,6 +92,11 @@ pub const Inst = struct {
     pub inline fn idx(self: Inst) usize {
         std.debug.assert(self.isValid());
         return self.index;
+    }
+
+    /// Compare instructions for ordering (for VCode compatibility).
+    pub inline fn lessThan(self: Inst, other: Inst) bool {
+        return self.index < other.index;
     }
 
     /// Create an invalid instruction.

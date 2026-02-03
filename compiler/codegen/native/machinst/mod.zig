@@ -13,6 +13,7 @@ pub const abi = @import("abi.zig");
 pub const buffer = @import("buffer.zig");
 pub const blockorder = @import("blockorder.zig");
 pub const lower = @import("lower.zig");
+pub const regalloc_adapter = @import("regalloc_adapter.zig");
 
 // Re-export commonly used types from reg.zig
 pub const RegClass = reg.RegClass;
@@ -49,6 +50,9 @@ pub const VCodeConstants = vcode.VCodeConstants;
 pub const InsnIndex = vcode.InsnIndex;
 pub const BlockIndex = vcode.BlockIndex;
 pub const InsnRange = vcode.InsnRange;
+
+// Re-export regalloc adapter
+pub const VCodeRegallocAdapter = regalloc_adapter.VCodeRegallocAdapter;
 
 // Re-export commonly used types from abi.zig
 pub const ABIArg = abi.ABIArg;

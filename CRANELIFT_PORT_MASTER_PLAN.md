@@ -1306,9 +1306,9 @@ All infrastructure is in place:
 | Task | Description | Status |
 |------|-------------|--------|
 | 7.1 | GlobalValue infrastructure | ✅ Complete |
-| 7.2 | Memory instructions (load/store) | ❌ Not Started |
-| 7.3 | Call instructions | ❌ Not Started |
-| 7.4 | i64 arithmetic | ❌ Not Started |
+| 7.2 | Memory instructions (load/store) | ✅ Complete |
+| 7.3 | Call instructions | ✅ Complete |
+| 7.4 | i64 arithmetic | ✅ Complete |
 | 7.5 | VCode-to-regalloc2 adapter | ❌ Not Started |
 | 7.6 | Emit with regalloc output | ❌ Not Started |
 | 7.7 | Object file generation (Mach-O/ELF) | ❌ Not Started |
