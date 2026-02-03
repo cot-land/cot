@@ -505,7 +505,8 @@ pub fn computeLiveness(
         ctx.liveins.items[block.idx()] = try live.clone();
     }
 
-    // Check entry block has no liveins
+    // Check entry block has no liveins.
+    // Port of regalloc2: if !self.liveins[self.func.entry_block().index()].is_empty() { return Err(EntryLivein) }
     if (!ctx.liveins.items[func.entryBlock().idx()].isEmpty()) {
         return error.EntryLivein;
     }
@@ -547,6 +548,14 @@ pub fn buildLiveranges(
             for (succs, 0..) |succ, succ_idx| {
                 const params_in = func.blockParams(succ);
                 const params_out = func.branchBlockparams(block, insns.last(), succ_idx);
+
+                // Branch args must match block params - this is a CLIF invariant.
+                // If they don't match, there's a bug in CLIF construction.
+                if (params_in.len != params_out.len) {
+                    std.debug.print("LIVENESS ERROR: block {d} -> succ {d} (succ_idx={d})\n", .{ block_idx, succ.idx(), succ_idx });
+                    std.debug.print("  params_in.len={d} params_out.len={d}\n", .{ params_in.len, params_out.len });
+                    @panic("branch args must match block params");
+                }
 
                 for (params_in, params_out) |param_in, param_out| {
                     const out_vreg = VRegIndex.new(param_out.vreg());

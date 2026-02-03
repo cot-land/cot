@@ -6,11 +6,19 @@
 const std = @import("std");
 const types = @import("types.zig");
 const jumptable_mod = @import("jumptable.zig");
+const builder_mod = @import("builder.zig");
 
 const Type = types.Type;
 pub const JumpTables = jumptable_mod.JumpTables;
 pub const JumpTableData = jumptable_mod.JumpTableData;
 pub const BlockCall = jumptable_mod.BlockCall;
+
+// Import InstructionData from builder - this is the ONLY instruction storage format
+// Port of cranelift: pub struct Insts(PrimaryMap<Inst, InstructionData>);
+pub const InstructionData = builder_mod.InstructionData;
+pub const InstructionFormat = builder_mod.InstructionFormat;
+pub const MemFlags = builder_mod.MemFlags;
+pub const TrapCode = builder_mod.TrapCode;
 
 // ============================================================================
 // Entity Types
@@ -196,11 +204,6 @@ pub const JumpTable = struct {
 };
 
 /// An opaque reference to a global value.
-///
-/// A `GlobalValue` is a [`Value`] that will be live across the entire
-/// function lifetime. It can be preloaded from other global values.
-///
-/// Port of cranelift/codegen/src/ir/entities.rs:160-188
 pub const GlobalValue = struct {
     index: u32,
 
@@ -218,8 +221,6 @@ pub const GlobalValue = struct {
         return self.index == other.index;
     }
 
-    /// Create a new global value reference from its number.
-    /// This method is for use by the parser.
     pub fn withNumber(n: u32) ?GlobalValue {
         if (n < std.math.maxInt(u32)) {
             return GlobalValue{ .index = n };
@@ -413,156 +414,20 @@ pub const BlockData = struct {
 };
 
 // ============================================================================
-// Instruction Data (simplified storage for DFG)
+// Opcode re-exports
 // ============================================================================
 
-/// Opcode - instruction operation type.
-/// This is a simplified version for DFG; full opcodes are in instructions.zig.
 const instructions = @import("instructions.zig");
 pub const Opcode = instructions.Opcode;
 pub const IntCC = instructions.IntCC;
 pub const FloatCC = instructions.FloatCC;
 
-/// Simplified instruction data storage for the DFG.
-/// Full InstructionData with all formats is in builder.zig.
-///
-/// Branch destination fields are used by blockorder.zig for CFG construction.
-pub const InstData = struct {
-    /// Instruction opcode.
-    opcode: Opcode,
-    /// Instruction arguments (input values).
-    args: ValueList,
-    /// Controlling type variable (for polymorphic instructions).
-    ctrl_type: Type,
-    /// Branch destination (for jump, fallthrough_return, etc).
-    dest: ?Block = null,
-    /// Then destination (for brif).
-    then_dest: ?Block = null,
-    /// Else destination (for brif).
-    else_dest: ?Block = null,
-    /// Then block arguments (for brif).
-    then_args: ?ValueList = null,
-    /// Else block arguments (for brif).
-    else_args: ?ValueList = null,
-    /// Immediate value (for iconst, iadd_imm, etc).
-    imm: ?i64 = null,
-    /// Integer comparison condition code (for icmp).
-    intcc: ?IntCC = null,
-    /// Float comparison condition code (for fcmp).
-    floatcc: ?FloatCC = null,
-    /// Jump table reference (for br_table).
-    jump_table: ?JumpTable = null,
-    /// Stack slot reference (for stack_load/stack_store).
-    stack_slot: ?StackSlot = null,
-    /// Stack slot offset (for stack_load/stack_store).
-    stack_offset: ?i32 = null,
-    /// Function reference (for call).
-    func_ref: ?FuncRef = null,
-    /// Signature reference (for call_indirect).
-    sig_ref: ?SigRef = null,
-    /// Global value reference (for global_value instruction).
-    /// Port of cranelift instruction global value operand.
-    global_value: ?GlobalValue = null,
-
-    pub const EMPTY: InstData = .{
-        .opcode = .nop,
-        .args = ValueList.EMPTY,
-        .ctrl_type = Type.INVALID,
-        .dest = null,
-        .then_dest = null,
-        .else_dest = null,
-        .imm = null,
-    };
-
-    /// Get the immediate value as unsigned, if present.
-    pub fn getImmediate(self: InstData) ?u64 {
-        return if (self.imm) |v| @bitCast(v) else null;
-    }
-
-    /// Get the immediate value as signed, if present.
-    pub fn getImmediateSigned(self: InstData) ?i64 {
-        return self.imm;
-    }
-
-    /// Get the integer comparison condition code (for icmp).
-    pub fn getIntCC(self: InstData) ?IntCC {
-        return self.intcc;
-    }
-
-    /// Get the float comparison condition code (for fcmp).
-    pub fn getFloatCC(self: InstData) ?FloatCC {
-        return self.floatcc;
-    }
-
-    /// Get the jump table reference (for br_table).
-    pub fn getJumpTable(self: InstData) ?JumpTable {
-        return self.jump_table;
-    }
-
-    /// Get the stack slot reference (for stack_load/stack_store).
-    pub fn getStackSlot(self: InstData) ?StackSlot {
-        return self.stack_slot;
-    }
-
-    /// Get the stack slot offset (for stack_load/stack_store).
-    pub fn getStackOffset(self: InstData) ?i32 {
-        return self.stack_offset;
-    }
-
-    /// Get the function reference (for call).
-    pub fn getFuncRef(self: InstData) ?FuncRef {
-        return self.func_ref;
-    }
-
-    /// Get the signature reference (for call_indirect).
-    pub fn getSigRef(self: InstData) ?SigRef {
-        return self.sig_ref;
-    }
-
-    /// Get the global value reference (for global_value instruction).
-    ///
-    /// Port of cranelift instruction global value operand access.
-    pub fn getGlobalValue(self: InstData) ?GlobalValue {
-        return self.global_value;
-    }
-
-    /// Get the single block destination (for jump instructions).
-    pub fn getBlockDest(self: InstData) ?Block {
-        return self.dest;
-    }
-
-    /// Get brif destinations (then and else blocks).
-    pub fn getBrifDests(self: InstData) ?struct { then_dest: Block, else_dest: Block } {
-        if (self.then_dest != null and self.else_dest != null) {
-            return .{
-                .then_dest = self.then_dest.?,
-                .else_dest = self.else_dest.?,
-            };
-        }
-        return null;
-    }
-
-    /// Get brif block arguments for a specific successor index.
-    /// succ_idx 0 = then branch args, succ_idx 1 = else branch args.
-    pub fn getBrifArgs(self: InstData, succ_idx: u32) ?ValueList {
-        return switch (succ_idx) {
-            0 => self.then_args,
-            1 => self.else_args,
-            else => null,
-        };
-    }
-
-    /// Get br_table data. Currently returns null (br_table not fully supported).
-    pub fn getBrTableData(self: InstData) ?struct { default: Block, targets: []const Block } {
-        // TODO: Implement br_table support with JumpTableData
-        _ = self;
-        return null;
-    }
-};
-
 // ============================================================================
 // Data Flow Graph
 // Port of cranelift/codegen/src/ir/dfg.rs DataFlowGraph
+//
+// CRITICAL: Stores InstructionData (typed union) directly, NOT a flat struct.
+// This matches Cranelift exactly: pub struct Insts(PrimaryMap<Inst, InstructionData>);
 // ============================================================================
 
 /// A data flow graph defines all instructions and basic blocks in a function as well as
@@ -576,8 +441,9 @@ pub const DataFlowGraph = struct {
     /// Storage for blocks.
     blocks: std.ArrayListUnmanaged(BlockData),
 
-    /// Storage for instruction data (opcode, args).
-    insts: std.ArrayListUnmanaged(InstData),
+    /// Storage for instruction data.
+    /// Port of cranelift: pub insts: Insts (which is PrimaryMap<Inst, InstructionData>)
+    insts: std.ArrayListUnmanaged(InstructionData),
 
     /// Storage for instruction results (value lists per instruction).
     results: std.ArrayListUnmanaged(ValueList),
@@ -586,7 +452,6 @@ pub const DataFlowGraph = struct {
     value_lists: ValueListPool,
 
     /// Jump tables used by br_table instructions.
-    /// Port of cranelift/codegen/src/ir/dfg.rs:167
     jump_tables: JumpTables,
 
     /// Number of instructions created (for generating Inst IDs).
@@ -626,40 +491,73 @@ pub const DataFlowGraph = struct {
         self.inst_count = 0;
     }
 
-    /// Create a new instruction ID and reserve storage.
-    pub fn makeInst(self: *Self) Inst {
-        const index = self.inst_count;
-        self.inst_count += 1;
-        // Ensure storage
-        while (self.insts.items.len <= index) {
-            self.insts.append(self.allocator, InstData.EMPTY) catch unreachable;
-        }
-        return Inst.fromIndex(index);
-    }
+    // ------------------------------------------------------------------------
+    // Instructions
+    // Port of cranelift/codegen/src/ir/dfg.rs make_inst
+    // ------------------------------------------------------------------------
 
     /// Create a new instruction with data.
-    pub fn makeInstWithData(self: *Self, data: InstData) !Inst {
+    /// Port of cranelift/codegen/src/ir/dfg.rs:868-873
+    pub fn makeInst(self: *Self, data: InstructionData) !Inst {
         const index = self.inst_count;
         self.inst_count += 1;
+        // Ensure storage is sized correctly
         while (self.insts.items.len < index) {
-            try self.insts.append(self.allocator, InstData.EMPTY);
+            try self.insts.append(self.allocator, .{ .nullary = .{ .opcode = .nop } });
         }
         try self.insts.append(self.allocator, data);
         return Inst.fromIndex(index);
     }
 
-    /// Set the instruction data for an existing instruction.
-    pub fn setInstData(self: *Self, inst: Inst, data: InstData) !void {
-        while (self.insts.items.len <= inst.index) {
-            try self.insts.append(self.allocator, InstData.EMPTY);
-        }
+    /// Get the instruction data.
+    /// Port of cranelift: self.insts[inst] returning &InstructionData
+    pub fn getInst(self: *const Self, inst: Inst) *const InstructionData {
+        return &self.insts.items[inst.index];
+    }
+
+    /// Get the instruction data mutably.
+    pub fn getInstMut(self: *Self, inst: Inst) *InstructionData {
+        return &self.insts.items[inst.index];
+    }
+
+    /// Replace instruction data.
+    pub fn replaceInst(self: *Self, inst: Inst, data: InstructionData) void {
         self.insts.items[inst.index] = data;
     }
 
-    /// Get the instruction data.
-    pub fn getInstData(self: *const Self, inst: Inst) InstData {
-        if (inst.index >= self.insts.items.len) return InstData.EMPTY;
-        return self.insts.items[inst.index];
+    /// Append a branch argument to the branch targeting dest_block.
+    /// Port of cranelift/codegen/src/ir/dfg.rs append_branch_arg
+    ///
+    /// This is used during SSA construction when predecessors disagree on the
+    /// value of a variable. The block parameter is kept and each predecessor
+    /// branch must pass its value as an argument.
+    pub fn appendBranchArg(self: *Self, inst: Inst, dest_block: Block, val: Value) !void {
+        const data = self.getInstMut(inst);
+        switch (data.*) {
+            .jump => |*j| {
+                // Jump has a single destination
+                if (j.destination.block.index == dest_block.index) {
+                    j.destination.args = try self.value_lists.push(j.destination.args, val);
+                }
+            },
+            .brif => |*b| {
+                // Check both then and else blocks
+                if (b.blocks[0].block.index == dest_block.index) {
+                    b.blocks[0].args = try self.value_lists.push(b.blocks[0].args, val);
+                }
+                if (b.blocks[1].block.index == dest_block.index) {
+                    b.blocks[1].args = try self.value_lists.push(b.blocks[1].args, val);
+                }
+            },
+            .branch_table => {
+                // Branch tables are not typically modified during SSA construction.
+                // If needed, this would require updating all entries targeting dest_block
+                // in the jump table. For now, this is not implemented.
+            },
+            else => {
+                // Not a branch instruction, nothing to do
+            },
+        }
     }
 
     // ------------------------------------------------------------------------
@@ -739,6 +637,7 @@ pub const DataFlowGraph = struct {
     /// Append a block parameter.
     pub fn appendBlockParam(self: *Self, block: Block, ty: Type) !Value {
         const num: u16 = @intCast(self.numBlockParams(block));
+
         const value = try self.makeValue(.{
             .ty = ty,
             .def = .{ .param = .{ .block = block, .num = num } },
@@ -751,8 +650,14 @@ pub const DataFlowGraph = struct {
         return value;
     }
 
+    /// Make a BlockCall, bundling together the block and its arguments.
+    /// Port of cranelift/codegen/src/ir/dfg.rs:239-246
+    pub fn blockCall(self: *Self, block: Block, args: []const Value) !BlockCall {
+        return BlockCall.withArgsSlice(block, args, &self.value_lists);
+    }
+
     // ------------------------------------------------------------------------
-    // Instructions
+    // Instruction Results
     // ------------------------------------------------------------------------
 
     /// Reserve space for instruction results.
@@ -797,32 +702,77 @@ pub const DataFlowGraph = struct {
     }
 
     // ------------------------------------------------------------------------
-    // Instruction data queries (for machinst integration)
+    // Instruction data queries
     // ------------------------------------------------------------------------
 
     /// Get the instruction opcode.
     pub fn instOpcode(self: *const Self, inst: Inst) Opcode {
-        return self.getInstData(inst).opcode;
+        return self.getInst(inst).opcode();
     }
 
     /// Get the instruction arguments (input values).
+    /// Uses pointer captures to return slices into the actual stored data.
     pub fn instArgs(self: *const Self, inst: Inst) []const Value {
-        const data = self.getInstData(inst);
-        return self.value_lists.getSlice(data.args);
+        const data = self.getInst(inst);
+        // Use pointer captures to get references into the actual stored data
+        return switch (data.*) {
+            .nullary => &[_]Value{},
+            .unary => |*d| @as(*const [1]Value, &d.arg)[0..1],
+            .unary_imm, .unary_ieee32, .unary_ieee64 => &[_]Value{},
+            .binary => |*d| &d.args,
+            .binary_imm64 => |*d| @as(*const [1]Value, &d.arg)[0..1],
+            .ternary => |*d| &d.args,
+            .int_compare => |*d| &d.args,
+            .float_compare => |*d| &d.args,
+            .jump => &[_]Value{},
+            .brif => |*d| @as(*const [1]Value, &d.arg)[0..1],
+            .branch_table => |*d| @as(*const [1]Value, &d.arg)[0..1],
+            .call => |d| self.value_lists.getSlice(d.args),
+            .call_indirect => |d| self.value_lists.getSlice(d.args),
+            .trap => &[_]Value{},
+            .cond_trap => |*d| @as(*const [1]Value, &d.arg)[0..1],
+            .load => |*d| @as(*const [1]Value, &d.arg)[0..1],
+            .store => |*d| &d.args,
+            .stack_load => &[_]Value{},
+            .stack_store => |*d| @as(*const [1]Value, &d.arg)[0..1],
+            .func_addr => &[_]Value{},
+            .unary_global_value => &[_]Value{},
+            .multi_ary => |d| self.value_lists.getSlice(d.args),
+        };
     }
 
-    /// Get the instruction input values (alias for instArgs).
-    pub fn instValues(self: *const Self, inst: Inst) []const Value {
+    /// Get an iterator over all instruction input values, including branch arguments.
+    ///
+    /// Port of cranelift/codegen/src/ir/dfg.rs:897-920 inst_values()
+    ///
+    /// Cranelift's inst_values() chains:
+    /// 1. inst_args(inst) - regular instruction arguments
+    /// 2. branch_destination().args() - values passed to branch targets
+    /// 3. exception_table().contexts() - exception contexts (not implemented yet)
+    ///
+    /// This iterator yields Values in the same order.
+    pub fn instValues(self: *const Self, inst: Inst) InstValuesIterator {
+        return InstValuesIterator.init(self, inst);
+    }
+
+    /// Get only the regular instruction arguments (not including branch args).
+    /// Use instValues() to get all values including branch arguments.
+    pub fn instArgsOnly(self: *const Self, inst: Inst) []const Value {
         return self.instArgs(inst);
     }
 
     /// Get the controlling type for a polymorphic instruction.
     pub fn ctrlType(self: *const Self, inst: Inst) Type {
-        return self.getInstData(inst).ctrl_type;
+        const data = self.getInst(inst);
+        return switch (data.*) {
+            .unary_imm => |d| d.imm_type(),
+            .binary_imm64 => |d| d.imm_type(),
+            else => Type.INVALID,
+        };
     }
 
     // ------------------------------------------------------------------------
-    // Value queries (for machinst integration)
+    // Value queries
     // ------------------------------------------------------------------------
 
     /// Get the number of values.
@@ -840,6 +790,133 @@ pub const DataFlowGraph = struct {
         _ = self;
         _ = inst;
         return "<inst>";
+    }
+};
+
+// ============================================================================
+// InstValuesIterator
+// Port of cranelift/codegen/src/ir/dfg.rs:897-920 inst_values()
+//
+// Cranelift returns an iterator that chains:
+// 1. inst_args(inst).iter().copied()
+// 2. branch_destination().flat_map(|branch| branch.args().filter_map(|arg| arg.as_value()))
+// 3. exception_table().flat_map(|et| exception_tables[et].contexts())
+//
+// We don't have exception tables yet, so we only implement #1 and #2.
+// ============================================================================
+
+/// Iterator over all values used by an instruction.
+///
+/// This includes:
+/// - Regular instruction arguments (from instArgs)
+/// - Branch destination arguments (values passed to target blocks)
+///
+/// This matches Cranelift's inst_values() behavior exactly.
+pub const InstValuesIterator = struct {
+    dfg: *const DataFlowGraph,
+    inst: Inst,
+    phase: Phase,
+    // For args phase
+    arg_index: usize,
+    args_slice: []const Value,
+    // For branch_args phase
+    branch_dest_index: usize,
+    branch_arg_index: usize,
+    branch_destinations: []const BlockCall,
+
+    const Phase = enum {
+        args,
+        branch_args,
+        done,
+    };
+
+    const Self = @This();
+
+    pub fn init(dfg: *const DataFlowGraph, inst: Inst) Self {
+        const args_slice = dfg.instArgs(inst);
+        const data = dfg.getInst(inst);
+        const branch_destinations = data.branchDestination(&dfg.jump_tables);
+
+        return .{
+            .dfg = dfg,
+            .inst = inst,
+            .phase = .args,
+            .arg_index = 0,
+            .args_slice = args_slice,
+            .branch_dest_index = 0,
+            .branch_arg_index = 0,
+            .branch_destinations = branch_destinations,
+        };
+    }
+
+    /// Get the next value, or null if iteration is complete.
+    pub fn next(self: *Self) ?Value {
+        switch (self.phase) {
+            .args => {
+                // Phase 1: yield regular instruction arguments
+                if (self.arg_index < self.args_slice.len) {
+                    const v = self.args_slice[self.arg_index];
+                    self.arg_index += 1;
+                    return v;
+                }
+                // Transition to branch_args phase
+                self.phase = .branch_args;
+                return self.next();
+            },
+            .branch_args => {
+                // Phase 2: yield branch destination arguments
+                // Iterate through all branch destinations
+                while (self.branch_dest_index < self.branch_destinations.len) {
+                    const bc = self.branch_destinations[self.branch_dest_index];
+                    const branch_args = self.dfg.value_lists.getSlice(bc.args);
+
+                    if (self.branch_arg_index < branch_args.len) {
+                        const v = branch_args[self.branch_arg_index];
+                        self.branch_arg_index += 1;
+                        return v;
+                    }
+                    // Move to next destination
+                    self.branch_dest_index += 1;
+                    self.branch_arg_index = 0;
+                }
+                // No more branch args
+                self.phase = .done;
+                return null;
+            },
+            .done => return null,
+        }
+    }
+
+    /// Reset the iterator to the beginning.
+    pub fn reset(self: *Self) void {
+        self.phase = .args;
+        self.arg_index = 0;
+        self.branch_dest_index = 0;
+        self.branch_arg_index = 0;
+    }
+
+    /// Collect all values into a slice (allocates).
+    /// Useful when you need random access or need to iterate multiple times.
+    pub fn collect(self: *Self, allocator: std.mem.Allocator) ![]Value {
+        var result = std.ArrayList(Value).init(allocator);
+        errdefer result.deinit();
+
+        self.reset();
+        while (self.next()) |v| {
+            try result.append(v);
+        }
+        return result.toOwnedSlice();
+    }
+
+    /// Count the total number of values.
+    pub fn count(self: *Self) usize {
+        var n: usize = 0;
+        self.reset();
+        while (self.next()) |_| {
+            n += 1;
+        }
+        self.reset();
+        return n;
     }
 };
 
@@ -952,4 +1029,98 @@ test "value aliasing" {
     // Resolve alias
     const resolved = dfg.resolveAliases(v1);
     try testing.expect(resolved.eql(v0));
+}
+
+test "InstValuesIterator includes branch arguments" {
+    // Port of cranelift inst_values() behavior verification
+    // This test verifies that instValues() returns both regular args AND branch args
+    const testing = std.testing;
+
+    var dfg = DataFlowGraph.init(testing.allocator);
+    defer dfg.deinit();
+
+    // Create blocks
+    const block0 = try dfg.makeBlock();
+    const block1 = try dfg.makeBlock();
+
+    // Create values that will be used
+    const cond = try dfg.appendBlockParam(block0, Type.I32);
+    const v1 = try dfg.appendBlockParam(block0, Type.I32);
+    const v2 = try dfg.appendBlockParam(block0, Type.I32);
+
+    // Add block param to block1 (the target)
+    _ = try dfg.appendBlockParam(block1, Type.I32);
+
+    // Create a brif instruction:
+    // brif cond, block1(v1), block1(v2)
+    // This has 1 regular arg (cond) + 2 branch args (v1, v2)
+    const then_args = try dfg.value_lists.alloc(&[_]Value{v1});
+    const else_args = try dfg.value_lists.alloc(&[_]Value{v2});
+
+    const brif_data = InstructionData{
+        .brif = .{
+            .opcode = .brif,
+            .arg = cond,
+            .blocks = .{
+                BlockCall{ .block = block1, .args = then_args },
+                BlockCall{ .block = block1, .args = else_args },
+            },
+        },
+    };
+
+    const brif_inst = try dfg.makeInst(brif_data);
+
+    // Test instArgs - should return only the condition (regular arg)
+    const args_only = dfg.instArgs(brif_inst);
+    try testing.expectEqual(@as(usize, 1), args_only.len);
+    try testing.expect(args_only[0].eql(cond));
+
+    // Test instValues - should return cond + v1 + v2 (all values)
+    var iter = dfg.instValues(brif_inst);
+    var collected: std.ArrayListUnmanaged(Value) = .{};
+    defer collected.deinit(testing.allocator);
+
+    while (iter.next()) |v| {
+        try collected.append(testing.allocator, v);
+    }
+
+    // Should have 3 values: cond (regular), v1 (then branch), v2 (else branch)
+    try testing.expectEqual(@as(usize, 3), collected.items.len);
+    try testing.expect(collected.items[0].eql(cond)); // Regular arg first
+    try testing.expect(collected.items[1].eql(v1)); // Then branch arg
+    try testing.expect(collected.items[2].eql(v2)); // Else branch arg
+}
+
+test "InstValuesIterator for non-branch instruction" {
+    // Verify that non-branch instructions work correctly
+    const testing = std.testing;
+
+    var dfg = DataFlowGraph.init(testing.allocator);
+    defer dfg.deinit();
+
+    const block0 = try dfg.makeBlock();
+    const v0 = try dfg.appendBlockParam(block0, Type.I32);
+    const v1 = try dfg.appendBlockParam(block0, Type.I32);
+
+    // Create an iadd instruction: v0 + v1
+    const iadd_data = InstructionData{
+        .binary = .{
+            .opcode = .iadd,
+            .args = .{ v0, v1 },
+        },
+    };
+
+    const iadd_inst = try dfg.makeInst(iadd_data);
+
+    // Both instArgs and instValues should return the same for non-branch
+    const args_only = dfg.instArgs(iadd_inst);
+    try testing.expectEqual(@as(usize, 2), args_only.len);
+
+    var iter = dfg.instValues(iadd_inst);
+    var count: usize = 0;
+    while (iter.next()) |v| {
+        try testing.expect(v.eql(args_only[count]));
+        count += 1;
+    }
+    try testing.expectEqual(@as(usize, 2), count);
 }

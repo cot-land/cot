@@ -317,8 +317,8 @@ pub fn visitBlockSuccs(
     const last_inst = func.layout.lastInst(block) orelse return;
 
     // Get the instruction data
-    const inst_data = func.dfg.getInstData(last_inst);
-    const opcode = inst_data.opcode;
+    const inst_data = func.dfg.getInst(last_inst);
+    const opcode = inst_data.opcode();
 
     switch (opcode) {
         .jump => {
@@ -335,13 +335,14 @@ pub fn visitBlockSuccs(
             }
         },
         .br_table => {
-            // Branch table has default + table entries
-            if (inst_data.getBrTableData()) |table_data| {
-                // Default destination (not from table)
-                try context.call(last_inst, table_data.default, false);
-                // Table entries (from table)
-                for (table_data.targets) |target| {
-                    try context.call(last_inst, target, true);
+            // Branch table has default + table entries from jump table
+            if (inst_data.getJumpTable()) |jt| {
+                if (func.dfg.jump_tables.get(jt)) |table_data| {
+                    // All branches from the jump table
+                    const branches = table_data.allBranches();
+                    for (branches) |branch| {
+                        try context.call(last_inst, branch.block, true);
+                    }
                 }
             }
         },
@@ -661,8 +662,8 @@ pub const BlockLoweringOrder = struct {
 
             // Handle br_table with empty table - still treat as conditional
             if (func.layout.lastInst(block)) |last_inst| {
-                const inst_data = func.dfg.getInstData(last_inst);
-                switch (inst_data.opcode) {
+                const inst_data = func.dfg.getInst(last_inst);
+                switch (inst_data.opcode()) {
                     .br_table => {
                         const out_ptr = try block_out_count.getPtr(allocator, block);
                         out_ptr.* = @max(out_ptr.*, 2);
@@ -737,10 +738,10 @@ pub const BlockLoweringOrder = struct {
                     }
 
                     if (func.layout.lastInst(o.block)) |last| {
-                        const inst_data = func.dfg.getInstData(last);
+                        const inst_data = func.dfg.getInst(last);
                         // All terminators need to be lowered (not just branches).
                         // This includes return, trap, jump, brif, br_table.
-                        if (inst_data.opcode.isTerminator()) {
+                        if (inst_data.opcode().isTerminator()) {
                             opt_inst = last;
                         }
                     }
@@ -966,29 +967,23 @@ test "DominatorTree RPO iterator" {
     try func.layout.appendBlock(allocator, block2);
 
     // Block 0 jumps to block 1
-    const inst0 = try func.dfg.makeInstWithData(.{
+    const inst0 = try func.dfg.makeInst(.{ .jump = .{
         .opcode = .jump,
-        .args = clif.ValueList.EMPTY,
-        .ctrl_type = clif.Type.INVALID,
-        .dest = block1,
-    });
+        .destination = clif.BlockCall.init(block1),
+    } });
     try func.layout.appendInst(allocator, inst0, block0);
 
     // Block 1 jumps to block 2
-    const inst1 = try func.dfg.makeInstWithData(.{
+    const inst1 = try func.dfg.makeInst(.{ .jump = .{
         .opcode = .jump,
-        .args = clif.ValueList.EMPTY,
-        .ctrl_type = clif.Type.INVALID,
-        .dest = block2,
-    });
+        .destination = clif.BlockCall.init(block2),
+    } });
     try func.layout.appendInst(allocator, inst1, block1);
 
     // Block 2 returns
-    const inst2 = try func.dfg.makeInstWithData(.{
+    const inst2 = try func.dfg.makeInst(.{ .nullary = .{
         .opcode = .@"return",
-        .args = clif.ValueList.EMPTY,
-        .ctrl_type = clif.Type.INVALID,
-    });
+    } });
     try func.layout.appendInst(allocator, inst2, block2);
 
     // Compute CFG and domtree
@@ -1035,29 +1030,23 @@ test "BlockLoweringOrder simple linear CFG" {
     try func.layout.appendBlock(allocator, block2);
 
     // Block 0 jumps to block 1
-    const inst0 = try func.dfg.makeInstWithData(.{
+    const inst0 = try func.dfg.makeInst(.{ .jump = .{
         .opcode = .jump,
-        .args = clif.ValueList.EMPTY,
-        .ctrl_type = clif.Type.INVALID,
-        .dest = block1,
-    });
+        .destination = clif.BlockCall.init(block1),
+    } });
     try func.layout.appendInst(allocator, inst0, block0);
 
     // Block 1 jumps to block 2
-    const inst1 = try func.dfg.makeInstWithData(.{
+    const inst1 = try func.dfg.makeInst(.{ .jump = .{
         .opcode = .jump,
-        .args = clif.ValueList.EMPTY,
-        .ctrl_type = clif.Type.INVALID,
-        .dest = block2,
-    });
+        .destination = clif.BlockCall.init(block2),
+    } });
     try func.layout.appendInst(allocator, inst1, block1);
 
     // Block 2 returns
-    const inst2 = try func.dfg.makeInstWithData(.{
+    const inst2 = try func.dfg.makeInst(.{ .nullary = .{
         .opcode = .@"return",
-        .args = clif.ValueList.EMPTY,
-        .ctrl_type = clif.Type.INVALID,
-    });
+    } });
     try func.layout.appendInst(allocator, inst2, block2);
 
     // Compute domtree
@@ -1104,39 +1093,33 @@ test "BlockLoweringOrder diamond CFG no critical edges" {
     try func.layout.appendBlock(allocator, block3);
 
     // Block 0: brif -> block1, block2
-    const inst0 = try func.dfg.makeInstWithData(.{
+    // Use a dummy condition value for testing
+    const cond = clif.Value.fromIndex(0);
+    const inst0 = try func.dfg.makeInst(.{ .brif = .{
         .opcode = .brif,
-        .args = clif.ValueList.EMPTY,
-        .ctrl_type = clif.Type.INVALID,
-        .then_dest = block1,
-        .else_dest = block2,
-    });
+        .arg = cond,
+        .blocks = .{ clif.BlockCall.init(block1), clif.BlockCall.init(block2) },
+    } });
     try func.layout.appendInst(allocator, inst0, block0);
 
     // Block 1: jump -> block3
-    const inst1 = try func.dfg.makeInstWithData(.{
+    const inst1 = try func.dfg.makeInst(.{ .jump = .{
         .opcode = .jump,
-        .args = clif.ValueList.EMPTY,
-        .ctrl_type = clif.Type.INVALID,
-        .dest = block3,
-    });
+        .destination = clif.BlockCall.init(block3),
+    } });
     try func.layout.appendInst(allocator, inst1, block1);
 
     // Block 2: jump -> block3
-    const inst2 = try func.dfg.makeInstWithData(.{
+    const inst2 = try func.dfg.makeInst(.{ .jump = .{
         .opcode = .jump,
-        .args = clif.ValueList.EMPTY,
-        .ctrl_type = clif.Type.INVALID,
-        .dest = block3,
-    });
+        .destination = clif.BlockCall.init(block3),
+    } });
     try func.layout.appendInst(allocator, inst2, block2);
 
     // Block 3: return
-    const inst3 = try func.dfg.makeInstWithData(.{
+    const inst3 = try func.dfg.makeInst(.{ .nullary = .{
         .opcode = .@"return",
-        .args = clif.ValueList.EMPTY,
-        .ctrl_type = clif.Type.INVALID,
-    });
+    } });
     try func.layout.appendInst(allocator, inst3, block3);
 
     var cfg = ControlFlowGraph.init(allocator);

@@ -130,7 +130,7 @@ pub const AArch64LowerBackend = struct {
     /// Returns the output registers containing the result, or null if lowering failed.
     pub fn lower(self: *const Self, ctx: *LowerCtx, ir_inst: ClifInst) ?InstOutput {
         const inst_data = ctx.data(ir_inst);
-        const opcode = inst_data.opcode;
+        const opcode = inst_data.opcode();
 
         return switch (opcode) {
             // Integer constants
@@ -237,7 +237,7 @@ pub const AArch64LowerBackend = struct {
         targets: []const MachLabel,
     ) ?void {
         const inst_data = ctx.data(ir_inst);
-        const opcode = inst_data.opcode;
+        const opcode = inst_data.opcode();
 
         switch (opcode) {
             .jump => {
@@ -467,9 +467,10 @@ pub const AArch64LowerBackend = struct {
 
         // Get constant value - first try the constant map (populated during init),
         // then fall back to instruction data
-        const value: u64 = ctx.getConstant(ir_inst) orelse
-            ctx.data(ir_inst).getImmediate() orelse
-            return null;
+        const value: u64 = ctx.getConstant(ir_inst) orelse blk: {
+            const imm = ctx.data(ir_inst).getImmediate() orelse return null;
+            break :blk @bitCast(imm);
+        };
 
         // Allocate destination register
         const dst = ctx.allocTmp(ty) catch return null;
@@ -1977,7 +1978,7 @@ pub const AArch64LowerBackend = struct {
         // Get stack slot from instruction data
         const inst_data = ctx.data(ir_inst);
         const slot = inst_data.getStackSlot() orelse return null;
-        const extra_offset = inst_data.getStackOffset() orelse 0;
+        const extra_offset = inst_data.getOffset() orelse 0;
 
         // Get the slot's byte offset from computed stackslot offsets
         // Port of cranelift/codegen/src/machinst/abi.rs Callee::sized_stackslot_offsets
@@ -2004,7 +2005,7 @@ pub const AArch64LowerBackend = struct {
         // Get stack slot from instruction data
         const inst_data = ctx.data(ir_inst);
         const slot = inst_data.getStackSlot() orelse return null;
-        const extra_offset = inst_data.getStackOffset() orelse 0;
+        const extra_offset = inst_data.getOffset() orelse 0;
 
         // Get the slot's byte offset from computed stackslot offsets
         // Port of cranelift/codegen/src/machinst/abi.rs Callee::sized_stackslot_offsets

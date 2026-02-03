@@ -92,13 +92,13 @@ pub const ExtFuncData = clif.ExtFuncData;
 pub const ValueDef = clif.ValueDef;
 pub const ValueData = clif.ValueData;
 pub const BlockData = clif.BlockData;
-pub const InstData = clif.InstData;
 pub const ValueList = clif.ValueList;
 pub const ValueListPool = clif.ValueListPool;
 
 // Iterators
 pub const BlockIterator = clif.BlockIterator;
 pub const InstIterator = clif.InstIterator;
+pub const InstValuesIterator = clif.InstValuesIterator;
 
 // Function/ABI types
 pub const Signature = clif.Signature;
@@ -795,9 +795,9 @@ pub fn Lower(comptime I: type) type {
         // Instruction input/output queries
         // =====================================================================
 
-        /// Get the instdata for a given IR instruction.
-        pub fn data(self: *const Self, ir_inst: Inst) InstData {
-            return self.f.dfg.getInstData(ir_inst);
+        /// Get the InstructionData for a given IR instruction.
+        pub fn data(self: *const Self, ir_inst: Inst) *const InstructionData {
+            return self.f.dfg.getInst(ir_inst);
         }
 
         /// Get jump table data for a given jump table reference.
@@ -1181,7 +1181,7 @@ pub fn Lower(comptime I: type) type {
 
                 // Skip terminators (handled separately in lowerClifBranch).
                 // Terminators include return, trap, jump, brif, br_table.
-                if (inst_data.opcode.isTerminator()) {
+                if (inst_data.opcode().isTerminator()) {
                     continue;
                 }
 
@@ -1263,6 +1263,10 @@ pub fn Lower(comptime I: type) type {
             return opt_inst;
         }
 
+        /// Collect the outgoing block-call arguments for a given edge out of a lowered block.
+        ///
+        /// Port of cranelift/codegen/src/machinst/lower.rs:1073-1132 collect_block_call()
+        /// Uses the unified getBranchDest() API to get BlockCall for any branch type.
         fn collectBlockCall(
             self: *Self,
             block: BlockIndex,
@@ -1275,38 +1279,38 @@ pub fn Lower(comptime I: type) type {
             const this_lb = block_order.loweredOrder()[block.index()];
             const succ_lb = block_order.loweredOrder()[succ.index()];
 
-            // Handle critical edge case - successor is a split-critical-edge block
+            // Handle critical edge case - successor is a split-critical-edge block.
+            // In this case, this block-call has no arguments, and the arguments go
+            // on the critical edge block's unconditional branch instead.
             if (succ_lb == .critical_edge) {
                 return .{ .succ = succ, .args = &[_]Reg{} };
             }
 
             // Get branch info based on this_lb
-            const BranchInfo = struct { branch_inst: Inst, succ_idx: u32 };
+            const BranchInfo = struct { branch_inst: Inst, succ_idx: usize };
             const branch_info: BranchInfo = switch (this_lb) {
                 .critical_edge => |ce| blk: {
+                    // This is a split-critical-edge block. The block-call has the
+                    // arguments that in the CLIF appear in the predecessor's branch.
                     const branch_inst = self.f.layout.lastInst(ce.pred).?;
                     break :blk .{ .branch_inst = branch_inst, .succ_idx = ce.succ_idx };
                 },
                 .orig => |o| blk: {
+                    // Ordinary block with ordinary successor.
                     const branch_inst = self.f.layout.lastInst(o.block).?;
-                    break :blk .{ .branch_inst = branch_inst, .succ_idx = @intCast(succ_idx) };
+                    break :blk .{ .branch_inst = branch_inst, .succ_idx = succ_idx };
                 },
             };
 
-            // Get the instruction data to extract block args
-            const inst_data = self.f.dfg.getInstData(branch_info.branch_inst);
-            const opcode = inst_data.opcode;
+            // Get the instruction data and use Cranelift's branchDestination API.
+            // Port of cranelift/codegen/src/machinst/lower.rs:1108-1111
+            const inst_data = self.f.dfg.getInst(branch_info.branch_inst);
+            const block_calls = inst_data.branchDestination(&self.f.dfg.jump_tables);
 
-            // Get the args ValueList based on instruction type and successor index
-            const args_list: ?clif.ValueList = switch (opcode) {
-                .jump => inst_data.args, // Jump stores args directly
-                .brif => inst_data.getBrifArgs(branch_info.succ_idx), // Brif has separate then/else args
-                else => null,
-            };
-
-            // Convert Values to registers
-            if (args_list) |vlist| {
-                const values = self.f.dfg.value_lists.getSlice(vlist);
+            // Get the specific BlockCall for this successor index
+            if (branch_info.succ_idx < block_calls.len) {
+                const bc = block_calls[branch_info.succ_idx];
+                const values = self.f.dfg.value_lists.getSlice(bc.args);
                 for (values) |val| {
                     const regs = self.value_regs.get(val);
                     for (regs.regs()) |r| {
@@ -1411,7 +1415,7 @@ pub fn Lower(comptime I: type) type {
 /// Determine if an instruction has a side effect for lowering purposes.
 /// Loads are considered side-effecting to avoid subtle memory model issues.
 pub fn hasLoweringSideEffect(f: *const Function, inst: Inst) bool {
-    const opcode = f.dfg.insts.items[inst.index].opcode;
+    const opcode = f.dfg.insts.items[inst.index].opcode();
     return switch (opcode) {
         .load, .store => true,
         .call, .call_indirect => true,
@@ -1422,10 +1426,10 @@ pub fn hasLoweringSideEffect(f: *const Function, inst: Inst) bool {
 
 /// Check if an instruction is a 64-bit constant.
 pub fn isConstant64Bit(f: *const Function, inst: Inst) ?u64 {
-    const inst_data = f.dfg.getInstData(inst);
-    if (inst_data.opcode == .iconst) {
+    const inst_data = f.dfg.getInst(inst);
+    if (inst_data.opcode() == .iconst) {
         // Extract the constant value from the immediate field
-        return inst_data.getImmediate();
+        return inst_data.getImmediateUnsigned();
     }
     return null;
 }
@@ -1437,6 +1441,13 @@ fn isValueUseRoot(f: *const Function, inst: Inst) bool {
 }
 
 /// Pre-analysis: compute `value_ir_uses`.
+///
+/// Port of cranelift/codegen/src/machinst/lower.rs:1245-1351 compute_use_states()
+///
+/// This performs a hybrid of shallow use-counting and DFS propagation:
+/// - Iterates over all instructions and marks their args as used
+/// - When a use count transitions to Multiple, does DFS to mark whole subtree
+/// - The coarsening into {Unused, Once, Multiple} makes this efficient
 pub fn computeUseStates(
     allocator: Allocator,
     f: *const Function,
@@ -1445,16 +1456,25 @@ pub fn computeUseStates(
     var value_ir_uses = SecondaryMap(Value, ValueUseState).withDefault(allocator, .unused);
 
     if (sret_param) |param| {
+        // There's an implicit use of the struct-return parameter in each
+        // copy of the function epilogue, which we count here.
         try value_ir_uses.set(param, .multiple);
     }
 
-    // Stack for DFS to mark Multiple-state subtrees.
-    var stack = std.ArrayListUnmanaged([]const Value){};
+    // Stack of iterators over Values as we do DFS to mark Multiple-state subtrees.
+    // Port of cranelift: let mut stack: SmallVec<[_; 16]> = smallvec![];
+    var stack = std.ArrayListUnmanaged(InstValuesIterator){};
     defer stack.deinit(allocator);
 
     // Find the args for the inst corresponding to the given value.
+    //
+    // Note that "root" instructions are skipped here. This means that multiple
+    // uses of any result of a multi-result instruction are not considered
+    // multiple uses of the operands of a multi-result instruction.
+    //
+    // Port of cranelift: let uses = |value| { ... }
     const getUses = struct {
-        fn get(func: *const Function, value: Value) ?[]const Value {
+        fn get(func: *const Function, value: Value) ?InstValuesIterator {
             const def = func.dfg.valueDef(value);
             switch (def) {
                 .result => |r| {
@@ -1472,12 +1492,17 @@ pub fn computeUseStates(
         }
     }.get;
 
-    // Iterate over all instructions.
+    // Do a DFS through `value_ir_uses` to mark a subtree as Multiple.
+    // Port of cranelift: for inst in f.layout.blocks().flat_map(|block| f.layout.block_insts(block))
     var block_iter = f.layout.blocks();
     while (block_iter.next()) |block| {
         var inst_iter = f.layout.blockInsts(block);
         while (inst_iter.next()) |inst| {
-            for (f.dfg.instValues(inst)) |arg| {
+            // Iterate over all values used by all instructions, noting an
+            // additional use on each operand.
+            // Port of cranelift: for arg in f.dfg.inst_values(inst)
+            var values_iter = f.dfg.instValues(inst);
+            while (values_iter.next()) |arg| {
                 std.debug.assert(f.dfg.valueIsReal(arg));
                 const old = value_ir_uses.get(arg);
                 const ptr = value_ir_uses.getPtr(arg);
@@ -1488,25 +1513,26 @@ pub fn computeUseStates(
                 if (old == .multiple or new != .multiple) {
                     continue;
                 }
-                if (getUses(f, arg)) |uses| {
-                    try stack.append(allocator, uses);
+                if (getUses(f, arg)) |uses_iter| {
+                    try stack.append(allocator, uses_iter);
                 }
+                // Port of cranelift: while let Some(iter) = stack.last_mut() { ... }
                 while (stack.items.len > 0) {
-                    const uses_slice = stack.items[stack.items.len - 1];
-                    if (uses_slice.len == 0) {
+                    const iter_ptr = &stack.items[stack.items.len - 1];
+                    if (iter_ptr.next()) |value| {
+                        std.debug.assert(f.dfg.valueIsReal(value));
+                        if (value_ir_uses.get(value) == .multiple) {
+                            // Truncate DFS here: no need to go further,
+                            // as whole subtree must already be Multiple.
+                            continue;
+                        }
+                        try value_ir_uses.set(value, .multiple);
+                        if (getUses(f, value)) |more_uses_iter| {
+                            try stack.append(allocator, more_uses_iter);
+                        }
+                    } else {
+                        // Empty iterator, discard.
                         _ = stack.pop();
-                        continue;
-                    }
-                    const value = uses_slice[0];
-                    stack.items[stack.items.len - 1] = uses_slice[1..];
-
-                    std.debug.assert(f.dfg.valueIsReal(value));
-                    if (value_ir_uses.get(value) == .multiple) {
-                        continue;
-                    }
-                    try value_ir_uses.set(value, .multiple);
-                    if (getUses(f, value)) |more_uses| {
-                        try stack.append(allocator, more_uses);
                     }
                 }
             }

@@ -434,13 +434,16 @@ pub const SSABuilder = struct {
     }
 
     /// Examine the values from predecessors and compute a result value.
+    ///
+    /// Port of cranelift frontend/src/ssa.rs finish_predecessors_lookup
     fn finishPredecessorsLookup(
         self: *Self,
         func: *Function,
         sentinel: Value,
         dest_block: Block,
     ) !Value {
-        const num_predecessors = self.predecessors(dest_block).len;
+        const preds = self.predecessors(dest_block);
+        const num_predecessors = preds.len;
 
         // Get values from predecessors
         const start_idx = self.results.items.len - num_predecessors;
@@ -464,17 +467,19 @@ pub const SSABuilder = struct {
             }
         }
 
-        // Truncate results
-        self.results.shrinkRetainingCapacity(start_idx);
-
         if (unique_val) |val| {
             if (all_same) {
                 // All predecessors use the same value - remove block param and use that value
+                // Truncate results first
+                self.results.shrinkRetainingCapacity(start_idx);
                 func.dfg.changeToAliasOf(sentinel, val);
                 return val;
             }
         } else {
             // Variable is used but never defined (unreachable code).
+            // Truncate results first
+            self.results.shrinkRetainingCapacity(start_idx);
+
             // Create a zero constant.
             if (!func.layout.isBlockInserted(dest_block)) {
                 try func.layout.appendBlock(func.dfg.allocator, dest_block);
@@ -486,8 +491,17 @@ pub const SSABuilder = struct {
             return zero;
         }
 
-        // Predecessors disagree - keep the block parameter and add arguments to jumps
-        // (This part requires modifying jump instructions which is complex - simplified here)
+        // Predecessors disagree - keep the block parameter and add arguments to predecessor branches.
+        // Port of cranelift ssa.rs lines 561-577
+        for (preds, 0..) |branch_inst, idx| {
+            const val = pred_values[idx];
+            // Append this value as an argument to the branch instruction for dest_block
+            try func.dfg.appendBranchArg(branch_inst, dest_block, val);
+        }
+
+        // Truncate results after processing
+        self.results.shrinkRetainingCapacity(start_idx);
+
         return sentinel;
     }
 
@@ -512,23 +526,21 @@ pub const SSABuilder = struct {
 };
 
 /// Emit instructions to produce a zero value in the given type.
+/// Port of cranelift-frontend/src/ssa.rs emit_zero_value
 fn emitZero(func: *Function, ty: Type, block: Block) !Value {
-    // For now, just create an iconst 0 for integers
-    // A full implementation would handle floats and vectors
-    if (ty.isInt()) {
-        const inst = func.dfg.makeInst();
-        try func.layout.appendInst(func.dfg.allocator, inst, block);
-        return try func.dfg.makeInstResult(inst, ty);
-    } else if (ty.isFloat()) {
-        const inst = func.dfg.makeInst();
-        try func.layout.appendInst(func.dfg.allocator, inst, block);
-        return try func.dfg.makeInstResult(inst, ty);
-    } else {
-        // Vector or other type - create with appropriate zero constant
-        const inst = func.dfg.makeInst();
-        try func.layout.appendInst(func.dfg.allocator, inst, block);
-        return try func.dfg.makeInstResult(inst, ty);
-    }
+    const data: clif.InstructionData = if (ty.isInt())
+        .{ .unary_imm = .{ .opcode = .iconst, .imm = 0 } }
+    else if (ty.isFloat() and ty.eql(Type.F32))
+        .{ .unary_ieee32 = .{ .opcode = .f32const, .imm = 0.0 } }
+    else if (ty.isFloat())
+        .{ .unary_ieee64 = .{ .opcode = .f64const, .imm = 0.0 } }
+    else
+        // Default to integer zero for other types
+        .{ .unary_imm = .{ .opcode = .iconst, .imm = 0 } };
+
+    const inst = try func.dfg.makeInst(data);
+    try func.layout.appendInst(func.dfg.allocator, inst, block);
+    return try func.dfg.makeInstResult(inst, ty);
 }
 
 // ============================================================================

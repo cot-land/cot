@@ -76,8 +76,8 @@ pub const ValueListPool = dfg_mod.ValueListPool;
 pub const ValueDef = dfg_mod.ValueDef;
 pub const ValueData = dfg_mod.ValueData;
 pub const BlockData = dfg_mod.BlockData;
-pub const InstData = dfg_mod.InstData;
 pub const DataFlowGraph = dfg_mod.DataFlowGraph;
+pub const InstValuesIterator = dfg_mod.InstValuesIterator;
 
 // =============================================================================
 // Layout (from layout.zig)

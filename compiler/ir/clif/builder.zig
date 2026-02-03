@@ -17,6 +17,7 @@ pub const Block = dfg_mod.Block;
 pub const Inst = dfg_mod.Inst;
 pub const Value = dfg_mod.Value;
 pub const ValueList = dfg_mod.ValueList;
+pub const ValueListPool = dfg_mod.ValueListPool;
 pub const Type = types.Type;
 pub const IntCC = instructions.IntCC;
 pub const FloatCC = instructions.FloatCC;
@@ -26,7 +27,9 @@ pub const FuncRef = dfg_mod.FuncRef;
 pub const SigRef = dfg_mod.SigRef;
 pub const StackSlot = dfg_mod.StackSlot;
 pub const JumpTable = dfg_mod.JumpTable;
+pub const JumpTables = dfg_mod.JumpTables;
 pub const GlobalValue = dfg_mod.GlobalValue;
+pub const BlockCall = dfg_mod.BlockCall;
 
 // ============================================================================
 // Instruction Formats
@@ -137,20 +140,19 @@ pub const InstructionData = union(enum) {
     },
 
     /// Unconditional jump with block arguments.
+    /// Port of cranelift Jump format - destination is a BlockCall bundling block + args.
     jump: struct {
         opcode: Opcode,
-        destination: Block,
-        args: ValueList,
+        destination: BlockCall,
     },
 
     /// Conditional branch (if-then-else).
+    /// Port of cranelift Brif format - blocks is array of 2 BlockCalls.
+    /// blocks[0] = then branch, blocks[1] = else branch.
     brif: struct {
         opcode: Opcode,
         arg: Value,
-        then_block: Block,
-        else_block: Block,
-        then_args: ValueList,
-        else_args: ValueList,
+        blocks: [2]BlockCall,
     },
 
     /// Branch table (switch).
@@ -302,6 +304,160 @@ pub const InstructionData = union(enum) {
             .multi_ary => .multi_ary,
         };
     }
+
+    /// Get the destinations of this instruction, if it's a branch.
+    ///
+    /// Port of cranelift/codegen/src/ir/instructions.rs:426-443
+    /// Returns a slice of BlockCalls for all branch targets.
+    /// - Jump: returns single-element slice with destination
+    /// - Brif: returns 2-element slice [then, else]
+    /// - BranchTable: returns all branches from jump table
+    /// - Other: returns empty slice
+    pub fn branchDestination(self: *const Self, jump_tables: *const JumpTables) []const BlockCall {
+        return switch (self.*) {
+            .jump => |*d| @as(*const [1]BlockCall, &d.destination)[0..1],
+            .brif => |*d| &d.blocks,
+            .branch_table => |d| blk: {
+                if (jump_tables.get(d.table)) |jt| {
+                    break :blk jt.allBranches();
+                }
+                break :blk &[_]BlockCall{};
+            },
+            else => &[_]BlockCall{},
+        };
+    }
+
+    /// Get the destinations of this instruction mutably.
+    ///
+    /// Port of cranelift/codegen/src/ir/instructions.rs:448-470
+    pub fn branchDestinationMut(self: *Self, jump_tables: *JumpTables) []BlockCall {
+        return switch (self.*) {
+            .jump => |*d| @as(*[1]BlockCall, &d.destination)[0..1],
+            .brif => |*d| &d.blocks,
+            .branch_table => |d| blk: {
+                if (jump_tables.getMut(d.table)) |jt| {
+                    break :blk jt.asMutSlice();
+                }
+                break :blk &[_]BlockCall{};
+            },
+            else => &[_]BlockCall{},
+        };
+    }
+
+    // ========================================================================
+    // Accessor methods for instruction data fields
+    // ========================================================================
+
+    /// Get the immediate value (i64) if present.
+    pub fn getImmediate(self: Self) ?i64 {
+        return switch (self) {
+            .unary_imm => |d| d.imm,
+            .binary_imm64 => |d| d.imm,
+            else => null,
+        };
+    }
+
+    /// Get the immediate value as unsigned if present.
+    pub fn getImmediateUnsigned(self: Self) ?u64 {
+        return if (self.getImmediate()) |v| @bitCast(v) else null;
+    }
+
+    /// Get the integer comparison condition code.
+    pub fn getIntCC(self: Self) ?IntCC {
+        return switch (self) {
+            .int_compare => |d| d.cond,
+            else => null,
+        };
+    }
+
+    /// Get the float comparison condition code.
+    pub fn getFloatCC(self: Self) ?FloatCC {
+        return switch (self) {
+            .float_compare => |d| d.cond,
+            else => null,
+        };
+    }
+
+    /// Get the jump table reference.
+    pub fn getJumpTable(self: Self) ?JumpTable {
+        return switch (self) {
+            .branch_table => |d| d.table,
+            else => null,
+        };
+    }
+
+    /// Get the stack slot reference.
+    pub fn getStackSlot(self: Self) ?StackSlot {
+        return switch (self) {
+            .stack_load => |d| d.slot,
+            .stack_store => |d| d.slot,
+            else => null,
+        };
+    }
+
+    /// Get the stack/memory offset.
+    pub fn getOffset(self: Self) ?i32 {
+        return switch (self) {
+            .stack_load => |d| d.offset,
+            .stack_store => |d| d.offset,
+            .load => |d| d.offset,
+            .store => |d| d.offset,
+            else => null,
+        };
+    }
+
+    /// Get the function reference.
+    pub fn getFuncRef(self: Self) ?FuncRef {
+        return switch (self) {
+            .call => |d| d.func_ref,
+            .func_addr => |d| d.func_ref,
+            else => null,
+        };
+    }
+
+    /// Get the signature reference.
+    pub fn getSigRef(self: Self) ?SigRef {
+        return switch (self) {
+            .call_indirect => |d| d.sig_ref,
+            else => null,
+        };
+    }
+
+    /// Get the global value reference.
+    pub fn getGlobalValue(self: Self) ?GlobalValue {
+        return switch (self) {
+            .unary_global_value => |d| d.global_value,
+            else => null,
+        };
+    }
+
+    /// Get the trap code.
+    pub fn getTrapCode(self: Self) ?TrapCode {
+        return switch (self) {
+            .trap => |d| d.code,
+            .cond_trap => |d| d.code,
+            else => null,
+        };
+    }
+
+    /// Get the single block destination (for jump instructions).
+    pub fn getBlockDest(self: Self) ?Block {
+        return switch (self) {
+            .jump => |d| d.destination.getBlock(),
+            else => null,
+        };
+    }
+
+    /// Get brif destinations (then and else blocks).
+    pub fn getBrifDests(self: Self) ?struct { then_dest: Block, else_dest: Block } {
+        return switch (self) {
+            .brif => |d| .{
+                .then_dest = d.blocks[0].getBlock(),
+                .else_dest = d.blocks[1].getBlock(),
+            },
+            else => null,
+        };
+    }
 };
 
 // ============================================================================
@@ -377,124 +533,13 @@ pub const FuncBuilder = struct {
     }
 
     /// Insert an instruction at the end of the current block.
+    /// Now directly stores InstructionData in the DFG, matching Cranelift's design.
     fn insertInst(self: *Self, data: InstructionData, result_type: ?Type) !struct { inst: Inst, result: ?Value } {
         const block = self.current_block orelse return error.NoCurrentBlock;
-        const inst = self.dfg.makeInst();
+
+        // Create instruction with data - directly stores InstructionData like Cranelift
+        const inst = try self.dfg.makeInst(data);
         try self.layout.appendInst(self.allocator, inst, block);
-
-        // Store instruction data in DFG
-        // Extract immediate value if present
-        const imm: ?i64 = switch (data) {
-            .unary_imm => |d| d.imm,
-            .binary_imm64 => |d| d.imm,
-            else => null,
-        };
-
-        // Extract comparison condition codes if present
-        const intcc: ?IntCC = switch (data) {
-            .int_compare => |d| d.cond,
-            else => null,
-        };
-        const floatcc: ?FloatCC = switch (data) {
-            .float_compare => |d| d.cond,
-            else => null,
-        };
-
-        // Extract jump table for br_table
-        const jump_table: ?JumpTable = switch (data) {
-            .branch_table => |d| d.table,
-            else => null,
-        };
-
-        // Extract stack slot and offset for stack_load/stack_store
-        const stack_slot: ?StackSlot = switch (data) {
-            .stack_load => |d| d.slot,
-            .stack_store => |d| d.slot,
-            else => null,
-        };
-        const stack_offset: ?i32 = switch (data) {
-            .stack_load => |d| d.offset,
-            .stack_store => |d| d.offset,
-            else => null,
-        };
-
-        // Extract func_ref for call
-        const func_ref: ?FuncRef = switch (data) {
-            .call => |d| d.func_ref,
-            else => null,
-        };
-
-        // Extract sig_ref for call_indirect
-        const sig_ref: ?SigRef = switch (data) {
-            .call_indirect => |d| d.sig_ref,
-            else => null,
-        };
-
-        // Extract global_value for global_value instruction
-        const global_value: ?GlobalValue = switch (data) {
-            .unary_global_value => |d| d.global_value,
-            else => null,
-        };
-
-        // Extract args for the ValueList
-        const args_slice: []const Value = switch (data) {
-            .nullary => &[_]Value{},
-            .unary => |d| &[_]Value{d.arg},
-            .unary_imm, .unary_ieee32, .unary_ieee64 => &[_]Value{},
-            .binary => |d| &d.args,
-            .binary_imm64 => |d| &[_]Value{d.arg},
-            .ternary => |d| &d.args,
-            .int_compare => |d| &d.args,
-            .float_compare => |d| &d.args,
-            .jump => &[_]Value{}, // args in ValueList
-            .brif => |d| &[_]Value{d.arg},
-            .branch_table => |d| &[_]Value{d.arg},
-            .call => &[_]Value{}, // args in ValueList
-            .call_indirect => |d| &[_]Value{d.callee}, // callee + args
-            .trap => &[_]Value{},
-            .cond_trap => |d| &[_]Value{d.arg},
-            .load => |d| &[_]Value{d.arg},
-            .store => |d| &d.args,
-            .stack_load => &[_]Value{},
-            .stack_store => |d| &[_]Value{d.arg},
-            .func_addr => &[_]Value{},
-            .unary_global_value => &[_]Value{}, // no value args, just GlobalValue ref
-            .multi_ary => &[_]Value{}, // args in ValueList
-        };
-
-        const args = try self.dfg.value_lists.alloc(args_slice);
-
-        // Extract branch destinations
-        const dest: ?dfg_mod.Block = switch (data) {
-            .jump => |d| d.destination,
-            else => null,
-        };
-        const then_dest: ?dfg_mod.Block = switch (data) {
-            .brif => |d| d.then_block,
-            else => null,
-        };
-        const else_dest: ?dfg_mod.Block = switch (data) {
-            .brif => |d| d.else_block,
-            else => null,
-        };
-
-        try self.dfg.setInstData(inst, .{
-            .opcode = data.opcode(),
-            .args = args,
-            .ctrl_type = result_type orelse Type.INVALID,
-            .dest = dest,
-            .then_dest = then_dest,
-            .else_dest = else_dest,
-            .imm = imm,
-            .intcc = intcc,
-            .floatcc = floatcc,
-            .jump_table = jump_table,
-            .stack_slot = stack_slot,
-            .stack_offset = stack_offset,
-            .func_ref = func_ref,
-            .sig_ref = sig_ref,
-            .global_value = global_value,
-        });
 
         // Create result value if needed
         var result: ?Value = null;
@@ -511,15 +556,12 @@ pub const FuncBuilder = struct {
 
     /// Unconditional jump.
     pub fn jump(self: *Self, destination: Block, args: []const Value) !Inst {
-        var arg_list = ValueList.init();
-        for (args) |v| {
-            arg_list = try self.dfg.value_lists.push(arg_list, v);
-        }
+        // Create BlockCall bundling destination block and arguments
+        const dest_call = try BlockCall.withArgsSlice(destination, args, &self.dfg.value_lists);
         const r = try self.insertInst(.{
             .jump = .{
                 .opcode = .jump,
-                .destination = destination,
-                .args = arg_list,
+                .destination = dest_call,
             },
         }, null);
         return r.inst;
@@ -527,14 +569,35 @@ pub const FuncBuilder = struct {
 
     /// Conditional branch.
     pub fn brif(self: *Self, cond: Value, then_block: Block, else_block: Block) !Inst {
+        // Create BlockCalls with empty args - args can be added later with appendBranchArg
+        const then_call = BlockCall.init(then_block);
+        const else_call = BlockCall.init(else_block);
         const r = try self.insertInst(.{
             .brif = .{
                 .opcode = .brif,
                 .arg = cond,
-                .then_block = then_block,
-                .else_block = else_block,
-                .then_args = ValueList.init(),
-                .else_args = ValueList.init(),
+                .blocks = .{ then_call, else_call },
+            },
+        }, null);
+        return r.inst;
+    }
+
+    /// Conditional branch with args.
+    pub fn brifWithArgs(
+        self: *Self,
+        cond: Value,
+        then_block: Block,
+        then_args: []const Value,
+        else_block: Block,
+        else_args: []const Value,
+    ) !Inst {
+        const then_call = try BlockCall.withArgsSlice(then_block, then_args, &self.dfg.value_lists);
+        const else_call = try BlockCall.withArgsSlice(else_block, else_args, &self.dfg.value_lists);
+        const r = try self.insertInst(.{
+            .brif = .{
+                .opcode = .brif,
+                .arg = cond,
+                .blocks = .{ then_call, else_call },
             },
         }, null);
         return r.inst;

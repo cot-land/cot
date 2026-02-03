@@ -128,6 +128,7 @@ pub const WasmFuncTranslator = struct {
         locals: []const LocalDecl,
         operators: []const WasmOperator,
     ) !void {
+
         // 1. Set up function signature with parameters and returns
         //    (must be done before creating FunctionBuilder)
         func.signature.params.clearRetainingCapacity();

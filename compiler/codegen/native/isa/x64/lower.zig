@@ -151,7 +151,7 @@ pub const X64LowerBackend = struct {
     /// Returns the output registers containing the result, or null if lowering failed.
     pub fn lower(self: *const Self, ctx: *LowerCtx, ir_inst: ClifInst) ?InstOutput {
         const inst_data = ctx.data(ir_inst);
-        const opcode = inst_data.opcode;
+        const opcode = inst_data.opcode();
 
         return switch (opcode) {
             // Integer constants
@@ -251,7 +251,7 @@ pub const X64LowerBackend = struct {
     ) ?void {
         _ = self;
         const inst_data = ctx.data(ir_inst);
-        const opcode = inst_data.opcode;
+        const opcode = inst_data.opcode();
 
         switch (opcode) {
             .jump => {

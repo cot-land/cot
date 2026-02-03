@@ -344,8 +344,8 @@ pub const FunctionBuilder = struct {
         // Create default block call
         const default_call = BlockCall.init(default_block);
 
-        // Create jump table data
-        var jt_data = JumpTableData.init(default_call);
+        // Create jump table data with default block
+        var jt_data = try JumpTableData.init(allocator, default_call);
 
         // Add target entries
         for (targets) |target| {
@@ -479,18 +479,17 @@ pub const FuncInstBuilder = struct {
 
     // ========================================================================
     // Helper for instruction insertion
+    // Port of Cranelift - uses InstructionData (typed union) directly
     // ========================================================================
 
-    fn build(self: Self, result_type: ?Type) !BuildResult {
-        return self.buildWithInstData(result_type, clif.dfg_mod.InstData.EMPTY);
-    }
+    /// Result type for instruction building
+    const BuildResult = struct { inst: Inst, result: ?Value };
 
-    /// Build instruction with DFG InstData (the actual storage format).
-    fn buildWithInstData(self: Self, result_type: ?Type, data: clif.dfg_mod.InstData) !BuildResult {
+    /// Build instruction with proper InstructionData union variant.
+    fn buildInst(self: Self, data: clif.InstructionData, result_type: ?Type) !BuildResult {
         try self.builder.ensureInsertedBlock();
 
-        const inst = self.builder.func.dfg.makeInst();
-        try self.builder.func.dfg.setInstData(inst, data);
+        const inst = try self.builder.func.dfg.makeInst(data);
         try self.builder.func.layout.appendInst(self.builder.func_ctx.allocator, inst, self.block);
 
         var result: ?Value = null;
@@ -501,197 +500,103 @@ pub const FuncInstBuilder = struct {
         return .{ .inst = inst, .result = result };
     }
 
-    // ========================================================================
-    // Format Constructors (copied from Cranelift's gen_inst.rs pattern)
-    // Each format creates the appropriate InstData and calls buildWithInstData
-    // ========================================================================
-
-    /// Result type for instruction building
-    const BuildResult = struct { inst: Inst, result: ?Value };
-
-    /// UnaryImm format: immediate only (iconst)
-    fn UnaryImm(self: Self, opcode: clif.Opcode, ty: Type, imm: i64) !BuildResult {
-        return self.buildWithInstData(ty, .{
-            .opcode = opcode,
-            .args = clif.ValueList.EMPTY,
-            .ctrl_type = ty,
-            .imm = imm,
-        });
-    }
-
-    /// UnaryIeee32 format: 32-bit float immediate (f32const)
-    /// Note: For now, store as i64 bit pattern since InstData doesn't have f32 field
-    fn UnaryIeee32(self: Self, opcode: clif.Opcode, imm: f32) !BuildResult {
-        return self.buildWithInstData(Type.F32, .{
-            .opcode = opcode,
-            .args = clif.ValueList.EMPTY,
-            .ctrl_type = Type.F32,
-            .imm = @as(i64, @bitCast(@as(u64, @as(u32, @bitCast(imm))))),
-        });
-    }
-
-    /// UnaryIeee64 format: 64-bit float immediate (f64const)
-    fn UnaryIeee64(self: Self, opcode: clif.Opcode, imm: f64) !BuildResult {
-        return self.buildWithInstData(Type.F64, .{
-            .opcode = opcode,
-            .args = clif.ValueList.EMPTY,
-            .ctrl_type = Type.F64,
-            .imm = @bitCast(imm),
-        });
-    }
-
-    /// Unary format: single value operand (ineg, fneg, copy, etc.)
-    fn Unary(self: Self, opcode: clif.Opcode, ty: Type, arg: Value) !BuildResult {
-        const args = try self.builder.func.dfg.value_lists.alloc(&[_]Value{arg});
-        return self.buildWithInstData(ty, .{
-            .opcode = opcode,
-            .args = args,
-            .ctrl_type = ty,
-        });
-    }
-
-    /// Binary format: two value operands (iadd, isub, imul, etc.)
-    fn Binary(self: Self, opcode: clif.Opcode, ty: Type, a: Value, b: Value) !BuildResult {
-        const args = try self.builder.func.dfg.value_lists.alloc(&[_]Value{ a, b });
-        return self.buildWithInstData(ty, .{
-            .opcode = opcode,
-            .args = args,
-            .ctrl_type = ty,
-        });
-    }
-
-    /// IntCompare format: integer comparison (icmp)
-    fn IntCompare(self: Self, opcode: clif.Opcode, cond: clif.IntCC, a: Value, b: Value) !BuildResult {
-        const args = try self.builder.func.dfg.value_lists.alloc(&[_]Value{ a, b });
-        return self.buildWithInstData(Type.I8, .{
-            .opcode = opcode,
-            .args = args,
-            .ctrl_type = Type.I8,
-            .intcc = cond,
-        });
-    }
-
-    /// FloatCompare format: floating-point comparison (fcmp)
-    fn FloatCompare(self: Self, opcode: clif.Opcode, cond: FloatCC, a: Value, b: Value) !BuildResult {
-        const args = try self.builder.func.dfg.value_lists.alloc(&[_]Value{ a, b });
-        return self.buildWithInstData(Type.I8, .{
-            .opcode = opcode,
-            .args = args,
-            .ctrl_type = Type.I8,
-            .floatcc = cond,
-        });
-    }
-
-    /// Load format: memory load
-    fn Load(self: Self, opcode: clif.Opcode, ty: Type, flags: clif.MemFlags, addr: Value, offset: i32) !BuildResult {
-        _ = flags; // TODO: store flags in InstData
-        const args = try self.builder.func.dfg.value_lists.alloc(&[_]Value{addr});
-        return self.buildWithInstData(ty, .{
-            .opcode = opcode,
-            .args = args,
-            .ctrl_type = ty,
-            .stack_offset = offset,
-        });
-    }
-
-    /// Store format: memory store (no result)
-    fn Store(self: Self, opcode: clif.Opcode, flags: clif.MemFlags, val: Value, addr: Value, offset: i32) !BuildResult {
-        _ = flags; // TODO: store flags in InstData
-        const args = try self.builder.func.dfg.value_lists.alloc(&[_]Value{ val, addr });
-        return self.buildWithInstData(null, .{
-            .opcode = opcode,
-            .args = args,
-            .ctrl_type = Type.INVALID,
-            .stack_offset = offset,
-        });
-    }
-
-    /// StackLoad format: load from stack slot
-    fn StackLoad(self: Self, opcode: clif.Opcode, ty: Type, slot: StackSlot, offset: i32) !BuildResult {
-        return self.buildWithInstData(ty, .{
-            .opcode = opcode,
-            .args = clif.ValueList.EMPTY,
-            .ctrl_type = ty,
-            .stack_slot = slot,
-            .stack_offset = offset,
-        });
-    }
-
-    /// StackStore format: store to stack slot (no result)
-    fn StackStore(self: Self, opcode: clif.Opcode, val: Value, slot: StackSlot, offset: i32) !BuildResult {
-        const args = try self.builder.func.dfg.value_lists.alloc(&[_]Value{val});
-        return self.buildWithInstData(null, .{
-            .opcode = opcode,
-            .args = args,
-            .ctrl_type = Type.INVALID,
-            .stack_slot = slot,
-            .stack_offset = offset,
-        });
-    }
-
-    fn buildTerminator(self: Self) !Inst {
-        return self.buildTerminatorWithInstData(clif.dfg_mod.InstData.EMPTY);
-    }
-
-    fn buildTerminatorWithInstData(self: Self, data: clif.dfg_mod.InstData) !Inst {
+    /// Build terminator instruction.
+    fn buildTerminator(self: Self, data: clif.InstructionData) !Inst {
         try self.builder.ensureInsertedBlock();
 
-        const inst = self.builder.func.dfg.makeInst();
-        try self.builder.func.dfg.setInstData(inst, data);
+        const inst = try self.builder.func.dfg.makeInst(data);
         try self.builder.func.layout.appendInst(self.builder.func_ctx.allocator, inst, self.block);
         try self.builder.fillCurrentBlock();
 
         return inst;
     }
 
-    // Terminator format constructors
+    // ========================================================================
+    // Format Constructors - create proper InstructionData union variants
+    // Port of Cranelift's gen_inst.rs pattern
+    // ========================================================================
 
-    /// Jump format: unconditional jump
-    fn JumpFmt(self: Self, opcode: clif.Opcode, destination: Block, args: []const Value) !Inst {
-        const vlist = try self.builder.func.dfg.value_lists.alloc(args);
-        return self.buildTerminatorWithInstData(.{
-            .opcode = opcode,
-            .args = vlist,
-            .ctrl_type = Type.INVALID,
-            .dest = destination,
-        });
+    /// UnaryImm format: immediate only (iconst)
+    fn UnaryImm(self: Self, opcode: clif.Opcode, ty: Type, imm: i64) !BuildResult {
+        return self.buildInst(.{ .unary_imm = .{ .opcode = opcode, .imm = imm } }, ty);
     }
 
-    /// Brif format: conditional branch
+    /// UnaryIeee32 format: 32-bit float immediate (f32const)
+    fn UnaryIeee32(self: Self, opcode: clif.Opcode, imm: f32) !BuildResult {
+        return self.buildInst(.{ .unary_ieee32 = .{ .opcode = opcode, .imm = imm } }, Type.F32);
+    }
+
+    /// UnaryIeee64 format: 64-bit float immediate (f64const)
+    fn UnaryIeee64(self: Self, opcode: clif.Opcode, imm: f64) !BuildResult {
+        return self.buildInst(.{ .unary_ieee64 = .{ .opcode = opcode, .imm = imm } }, Type.F64);
+    }
+
+    /// Unary format: single value operand (ineg, fneg, copy, etc.)
+    fn Unary(self: Self, opcode: clif.Opcode, ty: Type, arg: Value) !BuildResult {
+        return self.buildInst(.{ .unary = .{ .opcode = opcode, .arg = arg } }, ty);
+    }
+
+    /// Binary format: two value operands (iadd, isub, imul, etc.)
+    fn Binary(self: Self, opcode: clif.Opcode, ty: Type, a: Value, b: Value) !BuildResult {
+        return self.buildInst(.{ .binary = .{ .opcode = opcode, .args = .{ a, b } } }, ty);
+    }
+
+    /// IntCompare format: integer comparison (icmp)
+    fn IntCompare(self: Self, opcode: clif.Opcode, cond: clif.IntCC, a: Value, b: Value) !BuildResult {
+        return self.buildInst(.{ .int_compare = .{ .opcode = opcode, .cond = cond, .args = .{ a, b } } }, Type.I8);
+    }
+
+    /// FloatCompare format: floating-point comparison (fcmp)
+    fn FloatCompare(self: Self, opcode: clif.Opcode, cond: FloatCC, a: Value, b: Value) !BuildResult {
+        return self.buildInst(.{ .float_compare = .{ .opcode = opcode, .cond = cond, .args = .{ a, b } } }, Type.I8);
+    }
+
+    /// Load format: memory load
+    fn Load(self: Self, opcode: clif.Opcode, ty: Type, flags: clif.MemFlags, addr: Value, offset: i32) !BuildResult {
+        return self.buildInst(.{ .load = .{ .opcode = opcode, .flags = flags, .arg = addr, .offset = offset } }, ty);
+    }
+
+    /// Store format: memory store (no result)
+    fn Store(self: Self, opcode: clif.Opcode, flags: clif.MemFlags, val: Value, addr: Value, offset: i32) !BuildResult {
+        return self.buildInst(.{ .store = .{ .opcode = opcode, .flags = flags, .args = .{ val, addr }, .offset = offset } }, null);
+    }
+
+    /// StackLoad format: load from stack slot
+    fn StackLoad(self: Self, opcode: clif.Opcode, ty: Type, slot: StackSlot, offset: i32) !BuildResult {
+        return self.buildInst(.{ .stack_load = .{ .opcode = opcode, .slot = slot, .offset = offset } }, ty);
+    }
+
+    /// StackStore format: store to stack slot (no result)
+    fn StackStore(self: Self, opcode: clif.Opcode, val: Value, slot: StackSlot, offset: i32) !BuildResult {
+        return self.buildInst(.{ .stack_store = .{ .opcode = opcode, .arg = val, .slot = slot, .offset = offset } }, null);
+    }
+
+    // Terminator format constructors
+
+    /// Jump format: unconditional jump with block arguments
+    /// Creates proper InstructionData.jump with BlockCall bundling block + args
+    fn JumpFmt(self: Self, opcode: clif.Opcode, destination: Block, args: []const Value) !Inst {
+        const block_call = try self.builder.func.dfg.blockCall(destination, args);
+        return self.buildTerminator(.{ .jump = .{ .opcode = opcode, .destination = block_call } });
+    }
+
+    /// Brif format: conditional branch with BlockCalls
+    /// Creates proper InstructionData.brif with [2]BlockCall array
     fn BrifFmt(self: Self, opcode: clif.Opcode, cond: Value, then_block: Block, then_args: []const Value, else_block: Block, else_args: []const Value) !Inst {
-        // For brif, we store condition in args, and then/else blocks in dest fields
-        // Block args are stored in then_args/else_args fields
-        const vlist = try self.builder.func.dfg.value_lists.alloc(&[_]Value{cond});
-        const then_vlist = try self.builder.func.dfg.value_lists.alloc(then_args);
-        const else_vlist = try self.builder.func.dfg.value_lists.alloc(else_args);
-        return self.buildTerminatorWithInstData(.{
-            .opcode = opcode,
-            .args = vlist,
-            .ctrl_type = Type.INVALID,
-            .then_dest = then_block,
-            .else_dest = else_block,
-            .then_args = then_vlist,
-            .else_args = else_vlist,
-        });
+        const then_call = try self.builder.func.dfg.blockCall(then_block, then_args);
+        const else_call = try self.builder.func.dfg.blockCall(else_block, else_args);
+        return self.buildTerminator(.{ .brif = .{ .opcode = opcode, .arg = cond, .blocks = .{ then_call, else_call } } });
     }
 
     /// Nullary terminator format: return, trap
     fn NullaryTerminator(self: Self, opcode: clif.Opcode) !Inst {
-        return self.buildTerminatorWithInstData(.{
-            .opcode = opcode,
-            .args = clif.ValueList.EMPTY,
-            .ctrl_type = Type.INVALID,
-        });
+        return self.buildTerminator(.{ .nullary = .{ .opcode = opcode } });
     }
 
     /// MultiAry terminator format: return with values
     fn MultiAryTerminator(self: Self, opcode: clif.Opcode, args: []const Value) !Inst {
         const vlist = try self.builder.func.dfg.value_lists.alloc(args);
-        return self.buildTerminatorWithInstData(.{
-            .opcode = opcode,
-            .args = vlist,
-            .ctrl_type = Type.INVALID,
-        });
+        return self.buildTerminator(.{ .multi_ary = .{ .opcode = opcode, .args = vlist } });
     }
 
     // ========================================================================
@@ -1015,9 +920,6 @@ pub const FuncInstBuilder = struct {
 
     /// Call a function.
     pub fn call(self: Self, func_ref: FuncRef, args: []const Value) !struct { inst: Inst, results: []const Value } {
-        _ = args;
-
-        // F2 Fix: Must ensure block is in Layout before adding instructions
         try self.builder.ensureInsertedBlock();
 
         // Get the signature to determine return types
@@ -1026,7 +928,12 @@ pub const FuncInstBuilder = struct {
         const sig = self.builder.func.getSignature(ext_func.signature) orelse
             return error.InvalidSignature;
 
-        const inst = self.builder.func.dfg.makeInst();
+        const vlist = try self.builder.func.dfg.value_lists.alloc(args);
+        const inst = try self.builder.func.dfg.makeInst(.{ .call = .{
+            .opcode = .call,
+            .func_ref = func_ref,
+            .args = vlist,
+        } });
         try self.builder.func.layout.appendInst(self.builder.func_ctx.allocator, inst, self.block);
 
         // Create result values for each return type
@@ -1039,20 +946,20 @@ pub const FuncInstBuilder = struct {
     }
 
     /// Indirect call through a function pointer.
-    ///
-    /// Port of cranelift call_indirect instruction.
     pub fn callIndirect(self: Self, sig_ref: SigRef, callee: Value, args: []const Value) !struct { inst: Inst, results: []const Value } {
-        _ = args;
-        _ = callee;
-
-        // F2 Fix: Must ensure block is in Layout before adding instructions
         try self.builder.ensureInsertedBlock();
 
         // Get the signature to determine return types
         const sig = self.builder.func.getSignature(sig_ref) orelse
             return error.InvalidSignature;
 
-        const inst = self.builder.func.dfg.makeInst();
+        const vlist = try self.builder.func.dfg.value_lists.alloc(args);
+        const inst = try self.builder.func.dfg.makeInst(.{ .call_indirect = .{
+            .opcode = .call_indirect,
+            .sig_ref = sig_ref,
+            .callee = callee,
+            .args = vlist,
+        } });
         try self.builder.func.layout.appendInst(self.builder.func_ctx.allocator, inst, self.block);
 
         // Create result values for each return type
@@ -1066,51 +973,38 @@ pub const FuncInstBuilder = struct {
 
     /// Trap unconditionally.
     pub fn trap(self: Self, code: clif.TrapCode) !Inst {
-        _ = code;
-        return self.buildTerminator();
+        return self.buildTerminator(.{ .trap = .{ .opcode = .trap, .code = code } });
     }
 
     /// Trap if condition is nonzero (true).
-    /// Port of cranelift/codegen/src/ir/builder.rs trapnz
     pub fn trapnz(self: Self, cond: Value, code: clif.TrapCode) !Inst {
-        _ = cond;
-        _ = code;
-        // trapnz is NOT a terminator - execution continues if condition is false
-        const r = try self.build(null);
+        const r = try self.buildInst(.{ .cond_trap = .{ .opcode = .trapnz, .arg = cond, .code = code } }, null);
         return r.inst;
     }
 
     /// Trap if condition is zero (false).
-    /// Port of cranelift/codegen/src/ir/builder.rs trapz
     pub fn trapz(self: Self, cond: Value, code: clif.TrapCode) !Inst {
-        _ = cond;
-        _ = code;
-        // trapz is NOT a terminator - execution continues if condition is true
-        const r = try self.build(null);
+        const r = try self.buildInst(.{ .cond_trap = .{ .opcode = .trapz, .arg = cond, .code = code } }, null);
         return r.inst;
     }
 
     /// Branch table instruction.
-    ///
-    /// Port of cranelift/codegen/src/ir/instructions.rs br_table
     pub fn brTable(self: Self, selector: Value, jt: JumpTable) !Inst {
-        _ = selector;
+        const inst = try self.buildTerminator(.{ .branch_table = .{
+            .opcode = .br_table,
+            .arg = selector,
+            .table = jt,
+        } });
 
-        // Get the jump table to declare successors
+        // Declare successors from jump table
         if (self.builder.func.getJumpTable(jt)) |jt_data| {
-            // Declare default block as successor
-            const inst = try self.buildTerminator();
-            try self.builder.declareSuccessor(jt_data.default_block.block, inst);
-
-            // Declare all target blocks as successors
-            for (jt_data.entries.items) |entry| {
+            try self.builder.declareSuccessor(jt_data.defaultBlock().block, inst);
+            for (jt_data.asSlice()) |entry| {
                 try self.builder.declareSuccessor(entry.block, inst);
             }
-
-            return inst;
-        } else {
-            return self.buildTerminator();
         }
+
+        return inst;
     }
 
     // ========================================================================
@@ -1119,49 +1013,36 @@ pub const FuncInstBuilder = struct {
 
     /// No operation.
     pub fn nop(self: Self) !Inst {
-        const r = try self.build(null);
+        const r = try self.buildInst(.{ .nullary = .{ .opcode = .nop } }, null);
         return r.inst;
     }
 
     /// Select between two values based on condition.
     pub fn select(self: Self, ty: Type, cond: Value, if_true: Value, if_false: Value) !Value {
-        _ = cond;
-        _ = if_false;
-        _ = if_true;
-        const r = try self.build(ty);
+        const r = try self.buildInst(.{ .ternary = .{
+            .opcode = .select,
+            .args = .{ cond, if_true, if_false },
+        } }, ty);
         return r.result.?;
     }
 
     /// Copy a value.
     pub fn copy(self: Self, arg: Value) !Value {
         const ty = self.builder.func.dfg.valueType(arg);
-        const r = try self.build(ty);
+        const r = try self.buildInst(.{ .unary = .{ .opcode = .copy, .arg = arg } }, ty);
         return r.result.?;
     }
 
     // ========================================================================
     // Global Values
-    // Port of cranelift-frontend InstBuilder::global_value
     // ========================================================================
 
     /// Compute the value of a global variable.
-    ///
-    /// The `gv` argument must refer to a `GlobalValue` that has been declared
-    /// in the function using `Function.createGlobalValue()`. This instruction
-    /// produces a value containing the computed address of the global value.
-    ///
-    /// Port of cranelift InstBuilder::global_value
     pub fn globalValue(self: Self, ty: Type, gv: GlobalValue) !Value {
-        const r = try self.build(ty);
-
-        // Store the global value reference in instruction data
-        try self.builder.func.dfg.setInstData(r.inst, .{
+        const r = try self.buildInst(.{ .unary_global_value = .{
             .opcode = .global_value,
-            .args = clif.ValueList.EMPTY,
-            .ctrl_type = ty,
             .global_value = gv,
-        });
-
+        } }, ty);
         return r.result.?;
     }
 };

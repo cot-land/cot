@@ -94,110 +94,115 @@ pub const BlockCall = struct {
 
 /// Contents of a jump table.
 ///
+/// Port of cranelift/codegen/src/ir/jumptable.rs JumpTableData
 /// All jump tables use 0-based indexing and are densely populated.
-/// The default block is stored separately from the indexed entries.
+/// The default block is stored as the first element of the table.
 pub const JumpTableData = struct {
-    /// Default block (taken when index is out of bounds).
-    default_block: BlockCall,
-    /// Table entries (indexed from 0).
-    entries: std.ArrayListUnmanaged(BlockCall),
+    /// Table entries. First element is default block, rest are indexed entries.
+    /// Matches Cranelift: default is always at index 0.
+    table: std.ArrayListUnmanaged(BlockCall),
 
     const Self = @This();
 
     /// Create a new jump table with the given default block.
-    pub fn init(default: BlockCall) Self {
-        return .{
-            .default_block = default,
-            .entries = .{},
-        };
+    pub fn init(allocator: std.mem.Allocator, default: BlockCall) !Self {
+        var table: std.ArrayListUnmanaged(BlockCall) = .{};
+        try table.append(allocator, default);
+        return .{ .table = table };
     }
 
     /// Create a new jump table with default block and entries.
-    pub fn initWithEntries(allocator: std.mem.Allocator, default: BlockCall, table: []const BlockCall) !Self {
-        var entries: std.ArrayListUnmanaged(BlockCall) = .{};
-        try entries.appendSlice(allocator, table);
-        return .{
-            .default_block = default,
-            .entries = entries,
-        };
+    /// Port of cranelift JumpTableData::new()
+    pub fn new(allocator: std.mem.Allocator, default: BlockCall, entries: []const BlockCall) !Self {
+        var table: std.ArrayListUnmanaged(BlockCall) = .{};
+        try table.append(allocator, default);
+        try table.appendSlice(allocator, entries);
+        return .{ .table = table };
     }
 
     /// Deallocate storage.
     pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-        self.entries.deinit(allocator);
+        self.table.deinit(allocator);
     }
 
-    /// Get the default block.
+    /// Get the default block (always first element).
+    /// Port of cranelift default_block()
+    pub fn defaultBlock(self: Self) BlockCall {
+        return self.table.items[0];
+    }
+
+    /// Get mutable reference to default block.
+    /// Port of cranelift default_block_mut()
+    pub fn defaultBlockMut(self: *Self) *BlockCall {
+        return &self.table.items[0];
+    }
+
+    /// Get the default block (alias for compatibility).
     pub fn getDefaultBlock(self: Self) BlockCall {
-        return self.default_block;
+        return self.defaultBlock();
     }
 
     /// Set the default block.
     pub fn setDefaultBlock(self: *Self, default: BlockCall) void {
-        self.default_block = default;
+        self.table.items[0] = default;
     }
 
-    /// Get all branches (default + entries).
-    pub fn allBranches(self: *const Self) AllBranchesIterator {
-        return AllBranchesIterator{
-            .data = self,
-            .index = 0,
-        };
+    /// Get all branches as a slice (default + entries).
+    /// Port of cranelift all_branches() - returns &[BlockCall]
+    pub fn allBranches(self: *const Self) []const BlockCall {
+        return self.table.items;
+    }
+
+    /// Get all branches as mutable slice.
+    /// Port of cranelift all_branches_mut()
+    pub fn allBranchesMut(self: *Self) []BlockCall {
+        return self.table.items;
     }
 
     /// Get table entries (excluding default).
+    /// Port of cranelift as_slice()
     pub fn asSlice(self: Self) []const BlockCall {
-        return self.entries.items;
+        if (self.table.items.len <= 1) return &[_]BlockCall{};
+        return self.table.items[1..];
     }
 
     /// Get mutable table entries (excluding default).
+    /// Port of cranelift as_mut_slice()
     pub fn asMutSlice(self: *Self) []BlockCall {
-        return self.entries.items;
+        if (self.table.items.len <= 1) return &[_]BlockCall{};
+        return self.table.items[1..];
     }
 
     /// Get the number of entries (excluding default).
     pub fn len(self: Self) usize {
-        return self.entries.items.len;
+        if (self.table.items.len == 0) return 0;
+        return self.table.items.len - 1;
     }
 
     /// Check if the table is empty (excluding default).
     pub fn isEmpty(self: Self) bool {
-        return self.entries.items.len == 0;
+        return self.len() == 0;
     }
 
-    /// Get entry at index.
+    /// Get entry at index (0-based, excludes default).
     pub fn get(self: Self, index: usize) ?BlockCall {
-        if (index >= self.entries.items.len) return null;
-        return self.entries.items[index];
+        const actual_index = index + 1;
+        if (actual_index >= self.table.items.len) return null;
+        return self.table.items[actual_index];
     }
 
     /// Append an entry.
     pub fn push(self: *Self, allocator: std.mem.Allocator, entry: BlockCall) !void {
-        try self.entries.append(allocator, entry);
+        try self.table.append(allocator, entry);
     }
 
     /// Clear all entries (but keep default).
+    /// Port of cranelift clear()
     pub fn clear(self: *Self) void {
-        self.entries.clearRetainingCapacity();
-    }
-};
-
-/// Iterator over all branches (default first, then entries).
-pub const AllBranchesIterator = struct {
-    data: *const JumpTableData,
-    index: usize,
-
-    pub fn next(self: *AllBranchesIterator) ?BlockCall {
-        if (self.index == 0) {
-            self.index = 1;
-            return self.data.default_block;
+        // Keep only the first element (default)
+        if (self.table.items.len > 1) {
+            self.table.shrinkRetainingCapacity(1);
         }
-        const entry_index = self.index - 1;
-        if (entry_index >= self.data.entries.items.len) {
-            return null;
-        }
-        self.index += 1;
-        return self.data.entries.items[entry_index];
     }
 };
 
@@ -284,19 +289,17 @@ test "jump table empty" {
     const block0 = Block.fromIndex(0);
     const def = BlockCall.init(block0);
 
-    var jt = JumpTableData.init(def);
+    var jt = try JumpTableData.init(allocator, def);
     defer jt.deinit(allocator);
 
     try testing.expectEqual(def.block, jt.getDefaultBlock().block);
     try testing.expectEqual(@as(usize, 0), jt.len());
     try testing.expect(jt.isEmpty());
 
-    // Check all branches iterator
-    var iter = jt.allBranches();
-    const first = iter.next();
-    try testing.expect(first != null);
-    try testing.expectEqual(block0, first.?.block);
-    try testing.expect(iter.next() == null);
+    // Check allBranches returns slice with default block
+    const branches = jt.allBranches();
+    try testing.expectEqual(@as(usize, 1), branches.len);
+    try testing.expectEqual(block0, branches[0].block);
 }
 
 test "jump table with entries" {
@@ -311,7 +314,7 @@ test "jump table with entries" {
     const b1 = BlockCall.init(block1);
     const b2 = BlockCall.init(block2);
 
-    var jt = try JumpTableData.initWithEntries(allocator, def, &[_]BlockCall{ b1, b2 });
+    var jt = try JumpTableData.new(allocator, def, &[_]BlockCall{ b1, b2 });
     defer jt.deinit(allocator);
 
     try testing.expectEqual(block0, jt.getDefaultBlock().block);
@@ -323,11 +326,18 @@ test "jump table with entries" {
     try testing.expectEqual(block2, jt.get(1).?.block);
     try testing.expect(jt.get(2) == null);
 
-    // Check as_slice
+    // Check asSlice (entries only, excludes default)
     const slice = jt.asSlice();
     try testing.expectEqual(@as(usize, 2), slice.len);
     try testing.expectEqual(block1, slice[0].block);
     try testing.expectEqual(block2, slice[1].block);
+
+    // Check allBranches (includes default as first element)
+    const branches = jt.allBranches();
+    try testing.expectEqual(@as(usize, 3), branches.len);
+    try testing.expectEqual(block0, branches[0].block); // default
+    try testing.expectEqual(block1, branches[1].block);
+    try testing.expectEqual(block2, branches[2].block);
 }
 
 test "jump tables collection" {
@@ -344,11 +354,11 @@ test "jump tables collection" {
     const b1 = BlockCall.init(block1);
 
     // Create first table
-    const jt0 = try tables.create(JumpTableData.init(def));
+    const jt0 = try tables.create(try JumpTableData.init(allocator, def));
     try testing.expectEqual(@as(u32, 0), jt0.asU32());
 
     // Create second table with entries
-    const data = try JumpTableData.initWithEntries(allocator, def, &[_]BlockCall{b1});
+    const data = try JumpTableData.new(allocator, def, &[_]BlockCall{b1});
     const jt1 = try tables.create(data);
     _ = jt1;
     // Note: data is moved into tables, so we shouldn't deinit it here
