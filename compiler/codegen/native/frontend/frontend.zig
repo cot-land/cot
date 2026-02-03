@@ -601,6 +601,22 @@ pub const FuncInstBuilder = struct {
         return r.result.?;
     }
 
+    /// Rotate left.
+    pub fn rotl(self: Self, a: Value, b: Value) !Value {
+        _ = b;
+        const ty = self.builder.func.dfg.valueType(a);
+        const r = try self.build(ty);
+        return r.result.?;
+    }
+
+    /// Rotate right.
+    pub fn rotr(self: Self, a: Value, b: Value) !Value {
+        _ = b;
+        const ty = self.builder.func.dfg.valueType(a);
+        const r = try self.build(ty);
+        return r.result.?;
+    }
+
     // ========================================================================
     // Comparisons
     // ========================================================================

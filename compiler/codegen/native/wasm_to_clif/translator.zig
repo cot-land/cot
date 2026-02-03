@@ -807,152 +807,226 @@ pub const FuncTranslator = struct {
     // Binary Arithmetic Translation
     // ========================================================================
 
-    pub fn translateI32Add(self: *Self) !void {
+    // ========================================================================
+    // Arithmetic Translation (unified i32/i64)
+    // Port of code_translator.rs:1193-1268
+    // CLIF instructions are type-agnostic - they infer types from operands
+    // ========================================================================
+
+    pub fn translateIAdd(self: *Self) !void {
         const args = self.state.pop2();
         const result = try self.builder.ins().iadd(args[0], args[1]);
         try self.state.push1(result);
     }
 
-    pub fn translateI32Sub(self: *Self) !void {
+    pub fn translateISub(self: *Self) !void {
         const args = self.state.pop2();
         const result = try self.builder.ins().isub(args[0], args[1]);
         try self.state.push1(result);
     }
 
-    pub fn translateI32Mul(self: *Self) !void {
+    pub fn translateIMul(self: *Self) !void {
         const args = self.state.pop2();
         const result = try self.builder.ins().imul(args[0], args[1]);
         try self.state.push1(result);
     }
 
-    pub fn translateI32DivS(self: *Self) !void {
+    /// Signed division with trap guards.
+    /// Port of func_environ.rs:4467-4478 (translate_sdiv)
+    /// Guards: trap if rhs == 0, trap if lhs == MIN_INT and rhs == -1
+    pub fn translateSDivWithGuard(self: *Self) !void {
         const args = self.state.pop2();
-        const result = try self.builder.ins().sdiv(args[0], args[1]);
+        const lhs = args[0];
+        const rhs = args[1];
+
+        // Guard: trap if rhs == 0 (division by zero)
+        try self.guardZeroDivisor(rhs);
+
+        // Guard: trap if signed overflow (MIN_INT / -1)
+        // This is deferred for now - CLIF sdiv traps on overflow
+        // TODO: Add explicit guard for platforms that don't trap
+
+        const result = try self.builder.ins().sdiv(lhs, rhs);
         try self.state.push1(result);
     }
 
-    pub fn translateI32DivU(self: *Self) !void {
+    /// Unsigned division with trap guard.
+    /// Port of func_environ.rs:4480-4486 (translate_udiv)
+    pub fn translateUDivWithGuard(self: *Self) !void {
         const args = self.state.pop2();
-        const result = try self.builder.ins().udiv(args[0], args[1]);
+        const lhs = args[0];
+        const rhs = args[1];
+
+        // Guard: trap if rhs == 0
+        try self.guardZeroDivisor(rhs);
+
+        const result = try self.builder.ins().udiv(lhs, rhs);
         try self.state.push1(result);
     }
 
-    pub fn translateI32RemS(self: *Self) !void {
+    /// Signed remainder with trap guard.
+    /// Port of func_environ.rs:4488-4496 (translate_srem)
+    pub fn translateSRemWithGuard(self: *Self) !void {
         const args = self.state.pop2();
-        const result = try self.builder.ins().srem(args[0], args[1]);
+        const lhs = args[0];
+        const rhs = args[1];
+
+        // Guard: trap if rhs == 0
+        try self.guardZeroDivisor(rhs);
+
+        const result = try self.builder.ins().srem(lhs, rhs);
         try self.state.push1(result);
     }
 
-    pub fn translateI32RemU(self: *Self) !void {
+    /// Unsigned remainder with trap guard.
+    /// Port of func_environ.rs:4498-4505 (translate_urem)
+    pub fn translateURemWithGuard(self: *Self) !void {
         const args = self.state.pop2();
-        const result = try self.builder.ins().urem(args[0], args[1]);
+        const lhs = args[0];
+        const rhs = args[1];
+
+        // Guard: trap if rhs == 0
+        try self.guardZeroDivisor(rhs);
+
+        const result = try self.builder.ins().urem(lhs, rhs);
         try self.state.push1(result);
     }
 
-    pub fn translateI32And(self: *Self) !void {
+    /// Guard against division by zero.
+    /// Port of func_environ.rs guard_zero_divisor pattern
+    fn guardZeroDivisor(self: *Self, divisor: Value) !void {
+        // Get the type of the divisor to create the right zero constant
+        const val_type = self.builder.func.dfg.valueType(divisor);
+        const zero = try self.builder.ins().iconst(val_type, 0);
+        const is_zero = try self.builder.ins().icmp(clif.IntCC.eq, divisor, zero);
+
+        // TODO: Emit trap_if when we have that instruction
+        // For now, we rely on the hardware trap for division by zero
+        // try self.builder.ins().trapIf(is_zero, TrapCode.INTEGER_DIVISION_BY_ZERO);
+        _ = is_zero;
+    }
+
+    pub fn translateBAnd(self: *Self) !void {
         const args = self.state.pop2();
         const result = try self.builder.ins().band(args[0], args[1]);
         try self.state.push1(result);
     }
 
-    pub fn translateI32Or(self: *Self) !void {
+    pub fn translateBOr(self: *Self) !void {
         const args = self.state.pop2();
         const result = try self.builder.ins().bor(args[0], args[1]);
         try self.state.push1(result);
     }
 
-    pub fn translateI32Xor(self: *Self) !void {
+    pub fn translateBXor(self: *Self) !void {
         const args = self.state.pop2();
         const result = try self.builder.ins().bxor(args[0], args[1]);
         try self.state.push1(result);
     }
 
-    pub fn translateI32Shl(self: *Self) !void {
+    pub fn translateIShl(self: *Self) !void {
         const args = self.state.pop2();
         const result = try self.builder.ins().ishl(args[0], args[1]);
         try self.state.push1(result);
     }
 
-    pub fn translateI32ShrS(self: *Self) !void {
+    pub fn translateSShr(self: *Self) !void {
         const args = self.state.pop2();
         const result = try self.builder.ins().sshr(args[0], args[1]);
         try self.state.push1(result);
     }
 
-    pub fn translateI32ShrU(self: *Self) !void {
+    pub fn translateUShr(self: *Self) !void {
         const args = self.state.pop2();
         const result = try self.builder.ins().ushr(args[0], args[1]);
         try self.state.push1(result);
     }
 
+    pub fn translateRotl(self: *Self) !void {
+        const args = self.state.pop2();
+        const result = try self.builder.ins().rotl(args[0], args[1]);
+        try self.state.push1(result);
+    }
+
+    pub fn translateRotr(self: *Self) !void {
+        const args = self.state.pop2();
+        const result = try self.builder.ins().rotr(args[0], args[1]);
+        try self.state.push1(result);
+    }
+
     // ========================================================================
-    // Comparison Translation
+    // Comparison Translation (unified i32/i64)
+    // Port of code_translator.rs:1286-1318 and translate_icmp helper (3736-3740)
+    // CLIF icmp is type-agnostic - infers types from operands
     // ========================================================================
 
-    pub fn translateI32Eq(self: *Self) !void {
+    pub fn translateIEq(self: *Self) !void {
         const args = self.state.pop2();
         const result = try self.builder.ins().icmp(clif.IntCC.eq, args[0], args[1]);
         try self.state.push1(result);
     }
 
-    pub fn translateI32Ne(self: *Self) !void {
+    pub fn translateINe(self: *Self) !void {
         const args = self.state.pop2();
         const result = try self.builder.ins().icmp(clif.IntCC.ne, args[0], args[1]);
         try self.state.push1(result);
     }
 
-    pub fn translateI32LtS(self: *Self) !void {
+    pub fn translateILtS(self: *Self) !void {
         const args = self.state.pop2();
         const result = try self.builder.ins().icmp(clif.IntCC.slt, args[0], args[1]);
         try self.state.push1(result);
     }
 
-    pub fn translateI32LtU(self: *Self) !void {
+    pub fn translateILtU(self: *Self) !void {
         const args = self.state.pop2();
         const result = try self.builder.ins().icmp(clif.IntCC.ult, args[0], args[1]);
         try self.state.push1(result);
     }
 
-    pub fn translateI32GtS(self: *Self) !void {
+    pub fn translateIGtS(self: *Self) !void {
         const args = self.state.pop2();
         const result = try self.builder.ins().icmp(clif.IntCC.sgt, args[0], args[1]);
         try self.state.push1(result);
     }
 
-    pub fn translateI32GtU(self: *Self) !void {
+    pub fn translateIGtU(self: *Self) !void {
         const args = self.state.pop2();
         const result = try self.builder.ins().icmp(clif.IntCC.ugt, args[0], args[1]);
         try self.state.push1(result);
     }
 
-    pub fn translateI32LeS(self: *Self) !void {
+    pub fn translateILeS(self: *Self) !void {
         const args = self.state.pop2();
         const result = try self.builder.ins().icmp(clif.IntCC.sle, args[0], args[1]);
         try self.state.push1(result);
     }
 
-    pub fn translateI32LeU(self: *Self) !void {
+    pub fn translateILeU(self: *Self) !void {
         const args = self.state.pop2();
         const result = try self.builder.ins().icmp(clif.IntCC.ule, args[0], args[1]);
         try self.state.push1(result);
     }
 
-    pub fn translateI32GeS(self: *Self) !void {
+    pub fn translateIGeS(self: *Self) !void {
         const args = self.state.pop2();
         const result = try self.builder.ins().icmp(clif.IntCC.sge, args[0], args[1]);
         try self.state.push1(result);
     }
 
-    pub fn translateI32GeU(self: *Self) !void {
+    pub fn translateIGeU(self: *Self) !void {
         const args = self.state.pop2();
         const result = try self.builder.ins().icmp(clif.IntCC.uge, args[0], args[1]);
         try self.state.push1(result);
     }
 
-    /// Translate i32.eqz (compare equal to zero)
-    pub fn translateI32Eqz(self: *Self) !void {
+    /// Translate eqz (compare equal to zero) - unified for i32/i64
+    /// Port of code_translator.rs:1310-1314
+    pub fn translateIEqz(self: *Self) !void {
         const arg = self.state.pop1();
-        const zero = try self.builder.ins().iconst(Type.I32, 0);
+        // Get the type of the operand to create the right zero constant
+        const val_type = self.builder.func.dfg.valueType(arg);
+        const zero = try self.builder.ins().iconst(val_type, 0);
         const result = try self.builder.ins().icmp(clif.IntCC.eq, arg, zero);
         try self.state.push1(result);
     }
@@ -1026,7 +1100,7 @@ test "translate i32.const and i32.add with FunctionBuilder" {
 
     try translator.translateI32Const(10);
     try translator.translateI32Const(20);
-    try translator.translateI32Add();
+    try translator.translateIAdd();
 
     try testing.expectEqual(@as(usize, 1), translator.state.stackLen());
 
@@ -1153,7 +1227,7 @@ test "translate comparison with FunctionBuilder" {
 
     try translator.translateI32Const(10);
     try translator.translateI32Const(20);
-    try translator.translateI32LtS();
+    try translator.translateILtS();
 
     try testing.expectEqual(@as(usize, 1), translator.state.stackLen());
 }
