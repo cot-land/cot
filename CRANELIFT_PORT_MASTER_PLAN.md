@@ -1261,14 +1261,49 @@ compiler/codegen/native/
 
 ---
 
-## Phase 8: Self-Hosting
+## Critical Blockers (Must Fix for Native Output)
 
-### 8.1 Compile Cot with Cot
+These 5 issues will cause panics or crashes when native compilation is attempted:
 
-- [ ] **8.1** Write Cot compiler in Cot (or subset)
-- [ ] **8.2** Compile via Wasm→native path
-- [ ] **8.3** Verify self-compiled Cot produces correct output
-- [ ] **8.4** Document self-hosting achievement
+### Blocker 1: Loop Back-Edge Translation Disabled
+- **File:** `compiler/codegen/native/wasm_to_clif/func_translator.zig:547`
+- **Problem:** Loop translation test is commented out; back-edges not handled
+- **Impact:** ANY code with loops fails during Wasm→CLIF translation
+- **Fix:** Implement proper block sealing strategy for loop back-edges
+- **Effort:** ~2-3 hours
+
+### Blocker 2: SmallVec Overflow Panics
+- **File:** `compiler/codegen/native/machinst/inst.zig:536,542`
+- **Problem:** Heap allocation not implemented for SmallVec
+- **Impact:** Functions producing >8 register outputs panic at compile-time
+- **Fix:** Implement heap-based reallocation with allocator
+- **Effort:** ~1-2 hours
+
+### Blocker 3: genMove Is Empty Stub
+- **File:** `compiler/codegen/native/machinst/vcode.zig:900`
+- **Problem:** `genMove()` does nothing; moves silently dropped
+- **Impact:** Register allocation outputs silently dropped; invalid code generated
+- **Fix:** Implement ISA-specific move generation for ARM64/x64
+- **Effort:** ~2-3 hours
+
+### Blocker 4: genSpill/genReload Panic
+- **File:** `compiler/codegen/native/machinst/abi.zig:940,948`
+- **Problem:** Stub implementations that panic
+- **Impact:** ANY function requiring register spilling crashes
+- **Fix:** Implement for ARM64/x64 ABIs
+- **Effort:** ~3-4 hours
+
+### Blocker 5: Wasm Opcode Gaps
+- **File:** `compiler/codegen/native/wasm_to_clif/translator.zig`
+- **Issues:**
+  - Globals mutability not tracked (line 737)
+  - Missing `trap_if` instruction (lines 909, 1349, 1386)
+  - Indirect call signatures not loaded (line 1297)
+- **Impact:** Some Wasm features produce incorrect code
+- **Fix:** Complete opcode implementations
+- **Effort:** ~2-3 hours
+
+**Total estimated effort to reach working native output:** 10-15 hours
 
 ---
 
@@ -1276,34 +1311,42 @@ compiler/codegen/native/
 
 ### Current Status
 
-| Phase | Status | Progress | LOC |
-|-------|--------|----------|-----|
-| 0: Removal | ✅ Complete | 28/28 | -10,625 |
-| 1: CLIF IR | ✅ Complete | 18/18 | ~8,000 |
-| 2: Wasm Translation | ✅ Complete | 17/17 | ~4,500 |
-| 3: MachInst | ✅ Complete | 16/16 | ~9,000 |
-| 4: ARM64 | ✅ Complete | 23/23 | ~15,000 |
-| 5: x86-64 | ✅ Complete | 16/16 | ~8,400 |
-| 6: Regalloc | ✅ Complete | 19/19 | ~6,400 |
-| 7: Integration | ✅ Complete | 8/8 | ~3,400 |
-| 8: Self-Hosting | Not Started | 0/4 | TBD |
-| **TOTAL** | | **145/157** | **~56,075** |
+| Phase | Status | Progress | LOC | Blockers |
+|-------|--------|----------|-----|----------|
+| 0: Removal | ✅ Complete | 28/28 | -10,625 | None |
+| 1: CLIF IR | ✅ Complete | 18/18 | ~8,000 | None |
+| 2: Wasm Translation | ⚠️ 70% | 12/17 | ~4,500 | **Loop back-edges** |
+| 3: MachInst | ⚠️ 80% | 13/16 | ~9,000 | **SmallVec, genMove** |
+| 4: ARM64 | ✅ 85% | 20/23 | ~15,000 | Minor (float args) |
+| 5: x86-64 | ✅ 80% | 13/16 | ~8,400 | Minor (mem addressing) |
+| 6: Regalloc | ⚠️ 90% | 17/19 | ~6,400 | **genSpill/genReload** |
+| 7: Integration | ⚠️ 70% | 6/8 | ~3,400 | Cascading from above |
+| **TOTAL** | **~80%** | **127/145** | **~56,075** | **5 Critical** |
 
 ### What's Done
 
-All infrastructure is in place:
-- **CLIF IR**: Complete type system, DFG, instructions, layout, builder, GlobalValue
-- **Wasm→CLIF**: Complete translator with control flow, arithmetic, locals, globals
-- **MachInst Framework**: VCode, buffer, ABI, lowering framework
-- **ARM64 Backend**: Full instruction set, emission, lowering, ABI, global_value lowering
-- **x86-64 Backend**: Full instruction set, emission, lowering, ABI
-- **Register Allocator**: Complete Ion backtracking allocator from regalloc2
+Infrastructure is in place but has critical stubs:
+- **CLIF IR**: Complete type system, DFG, instructions, layout, builder, GlobalValue ✅
+- **Wasm→CLIF**: Basic translator works, but **loops broken** (back-edges disabled) ⚠️
+- **MachInst Framework**: VCode, buffer, ABI, lowering framework, but **SmallVec panics, genMove stub** ⚠️
+- **ARM64 Backend**: Full instruction set, emission, lowering, ABI ✅
+- **x86-64 Backend**: Full instruction set, emission, lowering, ABI ✅
+- **Register Allocator**: Ion algorithm complete, but **genSpill/genReload panic** ⚠️
+- **Object Files**: Mach-O and ELF writers complete ✅
 
 ### What Remains
 
-**Phase 7: Integration** - ✅ COMPLETE!
+**5 Critical Blockers** must be fixed before native output works:
 
-All Phase 7 tasks completed:
+| Task | Description | Status | File |
+|------|-------------|--------|------|
+| B1 | Loop back-edge translation | ❌ Disabled | func_translator.zig:547 |
+| B2 | SmallVec heap allocation | ❌ Panics | inst.zig:536,542 |
+| B3 | genMove implementation | ❌ Empty stub | vcode.zig:900 |
+| B4 | genSpill/genReload | ❌ Panics | abi.zig:940,948 |
+| B5 | Wasm opcode gaps | ⚠️ Partial | translator.zig |
+
+**Phase 7 Tasks (infrastructure complete, but blocked by above):**
 
 | Task | Description | Status |
 |------|-------------|--------|
@@ -1312,24 +1355,24 @@ All Phase 7 tasks completed:
 | 7.3 | Call instructions | ✅ Complete |
 | 7.4 | i64 arithmetic | ✅ Complete |
 | 7.5 | VCode-to-regalloc2 adapter | ✅ Complete |
-| 7.6 | Emit with regalloc output | ✅ Complete |
+| 7.6 | Emit with regalloc output | ⚠️ Blocked by B3 |
 | 7.7 | Object file generation (Mach-O/ELF) | ✅ Complete |
-| 7.8 | End-to-end tests | ✅ Complete |
+| 7.8 | End-to-end tests | ⚠️ Infrastructure only |
 
-**Phase 7 is COMPLETE!** All infrastructure for native code generation is in place.
+**Estimated effort to fix all blockers:** 10-15 hours
 
 ### Estimated LOC Summary
 
-| Component | Cranelift LOC | Cot LOC | Status |
-|-----------|---------------|---------|--------|
-| CLIF IR | 10,500 | ~8,000 | ✅ |
-| Wasm Translation | 5,800 | ~4,500 | ✅ |
-| MachInst Framework | 12,400 | ~9,000 | ✅ |
-| ARM64 Backend | 20,700 | ~15,000 | ✅ |
-| x86-64 Backend | 10,000 | 10,998 | ✅ |
-| Register Allocator | 12,631 | 10,813 | ✅ |
-| Integration | ~2,000 | ~3,400 | ✅ |
-| **TOTAL** | **~74,000** | **~61,711** | **93%** |
+| Component | Cranelift LOC | Cot LOC | Status | Blockers |
+|-----------|---------------|---------|--------|----------|
+| CLIF IR | 10,500 | ~8,000 | ✅ | None |
+| Wasm Translation | 5,800 | ~4,500 | ⚠️ 70% | B1: Loops |
+| MachInst Framework | 12,400 | ~9,000 | ⚠️ 80% | B2: SmallVec, B3: genMove |
+| ARM64 Backend | 20,700 | ~15,000 | ✅ 85% | Minor |
+| x86-64 Backend | 10,000 | 10,998 | ✅ 80% | Minor |
+| Register Allocator | 12,631 | 10,813 | ⚠️ 90% | B4: genSpill/genReload |
+| Integration | ~2,000 | ~3,400 | ⚠️ 70% | Cascading |
+| **TOTAL** | **~74,000** | **~61,711** | **~80%** | **5 Critical** |
 
 ---
 
