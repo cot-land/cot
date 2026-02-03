@@ -1392,6 +1392,20 @@ pub const Inst = union(enum) {
         unreachable;
     }
 
+    /// Generate a load from a stack slot.
+    /// Used for spill reloads during register allocation.
+    pub fn genLoadStack(into_reg: Writable(Reg), slot_offset: i64, ty: Type) Inst {
+        const mem = AMode{ .slot_offset = .{ .offset = slot_offset } };
+        return genLoad(into_reg, mem, ty, MemFlags.empty);
+    }
+
+    /// Generate a store to a stack slot.
+    /// Used for spills during register allocation.
+    pub fn genStoreStack(from_reg: Reg, slot_offset: i64, ty: Type) Inst {
+        const mem = AMode{ .slot_offset = .{ .offset = slot_offset } };
+        return genStore(mem, from_reg, ty, MemFlags.empty);
+    }
+
     /// Generate a jump to a label.
     pub fn genJump(target: MachLabel) Inst {
         return Inst{
@@ -2516,6 +2530,20 @@ pub const Inst = union(enum) {
         var state = emit_mod.EmitState{};
         try emit_mod.emit(&inst_copy, sink, emit_info, &state);
     }
+
+    /// Emit this instruction directly (with physical registers already in place).
+    /// Used for regalloc-inserted moves where registers are already physical.
+    pub fn emit(
+        self: *const Inst,
+        sink: *emit_mod.MachBuffer,
+        emit_info: *const emit_mod.EmitInfo,
+    ) !void {
+        var state = emit_mod.EmitState{};
+        try emit_mod.emit(self, sink, emit_info, &state);
+    }
+
+    /// EmitState type for this instruction type (used for emission context).
+    pub const EmitState = emit_mod.EmitState;
 };
 
 /// Apply an allocation to a register, returning the physical register.

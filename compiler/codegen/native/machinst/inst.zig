@@ -472,11 +472,15 @@ pub const MachTerminator = enum {
 // ============================================================================
 
 /// A small vector with inline storage, similar to Rust's SmallVec.
+/// Stores up to `inline_capacity` items inline, then promotes to heap.
+/// Following Cranelift's SmallVec pattern from the smallvec crate.
 pub fn SmallVec(comptime T: type, comptime inline_capacity: usize) type {
     return struct {
         inline_buf: [inline_capacity]T,
         inline_len: usize,
-        heap_buf: ?[]T,
+        heap_buf: ?[*]T,
+        heap_len: usize,
+        heap_cap: usize,
         allocator: ?std.mem.Allocator,
 
         const Self = @This();
@@ -486,6 +490,8 @@ pub fn SmallVec(comptime T: type, comptime inline_capacity: usize) type {
                 .inline_buf = undefined,
                 .inline_len = 0,
                 .heap_buf = null,
+                .heap_len = 0,
+                .heap_cap = 0,
                 .allocator = null,
             };
         }
@@ -495,6 +501,8 @@ pub fn SmallVec(comptime T: type, comptime inline_capacity: usize) type {
                 .inline_buf = undefined,
                 .inline_len = 0,
                 .heap_buf = null,
+                .heap_len = 0,
+                .heap_cap = 0,
                 .allocator = allocator,
             };
         }
@@ -502,53 +510,77 @@ pub fn SmallVec(comptime T: type, comptime inline_capacity: usize) type {
         pub fn deinit(self: *Self) void {
             if (self.heap_buf) |buf| {
                 if (self.allocator) |alloc| {
-                    alloc.free(buf);
+                    alloc.free(buf[0..self.heap_cap]);
                 }
             }
             self.heap_buf = null;
+            self.heap_len = 0;
+            self.heap_cap = 0;
             self.inline_len = 0;
         }
 
         pub fn len(self: *const Self) usize {
-            if (self.heap_buf) |buf| {
-                return buf.len;
+            if (self.heap_buf != null) {
+                return self.heap_len;
             }
             return self.inline_len;
         }
 
         pub fn items(self: *const Self) []const T {
             if (self.heap_buf) |buf| {
-                return buf;
+                return buf[0..self.heap_len];
             }
             return self.inline_buf[0..self.inline_len];
         }
 
         pub fn itemsMut(self: *Self) []T {
             if (self.heap_buf) |buf| {
-                return buf;
+                return buf[0..self.heap_len];
             }
             return self.inline_buf[0..self.inline_len];
         }
 
         pub fn push(self: *Self, item: T) void {
-            if (self.heap_buf != null) {
-                // Already on heap, need to reallocate
-                @panic("SmallVec heap reallocation not implemented");
-            }
-            if (self.inline_len < inline_capacity) {
+            if (self.heap_buf) |buf| {
+                // Already on heap - grow if needed
+                if (self.heap_len >= self.heap_cap) {
+                    const alloc = self.allocator orelse @panic("SmallVec needs allocator for heap growth");
+                    const new_cap = self.heap_cap * 2;
+                    const old_slice = buf[0..self.heap_cap];
+                    // Always allocate new buffer and copy (simpler than trying resize)
+                    const new_buf = alloc.alloc(T, new_cap) catch @panic("SmallVec OOM");
+                    @memcpy(new_buf[0..self.heap_len], buf[0..self.heap_len]);
+                    alloc.free(old_slice);
+                    self.heap_buf = new_buf.ptr;
+                    self.heap_cap = new_cap;
+                }
+                self.heap_buf.?[self.heap_len] = item;
+                self.heap_len += 1;
+            } else if (self.inline_len < inline_capacity) {
+                // Still fits inline
                 self.inline_buf[self.inline_len] = item;
                 self.inline_len += 1;
             } else {
-                @panic("SmallVec overflow - heap allocation not implemented");
+                // Promote to heap
+                const alloc = self.allocator orelse @panic("SmallVec needs allocator for heap promotion");
+                const new_cap = inline_capacity * 2;
+                const heap = alloc.alloc(T, new_cap) catch @panic("SmallVec OOM");
+                @memcpy(heap[0..inline_capacity], self.inline_buf[0..inline_capacity]);
+                heap[inline_capacity] = item;
+                self.heap_buf = heap.ptr;
+                self.heap_cap = new_cap;
+                self.heap_len = inline_capacity + 1;
             }
         }
 
         pub fn clear(self: *Self) void {
             if (self.heap_buf) |buf| {
                 if (self.allocator) |alloc| {
-                    alloc.free(buf);
+                    alloc.free(buf[0..self.heap_cap]);
                 }
                 self.heap_buf = null;
+                self.heap_len = 0;
+                self.heap_cap = 0;
             }
             self.inline_len = 0;
         }

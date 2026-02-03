@@ -888,20 +888,75 @@ pub fn VCode(comptime I: type) type {
 
         /// Emit a move instruction from one allocation to another.
         /// This handles reg-reg, reg-stack, and stack-reg moves.
+        ///
+        /// Follows Cranelift's pattern from vcode.rs:
+        /// - reg-to-reg: emit I.genMove()
+        /// - stack-to-reg: emit load from stack (genLoadStack via ABI)
+        /// - reg-to-stack: emit store to stack (genStoreStack via ABI)
         fn emitMove(
-            comptime _: type, // Inst type (for ISA-specific move generation)
+            comptime Inst: type,
             buffer: *MachBufferType,
             from: regalloc_operand.Allocation,
             to: regalloc_operand.Allocation,
-            emit_info: anytype,
+            emit_info: *const Inst.EmitInfo,
         ) !void {
-            // Generate move based on allocation types
-            // Uses ISA-specific move generation via Inst.genMove
-            // TODO: Implement genMove for each ISA (aarch64/x64)
-            _ = buffer;
-            _ = from;
-            _ = to;
-            _ = emit_info;
+            const from_kind = from.kind();
+            const to_kind = to.kind();
+
+            if (from_kind == .reg and to_kind == .reg) {
+                // Reg-to-reg move
+                const from_preg = from.asReg() orelse return;
+                const to_preg = to.asReg() orelse return;
+
+                // Convert PReg to Reg (physical register representation)
+                const from_reg = reg_mod.Reg.fromPReg(from_preg);
+                const to_reg = reg_mod.Writable(reg_mod.Reg).fromReg(reg_mod.Reg.fromPReg(to_preg));
+
+                // Use I64 type as default (covers most cases)
+                // TODO: Get actual type from vreg_types when available
+                const ty = Type.I64;
+
+                // Generate and emit the move instruction
+                const move_inst = Inst.genMove(to_reg, from_reg, ty);
+
+                // Use Inst.emit method which wraps the ISA-specific emit function
+                try move_inst.emit(buffer, emit_info);
+            } else if (from_kind == .stack and to_kind == .reg) {
+                // Stack-to-reg (reload)
+                const from_slot = from.asStack() orelse return;
+                const to_preg = to.asReg() orelse return;
+
+                // Calculate spillslot byte offset (8 bytes per slot)
+                const slot_offset: i64 = @as(i64, from_slot.bits) * 8;
+
+                // Convert PReg to Reg
+                const to_reg = reg_mod.Writable(reg_mod.Reg).fromReg(reg_mod.Reg.fromPReg(to_preg));
+
+                // Use I64 type (most common for spills)
+                const ty = Type.I64;
+
+                // Generate and emit the load instruction
+                const load_inst = Inst.genLoadStack(to_reg, slot_offset, ty);
+                try load_inst.emit(buffer, emit_info);
+            } else if (from_kind == .reg and to_kind == .stack) {
+                // Reg-to-stack (spill)
+                const from_preg = from.asReg() orelse return;
+                const to_slot = to.asStack() orelse return;
+
+                // Calculate spillslot byte offset (8 bytes per slot)
+                const slot_offset: i64 = @as(i64, to_slot.bits) * 8;
+
+                // Convert PReg to Reg
+                const from_reg = reg_mod.Reg.fromPReg(from_preg);
+
+                // Use I64 type (most common for spills)
+                const ty = Type.I64;
+
+                // Generate and emit the store instruction
+                const store_inst = Inst.genStoreStack(from_reg, slot_offset, ty);
+                try store_inst.emit(buffer, emit_info);
+            }
+            // Note: stack-to-stack moves should not occur (regalloc doesn't generate them)
         }
     };
 }

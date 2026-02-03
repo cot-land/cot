@@ -910,6 +910,20 @@ pub const Inst = union(enum) {
         return .{ .jmp_known = .{ .dst = target } };
     }
 
+    /// Generate a load from a stack slot.
+    /// Used for spill reloads during register allocation.
+    pub fn genLoadStack(into_reg: Writable(Reg), slot_offset: i64, ty: Type) Inst {
+        const addr = SyntheticAmode.slotOffset(@intCast(slot_offset));
+        return genLoad(ty, addr, into_reg, .none);
+    }
+
+    /// Generate a store to a stack slot.
+    /// Used for spills during register allocation.
+    pub fn genStoreStack(from_reg: Reg, slot_offset: i64, ty: Type) Inst {
+        const addr = SyntheticAmode.slotOffset(@intCast(slot_offset));
+        return genStore(ty, addr, from_reg);
+    }
+
     /// LabelUse type for this instruction type (for MachBuffer parameterization).
     /// Matches Cranelift's pattern where VCodeInst trait has associated LabelUse type.
     pub const LabelUse = emit_mod.X64LabelUse;
@@ -964,7 +978,7 @@ pub const Inst = union(enum) {
 
     /// Create a load instruction.
     pub fn genLoad(ty: Type, addr: SyntheticAmode, dst: Writable(Reg), ext_kind: ExtKind) Inst {
-        const size_bytes = ty.laneBytes();
+        const size_bytes = ty.bytes();
         if (dst.toReg().class() == .int) {
             const ext_mode = ExtMode.fromBits(@intCast(size_bytes * 8), 64);
             if (ext_mode) |em| {
@@ -1014,7 +1028,7 @@ pub const Inst = union(enum) {
 
     /// Create a store instruction.
     pub fn genStore(ty: Type, addr: SyntheticAmode, src: Reg) Inst {
-        const size_bytes = ty.laneBytes();
+        const size_bytes = ty.bytes();
         if (src.class() == .int) {
             return .{
                 .mov_r_m = .{
@@ -2246,6 +2260,20 @@ pub const Inst = union(enum) {
     pub fn format(self: Inst, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         try self.printWithState(writer);
     }
+
+    /// Emit this instruction directly (with physical registers already in place).
+    /// Used for regalloc-inserted moves where registers are already physical.
+    pub fn emit(
+        self: *const Inst,
+        sink: *emit_mod.MachBuffer,
+        emit_info: *const emit_mod.EmitInfo,
+    ) !void {
+        var state = emit_mod.EmitState{};
+        try emit_mod.emit(self, sink, emit_info, &state);
+    }
+
+    /// EmitState type for this instruction type (used for emission context).
+    pub const EmitState = emit_mod.EmitState;
 };
 
 //=============================================================================
