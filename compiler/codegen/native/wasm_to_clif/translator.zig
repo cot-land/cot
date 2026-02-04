@@ -232,26 +232,31 @@ pub const FuncTranslator = struct {
     const Self = @This();
 
     /// Create a new translator with module-level information.
+    /// Port of Cranelift's FuncTranslator with module access.
     pub fn init(
         allocator: std.mem.Allocator,
         builder: *FunctionBuilder,
         globals: []const WasmGlobalType,
         func_types: []const WasmFuncType,
+        func_to_type: []const u32,
     ) Self {
+        // Convert func_types to FuncEnvironment format
+        // Note: func_environ_mod.WasmFuncType uses the same structure
+        const env_func_types = @as([]const func_environ_mod.WasmFuncType, @ptrCast(func_types));
         return .{
             .state = TranslationState.init(allocator),
             .builder = builder,
             .locals = .{},
             .globals = globals,
             .func_types = func_types,
-            .env = FuncEnvironment.init(allocator),
+            .env = FuncEnvironment.initWithTypes(allocator, func_to_type, env_func_types),
             .allocator = allocator,
         };
     }
 
     /// Create a new translator without module info (backwards compatibility).
     pub fn initWithoutGlobals(allocator: std.mem.Allocator, builder: *FunctionBuilder) Self {
-        return init(allocator, builder, &[_]WasmGlobalType{}, &[_]WasmFuncType{});
+        return init(allocator, builder, &[_]WasmGlobalType{}, &[_]WasmFuncType{}, &[_]u32{});
     }
 
     /// Deallocate storage.

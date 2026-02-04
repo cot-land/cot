@@ -362,7 +362,8 @@ pub const Driver = struct {
         }
 
         // Create reusable translator context with module info
-        var func_translator = wasm_func_translator.WasmFuncTranslator.init(self.allocator, globals_converted, func_types_converted);
+        // Pass func_to_type mapping (wasm_module.funcs maps function_index -> type_index)
+        var func_translator = wasm_func_translator.WasmFuncTranslator.init(self.allocator, globals_converted, func_types_converted, wasm_module.funcs);
         defer func_translator.deinit();
 
         // Select ISA based on target

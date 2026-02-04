@@ -11,8 +11,10 @@ pub const args = @import("args.zig");
 pub const emit = @import("emit.zig");
 pub const get_operands = @import("get_operands.zig");
 
-// Import machinst types for Operand and PRegSet
+// Import machinst types for Operand, PRegSet, and CallType
 const machinst_reg = @import("../../../machinst/reg.zig");
+const machinst_inst = @import("../../../machinst/inst.zig");
+const CallType = machinst_inst.CallType;
 
 // Re-export commonly used types from args
 pub const Reg = args.Reg;
@@ -965,6 +967,17 @@ pub const Inst = union(enum) {
         /// A branch instruction.
         branch,
     };
+
+    /// Classify the type of call instruction this is.
+    /// Port of Cranelift's call_type() from x64/inst/mod.rs.
+    /// Returns CallType::Regular for call instructions, CallType::None otherwise.
+    pub fn callType(self: *const Inst) CallType {
+        return switch (self.*) {
+            .call_known, .call_unknown => CallType.Regular,
+            // TODO: Add return_call_known, return_call_unknown when tail calls needed
+            else => CallType.None,
+        };
+    }
 
     /// Check if this instruction is a terminator and what kind.
     /// Ported from cranelift/codegen/src/isa/x64/inst/mod.rs is_term()

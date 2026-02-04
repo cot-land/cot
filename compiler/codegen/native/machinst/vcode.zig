@@ -835,11 +835,30 @@ pub fn VCode(comptime I: type) type {
             // Compute frame size from spillslots
             const frame_size: u32 = @intCast(output.num_spillslots * 8); // 8 bytes per slot
 
-            // Emit prologue (placeholder - actual implementation depends on ABI)
-            // In a complete implementation, this would:
-            //   - Push callee-saved registers
-            //   - Set up frame pointer
-            //   - Allocate stack space for spills
+            // ================================================================
+            // Compute function_calls by scanning all instructions
+            // Port of Cranelift's compute_clobbers_and_function_calls()
+            // Reference: cranelift/codegen/src/machinst/vcode.rs:687-745
+            // ================================================================
+            var function_calls = FunctionCalls.None;
+            for (self.insts.items) |*inst| {
+                function_calls.update(inst.callType());
+            }
+
+            // ================================================================
+            // Emit prologue if function makes calls
+            // Following Cranelift's pattern: save FP and LR when function_calls != None
+            // Reference: cranelift/codegen/src/isa/aarch64/abi.rs:1158
+            // ================================================================
+            const needs_frame = (function_calls != .None) or (frame_size > 0);
+            if (needs_frame) {
+                // stp fp, lr, [sp, #-16]!  (pre-indexed store pair)
+                // Encoding: 1010100111000000 00000000 11111111 = 0xa9bf7bfd
+                try buffer.put4(0xa9bf7bfd);
+                // mov fp, sp
+                // Encoding: 1001000100000000 00000011 11111101 = 0x910003fd
+                try buffer.put4(0x910003fd);
+            }
 
             // Emit each block
             for (0..self.numBlocks()) |block_idx| {
@@ -869,8 +888,21 @@ pub fn VCode(comptime I: type) type {
                             const inst_allocs = output.instAllocs(inst);
                             const vcode_inst_idx = InsnIndex.new(inst.idx());
 
-                            // Get the instruction and emit with physical registers
+                            // Get the instruction
                             const vcode_inst = self.getInst(vcode_inst_idx);
+
+                            // ============================================
+                            // Emit epilogue before return instructions
+                            // Port of Cranelift's gen_epilogue_frame_restore
+                            // Reference: aarch64/abi.rs:940-972
+                            // ============================================
+                            if (needs_frame and vcode_inst.isTerm() == .ret) {
+                                // ldp fp, lr, [sp], #16  (post-indexed load pair)
+                                // Encoding: 1010100011000001 00000000 11111111 = 0xa8c17bfd
+                                try buffer.put4(0xa8c17bfd);
+                            }
+
+                            // Emit the instruction with physical registers
                             try vcode_inst.emitWithAllocs(&buffer, inst_allocs, emit_info);
                         },
                         .edit => |edit| {
@@ -886,9 +918,6 @@ pub fn VCode(comptime I: type) type {
                     }
                 }
             }
-
-            // Emit epilogue (done per-return in the instruction loop above)
-            // In a complete implementation, returns would restore callee-saves
 
             // Finalize the buffer
             const finalized = try buffer.finish();

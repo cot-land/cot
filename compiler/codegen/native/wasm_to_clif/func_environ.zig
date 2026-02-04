@@ -127,6 +127,37 @@ pub const GlobalVariable = union(enum) {
 /// This is created once per function translation and caches GlobalValue entries
 /// to avoid redundant allocations.
 ///
+/// Wasm value type for function signatures.
+/// Port of wasmtime_environ WasmValType.
+/// Must match translator.zig WasmValType for type compatibility.
+pub const WasmValType = enum {
+    i32,
+    i64,
+    f32,
+    f64,
+    v128,
+    funcref,
+    externref,
+
+    /// Convert to CLIF Type.
+    pub fn toClifType(self: WasmValType) Type {
+        return switch (self) {
+            .i32 => Type.I32,
+            .i64 => Type.I64,
+            .f32 => Type.F32,
+            .f64 => Type.F64,
+            else => Type.I64, // References are pointers
+        };
+    }
+};
+
+/// Wasm function type signature.
+/// Port of wasmtime_environ WasmFuncType.
+pub const WasmFuncType = struct {
+    params: []const WasmValType,
+    results: []const WasmValType,
+};
+
 /// Following Cranelift's pattern:
 /// - VMContext is a single GlobalValue representing the runtime context
 /// - Individual globals are accessed via a chain: vmctx → iadd_imm → load/store
@@ -160,10 +191,24 @@ pub const FuncEnvironment = struct {
     /// Maps type_index -> GlobalValue for the type ID location.
     type_ids: std.AutoHashMapUnmanaged(u32, GlobalValue),
 
+    /// Mapping from function_index -> type_index.
+    /// Port of wasmtime_environ module.functions[].signature.
+    func_to_type: []const u32,
+
+    /// Function type signatures indexed by type_index.
+    /// Port of wasmtime_environ module.types[].
+    func_types: []const WasmFuncType,
+
     const Self = @This();
 
     /// Create a new function environment.
     pub fn init(allocator: std.mem.Allocator) Self {
+        return initWithTypes(allocator, &[_]u32{}, &[_]WasmFuncType{});
+    }
+
+    /// Create a new function environment with type information.
+    /// Port of Cranelift's FuncEnvironment with module access.
+    pub fn initWithTypes(allocator: std.mem.Allocator, func_to_type: []const u32, func_types: []const WasmFuncType) Self {
         return .{
             .allocator = allocator,
             .pointer_type = Type.I64,
@@ -173,6 +218,8 @@ pub const FuncEnvironment = struct {
             .func_refs = .{},
             .tables = .{},
             .type_ids = .{},
+            .func_to_type = func_to_type,
+            .func_types = func_types,
         };
     }
 
@@ -339,7 +386,11 @@ pub const FuncEnvironment = struct {
     ///
     /// Creates an external function reference that can be used for direct calls.
     /// The signature includes the Wasm calling convention:
-    /// params = [callee_vmctx, caller_vmctx, ...wasm_params]
+    /// params = [callee_vmctx, caller_vmctx, ...wasm_params] -> ...wasm_returns
+    ///
+    /// Reference: Cranelift code_translator.rs:654-660
+    ///   let ty = environ.module.functions[function_index].signature.unwrap_module_type_index();
+    ///   let sig_ref = environ.get_or_create_interned_sig_ref(builder.func, ty);
     pub fn getOrCreateFuncRef(self: *Self, func: *Function, function_index: u32) !FuncRef {
         // Check cache first
         if (self.func_refs.get(function_index)) |ref| return ref;
@@ -352,9 +403,24 @@ pub const FuncEnvironment = struct {
         try sig.params.append(self.allocator, AbiParam.init(self.pointer_type));
         try sig.params.append(self.allocator, AbiParam.init(self.pointer_type));
 
-        // For now, we don't have the actual Wasm function signature info
-        // This would need to be passed in from the module environment
-        // For a minimal implementation, assume no params/returns beyond vmctx
+        // Look up the function's type using the function→type mapping
+        // Port of Cranelift: environ.module.functions[function_index].signature
+        if (function_index < self.func_to_type.len) {
+            const type_idx = self.func_to_type[function_index];
+            if (type_idx < self.func_types.len) {
+                const wasm_func_type = self.func_types[type_idx];
+
+                // Add Wasm parameters
+                for (wasm_func_type.params) |param| {
+                    try sig.params.append(self.allocator, AbiParam.init(param.toClifType()));
+                }
+
+                // Add Wasm returns
+                for (wasm_func_type.results) |result| {
+                    try sig.returns.append(self.allocator, AbiParam.init(result.toClifType()));
+                }
+            }
+        }
 
         // Create the signature ref
         const sig_ref = try func.importSignature(self.allocator, sig);

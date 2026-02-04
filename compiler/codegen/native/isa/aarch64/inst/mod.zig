@@ -70,6 +70,7 @@ const Writable = regs_mod.Writable;
 const machinst_inst = @import("../../../machinst/inst.zig");
 const machinst_reg = @import("../../../machinst/reg.zig");
 const MachLabel = machinst_inst.MachLabel;
+const CallType = machinst_inst.CallType;
 
 // Import emit module for MachBuffer
 const emit_mod = @import("emit.zig");
@@ -1761,6 +1762,17 @@ pub const Inst = union(enum) {
         // Emit the instruction with resolved registers
         var state = emit_mod.EmitState{};
         try emit_mod.emit(&inst_copy, sink, emit_info, &state);
+    }
+
+    /// Classify the type of call instruction this is.
+    /// Port of Cranelift's call_type() from aarch64/inst/mod.rs:1007-1018.
+    /// Returns CallType::Regular for call/call_ind, CallType::None otherwise.
+    pub fn callType(self: *const Inst) CallType {
+        return switch (self.*) {
+            .call, .call_ind => CallType.Regular,
+            // TODO: Add return_call, return_call_ind when implemented
+            else => CallType.None,
+        };
     }
 
     /// Emit this instruction directly (with physical registers already in place).

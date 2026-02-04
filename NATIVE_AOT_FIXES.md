@@ -10,13 +10,18 @@ On February 4, 2026, E2E testing revealed that native AOT compilation only works
 |---------|--------|
 | Return constant (`return 42`) | ✅ Works |
 | Return simple expression (`return 10 + 5`) | ✅ Works |
-| Local variables (`let x = 10`) | ❌ SIGSEGV at runtime |
-| Function calls (no params) | ❌ Compiler panic (stack underflow) |
-| Function calls (with params) | ❌ SIGSEGV at runtime |
+| Local variables (`let x = 10`) | ❌ SIGSEGV - needs Wasm memory init |
+| Function calls (no params) | ✅ **FIXED** (Feb 4, 2026) |
+| Nested function calls | ✅ **FIXED** (Feb 4, 2026) |
+| Function calls (with params) | ❌ SIGSEGV - needs Wasm memory init |
 | If/else control flow | ❌ SIGSEGV at runtime |
 | While loops | ❌ Untested (likely broken) |
 | Structs | ❌ Untested (likely broken) |
 | Pointers | ❌ Untested (likely broken) |
+
+**Root cause for SIGSEGV cases:** Generated code accesses Wasm linear memory at hardcoded addresses (0x10000, 0x20000) that don't exist in native process. Need to either:
+1. Initialize memory area before main (runtime support), OR
+2. Change codegen to use native stack for locals instead of Wasm memory
 
 ---
 
@@ -76,53 +81,46 @@ test_while_sum        -> expect 55 (sum 1 to 10)
 
 ---
 
-## Task 1: Fix Stack Underflow in Function Calls
+## Task 1: Fix Stack Underflow in Function Calls ✅ FIXED
 
-**Error observed:**
+**Status:** FIXED on February 4, 2026
+
+**Original Error:** Functions calling other functions would hang in infinite loop
+
+**Root Cause Analysis:**
+
+The issue was NOT a stack underflow in Wasm→CLIF translation. The actual issue was:
+
+1. Functions that make calls need to save the link register (x30/LR) in the prologue
+2. Without saving LR, after a `bl` instruction overwrites x30 with the return address
+3. When main's `ret` executed, x30 still pointed to main's `ret` → infinite loop!
+
+**Fix Applied (Following TROUBLESHOOTING.md methodology):**
+
+1. **Found reference:** `cranelift/codegen/src/machinst/vcode.rs:687-745` - `compute_clobbers_and_function_calls()`
+2. **Found reference:** `cranelift/codegen/src/isa/aarch64/abi.rs:1158` - checks `function_calls != .None`
+3. **Copied pattern exactly:**
+
+**Changes made:**
+
+| File | Change |
+|------|--------|
+| `compiler/codegen/native/isa/aarch64/inst/mod.zig` | Added `callType()` method to classify call instructions |
+| `compiler/codegen/native/isa/x64/inst/mod.zig` | Added `callType()` method to classify call instructions |
+| `compiler/codegen/native/machinst/vcode.zig` | Added scanning for calls + prologue/epilogue emission |
+
+**Prologue emitted when `function_calls != .None`:**
+```asm
+stp x29, x30, [sp, #-16]!   ; Save FP and LR
+mov x29, sp                  ; Set up frame pointer
 ```
-thread panic: attempt to use null value
-compiler/codegen/native/wasm_to_clif/stack.zig:284:32: in pop1
-    return self.stack.pop().?;
+
+**Epilogue emitted before `ret` instructions:**
+```asm
+ldp x29, x30, [sp], #16     ; Restore FP and LR
 ```
 
-**When:** Compiling `fn get_five() int { return 5; } fn main() int { return get_five(); }`
-
-**Pipeline stage:** Wasm → CLIF translation
-
-**Our file:** `compiler/codegen/native/wasm_to_clif/stack.zig` and `translator.zig`
-
-**Reference file:** `~/learning/wasmtime/crates/cranelift/src/translate/state.rs`
-
-### Investigation Steps (Follow TROUBLESHOOTING.md)
-
-1. **Find where the error occurs:**
-   - The panic is in `pop1()` which is called from `translateLocalSet`
-   - This means when translating `local.set`, the stack is empty when it shouldn't be
-
-2. **Find reference handling of local.set:**
-   ```bash
-   grep -n "local_set\|LocalSet" ~/learning/wasmtime/crates/cranelift/src/translate/code_translator.rs
-   ```
-
-3. **Compare stack management:**
-   - How does Cranelift manage the value stack?
-   - When are values pushed/popped?
-   - What happens at function entry?
-
-4. **Check function prologue:**
-   - Does Cranelift push initial values onto the stack for locals?
-   - Does our translator do the same?
-
-5. **DO NOT guess.** Find exactly what Cranelift does and copy it.
-
-### Likely Issue (Hypothesis Only - Verify Against Reference)
-
-The Wasm `local.set` instruction expects a value on the stack. If the stack is empty:
-- Either we're not pushing values correctly during earlier instructions
-- Or we're handling function entry incorrectly
-- Or we're mishandling the Wasm locals initialization
-
-**Find the reference. Copy the reference. Do not invent.**
+**Test result:** `fn get_five() -> 5; fn main() -> get_five()` returns exit code 5 ✅
 
 ---
 

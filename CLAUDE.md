@@ -126,22 +126,23 @@ The Go compiler is at `~/learning/go/src/cmd/`. Key files:
 
 **⚠️ NATIVE AOT STATUS (February 4, 2026)**
 
-E2E testing revealed native AOT only works for trivial cases:
-
 | Feature | Native Status |
 |---------|---------------|
 | Return constant (`return 42`) | ✅ Works |
 | Simple expression (`return 10 + 5`) | ✅ Works |
-| Local variables | ❌ SIGSEGV |
-| Function calls | ❌ SIGSEGV or compiler panic |
+| Function calls (no params) | ✅ **FIXED** |
+| Nested function calls | ✅ **FIXED** |
+| Local variables | ❌ SIGSEGV (needs memory init) |
+| Function calls (with params) | ❌ SIGSEGV (needs memory init) |
 | If/else | ❌ SIGSEGV |
 | Loops, recursion, structs | ❌ Untested (likely broken) |
 
 **See `NATIVE_AOT_FIXES.md` for the detailed fix plan.**
 
-**Recent Infrastructure Fixes (February 2026):**
-- Value alias resolution, jump table relocations, operand order
-- These fixed `return 42` but more features need work
+**Recent Fixes (February 4, 2026):**
+- Fixed function call prologue/epilogue (save/restore link register)
+- Added `callType()` method to detect call instructions
+- Following Cranelift pattern from `vcode.rs:compute_clobbers_and_function_calls()`
 
 ---
 
