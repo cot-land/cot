@@ -15,9 +15,9 @@ See **[VISION.md](VISION.md)** for the complete language vision and strategy.
 | Frontend | ✅ Done | Scanner, parser, type checker, IR lowering |
 | SSA Infrastructure | ✅ Done | Values, blocks, functions, passes |
 | Wasm Backend | ✅ M1-M16 Done | Constants, arithmetic, control flow, loops, calls, memory, pointers, structs, slices, strings, ARC |
-| Native AOT | 🔄 80% Done | Cranelift port: CLIF IR, regalloc, ARM64/AMD64 backends (driver wiring in progress) |
+| Native AOT | ✅ Done | Cranelift port complete: CLIF IR, regalloc, ARM64/AMD64 backends, working executables |
 
-**Tests: 777/779 passed**
+**Tests: All passing**
 
 ## Quick Start
 
@@ -33,11 +33,12 @@ zig build
 wasmtime hello.wasm
 ```
 
-### Compile to Native (AOT - In Progress)
+### Compile to Native (AOT)
 ```bash
-# Native compilation is ~80% complete (Cranelift port)
-# Driver wiring is in progress - use Wasm target for now
-# Once complete, the AOT path will be: Cot → Wasm → CLIF → Native → Executable
+# Compile to native executable (default target)
+./zig-out/bin/cot hello.cot -o hello
+./hello
+echo $?  # Shows return value
 ```
 
 ### Run Tests
@@ -134,8 +135,8 @@ cot/
 
 | Target | Flag | Output | Status |
 |--------|------|--------|--------|
-| Wasm32 | `--target=wasm32` (default) | `.wasm` | ✅ Working |
-| Native | (in progress) | executable | 🔄 80% - Cranelift port |
+| Native | (default) | executable | ✅ Working |
+| Wasm32 | `--target=wasm32` | `.wasm` | ✅ Working |
 
 ## Design Decisions
 
@@ -167,7 +168,6 @@ cot/
 - ✅ ARC (retain/release)
 
 ### In Progress
-- 🔄 Native AOT compilation (Cranelift port ~80%)
 - 🔄 Browser imports (console.log, fetch)
 
 ### Planned

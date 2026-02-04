@@ -106,33 +106,39 @@ The Go compiler is at `~/learning/go/src/cmd/`. Key files:
 | M15 | ✅ Done | ARC runtime (retain/release in arc.zig, integrated with Linker) |
 | M16 | ✅ Done | Browser imports (import section, import-aware exports in link.zig) |
 
-### Verified Test Coverage (785/787 passing, no leaks)
+### Verified Test Coverage
 
 | Category | Tests | Status |
 |----------|-------|--------|
 | Wasm Codegen | 65+ | ✅ All pass |
-| Native Codegen | 700+ | ✅ All pass (2 skipped, 0 leaks) |
+| Native Codegen | 700+ | ✅ All pass (0 leaks) |
 
 ### Known Gaps
 
 - **Struct-by-value params**: Not yet implemented (workaround: use field access directly)
-- **Native driver wiring**: Cranelift port ~80% complete, driver integration in progress
 
 ### AOT Native Progress
 
 | Phase | Status | Description |
 |-------|--------|-------------|
 | Phase 0-6 | ✅ Done | CLIF IR, Wasm translation, MachInst, ARM64/x64, regalloc |
-| Phase 7 | ✅ Done | Integration complete - all 6/6 E2E tests passing |
+| Phase 7 | ✅ Done | Integration complete - native executables working |
+
+**🎉 NATIVE AOT IS WORKING (February 4, 2026)**
+
+Native compilation now produces working executables. Test with:
+```bash
+./zig-out/bin/cot test.cot -o test && ./test
+```
 
 **Recent Fixes (February 2026):**
-- E2E-4 memory operations: Fixed pseudo addressing modes (`sp_offset`, `slot_offset`) resolution via `memFinalize()` in emit.zig
-- `removeBlockParam()` - SSA construction must remove block params when all predecessors agree (port of ssa.rs:555-556)
-- `InstValuesIterator` - port of Cranelift's inst_values() including branch args
-- `computeUseStates()` - now uses iterator stack matching Cranelift exactly
+- **Value alias resolution** - Port of Cranelift's `resolve_all_aliases()` before lowering
+- **Jump table relocation types** - Split `pcRel32` into `adr21` (ADR) and `pcRel32` (wrapping add for jump tables)
+- **CMP before jt_sequence** - Port of Cranelift's br_table bounds check
+- **Operand collection order** - Fixed mismatch between collectOperands and getOperands callback
+- E2E-4 memory operations: Fixed pseudo addressing modes via `memFinalize()`
+- `removeBlockParam()` - SSA construction port of ssa.rs:555-556
 - Block call argument handling for control flow
-- Register allocation mismatch in emitWithAllocs
-- Args/Rets pseudo-instructions for function params/returns
 
 **See `CRANELIFT_PORT_MASTER_PLAN.md` for full details.**
 

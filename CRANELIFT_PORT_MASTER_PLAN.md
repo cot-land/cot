@@ -1065,9 +1065,11 @@ All audit documents are in `audit/native/`:
 
 ## Phase 7: Integration
 
-**STATUS**: ✅ Complete (all infrastructure done, 6/6 E2E tests passing)
+**STATUS**: ✅ Complete - Native AOT executables working!
 
 **Audit Date**: February 4, 2026
+
+**🎉 MILESTONE: First working native executable produced on February 4, 2026.**
 
 ### 7.0 Overview
 
@@ -1281,7 +1283,9 @@ compiler/codegen/native/
 | 5: x86-64 | ✅ Complete | 16/16 | ~8,400 | None |
 | 6: Regalloc | ✅ Complete | 19/19 | ~6,400 | None |
 | 7: Integration | ✅ Complete | 8/8 | ~3,400 | None |
-| **TOTAL** | **100%** | **145/145** | **~56,075** | **None** |
+| **TOTAL** | **✅ 100%** | **145/145** | **~56,075** | **None** |
+
+**🎉 Native AOT compilation is working! First executable produced February 4, 2026.**
 
 ### What's Done
 
@@ -1297,9 +1301,14 @@ All infrastructure is complete and tests pass:
 
 ### What Remains
 
-**✅ ALL PHASES COMPLETE**
+**✅ ALL PHASES COMPLETE - NATIVE AOT WORKING**
 
-The native codegen pipeline is fully operational. All end-to-end tests pass:
+The native codegen pipeline is fully operational. Native executables can be produced:
+
+```bash
+./zig-out/bin/cot test.cot -o test && ./test
+echo $?  # Returns 42
+```
 
 | Test | Description | Status | Notes |
 |------|-------------|--------|-------|
@@ -1310,12 +1319,32 @@ The native codegen pipeline is fully operational. All end-to-end tests pass:
 | E2E-5 | Function calls - direct calls | ✅ PASS | Fixed in Feb 2026 - clobber/def collision resolved |
 | E2E-6 | Loops - while/for | ✅ PASS | Fixed in Feb 2026 - label fixup timing |
 
-**Recent Fixes (February 2026)**:
-- Fixed memory leak: `Inst.deinit` now frees CallInfo/CallIndInfo (matching Cranelift's Box<CallInfo> drop)
-- Fixed E2E-4: Pseudo addressing modes (`sp_offset`, `slot_offset`) now resolved via `memFinalize()` in emit.zig
-- Fixed clobber/def collision in call instructions by porting Cranelift's gen_call_info pattern
-- Fixed label fixup timing by deferring all fixups to finish() (matching Cranelift's use_label_at_offset)
-- See `audit/regalloc2_port_gaps.md` for gap analysis and change log
+**Critical Fixes (February 4, 2026)** - Made native AOT work:
+1. **Value alias resolution** (`dfg.zig`, `compile.zig`):
+   - SSA construction creates value aliases via `changeToAliasOf()`
+   - Port of Cranelift's `resolve_all_aliases()` flattens alias chains
+   - Must be called before lowering so instruction arguments point to real values
+
+2. **Jump table relocation types** (`emit.zig`):
+   - Split `pcRel32` into `adr21` (ADR instruction) and `pcRel32` (jump tables)
+   - `pcRel32` now uses wrapping add like Cranelift, not ADR bit manipulation
+   - ADR/ADRP instructions use new `adr21` type
+
+3. **CMP before jt_sequence** (`lower.zig`):
+   - Port of Cranelift's `br_table_impl` pattern
+   - Emit CMP instruction to set flags before jump table sequence
+   - `jt_sequence`'s B.HS relies on prior CMP for bounds check
+
+4. **Operand collection order** (`get_operands.zig`):
+   - `collectOperands` puts defs before uses
+   - Changed jt_sequence to emit `regDef` before `regUse`
+   - Fixes register allocation mismatch
+
+**Earlier Fixes (February 2026)**:
+- Fixed memory leak: `Inst.deinit` now frees CallInfo/CallIndInfo
+- Fixed E2E-4: Pseudo addressing modes resolved via `memFinalize()` in emit.zig
+- Fixed clobber/def collision by porting Cranelift's gen_call_info pattern
+- Fixed label fixup timing by deferring all fixups to finish()
 
 ### Estimated LOC Summary
 
@@ -1327,8 +1356,8 @@ The native codegen pipeline is fully operational. All end-to-end tests pass:
 | ARM64 Backend | 20,700 | ~15,000 | ✅ Complete |
 | x86-64 Backend | 10,000 | 10,998 | ✅ Complete |
 | Register Allocator | 12,631 | 10,813 | ✅ Complete |
-| Integration | ~2,000 | ~3,400 | ✅ ~95% |
-| **TOTAL** | **~74,000** | **~61,711** | **~95%** |
+| Integration | ~2,000 | ~3,400 | ✅ Complete |
+| **TOTAL** | **~74,000** | **~61,711** | **✅ 100%** |
 
 ---
 
