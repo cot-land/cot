@@ -177,7 +177,7 @@ pub fn addToLinker(allocator: std.mem.Allocator, linker: *wasm_link.Linker) !Run
         &[_]ValType{ .i64, .i64 },
         &[_]ValType{.i64},
     );
-    const append_body = try generateStubBody(allocator);
+    const append_body = try generateI64StubBody(allocator);
     const append_idx = try linker.addFunc(.{
         .name = APPEND_NAME,
         .type_idx = append_type,
@@ -191,7 +191,7 @@ pub fn addToLinker(allocator: std.mem.Allocator, linker: *wasm_link.Linker) !Run
         &[_]ValType{ .i64, .i64 },
         &[_]ValType{},
     );
-    const memset_zero_body = try generateStubBody(allocator);
+    const memset_zero_body = try generateVoidStubBody(allocator);
     const memset_zero_idx = try linker.addFunc(.{
         .name = MEMSET_ZERO_NAME,
         .type_idx = memset_zero_type,
@@ -211,16 +211,22 @@ pub fn addToLinker(allocator: std.mem.Allocator, linker: *wasm_link.Linker) !Run
     };
 }
 
-/// Generates a stub function body that returns 0 (for i64 returns) or does nothing (for void)
-/// Used for unimplemented functions
-fn generateStubBody(allocator: std.mem.Allocator) ![]const u8 {
+/// Generates a stub function body for void functions.
+/// Reference: Swift void functions have empty bodies (HeapObject.cpp)
+/// Wasm validation requires stack to be empty at end for void functions.
+fn generateVoidStubBody(allocator: std.mem.Allocator) ![]const u8 {
     var code = wasm.CodeBuilder.init(allocator);
     defer code.deinit();
+    // Empty body - finish() adds the end opcode automatically
+    return try code.finish();
+}
 
-    // Return 0 for any return type (harmless for void returns)
+/// Generates a stub function body that returns 0 (for i64 returns).
+/// Used for unimplemented functions that need to return a value.
+fn generateI64StubBody(allocator: std.mem.Allocator) ![]const u8 {
+    var code = wasm.CodeBuilder.init(allocator);
+    defer code.deinit();
     try code.emitI64Const(0);
-    // Note: finish() adds the end opcode automatically
-
     return try code.finish();
 }
 
