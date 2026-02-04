@@ -150,7 +150,12 @@ pub const AArch64LabelUse = struct {
         /// 14-bit PC-relative branch (TBZ, TBNZ).
         /// Range: ±32KB.
         branch14,
-        /// 32-bit PC-relative for ADR (±4GB in practice, using imm21).
+        /// 21-bit PC-relative for ADR instruction.
+        /// Port of Cranelift's Adr21.
+        adr21,
+        /// 32-bit PC-relative constant offset (from address of constant itself),
+        /// signed. Used in jump tables.
+        /// Port of Cranelift's PCRel32.
         pcRel32,
         /// 19-bit PC-relative for LDR literal.
         /// Range: ±1MB.
@@ -184,11 +189,22 @@ pub const AArch64LabelUse = struct {
         .supports_veneer = true,
     };
 
-    /// PCRel32: Used for ADR instruction (21-bit immediate).
-    pub const pcRel32 = AArch64LabelUse{
-        .kind = .pcRel32,
+    /// Adr21: Used for ADR instruction (21-bit immediate).
+    /// Port of Cranelift's Adr21.
+    pub const adr21 = AArch64LabelUse{
+        .kind = .adr21,
         .max_pos_range = (1 << 20) - 4, // 1MB - 4
         .max_neg_range = 1 << 20, // 1MB
+        .patch_size = 4,
+        .supports_veneer = false,
+    };
+
+    /// PCRel32: 32-bit PC-relative constant offset, signed. Used in jump tables.
+    /// Port of Cranelift's PCRel32 - adds pc_rel to existing value.
+    pub const pcRel32 = AArch64LabelUse{
+        .kind = .pcRel32,
+        .max_pos_range = 0x7fffffff,
+        .max_neg_range = 0x80000000,
         .patch_size = 4,
         .supports_veneer = false,
     };
@@ -228,13 +244,22 @@ pub const AArch64LabelUse = struct {
                 const patched = (insn & 0xFFF8001F) | (imm14 << 5);
                 std.mem.writeInt(u32, buf[use_offset..][0..4], patched, .little);
             },
-            .pcRel32 => {
+            .adr21 => {
                 // ADR: immlo at bits [30:29], immhi at bits [23:5].
+                // Port of Cranelift's Adr21 patch.
                 const imm21: i32 = @intCast(pc_rel);
                 const immlo: u32 = @bitCast(imm21 & 0x3);
                 const immhi: u32 = @bitCast((imm21 >> 2) & 0x7FFFF);
                 const insn = std.mem.readInt(u32, buf[use_offset..][0..4], .little);
                 const patched = (insn & 0x9F00001F) | (immlo << 29) | (immhi << 5);
+                std.mem.writeInt(u32, buf[use_offset..][0..4], patched, .little);
+            },
+            .pcRel32 => {
+                // Jump table entry: ADD pc_rel to existing value.
+                // Port of Cranelift's PCRel32 patch - uses wrapping_add.
+                const pc_rel_u32: u32 = @bitCast(@as(i32, @intCast(pc_rel)));
+                const existing = std.mem.readInt(u32, buf[use_offset..][0..4], .little);
+                const patched = existing +% pc_rel_u32;
                 std.mem.writeInt(u32, buf[use_offset..][0..4], patched, .little);
             },
             .ldr19 => {
@@ -1216,7 +1241,7 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, emit_info: *const EmitInfo, st
                 .pc_rel => |o| o,
                 .mach => |l| blk: {
                     // Register relocation for later resolution
-                    try sink.useLabelAtOffset(sink.curOffset(), l, .pcRel32);
+                    try sink.useLabelAtOffset(sink.curOffset(), l, .adr21);
                     break :blk 0;
                 },
             };
@@ -1229,7 +1254,7 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, emit_info: *const EmitInfo, st
             const off: i32 = switch (payload.label) {
                 .pc_rel => |o| o,
                 .mach => |l| blk: {
-                    try sink.useLabelAtOffset(sink.curOffset(), l, .pcRel32);
+                    try sink.useLabelAtOffset(sink.curOffset(), l, .adr21);
                     break :blk 0;
                 },
             };

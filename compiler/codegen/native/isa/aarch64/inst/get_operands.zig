@@ -688,10 +688,12 @@ pub fn getOperands(inst: *Inst, visitor: *OperandVisitor) void {
         .atomic_rmw_loop, .atomic_cas_loop => {},
 
         // Jump table
+        // IMPORTANT: Order must match collectOperands in vcode.zig - defs first, then uses
+        // Port of Cranelift's JTSequence operand collection
         .jt_sequence => |*p| {
-            visitor.regUse(&p.ridx);
             visitor.regDef(&p.rtmp1);
             visitor.regDef(&p.rtmp2);
+            visitor.regUse(&p.ridx);
         },
 
         // External symbol loading

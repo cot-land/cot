@@ -320,6 +320,20 @@ pub const ValueListPool = struct {
         return @as([*]const Value, @ptrCast(data_slice.ptr))[0..list_len];
     }
 
+    /// Get the values in a list (mutable version for resolveAllAliases).
+    pub fn getMutSlice(self: *Self, list: ValueList) []Value {
+        if (list.isEmpty()) return &[_]Value{};
+
+        const list_len = self.data.items[list.base];
+        const start = list.base + 1;
+        const end = start + list_len;
+        _ = end;
+
+        // Return a mutable slice reinterpreted as Values
+        const data_slice = self.data.items[start..][0..list_len];
+        return @as([*]Value, @ptrCast(data_slice.ptr))[0..list_len];
+    }
+
     /// Get the length of a list.
     pub fn len(self: *const Self, list: ValueList) usize {
         if (list.isEmpty()) return 0;
@@ -625,6 +639,108 @@ pub const DataFlowGraph = struct {
             .ty = ty,
             .def = .{ .alias = .{ .original = original } },
         };
+    }
+
+    /// Replace all uses of value aliases with their resolved values, and delete the aliases.
+    ///
+    /// Port of cranelift/codegen/src/ir/dfg.rs resolve_all_aliases.
+    /// This must be called before lowering to machine instructions.
+    pub fn resolveAllAliases(self: *Self) void {
+        // First pass: flatten all alias chains so each alias points directly to final value
+        for (self.values.items, 0..) |*vdata, idx| {
+            switch (vdata.def) {
+                .alias => |a| {
+                    // Resolve to final value
+                    const resolved = self.resolveAliases(a.original);
+                    vdata.def = .{ .alias = .{ .original = resolved } };
+                    _ = idx;
+                },
+                else => {},
+            }
+        }
+
+        // Second pass: rewrite all instruction arguments to use resolved values
+        for (self.insts.items) |*inst| {
+            self.mapInstValues(inst);
+        }
+
+        // Third pass: rewrite branch arguments in jump tables
+        for (self.jump_tables.tables.items) |*jt| {
+            // Update all branch entries (including default which is at index 0)
+            for (jt.allBranchesMut()) |*bc| {
+                self.mapBlockCallValues(bc);
+            }
+        }
+    }
+
+    /// Helper: resolve aliases in a single value, returning the resolved value.
+    fn resolveValueAlias(self: *Self, v: Value) Value {
+        switch (self.values.items[v.index].def) {
+            .alias => |a| return a.original,
+            else => return v,
+        }
+    }
+
+    /// Helper: map values in an instruction to their resolved aliases.
+    fn mapInstValues(self: *Self, inst: *InstructionData) void {
+        switch (inst.*) {
+            .nullary, .unary_imm, .unary_ieee32, .unary_ieee64, .trap, .stack_load, .func_addr, .unary_global_value => {},
+            .unary => |*d| d.arg = self.resolveValueAlias(d.arg),
+            .binary => |*d| {
+                d.args[0] = self.resolveValueAlias(d.args[0]);
+                d.args[1] = self.resolveValueAlias(d.args[1]);
+            },
+            .binary_imm64 => |*d| d.arg = self.resolveValueAlias(d.arg),
+            .ternary => |*d| {
+                d.args[0] = self.resolveValueAlias(d.args[0]);
+                d.args[1] = self.resolveValueAlias(d.args[1]);
+                d.args[2] = self.resolveValueAlias(d.args[2]);
+            },
+            .int_compare => |*d| {
+                d.args[0] = self.resolveValueAlias(d.args[0]);
+                d.args[1] = self.resolveValueAlias(d.args[1]);
+            },
+            .float_compare => |*d| {
+                d.args[0] = self.resolveValueAlias(d.args[0]);
+                d.args[1] = self.resolveValueAlias(d.args[1]);
+            },
+            .jump => |*d| self.mapBlockCallValues(&d.destination),
+            .brif => |*d| {
+                d.arg = self.resolveValueAlias(d.arg);
+                self.mapBlockCallValues(&d.blocks[0]);
+                self.mapBlockCallValues(&d.blocks[1]);
+            },
+            .branch_table => |*d| d.arg = self.resolveValueAlias(d.arg),
+            .call => |*d| self.mapValueListValues(d.args),
+            .call_indirect => |*d| {
+                d.callee = self.resolveValueAlias(d.callee);
+                self.mapValueListValues(d.args);
+            },
+            .cond_trap => |*d| d.arg = self.resolveValueAlias(d.arg),
+            .load => |*d| d.arg = self.resolveValueAlias(d.arg),
+            .store => |*d| {
+                d.args[0] = self.resolveValueAlias(d.args[0]);
+                d.args[1] = self.resolveValueAlias(d.args[1]);
+            },
+            .stack_store => |*d| d.arg = self.resolveValueAlias(d.arg),
+            .multi_ary => |*d| self.mapValueListValues(d.args),
+        }
+    }
+
+    /// Helper: map values in a BlockCall.
+    fn mapBlockCallValues(self: *Self, bc: *BlockCall) void {
+        if (!bc.args.isEmpty()) {
+            self.mapValueListValues(bc.args);
+        }
+    }
+
+    /// Helper: map values in a ValueList.
+    fn mapValueListValues(self: *Self, vl: ValueList) void {
+        if (vl.isEmpty()) return;
+        const values = self.value_lists.getMutSlice(vl);
+        for (values) |*v| {
+            v.* = self.resolveValueAlias(v.*);
+        }
     }
 
     // ------------------------------------------------------------------------

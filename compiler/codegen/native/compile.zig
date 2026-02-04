@@ -249,7 +249,7 @@ pub const ControlPlane = struct {
 /// Returns CompiledCode containing the machine code, relocations, and metadata.
 pub fn compile(
     allocator: Allocator,
-    clif_func: *const ClifFunction,
+    clif_func: *ClifFunction,
     isa: TargetIsa,
     ctrl_plane: *ControlPlane,
 ) !CompiledCode {
@@ -266,7 +266,7 @@ pub fn compile(
 /// AArch64-specific compilation pipeline.
 fn compileAArch64(
     allocator: Allocator,
-    clif_func: *const ClifFunction,
+    clif_func: *ClifFunction,
     backend: AArch64Backend,
 ) !CompiledCode {
     // Phase 1: Compute CFG and dominator tree
@@ -281,6 +281,12 @@ fn compileAArch64(
     // Phase 2: Compute block ordering
     var block_order = try BlockLoweringOrder.init(allocator, clif_func, &domtree);
     defer block_order.deinit();
+
+    // Phase 2.5: Resolve all value aliases
+    // Port of Cranelift's context.rs line 183: self.func.dfg.resolve_all_aliases()
+    // This must be done before lowering so that instruction arguments
+    // point to actual values with registers, not aliases.
+    clif_func.dfg.resolveAllAliases();
 
     // Phase 3: Lower CLIF to VCode
     var lower_ctx = try Lower(aarch64.Inst).init(
@@ -317,7 +323,7 @@ fn compileAArch64(
 /// x64-specific compilation pipeline.
 fn compileX64(
     allocator: Allocator,
-    clif_func: *const ClifFunction,
+    clif_func: *ClifFunction,
     backend: X64Backend,
 ) !CompiledCode {
     // Phase 1: Compute CFG and dominator tree
@@ -332,6 +338,12 @@ fn compileX64(
     // Phase 2: Compute block ordering
     var block_order = try BlockLoweringOrder.init(allocator, clif_func, &domtree);
     defer block_order.deinit();
+
+    // Phase 2.5: Resolve all value aliases
+    // Port of Cranelift's context.rs line 183: self.func.dfg.resolve_all_aliases()
+    // This must be done before lowering so that instruction arguments
+    // point to actual values with registers, not aliases.
+    clif_func.dfg.resolveAllAliases();
 
     // Phase 3: Lower CLIF to VCode
     var lower_ctx = try Lower(x64.Inst).init(

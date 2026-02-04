@@ -44,6 +44,7 @@ const PReg = regs.PReg;
 const VReg = regs.VReg;
 const Writable = regs.Writable;
 const zeroReg = regs.zeroReg;
+const writableZeroReg = regs.writableZeroReg;
 
 // Import ArgPair and RetPair for argument/return value constraints
 const ArgPair = inst_mod.ArgPair;
@@ -328,7 +329,32 @@ pub const AArch64LowerBackend = struct {
                 const tmp2_regs = ctx.allocTmp(.I64) catch return null;
                 const tmp2_wreg = tmp2_regs.onlyReg() orelse return null;
 
-                // Emit the jump table sequence
+                // CRITICAL: Emit CMP instruction before jt_sequence to set flags
+                // Port of Cranelift: (cmp_imm (OperandSize.Size32) ridx jt_size)
+                // CMP is encoded as SUBS with XZR as destination
+                const imm12 = Imm12.maybeFromU64(@intCast(table_size)) orelse {
+                    // Table too large for immediate - would need to use register compare
+                    // For now, just emit default jump for large tables
+                    ctx.emit(Inst{
+                        .jump = .{
+                            .dest = .{ .label = default_label },
+                        },
+                    }) catch return null;
+                    return;
+                };
+
+                // Emit: CMP Widx, #table_size (which is SUBS WZR, Widx, #table_size)
+                ctx.emit(Inst{
+                    .alu_rr_imm12 = .{
+                        .alu_op = .subs,
+                        .size = .size32,
+                        .rd = writableZeroReg(),
+                        .rn = idx_reg,
+                        .imm12 = imm12,
+                    },
+                }) catch return null;
+
+                // Emit the jump table sequence (uses flags set by CMP above)
                 ctx.emit(Inst{
                     .jt_sequence = .{
                         .ridx = idx_reg,
