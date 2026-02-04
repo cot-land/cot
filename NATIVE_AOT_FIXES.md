@@ -662,6 +662,12 @@ ret
   - The same vreg (vmctx) needed fixed_reg constraints for both x0 and x1
   - First call's move (x0 ← x1) was emitted correctly
   - Second call's move was ELIDED because eliminator tracked x0=x1 without accounting for call clobbers
-  - Fix: processRedundantMoveSideEffects now clears ALL state when instructions exist between moves
-  - This is conservative but safe - calls clobber x0-x17, invalidating any tracked copy chains
+  - Fix (v1): Conservative - clears ALL state when instructions exist between moves
+  - Fix (v2): Proper Cranelift port from `src/ion/moves.rs:789-835` `redundant_move_process_side_effects`
+    - MoveContext now generic over Function type, takes func and MachineEnv params
+    - processRedundantMoveSideEffects iterates through instructions, clearing allocations for:
+      - Def operands (registers being defined)
+      - Clobbered registers (from instClobbers)
+      - Scratch registers (from MachineEnv.scratch_by_class)
+    - Matches Cranelift's granular approach instead of conservative full-clear
   - All 52 E2E tests now pass on both wasm and native targets

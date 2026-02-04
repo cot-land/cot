@@ -63,7 +63,6 @@ const RegAllocError = output_mod.RegAllocError;
 const RegallocOptions = output_mod.RegallocOptions;
 const ProcessContext = process_mod.ProcessContext;
 const SpillContext = spill_mod.SpillContext;
-const MoveContext = ion_moves.MoveContext;
 const Function = func_mod.Function;
 const LivenessContext = liveness_mod.LivenessContext;
 const MergeContext = merge_mod.MergeContext;
@@ -447,8 +446,10 @@ pub fn runWithCtx(
     // Phase 10: Move insertion
     // Ported from: self.apply_allocations_and_insert_moves() and
     //              self.resolve_inserted_moves() in moves.rs
-    var move_ctx = MoveContext.init(
+    var move_ctx = ion_moves.MoveContext(FuncType).init(
         allocator,
+        func,
+        env,
         &ctx.ranges,
         &ctx.bundles,
         &ctx.spillsets,

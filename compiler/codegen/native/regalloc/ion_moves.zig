@@ -18,19 +18,24 @@ const cfg_mod = @import("cfg.zig");
 const process_mod = @import("process.zig");
 const moves_mod = @import("moves.zig");
 const output_mod = @import("output.zig");
+const env_mod = @import("env.zig");
+const func_mod = @import("func.zig");
 
 const Block = index.Block;
 const Inst = index.Inst;
 const VReg = index.VReg;
 const PReg = index.PReg;
+const PRegSet = index.PRegSet;
 const RegClass = index.RegClass;
 const SpillSlot = index.SpillSlot;
 const Allocation = operand_mod.Allocation;
 const ProgPoint = operand_mod.ProgPoint;
 const InstPosition = operand_mod.InstPosition;
 const Edit = operand_mod.Edit;
+const Operand = operand_mod.Operand;
 const OperandKind = operand_mod.OperandKind;
 const OperandConstraint = operand_mod.OperandConstraint;
+const MachineEnv = env_mod.MachineEnv;
 const CodeRange = ion_data.CodeRange;
 const LiveRangeIndex = ion_data.LiveRangeIndex;
 const LiveBundleIndex = ion_data.LiveBundleIndex;
@@ -266,73 +271,88 @@ const PrevBuffer = struct {
 // MoveContext - Context for move insertion
 //=============================================================================
 
-pub const MoveContext = struct {
-    const Self = @This();
+/// MoveContext - Context for move insertion.
+///
+/// Ported from regalloc2's `Env` struct in `src/ion/mod.rs`, specifically
+/// the move-related functionality in `src/ion/moves.rs`.
+pub fn MoveContext(comptime Func: type) type {
+    return struct {
+        const Self = @This();
 
-    allocator: std.mem.Allocator,
-
-    // === Core data structures ===
-    ranges: *std.ArrayListUnmanaged(LiveRange),
-    bundles: *std.ArrayListUnmanaged(LiveBundle),
-    spillsets: *std.ArrayListUnmanaged(SpillSet),
-    spillslots: *std.ArrayListUnmanaged(SpillSlotData),
-    vregs: *std.ArrayListUnmanaged(VRegData),
-
-    // === CFG info ===
-    cfginfo: *const CFGInfo,
-
-    // === Output ===
-    output: *Output,
-
-    // === Block parameters ===
-    blockparam_ins: []const BlockparamIn,
-    blockparam_outs: []const BlockparamOut,
-
-    // === Fixed-reg fixups ===
-    multi_fixed_reg_fixups: *std.ArrayListUnmanaged(MultiFixedRegFixup),
-
-    // === Extra spillslots for scratch ===
-    extra_spillslots_by_class: *[3]std.ArrayListUnmanaged(Allocation),
-
-    // === Preferred victim registers for scratch ===
-    preferred_victim_by_class: [3]PReg,
-
-    // === Number of spillslots ===
-    num_spillslots: *usize,
-
-    pub fn init(
         allocator: std.mem.Allocator,
+
+        // === Function interface ===
+        func: *const Func,
+
+        // === Machine environment ===
+        env: *const MachineEnv,
+
+        // === Core data structures ===
         ranges: *std.ArrayListUnmanaged(LiveRange),
         bundles: *std.ArrayListUnmanaged(LiveBundle),
         spillsets: *std.ArrayListUnmanaged(SpillSet),
         spillslots: *std.ArrayListUnmanaged(SpillSlotData),
         vregs: *std.ArrayListUnmanaged(VRegData),
+
+        // === CFG info ===
         cfginfo: *const CFGInfo,
+
+        // === Output ===
         output: *Output,
+
+        // === Block parameters ===
         blockparam_ins: []const BlockparamIn,
         blockparam_outs: []const BlockparamOut,
+
+        // === Fixed-reg fixups ===
         multi_fixed_reg_fixups: *std.ArrayListUnmanaged(MultiFixedRegFixup),
+
+        // === Extra spillslots for scratch ===
         extra_spillslots_by_class: *[3]std.ArrayListUnmanaged(Allocation),
+
+        // === Preferred victim registers for scratch ===
         preferred_victim_by_class: [3]PReg,
+
+        // === Number of spillslots ===
         num_spillslots: *usize,
-    ) Self {
-        return .{
-            .allocator = allocator,
-            .ranges = ranges,
-            .bundles = bundles,
-            .spillsets = spillsets,
-            .spillslots = spillslots,
-            .vregs = vregs,
-            .cfginfo = cfginfo,
-            .output = output,
-            .blockparam_ins = blockparam_ins,
-            .blockparam_outs = blockparam_outs,
-            .multi_fixed_reg_fixups = multi_fixed_reg_fixups,
-            .extra_spillslots_by_class = extra_spillslots_by_class,
-            .preferred_victim_by_class = preferred_victim_by_class,
-            .num_spillslots = num_spillslots,
-        };
-    }
+
+        pub fn init(
+            allocator: std.mem.Allocator,
+            func: *const Func,
+            env: *const MachineEnv,
+            ranges: *std.ArrayListUnmanaged(LiveRange),
+            bundles: *std.ArrayListUnmanaged(LiveBundle),
+            spillsets: *std.ArrayListUnmanaged(SpillSet),
+            spillslots: *std.ArrayListUnmanaged(SpillSlotData),
+            vregs: *std.ArrayListUnmanaged(VRegData),
+            cfginfo: *const CFGInfo,
+            output: *Output,
+            blockparam_ins: []const BlockparamIn,
+            blockparam_outs: []const BlockparamOut,
+            multi_fixed_reg_fixups: *std.ArrayListUnmanaged(MultiFixedRegFixup),
+            extra_spillslots_by_class: *[3]std.ArrayListUnmanaged(Allocation),
+            preferred_victim_by_class: [3]PReg,
+            num_spillslots: *usize,
+        ) Self {
+            return .{
+                .allocator = allocator,
+                .func = func,
+                .env = env,
+                .ranges = ranges,
+                .bundles = bundles,
+                .spillsets = spillsets,
+                .spillslots = spillslots,
+                .vregs = vregs,
+                .cfginfo = cfginfo,
+                .output = output,
+                .blockparam_ins = blockparam_ins,
+                .blockparam_outs = blockparam_outs,
+                .multi_fixed_reg_fixups = multi_fixed_reg_fixups,
+                .extra_spillslots_by_class = extra_spillslots_by_class,
+                .preferred_victim_by_class = preferred_victim_by_class,
+                .num_spillslots = num_spillslots,
+            };
+        }
 
     //=========================================================================
     // Block boundary checks
@@ -630,46 +650,76 @@ pub const MoveContext = struct {
         return edits;
     }
 
-    /// Process side effects between two positions for redundant move elimination.
-    fn processRedundantMoveSideEffects(
-        self: *const Self,
-        redundant_moves: *RedundantMoveEliminator,
-        from: ProgPoint,
-        to: ProgPoint,
-    ) !void {
-        // If we cross a block boundary, clear state
-        if (self.cfginfo.insn_block.items[from.inst().idx()].idx() !=
-            self.cfginfo.insn_block.items[to.inst().idx()].idx())
-        {
-            redundant_moves.clear();
-            return;
-        }
+        /// Process side effects between two positions for redundant move elimination.
+        ///
+        /// Ported from regalloc2's `redundant_move_process_side_effects` in
+        /// `src/ion/moves.rs:789-835`.
+        ///
+        /// For each instruction between `from` and `to`:
+        /// - Clear allocations for Def operands (they overwrite the register)
+        /// - Clear allocations for clobbered registers (garbage after instruction)
+        /// - Clear allocations for scratch registers (may be used by any instruction)
+        fn processRedundantMoveSideEffects(
+            self: *const Self,
+            redundant_moves: *RedundantMoveEliminator,
+            from: ProgPoint,
+            to: ProgPoint,
+        ) !void {
+            // If we cross a block boundary, clear and return.
+            // Ported from: if this.cfginfo.insn_block[from.inst().index()] != ...
+            if (self.cfginfo.insn_block.items[from.inst().idx()].idx() !=
+                self.cfginfo.insn_block.items[to.inst().idx()].idx())
+            {
+                redundant_moves.clear();
+                return;
+            }
 
-        // Clear allocations for any defs/clobbers between the two positions.
-        // Since we don't have direct access to clobber information here,
-        // we conservatively clear ALL state if there are any instructions
-        // between the two positions. This may miss some optimization opportunities
-        // but ensures correctness when calls or other clobbering instructions exist.
-        //
-        // A call instruction clobbers x0-x17, so any move that was valid before
-        // the call may no longer be valid after it.
-        const start_inst: usize = if (from.pos() == .before)
-            from.inst().idx()
-        else
-            from.inst().idx() + 1;
-        const end_inst: usize = if (to.pos() == .before)
-            to.inst().idx()
-        else
-            to.inst().idx() + 1;
+            // Calculate instruction range to process.
+            // Ported from: let start_inst = if from.pos() == InstPosition::Before { ... }
+            const start_inst: usize = if (from.pos() == .before)
+                from.inst().idx()
+            else
+                from.inst().idx() + 1;
+            const end_inst: usize = if (to.pos() == .before)
+                to.inst().idx()
+            else
+                to.inst().idx() + 1;
 
-        // If there are any instructions between start and end, clear all state.
-        // This is conservative but safe - clobbers from calls would invalidate
-        // any tracked copy chains.
-        if (end_inst > start_inst) {
-            redundant_moves.clear();
+            // For each instruction in range, clear allocations for defs and clobbers.
+            // Ported from: for inst in start_inst.index()..end_inst.index() { ... }
+            var inst_idx = start_inst;
+            while (inst_idx < end_inst) : (inst_idx += 1) {
+                const inst = Inst.new(inst_idx);
+
+                // Clear allocations for Def operands.
+                // Ported from: for (i, op) in this.func.inst_operands(inst).iter().enumerate() { ... }
+                const operands = self.func.instOperands(inst);
+                for (operands, 0..) |op, slot| {
+                    if (op.kind() == .def) {
+                        const alloc = self.getAlloc(inst, slot);
+                        try redundant_moves.clearAlloc(alloc);
+                    }
+                }
+
+                // Clear allocations for clobbered registers.
+                // Ported from: for reg in this.func.inst_clobbers(inst) { ... }
+                const clobbers = self.func.instClobbers(inst);
+                var clobber_iter = clobbers.iter();
+                while (clobber_iter.next()) |preg| {
+                    try redundant_moves.clearAlloc(Allocation.reg(preg));
+                }
+
+                // Clear allocations for scratch registers.
+                // Ported from: for reg in this.env.scratch_by_class { ... }
+                for (self.env.scratch_by_class) |maybe_scratch| {
+                    if (maybe_scratch) |scratch| {
+                        try redundant_moves.clearAlloc(Allocation.reg(scratch));
+                    }
+                }
+            }
         }
-    }
-};
+    };
+}
 
 //=============================================================================
 // Tests
@@ -754,6 +804,55 @@ test "PrevBuffer advancement" {
 }
 
 test "MoveContext block boundaries" {
+    // Mock function type for testing
+    const MockFunc = struct {
+        pub fn numInsts(_: *const @This()) usize {
+            return 3;
+        }
+        pub fn numBlocks(_: *const @This()) usize {
+            return 1;
+        }
+        pub fn entryBlock(_: *const @This()) Block {
+            return Block.new(0);
+        }
+        pub fn blockInsns(_: *const @This(), _: Block) index.InstRange {
+            return index.InstRange.new(Inst.new(0), Inst.new(3));
+        }
+        pub fn blockSuccs(_: *const @This(), _: Block) []const Block {
+            return &.{};
+        }
+        pub fn blockPreds(_: *const @This(), _: Block) []const Block {
+            return &.{};
+        }
+        pub fn blockParams(_: *const @This(), _: Block) []const VReg {
+            return &.{};
+        }
+        pub fn isRet(_: *const @This(), _: Inst) bool {
+            return false;
+        }
+        pub fn isBranch(_: *const @This(), _: Inst) bool {
+            return false;
+        }
+        pub fn branchBlockparams(_: *const @This(), _: Block, _: Inst, _: usize) []const VReg {
+            return &.{};
+        }
+        pub fn instOperands(_: *const @This(), _: Inst) []const Operand {
+            return &.{};
+        }
+        pub fn instClobbers(_: *const @This(), _: Inst) PRegSet {
+            return PRegSet.empty();
+        }
+        pub fn numVregs(_: *const @This()) usize {
+            return 0;
+        }
+        pub fn spillslotSize(_: *const @This(), _: RegClass) usize {
+            return 1;
+        }
+    };
+
+    const mock_func = MockFunc{};
+    const mock_env = MachineEnv.empty();
+
     // Create minimal CFGInfo for testing
     var insn_block: std.ArrayListUnmanaged(Block) = .{};
     var block_entry: std.ArrayListUnmanaged(ProgPoint) = .{};
@@ -799,8 +898,10 @@ test "MoveContext block boundaries" {
     var extra: [3]std.ArrayListUnmanaged(Allocation) = .{ .{}, .{}, .{} };
     var num_spillslots: usize = 0;
 
-    const ctx = MoveContext.init(
+    const ctx = MoveContext(MockFunc).init(
         std.testing.allocator,
+        &mock_func,
+        &mock_env,
         &ranges,
         &bundles,
         &spillsets,
