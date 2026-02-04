@@ -13,6 +13,10 @@ When you encounter ANY bug or error, **STOP** and follow `TROUBLESHOOTING.md`.
 
 See `TROUBLESHOOTING.md` for the full methodology, reference map, and checklist.
 
+### ⚠️ Confused about br_table / dispatch loops?
+
+**READ: `docs/BR_TABLE_ARCHITECTURE.md`** - br_table is INTENTIONAL, copied from Go's dispatch loop pattern. Do NOT try to remove or "fix" it without reading this document first.
+
 ---
 
 ## CRITICAL WARNING - READ THIS FIRST
@@ -152,6 +156,7 @@ The Go compiler is at `~/learning/go/src/cmd/`. Key files:
 |----------|---------|
 | `NATIVE_AOT_FIXES.md` | **CURRENT WORK: Native AOT bugs and fix plan** |
 | `TROUBLESHOOTING.md` | **MUST READ: Debugging methodology - never invent, always copy reference** |
+| `docs/BR_TABLE_ARCHITECTURE.md` | **br_table dispatch loop pattern - READ if confused about br_table** |
 | `CRANELIFT_PORT_MASTER_PLAN.md` | Native AOT codegen - phases and architecture |
 | `WASM_BACKEND.md` | Wasm milestones M1-M16, implementation details |
 | `ROADMAP_PHASE2.md` | M17-M24 detailed plan with Go/Swift research |

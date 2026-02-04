@@ -104,9 +104,9 @@ This gives you a working E2E test suite immediately. Then add features increment
 | While loops | ✅ FIXED |
 | Recursion | ✅ **FIXED** (Feb 5, 2026) |
 | Structs (local) | ✅ Works |
-| Structs (as params) | ❌ Known Wasm codegen limitation |
+| Structs (as params) | ✅ **FIXED** (Feb 5, 2026) |
 | Pointers (read/write) | ✅ Works |
-| Pointer arithmetic | ❌ Bug in Wasm codegen (not native) |
+| Pointer arithmetic | ✅ **FIXED** (Feb 5, 2026) |
 | Arrays | ✅ Works |
 
 **Note:** Native AOT is now feature-complete for basic programs. Remaining issues are in Wasm codegen, not native.

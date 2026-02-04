@@ -49,19 +49,39 @@ pub fn preprocess(allocator: std.mem.Allocator, sym: *Symbol) !void {
     defer tableIdxs.deinit(allocator);
     var tablePC: i64 = 0;
 
+    // Go: wasmobj.go line 265 - track explicit block depth
+    // Resume points only count at toplevel (explicitBlockDepth == 0)
+    var explicitBlockDepth: i32 = 0;
+
     var p: ?*Prog = text;
     while (p) |current| : (p = current.link) {
         switch (current.as) {
+            // Go: lines 265-282 - track block depth
+            .block, .loop, .@"if" => {
+                explicitBlockDepth += 1;
+            },
+            .end => {
+                if (explicitBlockDepth > 0) {
+                    explicitBlockDepth -= 1;
+                }
+            },
             .resume_point => {
                 // Go: lines 284-294
-                // Convert to AEnd, assign PC
-                current.as = .end;
-                while (tablePC <= pc) {
-                    try tableIdxs.append(allocator, @intCast(numResumePoints));
-                    tablePC += 1;
+                // CRITICAL: Resume points only count at toplevel!
+                // If inside a block/loop/if, just convert to end without counting
+                if (explicitBlockDepth == 0) {
+                    // Toplevel - count this resume point
+                    current.as = .end;
+                    while (tablePC <= pc) {
+                        try tableIdxs.append(allocator, @intCast(numResumePoints));
+                        tablePC += 1;
+                    }
+                    numResumePoints += 1;
+                    pc += 1;
+                } else {
+                    // Inside a block - just convert to end, don't count
+                    current.as = .end;
                 }
-                numResumePoints += 1;
-                pc += 1;
             },
             .call => {
                 // Go: lines 296-300
@@ -258,16 +278,14 @@ pub fn preprocess(allocator: std.mem.Allocator, sym: *Symbol) !void {
     // ========================================================================
     // Pass 5: Create dispatch loop structure
     // Go: wasmobj.go lines 690-724
+    // CRITICAL: These are SEPARATE conditions in Go, not OR'd together!
     // ========================================================================
 
     var entryPointLoop: ?*Prog = null;
+    var insert_point = text;
 
-    if (entryPointLoopBranches.items.len > 0 or numResumePoints > 0) {
-        // Find end of text marker to insert after
-        var insert_point = text;
-
-        // Insert loop for entryPointLoop
-        // Go: lines 698-702
+    // Go: lines 698-702 - Loop ONLY if there are inter-block jumps
+    if (entryPointLoopBranches.items.len > 0) {
         insert_point = try appendAfter(allocator, insert_point, .loop, .{}, .{});
         entryPointLoop = insert_point;
 
@@ -275,44 +293,44 @@ pub fn preprocess(allocator: std.mem.Allocator, sym: *Symbol) !void {
         for (entryPointLoopBranches.items) |b| {
             b.to.branch_target = entryPointLoop;
         }
-
-        if (numResumePoints > 0) {
-            // Add Block instructions for resume points (N+1 blocks)
-            // Go: lines 704-711
-            var i: i64 = 0;
-            while (i < numResumePoints + 1) : (i += 1) {
-                insert_point = try appendAfter(allocator, insert_point, .block, .{}, .{});
-            }
-
-            // Get PC_B (i32, used directly by br_table)
-            // Go line 709: p = appendp(p, AGet, regAddr(REG_PC_B))
-            insert_point = try appendAfter(allocator, insert_point, .get, prog.regAddr(.pc_b), .{});
-
-            // br_table with indices
-            insert_point = try appendAfter(allocator, insert_point, .br_table, .{}, .{});
-            // Store table indices in the instruction
-            const table_copy = try allocator.alloc(u64, tableIdxs.items.len);
-            @memcpy(table_copy, tableIdxs.items);
-            insert_point.to.val = .{ .br_table = table_copy };
-
-            // End of first block (innermost)
-            insert_point = try appendAfter(allocator, insert_point, .end, .{}, .{});
-        }
-
-        // Find end of function body to add loop terminator
-        var last = text;
-        while (last.link) |n| {
-            last = n;
-        }
-
-        // End of entryPointLoop
-        // Go: lines 716-718
-        last = try appendAfter(allocator, last, .end, .{}, .{});
-
-        // Unreachable (should never reach here)
-        // Go: line 719
-        _ = try appendAfter(allocator, last, .@"unreachable", .{}, .{});
     }
+
+    // Go: lines 704-711 - br_table ONLY if there are resume points
+    if (numResumePoints > 0) {
+        // Add Block instructions for resume points (N+1 blocks)
+        var i: i64 = 0;
+        while (i < numResumePoints + 1) : (i += 1) {
+            insert_point = try appendAfter(allocator, insert_point, .block, .{}, .{});
+        }
+
+        // Get PC_B (i32, used directly by br_table)
+        // Go line 709: p = appendp(p, AGet, regAddr(REG_PC_B))
+        insert_point = try appendAfter(allocator, insert_point, .get, prog.regAddr(.pc_b), .{});
+
+        // br_table with indices
+        insert_point = try appendAfter(allocator, insert_point, .br_table, .{}, .{});
+        // Store table indices in the instruction
+        const table_copy = try allocator.alloc(u64, tableIdxs.items.len);
+        @memcpy(table_copy, tableIdxs.items);
+        insert_point.to.val = .{ .br_table = table_copy };
+
+        // End of first block (innermost)
+        insert_point = try appendAfter(allocator, insert_point, .end, .{}, .{});
+    }
+
+    // Find end of function body to add loop terminator
+    var last = text;
+    while (last.link) |n| {
+        last = n;
+    }
+
+    // Go: lines 716-718 - End of entryPointLoop ONLY if loop exists
+    if (entryPointLoopBranches.items.len > 0) {
+        last = try appendAfter(allocator, last, .end, .{}, .{});
+    }
+
+    // Go: line 719 - Unreachable (ALWAYS added)
+    _ = try appendAfter(allocator, last, .@"unreachable", .{}, .{});
 
     // ========================================================================
     // Pass 6: Compute relative branch depths
@@ -590,13 +608,16 @@ test "preprocess with frame allocation" {
     try testing.expect(count >= 5);
 }
 
-test "preprocess with resume points creates dispatch loop" {
+test "preprocess with resume points creates br_table dispatch" {
     const allocator = testing.allocator;
 
     var sym = Symbol.init("test");
     sym.frame_size = 0;
 
     // Create: text -> resume_point -> return
+    // This has a resume point but NO inter-block branches
+    // Go: Loop is only created when entryPointLoopBranches > 0
+    // Go: br_table/blocks are created when numResumePoints > 0
     const text = try allocator.create(Prog);
     text.* = Prog.init(.text);
 
@@ -627,7 +648,9 @@ test "preprocess with resume points creates dispatch loop" {
 
     try preprocess(allocator, &sym);
 
-    // Should have loop, blocks, br_table in the output
+    // Go: lines 698-711, 716-718
+    // - Loop only if entryPointLoopBranches > 0 (we have none)
+    // - Blocks + br_table if numResumePoints > 0 (we have 1)
     var has_loop = false;
     var has_block = false;
     var has_br_table = false;
@@ -643,7 +666,9 @@ test "preprocess with resume points creates dispatch loop" {
         p = current.link;
     }
 
-    try testing.expect(has_loop);
+    // No inter-block jumps, so NO loop
+    try testing.expect(!has_loop);
+    // Resume points exist, so blocks and br_table
     try testing.expect(has_block);
     try testing.expect(has_br_table);
 }

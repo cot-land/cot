@@ -178,6 +178,26 @@ pub const FunctionBuilder = struct {
         side_effects.deinit(self.func_ctx.allocator);
     }
 
+    /// Change the destination of a branch instruction from old_block to new_block.
+    /// Port of cranelift-frontend/src/frontend.rs:777-788
+    pub fn changeJumpDestination(self: *Self, inst: Inst, old_block: Block, new_block: Block) !void {
+        // Get the instruction data mutably
+        const inst_data = self.func.dfg.getInstMut(inst);
+
+        // Iterate over branch destinations and change matching ones
+        const destinations = inst_data.branchDestinationMut(&self.func.dfg.jump_tables);
+        for (destinations) |*dest| {
+            if (dest.block.eql(old_block)) {
+                // Remove old_block as predecessor
+                self.func_ctx.ssa.removeBlockPredecessor(old_block, inst);
+                // Change destination
+                dest.block = new_block;
+                // Add new_block as predecessor
+                try self.func_ctx.ssa.declareBlockPredecessor(new_block, inst);
+            }
+        }
+    }
+
     /// Make sure that the current block is inserted in the layout.
     /// Port of cranelift-frontend/src/frontend.rs ensure_inserted_block()
     pub fn ensureInsertedBlock(self: *Self) !void {

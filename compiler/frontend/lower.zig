@@ -1010,6 +1010,26 @@ pub const Lowerer = struct {
                 return try fb.emitSelect(condition, unwrapped, right, result_type, bin.span);
             }
         }
+        // Pointer arithmetic: p + n scales by element size (like Go's PtrIndex)
+        if (bin.op == .add or bin.op == .sub) {
+            const left_type_idx = self.inferExprType(bin.left);
+            const left_type = self.type_reg.get(left_type_idx);
+            if (left_type == .pointer) {
+                const elem_size = self.type_reg.sizeOf(left_type.pointer.elem);
+                // For add: use addr_index which handles scaling
+                // For sub: negate the index first, then use addr_index
+                if (bin.op == .add) {
+                    return try fb.emitAddrIndex(left, right, elem_size, result_type, bin.span);
+                } else {
+                    // p - n => addr_index(p, 0-n, elem_size)
+                    // Wasm has no integer neg, so use 0 - n
+                    const right_type = self.inferExprType(bin.right);
+                    const zero = try fb.emitConstInt(0, right_type, bin.span);
+                    const neg_right = try fb.emitBinary(.sub, zero, right, right_type, bin.span);
+                    return try fb.emitAddrIndex(left, neg_right, elem_size, result_type, bin.span);
+                }
+            }
+        }
         return try fb.emitBinary(tokenToBinaryOp(bin.op), left, right, result_type, bin.span);
     }
 

@@ -571,10 +571,62 @@ pub const SSABuilder = struct {
         call_val.aux = .{ .string = func_name };
         for (args) |arg_idx| {
             const arg_val = try self.convertNode(arg_idx) orelse return error.MissingValue;
-            try call_val.addArgAlloc(arg_val, self.allocator);
+            const arg_type = self.type_registry.get(arg_val.type_idx);
+            const type_size = self.type_registry.sizeOf(arg_val.type_idx);
+
+            // Large struct decomposition (matching param handling in buildSSA)
+            // Structs >8 and <=16 bytes are passed as two i64 values
+            const is_large_struct = arg_type == .struct_type and type_size > 8 and type_size <= 16;
+            if (is_large_struct) {
+                // Struct is in memory, load low and high parts
+                // First, get the address of the struct
+                const addr = try self.getStructAddr(arg_val, cur);
+
+                // Load low part (first 8 bytes)
+                const lo_val = try self.func.newValue(.load, TypeRegistry.I64, cur, self.cur_pos);
+                lo_val.addArg(addr);
+                try cur.addValue(self.allocator, lo_val);
+                try call_val.addArgAlloc(lo_val, self.allocator);
+
+                // Load high part (bytes 8-15)
+                const hi_addr = try self.func.newValue(.off_ptr, TypeRegistry.VOID, cur, self.cur_pos);
+                hi_addr.aux_int = 8;
+                hi_addr.addArg(addr);
+                try cur.addValue(self.allocator, hi_addr);
+
+                const hi_val = try self.func.newValue(.load, TypeRegistry.I64, cur, self.cur_pos);
+                hi_val.addArg(hi_addr);
+                try cur.addValue(self.allocator, hi_val);
+                try call_val.addArgAlloc(hi_val, self.allocator);
+            } else {
+                try call_val.addArgAlloc(arg_val, self.allocator);
+            }
         }
         try cur.addValue(self.allocator, call_val);
         return call_val;
+    }
+
+    /// Get the address of a struct value (for decomposition)
+    fn getStructAddr(_: *SSABuilder, val: *Value, cur: *Block) !*Value {
+        // If the value is already an address (local_addr, off_ptr), use it directly
+        if (val.op == .local_addr or val.op == .off_ptr or val.op == .global_addr) {
+            return val;
+        }
+        // If it's a load, use the address that was loaded from
+        if (val.op == .load and val.args.len > 0) {
+            return val.args[0];
+        }
+        // Otherwise, the struct should be stored in a local - find its address
+        // This handles struct literals which are stored to locals
+        // Search backwards for a store that stored this value
+        for (cur.values.items) |v| {
+            if (v.op == .store and v.args.len >= 2 and v.args[1] == val) {
+                return v.args[0];
+            }
+        }
+        // Fallback: struct should have been stored, but if we reach here,
+        // allocate a temp local (shouldn't normally happen)
+        return error.MissingValue;
     }
 
     fn convertCallIndirect(self: *SSABuilder, callee_idx: ir.NodeIndex, args: []const ir.NodeIndex, type_idx: TypeIndex, cur: *Block) !*Value {

@@ -203,7 +203,18 @@ pub const WasmFuncTranslator = struct {
             try self.translateOperator(&translator, op);
         }
 
-        // 8. Finalize the builder
+        // 8. Emit return instruction AFTER all operators
+        // Following Cranelift's func_translator.rs:271-283:
+        // "The final `End` operator left us in the exit block where we need to
+        // manually add a return instruction."
+        if (translator.state.reachable) {
+            // Get return values from the stack (pushed by the final End)
+            const return_count = signature.results.len;
+            const return_args = translator.state.peekn(return_count);
+            _ = try translator.builder.ins().return_(return_args);
+        }
+
+        // 9. Finalize the builder
         builder.finalize();
     }
 
