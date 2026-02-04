@@ -19,6 +19,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const pipeline_debug = @import("../../../pipeline_debug.zig");
 
 // Import from other machinst modules
 const reg_mod = @import("reg.zig");
@@ -836,7 +837,7 @@ pub fn VCode(comptime I: type) type {
             const frame_size: u32 = @intCast(output.num_spillslots * 8); // 8 bytes per slot
 
             // ================================================================
-            // Compute function_calls by scanning all instructions
+            // Compute function_calls and clobbered callee-saves
             // Port of Cranelift's compute_clobbers_and_function_calls()
             // Reference: cranelift/codegen/src/machinst/vcode.rs:687-745
             // ================================================================
@@ -845,8 +846,50 @@ pub fn VCode(comptime I: type) type {
                 function_calls.update(inst.callType());
             }
 
+            // Collect clobbered registers from regalloc allocations
+            // Reference: cranelift/codegen/src/machinst/vcode.rs:699-721
+            var clobbered_set: u32 = 0; // Bitmask of clobbered callee-saved registers (x19-x28)
+            const callee_save_mask: u32 = 0x1FF80000; // bits 19-28 (x19-x28 are callee-saved)
+
+            // Step 1: Add registers from regalloc moves (edits)
+            for (output.edits.items) |edit_at_point| {
+                switch (edit_at_point.edit) {
+                    .move => |m| {
+                        if (m.to.asReg()) |preg| {
+                            const hw_enc = preg.hwEnc();
+                            if (hw_enc >= 19 and hw_enc <= 28) {
+                                clobbered_set |= (@as(u32, 1) << @intCast(hw_enc));
+                            }
+                        }
+                    },
+                }
+            }
+
+            // Step 2: Add registers from instruction def operands
+            for (output.allocs.items) |allocation| {
+                if (allocation.asReg()) |preg| {
+                    const hw_enc = preg.hwEnc();
+                    if (hw_enc >= 19 and hw_enc <= 28) {
+                        clobbered_set |= (@as(u32, 1) << @intCast(hw_enc));
+                    }
+                }
+            }
+
+            // Note: We only need the callee-saved bits
+            clobbered_set &= callee_save_mask;
+
+            // Count clobbered callee-saved registers and collect them in order
+            var clobbered_regs: [10]u8 = undefined; // max 10 callee-saves (x19-x28)
+            var num_clobbered: usize = 0;
+            for (19..29) |reg| {
+                if (clobbered_set & (@as(u32, 1) << @intCast(reg)) != 0) {
+                    clobbered_regs[num_clobbered] = @intCast(reg);
+                    num_clobbered += 1;
+                }
+            }
+
             // ================================================================
-            // Emit prologue if function makes calls
+            // Emit prologue if function makes calls or has frame
             // Following Cranelift's pattern: save FP and LR when function_calls != None
             // Reference: cranelift/codegen/src/isa/aarch64/abi.rs:1158
             // ================================================================
@@ -858,6 +901,33 @@ pub fn VCode(comptime I: type) type {
                 // mov fp, sp
                 // Encoding: 1001000100000000 00000011 11111101 = 0x910003fd
                 try buffer.put4(0x910003fd);
+            }
+
+            // ================================================================
+            // Save clobbered callee-saved registers
+            // Port of Cranelift's gen_clobber_save()
+            // Reference: cranelift/codegen/src/isa/aarch64/abi.rs:717-944
+            // ================================================================
+            // Save in pairs using stp [sp, #-16]! (pre-indexed)
+            var save_idx: usize = 0;
+            while (save_idx + 1 < num_clobbered) : (save_idx += 2) {
+                const rt = clobbered_regs[save_idx];
+                const rt2 = clobbered_regs[save_idx + 1];
+                // stp rt, rt2, [sp, #-16]!
+                // Encoding: 1010100111 simm7 rt2 sp rt
+                // simm7 = -2 (for -16 bytes / 8) = 0b1111110 (7 bits)
+                // Full: 1010100111 1111110 rt2 11111 rt
+                const enc: u32 = 0xa9bf0000 | (@as(u32, rt2) << 10) | @as(u32, rt);
+                try buffer.put4(enc);
+            }
+            // Handle odd register: str rt, [sp, #-16]!
+            if (save_idx < num_clobbered) {
+                const rt = clobbered_regs[save_idx];
+                // str rt, [sp, #-16]!  (pre-indexed store, 8 bytes)
+                // Encoding: 11111000000 simm9 11 11111 rt
+                // simm9 = -16 = 0x1F0 (9 bits two's complement: 111110000)
+                const enc: u32 = 0xf81f0fe0 | @as(u32, rt);
+                try buffer.put4(enc);
             }
 
             // Emit each block
@@ -896,10 +966,41 @@ pub fn VCode(comptime I: type) type {
                             // Port of Cranelift's gen_epilogue_frame_restore
                             // Reference: aarch64/abi.rs:940-972
                             // ============================================
-                            if (needs_frame and vcode_inst.isTerm() == .ret) {
-                                // ldp fp, lr, [sp], #16  (post-indexed load pair)
-                                // Encoding: 1010100011000001 00000000 11111111 = 0xa8c17bfd
-                                try buffer.put4(0xa8c17bfd);
+                            if (vcode_inst.isTerm() == .ret) {
+                                // First: restore clobbered callee-saved registers
+                                // (reverse order of save, using post-indexed addressing)
+                                // Reference: cranelift/codegen/src/isa/aarch64/abi.rs:946-1032
+
+                                // Handle odd register first if present
+                                if (num_clobbered > 0 and num_clobbered % 2 == 1) {
+                                    const rt = clobbered_regs[num_clobbered - 1];
+                                    // ldr rt, [sp], #16  (post-indexed load)
+                                    // Encoding: 11111000 010 simm9 01 Rn Rt
+                                    // simm9 = 16 = 000010000, 01 = post-indexed, Rn = 31 (sp)
+                                    // Full: 11111000 010 000010000 01 11111 rt = 0xf84107e0 | rt
+                                    const enc: u32 = 0xf84107e0 | @as(u32, rt);
+                                    try buffer.put4(enc);
+                                }
+
+                                // Restore pairs in reverse order
+                                var restore_idx: usize = if (num_clobbered % 2 == 1) num_clobbered - 1 else num_clobbered;
+                                while (restore_idx >= 2) {
+                                    restore_idx -= 2;
+                                    const rt = clobbered_regs[restore_idx];
+                                    const rt2 = clobbered_regs[restore_idx + 1];
+                                    // ldp rt, rt2, [sp], #16
+                                    // Encoding: 1010100011 simm7 rt2 sp rt
+                                    // simm7 = 2 (for +16 bytes / 8) = 0b0000010
+                                    const enc: u32 = 0xa8c10000 | (@as(u32, rt2) << 10) | @as(u32, rt);
+                                    try buffer.put4(enc);
+                                }
+
+                                // Then: restore FP and LR
+                                if (needs_frame) {
+                                    // ldp fp, lr, [sp], #16  (post-indexed load pair)
+                                    // Encoding: 1010100011000001 00000000 11111111 = 0xa8c17bfd
+                                    try buffer.put4(0xa8c17bfd);
+                                }
                             }
 
                             // Emit the instruction with physical registers

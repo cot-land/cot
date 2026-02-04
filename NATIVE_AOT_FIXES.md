@@ -18,13 +18,17 @@ On February 4, 2026, E2E testing revealed that native AOT compilation only works
 | If/else control flow | ✅ **FIXED** (Feb 5, 2026) |
 | While loops | ✅ **FIXED** (Feb 5, 2026) |
 | Params + early return | ✅ **FIXED** (Feb 5, 2026) |
-| Recursion | ❌ Returns base case immediately |
+| Recursion | ✅ **FIXED** (Feb 5, 2026) |
 | Structs | ❌ Untested |
 | Pointers | ❌ Untested |
 
 **Feb 5 update (PM):** Fixed vmctx pinned register - params + early return pattern now works.
 - vmctx is now moved to x21 at function entry, excluded from register allocation
-- Recursion still returns base case immediately (recursive call not working)
+
+**Feb 5 update (late PM):** Fixed if/else with early return pattern AND recursion.
+- translateEnd now has two-path logic matching Cranelift exactly (reachable vs unreachable handlers)
+- Fixed call_ind register allocation (mutable pointer for allocation application)
+- Fixed callee-saved register preservation across calls (x19-x28 save/restore in prologue/epilogue)
 
 ---
 
@@ -504,6 +508,137 @@ The issue was that vmctx (which provides access to Wasm linear memory, including
 
 ---
 
+## Task 10: Fix If Without Else and Nested Calls ✅ FIXED
+
+**Status:** FIXED on February 5, 2026
+
+**Error observed:**
+```
+Exit: 0 (should be 42)
+```
+
+**When:** Running native executable compiled from:
+```cot
+fn main() i64 {
+    let n = 2
+    if n <= 1 { return 1 }
+    return 42
+}
+```
+
+### Root Cause Analysis (Following TROUBLESHOOTING.md)
+
+**Reference comparison revealed TWO issues:**
+
+**Issue 1: translateEnd had incorrect two-path logic**
+
+Cranelift has TWO separate End handlers:
+1. **Reachable case (code_translator.rs:412-444)**: UNCONDITIONALLY emit jump, switch to next_block, seal
+2. **Unreachable case (code_translator.rs:3389-3437)**: CONDITIONALLY switch based on `reachable_anyway`
+
+Our code incorrectly used conditional logic even when entering with `self.state.reachable == true`.
+
+**Issue 2: call_ind register allocation not applied**
+
+In `get_operands.zig`, the `call_ind` handling created a local copy of `info.dest`:
+```zig
+// BUG: creates local copy, allocation written to copy not original
+var dest_reg = info.dest;
+visitor.regUse(&dest_reg);
+```
+
+The allocation callback would mutate `dest_reg`, but `info.dest` remained unchanged (virtual register).
+
+### Fix Applied
+
+**File 1: `compiler/codegen/native/wasm_to_clif/translator.zig`**
+
+Rewrote `translateEnd` to have TWO completely separate paths:
+
+1. When `self.state.reachable == true`: UNCONDITIONALLY emit jump, switch, seal, push params
+2. When `self.state.reachable == false`: Calculate `reachable_anyway`, CONDITIONALLY switch/seal/push
+
+This exactly matches Cranelift's two handler functions.
+
+**File 2: `compiler/codegen/native/isa/aarch64/inst/get_operands.zig`**
+
+Changed `call_ind` to pass reference to actual field:
+```zig
+// Pass reference to actual field, not a copy
+visitor.regUse(&info.dest);
+```
+
+**File 3: `compiler/codegen/native/isa/aarch64/inst/mod.zig`**
+
+Changed `call_ind.info` type from `*const CallIndInfo` to `*CallIndInfo` to allow mutation during allocation application.
+
+**Test result:** `let n = 2; if n <= 1 { return 1 } return 42` returns 42 ✅
+
+---
+
+## Task 11: Fix Recursion (Callee-Saved Register Preservation) ✅ FIXED
+
+**Status:** FIXED on February 5, 2026
+
+**Error observed:**
+```
+factorial(5) returns 16 instead of 120
+factorial(3) returns 4 instead of 6
+```
+
+**When:** Running recursive functions that use a value across a recursive call.
+
+### Root Cause Analysis (Following TROUBLESHOOTING.md)
+
+**Reference files:**
+1. `~/learning/wasmtime/cranelift/codegen/src/machinst/vcode.rs:687-745` - `compute_clobbers_and_function_calls()`
+2. `~/learning/wasmtime/cranelift/codegen/src/isa/aarch64/abi.rs:717-944` - `gen_clobber_save()`
+3. `~/learning/wasmtime/cranelift/codegen/src/isa/aarch64/abi.rs:946-1032` - `gen_clobber_restore()`
+4. `~/learning/wasmtime/cranelift/codegen/src/isa/aarch64/abi.rs:1277-1322` - `is_reg_saved_in_prologue()`
+
+**The problem:**
+
+Register allocator assigned `n` to x19 (callee-saved register) to preserve it across the recursive call. But our prologue/epilogue only saved FP (x29) and LR (x30), NOT x19.
+
+**Disassembly showed:**
+```asm
+; Before call
+ldr  x19, [sp+offset]      ; Load n into x19
+...
+bl   _factorial            ; Recursive call - CLOBBERS x19!
+mul  x0, x19, x0           ; x19 is wrong value now!
+```
+
+When factorial called itself recursively, the inner call would load ITS `n` into x19, clobbering the outer call's value.
+
+### Fix Applied
+
+**File:** `compiler/codegen/native/machinst/vcode.zig`
+
+Added callee-saved register computation and save/restore:
+
+1. **Compute clobbered callee-saves** by scanning all regalloc allocations and edits, filtering to x19-x28
+2. **Prologue**: Save clobbered callee-saves using `stp rt, rt2, [sp, #-16]!` (pairs) or `str rt, [sp, #-16]!` (odd)
+3. **Epilogue**: Restore them using `ldp rt, rt2, [sp], #16` (pairs) or `ldr rt, [sp], #16` (odd)
+
+**Generated prologue now:**
+```asm
+stp  x29, x30, [sp, #-16]!   ; Save FP and LR
+mov  x29, sp                  ; Set FP
+str  x19, [sp, #-16]!         ; Save callee-saved x19
+```
+
+**Generated epilogue now:**
+```asm
+ldr  x19, [sp], #16          ; Restore x19
+ldp  x29, x30, [sp], #16     ; Restore FP and LR
+ret
+```
+
+**Test result:** `factorial(5)` returns 120 ✅
+
+---
+
 ## History
 
 - **Feb 4, 2026 (AM)**: Fixed value aliases, jump table relocs, operand order - `return 42` works
@@ -512,3 +647,9 @@ The issue was that vmctx (which provides access to Wasm linear memory, including
 - **Feb 5, 2026 (PM)**: Fixed pinned register for vmctx - params + early return pattern works
   - Root cause: vmctx in x0 was clobbered by return value
   - Fix: Copy vmctx to x21 at function entry, exclude x21 from allocation
+- **Feb 5, 2026 (late PM)**: Fixed if without else + nested call_indirect + recursion
+  - Root cause 1: translateEnd used conditional logic when reachable (should be unconditional)
+  - Root cause 2: call_ind register allocation written to local copy, not original
+  - Root cause 3: Callee-saved registers (x19-x28) not saved/restored in prologue/epilogue
+  - Fix: Match Cranelift's two-path End handler, pass mutable reference to info.dest
+  - Fix: Add callee-save computation from regalloc output, emit stp/ldp for clobbered regs

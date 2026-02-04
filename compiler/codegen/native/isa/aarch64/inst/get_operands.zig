@@ -460,9 +460,9 @@ pub fn getOperands(inst: *Inst, visitor: *OperandVisitor) void {
         // Port of Cranelift's call_ind operand handling from aarch64/inst/mod.rs
         .call_ind => |p| {
             const info = p.info;
-            // The destination register is a use
-            var dest_reg = info.dest;
-            visitor.regUse(&dest_reg);
+            // The destination register is a use - pass reference to actual field
+            // so allocation callback can mutate it (not a local copy)
+            visitor.regUse(&info.dest);
             // Add argument uses
             for (info.uses.items) |use| {
                 visitor.regFixedUse(use.vreg, use.preg);

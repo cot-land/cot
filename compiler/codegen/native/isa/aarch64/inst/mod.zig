@@ -1271,14 +1271,16 @@ pub const Inst = union(enum) {
     // Port of Cranelift's Inst::Call from aarch64/inst/mod.rs.
     call: struct {
         /// Call information including destination, uses, defs, clobbers.
-        info: *const CallInfo,
+        /// Mutable so register allocation can be applied during emit.
+        info: *CallInfo,
     },
 
     // Call indirect (through register).
     // Port of Cranelift's Inst::CallInd from aarch64/inst/mod.rs.
     call_ind: struct {
         /// Call information including register target, uses, defs, clobbers.
-        info: *const CallIndInfo,
+        /// Mutable so register allocation can be applied to dest register during emit.
+        info: *CallIndInfo,
     },
 
     // ==========================================================================

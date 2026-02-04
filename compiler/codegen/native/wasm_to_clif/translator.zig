@@ -531,60 +531,96 @@ pub const FuncTranslator = struct {
     pub fn translateEnd(self: *Self) !void {
         const frame = self.state.popFrame();
         const next_block = frame.followingCode();
-        const return_count = frame.numReturnValues();
+
+        // Cranelift has TWO separate End handlers:
+        // 1. Reachable case (code_translator.rs:412-444): UNCONDITIONALLY emit jump, switch, seal
+        // 2. Unreachable case (code_translator.rs:3389-3437): Conditionally switch based on reachability
+        //
+        // We MUST split these cases to match Cranelift's behavior exactly.
 
         if (self.state.reachable) {
-            // Get return values from stack
+            // REACHABLE CASE (Cranelift lines 412-444)
+            // When entering with reachable=true, we ALWAYS:
+            // 1. Emit jump to next_block with return values
+            // 2. Switch to next_block
+            // 3. Seal next_block
+            // 4. Push block params
+
+            const return_count = frame.numReturnValues();
             const return_vals = self.state.peekn(return_count);
 
-            // Jump to next block with return values
+            // Emit jump to next block with return values
             _ = try self.builder.ins().jump(next_block, return_vals);
-        }
 
-        // Truncate stack to original size
-        frame.truncateValueStackToOriginalSize(&self.state.stack);
-
-        // Determine if next block is reachable and seal loop headers if applicable
-        // Following Cranelift's pattern from code_translator.rs lines 3400-3413
-        const next_reachable = switch (frame) {
-            .if_frame => |f| blk: {
-                const conseq_reachable = f.consequent_ends_reachable orelse self.state.reachable;
-                break :blk (f.head_is_reachable and conseq_reachable) or f.exit_is_branched_to;
-            },
-            .block_frame => |f| self.state.reachable or f.exit_is_branched_to,
-            .loop_frame => |f| blk: {
-                // For loops, seal the header block now that all back-edges have been added
-                try self.builder.sealBlock(f.header);
-                // Loops can't have branches to the end
-                break :blk self.state.reachable;
-            },
-        };
-
-        if (next_reachable) {
-            // Switch to next block
+            // Switch to next block - UNCONDITIONAL in reachable case
             self.builder.switchToBlock(next_block);
             try self.builder.sealBlock(next_block);
 
-            // F1 Fix: Ensure next block is in Layout after switching
+            // If it is a loop we also have to seal the body loop block (Cranelift line 430-432)
+            if (frame == .loop_frame) {
+                try self.builder.sealBlock(frame.loop_frame.header);
+            }
+
+            // Truncate stack to original size
+            frame.truncateValueStackToOriginalSize(&self.state.stack);
+
+            // Ensure next block is in Layout after switching
             try self.builder.ensureInsertedBlock();
 
-            // Check if this is the function-level end (control stack empty)
-            // If so, we need to emit a return instruction from the exit block
-            if (self.state.controlStackLen() == 0) {
-                // Function-level end - emit return with the results
-                const next_params = self.builder.blockParams(next_block);
-                _ = try self.builder.ins().return_(next_params);
-                self.state.reachable = false;
-            } else {
-                // Nested block end - push block params as results
+            // Push block params onto stack (Cranelift line 443)
+            const next_params = self.builder.blockParams(next_block);
+            for (next_params) |param| {
+                try self.state.push1(param);
+            }
+            // state.reachable remains true
+        } else {
+            // UNREACHABLE CASE (Cranelift lines 3389-3437)
+            // When entering with reachable=false, we:
+            // 1. Truncate stack first (no return values to emit)
+            // 2. Calculate reachable_anyway
+            // 3. Conditionally switch/seal/push based on exit_is_branched_to || reachable_anyway
+
+            // Truncate stack to original size FIRST (Cranelift line 3398)
+            frame.truncateValueStackToOriginalSize(&self.state.stack);
+
+            // Calculate reachable_anyway (Cranelift lines 3400-3427)
+            const reachable_anyway = switch (frame) {
+                .loop_frame => |f| blk: {
+                    // For loops, seal the header block now (Cranelift line 3403)
+                    try self.builder.sealBlock(f.header);
+                    // Loops can't have branches to the end (Cranelift line 3405)
+                    break :blk false;
+                },
+                .if_frame => |f| blk: {
+                    if (f.consequent_ends_reachable) |conseq_reachable| {
+                        // We have an else, and since we're unreachable, the alternative just
+                        // ended unreachable. Check if consequent ended reachable. (Cranelift 3420-3424)
+                        break :blk f.head_is_reachable and conseq_reachable;
+                    } else {
+                        // No else: we're finishing the consequent now.
+                        // Reachable if head was reachable. (Cranelift lines 3407-3415)
+                        break :blk f.head_is_reachable;
+                    }
+                },
+                .block_frame => false, // Cranelift line 3426
+            };
+
+            // Conditionally switch to next block (Cranelift lines 3429-3436)
+            if (frame.exitIsBranchedTo() or reachable_anyway) {
+                self.builder.switchToBlock(next_block);
+                try self.builder.sealBlock(next_block);
+
+                // Ensure next block is in Layout after switching
+                try self.builder.ensureInsertedBlock();
+
+                // Push block params onto stack
                 const next_params = self.builder.blockParams(next_block);
                 for (next_params) |param| {
                     try self.state.push1(param);
                 }
                 self.state.reachable = true;
             }
-        } else {
-            self.state.reachable = false;
+            // If neither condition is met, state.reachable remains false
         }
     }
 
