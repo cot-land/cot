@@ -17,12 +17,14 @@ On February 4, 2026, E2E testing revealed that native AOT compilation only works
 | Function calls (1 param) | ✅ **FIXED** (Feb 5, 2026) |
 | If/else control flow | ✅ **FIXED** (Feb 5, 2026) |
 | While loops | ✅ **FIXED** (Feb 5, 2026) |
+| Params + early return | ✅ **FIXED** (Feb 5, 2026) |
 | Recursion | ❌ Returns base case immediately |
 | Structs | ❌ Untested |
 | Pointers | ❌ Untested |
 
-**Feb 5 update:** vmctx wrapper fix resolved most SIGSEGV issues, ValueListPool fix resolved single-param crash.
-- Recursion returns base case immediately (recursive call not working)
+**Feb 5 update (PM):** Fixed vmctx pinned register - params + early return pattern now works.
+- vmctx is now moved to x21 at function entry, excluded from register allocation
+- Recursion still returns base case immediately (recursive call not working)
 
 ---
 
@@ -432,10 +434,81 @@ Before making ANY change, verify:
 
 ---
 
+## Task 9: Fix vmctx Register Preservation (SIGSEGV) ✅ FIXED
+
+**Status:** FIXED on February 5, 2026
+
+**Error observed:**
+```
+Exit: 139 (SIGSEGV)
+```
+
+**When:** Running native executable compiled from functions with parameters AND early returns:
+```cot
+fn check(n: i64) i64 { if n > 1 { return 99 } return 0 }
+fn main() i64 { return check(5) }  // Should return 99, was SIGSEGV
+```
+
+### Root Cause Analysis
+
+The issue was that vmctx (which provides access to Wasm linear memory, including the stack pointer) was being clobbered when control flow diverged.
+
+**What was happening:**
+1. vmctx comes in x0 as the first function parameter
+2. Code paths that accessed SP correctly used vmctx from x0
+3. But when control flow split (if/else with early return), the return block needed vmctx
+4. By that point, x0 had been overwritten with the return value (99)
+5. Code tried to use some other register (x4) for vmctx, which was never set
+6. Accessing SP via garbage address → SIGSEGV
+
+**Disassembly showed:**
+```asm
+10000068c: mov x0, #99      ; return value in x0
+100000690: mov x1, x4       ; trying to use x4 as vmctx - but x4 was never set!
+100000694: add x17, x1, #0x10000  ; SP access fails
+```
+
+### Fix Applied (Following TROUBLESHOOTING.md methodology)
+
+**Reference files found:**
+1. `~/learning/wasmtime/cranelift/codegen/src/isa/aarch64/inst/regs.rs:19` - `PINNED_REG = 21`
+2. `~/learning/wasmtime/cranelift/codegen/src/isa/aarch64/lower.rs:130-131` - `maybe_pinned_reg()`
+3. `~/learning/wasmtime/cranelift/codegen/src/isa/aarch64/abi.rs:1538-1634` - `create_reg_env()`
+4. `~/learning/wasmtime/cranelift/codegen/src/isa/aarch64/lower.isle:2788-2792` - `get_pinned_reg`, `set_pinned_reg`
+
+**Cranelift's solution:**
+1. Reserve x21 as the "pinned register" for vmctx
+2. At function entry, move vmctx from x0 to x21
+3. Exclude x21 from register allocation (can't be clobbered)
+4. When code needs vmctx, read from x21 (always available)
+
+**Changes made:**
+
+| File | Change |
+|------|--------|
+| `compiler/codegen/native/regalloc/env.zig` | Exclude x21 from allocatable registers (add `PINNED_REG = 21`, skip it in loop) |
+| `compiler/codegen/native/isa/aarch64/lower.zig:maybePinnedReg()` | Return x21 instead of null |
+| `compiler/codegen/native/isa/aarch64/lower.zig:genArgSetup()` | Emit `mov x21, x0` at function entry when vmctx exists |
+| `compiler/codegen/native/isa/aarch64/lower.zig:lowerGlobalValue()` | For VMContext, return x21 directly instead of reading vmctx param |
+
+**Disassembly after fix:**
+```asm
+100000578: mov x21, x0      ; Save vmctx to pinned register at function entry!
+...
+1000006a0: mov x0, #99      ; return value in x0
+1000006a4: mov x1, x21      ; vmctx from pinned register (always valid!)
+1000006a8: add x17, x1, #0x10000  ; SP access succeeds
+```
+
+**Test result:** `fn check(n) { if n > 1 { return 99 } return 0 }; check(5)` returns 99 ✅
+
+---
+
 ## History
 
 - **Feb 4, 2026 (AM)**: Fixed value aliases, jump table relocs, operand order - `return 42` works
 - **Feb 4, 2026 (PM)**: E2E testing revealed most features still broken
-- **Feb 5, 2026**: Fixed vmctx wrapper - local variables, if/else, while loops now work
-  - Single-param functions still crash (new bug)
-  - Recursion returns base case immediately (new bug)
+- **Feb 5, 2026 (AM)**: Fixed vmctx wrapper - local variables, if/else, while loops now work
+- **Feb 5, 2026 (PM)**: Fixed pinned register for vmctx - params + early return pattern works
+  - Root cause: vmctx in x0 was clobbered by return value
+  - Fix: Copy vmctx to x21 at function entry, exclude x21 from allocation

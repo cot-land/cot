@@ -438,13 +438,20 @@ pub const AArch64LowerBackend = struct {
 
     /// Get the pinned register, if any.
     /// Returns machinst.Reg to match the lower.zig pinned_reg field type.
+    /// Port of Cranelift's maybe_pinned_reg() from cranelift/codegen/src/isa/aarch64/lower.rs:130-131
+    /// which returns Some(regs::pinned_reg()) = x21
     pub fn maybePinnedReg(_: *const Self) ?machinst.Reg {
-        return null;
+        // Return x21 as the pinned register for vmctx
+        // This tells the register allocator that get_pinned_reg results are in x21
+        return regs.pinnedReg();
     }
 
     /// Generate the Args pseudo-instruction for function parameters.
     /// Port of Cranelift's gen_args pattern from abi.rs.
     /// This creates fixed register constraints (x0, x1, etc.) for function params.
+    ///
+    /// Also emits a mov from vmctx (x0) to the pinned register (x21).
+    /// Port of Cranelift's set_pinned_reg pattern from lower.isle:2791-2792
     pub fn genArgSetup(_: *const Self, ctx: *LowerCtx) !void {
         // Get the entry block
         const entry_block = ctx.f.layout.entryBlock() orelse return;
@@ -452,6 +459,10 @@ pub const AArch64LowerBackend = struct {
         // Get the entry block's params (which are function parameters)
         const block_params = ctx.f.dfg.blockParams(entry_block);
         if (block_params.len == 0) return;
+
+        // Check if we have a vmctx parameter using Function.specialParam
+        // vmctx is typically the first integer parameter (x0)
+        const has_vmctx = ctx.f.specialParam(.vmctx) != null;
 
         // Allocate ArgPairs for each function parameter
         var arg_pairs = try ctx.allocator.alloc(ArgPair, block_params.len);
@@ -490,6 +501,23 @@ pub const AArch64LowerBackend = struct {
 
         // Emit the Args instruction
         try ctx.emit(Inst.genArgs(arg_pairs));
+
+        // If we have a vmctx parameter, move it to the pinned register (x21)
+        // Port of Cranelift's set_pinned_reg from lower.isle:2791-2792
+        // This ensures vmctx is always available in x21, which is excluded from allocation
+        if (has_vmctx) {
+            // vmctx is in x0 (first int arg), move to x21 (pinned reg)
+            // orr x21, xzr, x0  (equivalent to mov x21, x0)
+            try ctx.emit(Inst{
+                .alu_rrr = .{
+                    .alu_op = .orr,
+                    .size = .size64,
+                    .rd = Writable(Reg).fromReg(regs.pinnedReg()),
+                    .rn = zeroReg(),
+                    .rm = regs.xreg(0), // vmctx is in x0
+                },
+            });
+        }
     }
 
     // =========================================================================
@@ -2144,28 +2172,23 @@ pub const AArch64LowerBackend = struct {
 
         switch (gv_data) {
             .vmcontext => {
-                // VMContext: Get the vmctx parameter passed to the function.
-                // Port of cranelift/codegen/src/legalizer/globalvalue.rs vmctx_addr
-                // which aliases global_value(VMContext) to func.special_param(VMContext)
-                const vmctx_value = ctx.f.specialParam(.vmctx) orelse {
-                    // Fallback: no vmctx param found, this shouldn't happen
-                    // if the function was set up correctly with Wasm calling convention
-                    return null;
-                };
-
-                // Get the register(s) assigned to the vmctx parameter value
-                const vmctx_regs = ctx.value_regs.get(vmctx_value);
-                const vmctx_reg = vmctx_regs.onlyReg() orelse return null;
-
-                // Copy vmctx to the destination register
-                // (In Cranelift, this is an alias, but we emit a move for simplicity)
+                // VMContext: Return the pinned register (x21) directly.
+                // Port of Cranelift's get_pinned_reg from lower.isle:2788-2789
+                // which returns mov_from_preg(preg_pinned) = x21
+                //
+                // At function entry, vmctx is moved from x0 into x21.
+                // x21 is excluded from register allocation, so it can't be clobbered.
+                // This ensures vmctx is always available regardless of control flow.
+                //
+                // Copy x21 to the destination register.
+                // orr dst, xzr, x21  (equivalent to mov dst, x21)
                 ctx.emit(Inst{
                     .alu_rrr = .{
                         .alu_op = .orr,
                         .size = .size64,
                         .rd = dst_reg,
                         .rn = zeroReg(),
-                        .rm = vmctx_reg,
+                        .rm = regs.pinnedReg(), // x21 = pinned register
                     },
                 }) catch return null;
             },
@@ -2273,20 +2296,19 @@ pub const AArch64LowerBackend = struct {
 
         switch (gv_data) {
             .vmcontext => {
-                // VMContext: Get the vmctx parameter passed to the function.
-                // Port of cranelift/codegen/src/legalizer/globalvalue.rs vmctx_addr
-                const vmctx_value = ctx.f.specialParam(.vmctx) orelse return null;
-                const vmctx_regs = ctx.value_regs.get(vmctx_value);
-                const vmctx_reg = vmctx_regs.onlyReg() orelse return null;
-
-                // Copy vmctx to the temp register
+                // VMContext: Return the pinned register (x21) directly.
+                // Port of Cranelift's get_pinned_reg from lower.isle:2788-2789
+                // At function entry, vmctx is moved from x0 into x21.
+                // x21 is excluded from register allocation, so it can't be clobbered.
+                //
+                // Copy x21 to the temp register.
                 ctx.emit(Inst{
                     .alu_rrr = .{
                         .alu_op = .orr,
                         .size = .size64,
                         .rd = tmp_reg,
                         .rn = zeroReg(),
-                        .rm = vmctx_reg,
+                        .rm = regs.pinnedReg(), // x21 = pinned register
                     },
                 }) catch return null;
                 return tmp_reg.toReg();

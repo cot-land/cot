@@ -108,22 +108,31 @@ pub const MachineEnv = struct {
 // ARM64 MachineEnv
 //=============================================================================
 
+/// The pinned register for vmctx on ARM64 (x21).
+/// Port of Cranelift's PINNED_REG from cranelift/codegen/src/isa/aarch64/inst/regs.rs
+const PINNED_REG: usize = 21;
+
 /// Create a MachineEnv for ARM64 (AArch64).
 ///
 /// Integer registers: x0-x28 (x29=FP, x30=LR, x31=SP/ZR are special)
 /// Float registers: v0-v31
+/// x21 is reserved as the pinned register for vmctx (excluded from allocation)
 pub fn arm64MachineEnv() MachineEnv {
     var env = MachineEnv.empty();
 
     // Integer registers: x0-x17 are caller-saved (preferred)
     // x18 is platform register (avoided on many OSes)
-    // x19-x28 are callee-saved (non-preferred)
+    // x19-x28 are callee-saved (non-preferred), EXCEPT x21 which is pinned
     // x29 = FP, x30 = LR, x31 = SP/ZR (not allocatable)
     for (0..18) |i| {
         env.preferred_regs_by_class[@intFromEnum(RegClass.int)].add(PReg.new(i, .int));
     }
+    // Add x19-x28 but skip x21 (pinned register)
+    // Port of Cranelift's create_reg_env(enable_pinned_reg: true) from abi.rs
     for (19..29) |i| {
-        env.non_preferred_regs_by_class[@intFromEnum(RegClass.int)].add(PReg.new(i, .int));
+        if (i != PINNED_REG) {
+            env.non_preferred_regs_by_class[@intFromEnum(RegClass.int)].add(PReg.new(i, .int));
+        }
     }
 
     // Float/SIMD registers: v0-v7 are caller-saved (preferred)
