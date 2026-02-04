@@ -95,6 +95,9 @@ pub const StackSlot = lower_mod.StackSlot;
 /// Stack slot data (size, alignment, etc.).
 pub const StackSlotData = lower_mod.StackSlotData;
 
+/// Argument purpose - for identifying special parameters like vmctx.
+pub const ArgumentPurpose = lower_mod.ArgumentPurpose;
+
 // =============================================================================
 // Lower context
 // This is the actual Lower(Inst) type from machinst/lower.zig.
@@ -2141,11 +2144,30 @@ pub const AArch64LowerBackend = struct {
 
         switch (gv_data) {
             .vmcontext => {
-                // VMContext: For now, use a fixed base address (0x10000)
-                // In a full implementation, this would be a special register or parameter
+                // VMContext: Get the vmctx parameter passed to the function.
                 // Port of cranelift/codegen/src/legalizer/globalvalue.rs vmctx_addr
-                const vmctx_base: u64 = 0x10000;
-                emitLoadConstant(ctx, dst_reg, vmctx_base, .size64) catch return null;
+                // which aliases global_value(VMContext) to func.special_param(VMContext)
+                const vmctx_value = ctx.f.specialParam(.vmctx) orelse {
+                    // Fallback: no vmctx param found, this shouldn't happen
+                    // if the function was set up correctly with Wasm calling convention
+                    return null;
+                };
+
+                // Get the register(s) assigned to the vmctx parameter value
+                const vmctx_regs = ctx.value_regs.get(vmctx_value);
+                const vmctx_reg = vmctx_regs.onlyReg() orelse return null;
+
+                // Copy vmctx to the destination register
+                // (In Cranelift, this is an alias, but we emit a move for simplicity)
+                ctx.emit(Inst{
+                    .alu_rrr = .{
+                        .alu_op = .orr,
+                        .size = .size64,
+                        .rd = dst_reg,
+                        .rn = zeroReg(),
+                        .rm = vmctx_reg,
+                    },
+                }) catch return null;
             },
 
             .iadd_imm => |d| {
@@ -2251,9 +2273,22 @@ pub const AArch64LowerBackend = struct {
 
         switch (gv_data) {
             .vmcontext => {
-                // VMContext: fixed base address
-                const vmctx_base: u64 = 0x10000;
-                emitLoadConstant(ctx, tmp_reg, vmctx_base, .size64) catch return null;
+                // VMContext: Get the vmctx parameter passed to the function.
+                // Port of cranelift/codegen/src/legalizer/globalvalue.rs vmctx_addr
+                const vmctx_value = ctx.f.specialParam(.vmctx) orelse return null;
+                const vmctx_regs = ctx.value_regs.get(vmctx_value);
+                const vmctx_reg = vmctx_regs.onlyReg() orelse return null;
+
+                // Copy vmctx to the temp register
+                ctx.emit(Inst{
+                    .alu_rrr = .{
+                        .alu_op = .orr,
+                        .size = .size64,
+                        .rd = tmp_reg,
+                        .rn = zeroReg(),
+                        .rm = vmctx_reg,
+                    },
+                }) catch return null;
                 return tmp_reg.toReg();
             },
             .iadd_imm => |d| {

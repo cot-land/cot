@@ -137,9 +137,20 @@ pub const WasmFuncTranslator = struct {
 
         // 1. Set up function signature with parameters and returns
         //    (must be done before creating FunctionBuilder)
+        //
+        //    Port of Cranelift's Wasm calling convention:
+        //    params = [callee_vmctx, caller_vmctx, ...wasm_params] -> ...wasm_returns
+        //    Reference: wasmtime/cranelift/src/func_environ.rs
         func.signature.params.clearRetainingCapacity();
         func.signature.returns.clearRetainingCapacity();
 
+        // Add vmctx parameters (required by Wasm calling convention)
+        // callee_vmctx with vmctx purpose - this is what GlobalValue::VMContext resolves to
+        try func.signature.params.append(self.allocator, clif.AbiParam.special(clif.Type.I64, .vmctx));
+        // caller_vmctx (normal purpose, used for calls between functions)
+        try func.signature.params.append(self.allocator, clif.AbiParam.init(clif.Type.I64));
+
+        // Add Wasm parameters
         for (signature.params) |p| {
             try func.signature.params.append(self.allocator, clif.AbiParam.init(p.toClifType()));
         }

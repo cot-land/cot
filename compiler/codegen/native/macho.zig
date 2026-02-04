@@ -395,10 +395,13 @@ pub const MachOWriter = struct {
 
         for (self.data_relocations.items) |reloc| {
             const sym_idx = sym_name_to_idx.get(reloc.target) orelse 0;
-            const is_external = if (sym_idx < self.symbols.items.len) self.symbols.items[sym_idx].external else true;
+            // For symbol-based relocations (ADRP, ADD, etc.), always use extern=true
+            // because the symbolnum field should be a symbol table index, not section number.
+            // extern=false would mean symbolnum is a section number, which is only for
+            // section-based relocations (not used for symbol references).
             try writer.writeAll(std.mem.asBytes(&RelocationInfo{
                 .r_address = reloc.offset,
-                .r_info = RelocationInfo.makeInfo(@intCast(sym_idx), reloc.pc_rel, reloc.length, is_external, reloc.reloc_type),
+                .r_info = RelocationInfo.makeInfo(@intCast(sym_idx), reloc.pc_rel, reloc.length, true, reloc.reloc_type),
             }));
         }
 

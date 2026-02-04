@@ -39,6 +39,7 @@ const clif = @import("ir/clif/mod.zig");
 const macho = @import("codegen/native/macho.zig");
 const elf = @import("codegen/native/elf.zig");
 const object_module = @import("codegen/native/object_module.zig");
+const buffer_mod = @import("codegen/native/machinst/buffer.zig");
 
 const Allocator = std.mem.Allocator;
 const Target = target_mod.Target;
@@ -538,6 +539,9 @@ pub const Driver = struct {
             }
         }
 
+        // Track if we need to generate a main wrapper
+        var main_func_index: ?usize = null;
+
         // Declare and define each function
         for (compiled_funcs, 0..) |*cf, i| {
             // Determine function name from exports, or generate one
@@ -555,13 +559,23 @@ pub const Driver = struct {
                 func_name = try std.fmt.allocPrint(self.allocator, "_func_{d}", .{i});
             }
 
+            // For "main" export, rename to "__wasm_main" and generate a wrapper later
+            const is_main = std.mem.eql(u8, func_name, "main");
+            if (is_main) {
+                main_func_index = i;
+            }
+
             // Prefix with underscore for Mach-O convention
-            const mangled_name = try std.fmt.allocPrint(self.allocator, "_{s}", .{func_name});
+            // For main, use __wasm_main instead of _main (wrapper will be _main)
+            const mangled_name = if (is_main)
+                try self.allocator.dupe(u8, "__wasm_main")
+            else
+                try std.fmt.allocPrint(self.allocator, "_{s}", .{func_name});
             defer self.allocator.free(mangled_name);
 
-            // Determine linkage
-            const linkage: object_module.Linkage = if (std.mem.eql(u8, func_name, "main"))
-                .Export
+            // Determine linkage - wasm main is local (called by wrapper)
+            const linkage: object_module.Linkage = if (is_main)
+                .Local
             else if (found_name)
                 .Export
             else
@@ -577,12 +591,154 @@ pub const Driver = struct {
             try module.defineFunction(func_id, cf);
         }
 
+        // If we have a main function, generate the wrapper and static vmctx
+        if (main_func_index != null) {
+            try self.generateMainWrapperMachO(&module);
+        }
+
         // Write to memory buffer
         var output = std.ArrayListUnmanaged(u8){};
         defer output.deinit(self.allocator);
         try module.finish(output.writer(self.allocator));
 
         return output.toOwnedSlice(self.allocator);
+    }
+
+    /// Generate the _main wrapper and static vmctx data for Mach-O.
+    /// The wrapper initializes vmctx and calls __wasm_main.
+    fn generateMainWrapperMachO(self: *Driver, module: *object_module.ObjectModule) !void {
+        // =================================================================
+        // Step 1: Declare and define static vmctx data section
+        // Layout (total 384KB = 0x60000):
+        //   0x00000 - 0x0FFFF: Padding/reserved
+        //   0x10000: Stack pointer global (i32) - initialized to 64KB
+        //   0x20000: Heap base pointer (i64) - to be filled by wrapper
+        //   0x20008: Heap bound (i64) - 128KB
+        //   0x40000 - 0x5FFFF: Linear memory (128KB heap)
+        // =================================================================
+        const vmctx_size: usize = 0x60000; // 384KB
+        const vmctx_data = try self.allocator.alloc(u8, vmctx_size);
+        defer self.allocator.free(vmctx_data);
+
+        // Zero initialize
+        @memset(vmctx_data, 0);
+
+        // Initialize stack pointer at offset 0x10000 = 64KB into linear memory
+        // This means SP starts at heap_base + 0x10000
+        const sp_value: u32 = 0x10000;
+        @memcpy(vmctx_data[0x10000..][0..4], std.mem.asBytes(&sp_value));
+
+        // Heap bound at offset 0x20008 = 128KB (size of linear memory)
+        const heap_bound: u64 = 0x20000;
+        @memcpy(vmctx_data[0x20008..][0..8], std.mem.asBytes(&heap_bound));
+
+        // Note: heap base pointer at 0x20000 will be patched by wrapper at runtime
+        // because we need the absolute address which isn't known until load time
+
+        const vmctx_data_id = try module.declareData("_vmctx_data", .Local, true);
+        try module.defineData(vmctx_data_id, vmctx_data);
+
+        // =================================================================
+        // Step 2: Generate _main wrapper function
+        // This wrapper:
+        //   1. Loads address of _vmctx_data
+        //   2. Initializes heap base pointer (requires runtime address)
+        //   3. Calls __wasm_main(vmctx, vmctx)
+        //   4. Returns result
+        //
+        // ARM64 code:
+        //   stp     x29, x30, [sp, #-16]!
+        //   mov     x29, sp
+        //   adrp    x0, _vmctx_data@PAGE
+        //   add     x0, x0, _vmctx_data@PAGEOFF
+        //   add     x8, x0, #0x20, lsl #12  ; x8 = vmctx + 0x20000
+        //   add     x9, x0, #0x40, lsl #12  ; x9 = vmctx + 0x40000 (heap base)
+        //   str     x9, [x8]                ; Store heap base ptr
+        //   mov     x1, x0                  ; caller_vmctx = vmctx
+        //   bl      __wasm_main
+        //   ldp     x29, x30, [sp], #16
+        //   ret
+        // =================================================================
+        var wrapper_code = std.ArrayListUnmanaged(u8){};
+        defer wrapper_code.deinit(self.allocator);
+
+        // Helper to append little-endian u32
+        const appendInst = struct {
+            fn f(list: *std.ArrayListUnmanaged(u8), alloc: std.mem.Allocator, inst: u32) !void {
+                try list.appendSlice(alloc, &std.mem.toBytes(std.mem.nativeToBig(u32, @byteSwap(inst))));
+            }
+        }.f;
+
+        // stp x29, x30, [sp, #-16]!
+        try appendInst(&wrapper_code, self.allocator, 0xA9BF7BFD);
+        // mov x29, sp
+        try appendInst(&wrapper_code, self.allocator, 0x910003FD);
+        // adrp x0, _vmctx_data@PAGE (reloc at offset 8)
+        try appendInst(&wrapper_code, self.allocator, 0x90000000);
+        // add x0, x0, _vmctx_data@PAGEOFF (reloc at offset 12)
+        try appendInst(&wrapper_code, self.allocator, 0x91000000);
+        // add x8, x0, #0x20, lsl #12 (x8 = vmctx + 0x20000)
+        try appendInst(&wrapper_code, self.allocator, 0x91408008);
+        // add x9, x0, #0x40, lsl #12 (x9 = vmctx + 0x40000 = heap base)
+        try appendInst(&wrapper_code, self.allocator, 0x91410009);
+        // str x9, [x8] (store heap base pointer)
+        try appendInst(&wrapper_code, self.allocator, 0xF9000109);
+        // mov x1, x0 (caller_vmctx = vmctx)
+        try appendInst(&wrapper_code, self.allocator, 0xAA0003E1);
+        // bl __wasm_main (reloc at offset 32)
+        try appendInst(&wrapper_code, self.allocator, 0x94000000);
+        // ldp x29, x30, [sp], #16
+        try appendInst(&wrapper_code, self.allocator, 0xA8C17BFD);
+        // ret
+        try appendInst(&wrapper_code, self.allocator, 0xD65F03C0);
+
+        // Declare _main wrapper
+        const main_func_id = try module.declareFunction("_main", .Export);
+
+        // Create relocations for the wrapper code
+        // Relocation offsets: ADRP at 8, ADD at 12, BL at 32
+        const FinalizedMachReloc = buffer_mod.FinalizedMachReloc;
+        const FinalizedRelocTarget = buffer_mod.FinalizedRelocTarget;
+        const Reloc = buffer_mod.Reloc;
+        const ExternalName = buffer_mod.ExternalName;
+
+        // Use indices 1000 and 1001 (high enough to avoid collision with function indices)
+        const vmctx_ext_idx: u32 = 1000;
+        const wasm_main_ext_idx: u32 = 1001;
+
+        // Create external name references for _vmctx_data and __wasm_main
+        const vmctx_name_ref = ExternalName{ .User = .{ .namespace = 0, .index = vmctx_ext_idx } };
+        const wasm_main_name_ref = ExternalName{ .User = .{ .namespace = 0, .index = wasm_main_ext_idx } };
+
+        // Register external names for relocation resolution (indices must match the refs above)
+        try module.declareExternalName(vmctx_ext_idx, "_vmctx_data");
+        try module.declareExternalName(wasm_main_ext_idx, "__wasm_main");
+
+        const relocs = [_]FinalizedMachReloc{
+            // ADRP x0, _vmctx_data@PAGE at offset 8
+            .{
+                .offset = 8,
+                .kind = Reloc.Aarch64AdrPrelPgHi21,
+                .target = FinalizedRelocTarget{ .ExternalName = vmctx_name_ref },
+                .addend = 0,
+            },
+            // ADD x0, x0, _vmctx_data@PAGEOFF at offset 12
+            .{
+                .offset = 12,
+                .kind = Reloc.Aarch64AddAbsLo12Nc,
+                .target = FinalizedRelocTarget{ .ExternalName = vmctx_name_ref },
+                .addend = 0,
+            },
+            // BL __wasm_main at offset 32
+            .{
+                .offset = 32,
+                .kind = Reloc.Arm64Call,
+                .target = FinalizedRelocTarget{ .ExternalName = wasm_main_name_ref },
+                .addend = 0,
+            },
+        };
+
+        try module.defineFunctionBytes(main_func_id, wrapper_code.items, &relocs);
     }
 
     /// Generate ELF object file from compiled functions.

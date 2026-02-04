@@ -308,14 +308,18 @@ pub const FuncTranslator = struct {
         try self.locals.ensureTotalCapacity(self.allocator, total_locals);
 
         // Declare variables for parameters and define them with block params
+        // Note: Entry block params include vmctx params first:
+        //   [callee_vmctx, caller_vmctx, wasm_param0, wasm_param1, ...]
+        // So Wasm params start at index 2.
         const entry_params = self.builder.blockParams(entry_block);
+        const vmctx_param_count: usize = 2; // callee_vmctx and caller_vmctx
         for (0..num_params) |i| {
             const var_type = param_types[i];
             const variable = try self.builder.declareVar(var_type);
             self.locals.appendAssumeCapacity(variable);
 
-            // Define parameter variable with block param value
-            try self.builder.defVar(variable, entry_params[i]);
+            // Define parameter variable with block param value (offset by vmctx params)
+            try self.builder.defVar(variable, entry_params[vmctx_param_count + i]);
         }
 
         // Declare variables for non-parameter locals (initialized to zero)
