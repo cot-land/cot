@@ -8,9 +8,11 @@
 const std = @import("std");
 const wasm = @import("../../wasm_opcodes.zig");
 const func_translator = @import("func_translator.zig");
+const heap_mod = @import("heap.zig");
 
 pub const WasmOperator = func_translator.WasmOperator;
 pub const BlockData = func_translator.BlockData;
+pub const FuncTranslatorMemArg = heap_mod.MemArg;
 
 // ============================================================================
 // MemArg - Memory instruction argument
@@ -340,8 +342,163 @@ pub const WasmOp = union(enum) {
             .drop => .drop,
             .select => .select,
 
+            // Memory loads - Port of code_translator.rs:818-902
+            .i32_load => |m| WasmOperator{ .i32_load = toFuncTranslatorMemArg(m) },
+            .i64_load => |m| WasmOperator{ .i64_load = toFuncTranslatorMemArg(m) },
+            .f32_load => |m| WasmOperator{ .f32_load = toFuncTranslatorMemArg(m) },
+            .f64_load => |m| WasmOperator{ .f64_load = toFuncTranslatorMemArg(m) },
+            .i32_load8_s => |m| WasmOperator{ .i32_load8_s = toFuncTranslatorMemArg(m) },
+            .i32_load8_u => |m| WasmOperator{ .i32_load8_u = toFuncTranslatorMemArg(m) },
+            .i32_load16_s => |m| WasmOperator{ .i32_load16_s = toFuncTranslatorMemArg(m) },
+            .i32_load16_u => |m| WasmOperator{ .i32_load16_u = toFuncTranslatorMemArg(m) },
+            .i64_load8_s => |m| WasmOperator{ .i64_load8_s = toFuncTranslatorMemArg(m) },
+            .i64_load8_u => |m| WasmOperator{ .i64_load8_u = toFuncTranslatorMemArg(m) },
+            .i64_load16_s => |m| WasmOperator{ .i64_load16_s = toFuncTranslatorMemArg(m) },
+            .i64_load16_u => |m| WasmOperator{ .i64_load16_u = toFuncTranslatorMemArg(m) },
+            .i64_load32_s => |m| WasmOperator{ .i64_load32_s = toFuncTranslatorMemArg(m) },
+            .i64_load32_u => |m| WasmOperator{ .i64_load32_u = toFuncTranslatorMemArg(m) },
+
+            // Memory stores - Port of code_translator.rs:962-977
+            .i32_store => |m| WasmOperator{ .i32_store = toFuncTranslatorMemArg(m) },
+            .i64_store => |m| WasmOperator{ .i64_store = toFuncTranslatorMemArg(m) },
+            .f32_store => |m| WasmOperator{ .f32_store = toFuncTranslatorMemArg(m) },
+            .f64_store => |m| WasmOperator{ .f64_store = toFuncTranslatorMemArg(m) },
+            .i32_store8 => |m| WasmOperator{ .i32_store8 = toFuncTranslatorMemArg(m) },
+            .i32_store16 => |m| WasmOperator{ .i32_store16 = toFuncTranslatorMemArg(m) },
+            .i64_store8 => |m| WasmOperator{ .i64_store8 = toFuncTranslatorMemArg(m) },
+            .i64_store16 => |m| WasmOperator{ .i64_store16 = toFuncTranslatorMemArg(m) },
+            .i64_store32 => |m| WasmOperator{ .i64_store32 = toFuncTranslatorMemArg(m) },
+
+            // Memory size/grow
+            .memory_size => |m| WasmOperator{ .memory_size = m },
+            .memory_grow => |m| WasmOperator{ .memory_grow = m },
+
+            // Calls - Port of code_translator.rs:654-717
+            .call => |idx| WasmOperator{ .call = idx },
+            .call_indirect => |d| WasmOperator{ .call_indirect = .{ .type_index = d.type_index, .table_index = d.table_index } },
+
+            // Float constants
+            .f32_const => |v| WasmOperator{ .f32_const = v },
+            .f64_const => |v| WasmOperator{ .f64_const = v },
+
+            // Float arithmetic binary
+            .f32_add => .f32_add,
+            .f32_sub => .f32_sub,
+            .f32_mul => .f32_mul,
+            .f32_div => .f32_div,
+            .f32_min => .f32_min,
+            .f32_max => .f32_max,
+            .f32_copysign => .f32_copysign,
+            .f64_add => .f64_add,
+            .f64_sub => .f64_sub,
+            .f64_mul => .f64_mul,
+            .f64_div => .f64_div,
+            .f64_min => .f64_min,
+            .f64_max => .f64_max,
+            .f64_copysign => .f64_copysign,
+
+            // Float arithmetic unary
+            .f32_abs => .f32_abs,
+            .f32_neg => .f32_neg,
+            .f32_ceil => .f32_ceil,
+            .f32_floor => .f32_floor,
+            .f32_trunc => .f32_trunc,
+            .f32_nearest => .f32_nearest,
+            .f32_sqrt => .f32_sqrt,
+            .f64_abs => .f64_abs,
+            .f64_neg => .f64_neg,
+            .f64_ceil => .f64_ceil,
+            .f64_floor => .f64_floor,
+            .f64_trunc => .f64_trunc,
+            .f64_nearest => .f64_nearest,
+            .f64_sqrt => .f64_sqrt,
+
+            // Float comparison
+            .f32_eq => .f32_eq,
+            .f32_ne => .f32_ne,
+            .f32_lt => .f32_lt,
+            .f32_gt => .f32_gt,
+            .f32_le => .f32_le,
+            .f32_ge => .f32_ge,
+            .f64_eq => .f64_eq,
+            .f64_ne => .f64_ne,
+            .f64_lt => .f64_lt,
+            .f64_gt => .f64_gt,
+            .f64_le => .f64_le,
+            .f64_ge => .f64_ge,
+
+            // i64 arithmetic (already have i32 versions)
+            .i64_add => .i64_add,
+            .i64_sub => .i64_sub,
+            .i64_mul => .i64_mul,
+            .i64_div_s => .i64_div_s,
+            .i64_div_u => .i64_div_u,
+            .i64_rem_s => .i64_rem_s,
+            .i64_rem_u => .i64_rem_u,
+            .i64_and => .i64_and,
+            .i64_or => .i64_or,
+            .i64_xor => .i64_xor,
+            .i64_shl => .i64_shl,
+            .i64_shr_s => .i64_shr_s,
+            .i64_shr_u => .i64_shr_u,
+            .i64_rotl => .i64_rotl,
+            .i64_rotr => .i64_rotr,
+
+            // i64 comparison (already have i32 versions)
+            .i64_eqz => .i64_eqz,
+            .i64_eq => .i64_eq,
+            .i64_ne => .i64_ne,
+            .i64_lt_s => .i64_lt_s,
+            .i64_lt_u => .i64_lt_u,
+            .i64_gt_s => .i64_gt_s,
+            .i64_gt_u => .i64_gt_u,
+            .i64_le_s => .i64_le_s,
+            .i64_le_u => .i64_le_u,
+            .i64_ge_s => .i64_ge_s,
+            .i64_ge_u => .i64_ge_u,
+
+            // Float truncation to int
+            .i32_trunc_f32_s => .i32_trunc_f32_s,
+            .i32_trunc_f32_u => .i32_trunc_f32_u,
+            .i32_trunc_f64_s => .i32_trunc_f64_s,
+            .i32_trunc_f64_u => .i32_trunc_f64_u,
+            .i64_trunc_f32_s => .i64_trunc_f32_s,
+            .i64_trunc_f32_u => .i64_trunc_f32_u,
+            .i64_trunc_f64_s => .i64_trunc_f64_s,
+            .i64_trunc_f64_u => .i64_trunc_f64_u,
+
+            // Int to float conversion
+            .f32_convert_i32_s => .f32_convert_i32_s,
+            .f32_convert_i32_u => .f32_convert_i32_u,
+            .f32_convert_i64_s => .f32_convert_i64_s,
+            .f32_convert_i64_u => .f32_convert_i64_u,
+            .f64_convert_i32_s => .f64_convert_i32_s,
+            .f64_convert_i32_u => .f64_convert_i32_u,
+            .f64_convert_i64_s => .f64_convert_i64_s,
+            .f64_convert_i64_u => .f64_convert_i64_u,
+
+            // Float promotion/demotion
+            .f32_demote_f64 => .f32_demote_f64,
+            .f64_promote_f32 => .f64_promote_f32,
+
+            // Reinterpret
+            .i32_reinterpret_f32 => .i32_reinterpret_f32,
+            .i64_reinterpret_f64 => .i64_reinterpret_f64,
+            .f32_reinterpret_i32 => .f32_reinterpret_i32,
+            .f64_reinterpret_i64 => .f64_reinterpret_i64,
+
             // Not yet supported in basic translator
             else => null,
+        };
+    }
+
+    /// Convert decoder's MemArg to func_translator's MemArg (heap.MemArg)
+    /// Port of Cranelift's MemArg conversion
+    fn toFuncTranslatorMemArg(m: MemArg) FuncTranslatorMemArg {
+        return .{
+            .align_ = m.align_,
+            .offset = @as(u64, m.offset),
+            .memory = 0, // Default to memory index 0 (single-memory model)
         };
     }
 };
@@ -909,8 +1066,13 @@ test "toBasicOperator conversion" {
     try testing.expect(basic2 != null);
     try testing.expectEqual(WasmOperator.i32_add, basic2.?);
 
-    // Memory ops return null (not in basic operator)
+    // Memory ops are now converted (port of code_translator.rs memory ops)
     const op3: WasmOp = .{ .i32_load = .{ .align_ = 2, .offset = 0 } };
     const basic3 = op3.toBasicOperator();
-    try testing.expect(basic3 == null);
+    try testing.expect(basic3 != null);
+    // Verify it's an i32_load with correct conversion
+    try testing.expect(basic3.? == .i32_load);
+    try testing.expectEqual(@as(u32, 2), basic3.?.i32_load.align_);
+    try testing.expectEqual(@as(u64, 0), basic3.?.i32_load.offset);
+    try testing.expectEqual(@as(u32, 0), basic3.?.i32_load.memory);
 }
