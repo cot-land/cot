@@ -973,10 +973,60 @@ test "V2: compile arithmetic (10 + 32) produces correct code" {
 }
 
 test "V2: compile memory operations (stack load/store) produces correct code" {
-    // TODO: Stack slot offset computation needs to be wired properly
-    // The sized_stackslots array is not being populated during lowering
-    // This test crashes with SIGABRT - skip until fixed
-    return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+
+    const frontend_mod = @import("frontend/mod.zig");
+    const FunctionBuilder = frontend_mod.FunctionBuilder;
+    const FunctionBuilderContext = frontend_mod.FunctionBuilderContext;
+    const Type = frontend_mod.Type;
+    const StackSlotData = frontend_mod.StackSlotData;
+
+    var func = clif.Function.init(allocator);
+    defer func.deinit();
+
+    // Function: () -> i32
+    try func.signature.returns.append(allocator, clif.AbiParam.init(Type.I32));
+
+    var ctx = FunctionBuilderContext.init(allocator);
+    defer ctx.deinit();
+
+    var builder = FunctionBuilder.init(&func, &ctx);
+
+    // Create entry block
+    const entry = try builder.createBlock();
+    builder.switchToBlock(entry);
+    try builder.sealBlock(entry);
+
+    // Create a stack slot: 4 bytes, 4-byte aligned (align_shift=2 means 2^2=4)
+    const slot = try builder.createSizedStackSlot(StackSlotData.explicit(4, 2));
+
+    // Store 42 to stack slot
+    const val = try builder.ins().iconst(Type.I32, 42);
+    _ = try builder.ins().stackStore(val, slot, 0);
+
+    // Load it back
+    const loaded = try builder.ins().stackLoad(Type.I32, slot, 0);
+
+    // Return the loaded value
+    _ = try builder.ins().return_(&[_]frontend_mod.Value{loaded});
+
+    builder.finalize();
+
+    // Compile
+    const isa = detectNativeIsa();
+    var ctrl_plane = ControlPlane.init();
+
+    const compiled = compile(allocator, &func, isa, &ctrl_plane) catch |e| {
+        std.debug.print("Memory ops compilation failed: {}\n", .{e});
+        return e;
+    };
+    defer {
+        var compiled_mut = compiled;
+        compiled_mut.deinit();
+    }
+
+    // Must produce non-zero output
+    try std.testing.expect(compiled.codeSize() > 0);
 }
 
 test "V2: compile function call produces correct code" {

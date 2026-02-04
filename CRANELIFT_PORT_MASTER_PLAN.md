@@ -1065,7 +1065,7 @@ All audit documents are in `audit/native/`:
 
 ## Phase 7: Integration
 
-**STATUS**: ✅ Complete (95% - all infrastructure done, 2/6 E2E tests passing)
+**STATUS**: ✅ Complete (all infrastructure done, 6/6 E2E tests passing)
 
 **Audit Date**: February 4, 2026
 
@@ -1197,17 +1197,15 @@ All i64 opcodes defined in translator.zig and dispatched to translate functions:
 - `object_module.zig` - Bridges compiled code to object files
 - Wired into `driver.zig` at lines 39-41
 
-#### 7.8 End-to-End Tests ✅ PARTIAL (2/6 passing)
+#### 7.8 End-to-End Tests ✅ COMPLETE (6/6 passing)
 
-**Passing tests in compile.zig:**
+**All tests passing in compile.zig:**
 - [x] `return 42` - basic compilation (test at line 782)
 - [x] `if (cond) { ... }` - control flow (test at line 851)
-
-**Can be added (infrastructure complete):**
-- [ ] `return 10 + 32` - arithmetic
-- [ ] Function calls - direct calls
-- [ ] Memory operations - load/store
-- [ ] Loops
+- [x] `return 10 + 32` - arithmetic
+- [x] Memory operations - stack load/store
+- [x] Function calls - direct calls
+- [x] Loops - while/for
 
 ### 7.3 Execution Order ✅ ALL PHASES COMPLETE
 
@@ -1282,8 +1280,8 @@ compiler/codegen/native/
 | 4: ARM64 | ✅ Complete | 23/23 | ~15,000 | None |
 | 5: x86-64 | ✅ Complete | 16/16 | ~8,400 | None |
 | 6: Regalloc | ✅ Complete | 19/19 | ~6,400 | None |
-| 7: Integration | ✅ ~95% | 7/8 | ~3,400 | End-to-end testing |
-| **TOTAL** | **~95%** | **144/145** | **~56,075** | **End-to-end tests** |
+| 7: Integration | ✅ Complete | 8/8 | ~3,400 | None |
+| **TOTAL** | **100%** | **145/145** | **~56,075** | **None** |
 
 ### What's Done
 
@@ -1299,20 +1297,21 @@ All infrastructure is complete and tests pass:
 
 ### What Remains
 
-**Phase 7.8: End-to-End Tests**
+**✅ ALL PHASES COMPLETE**
 
-The native codegen pipeline is complete. What remains is testing the full integration:
+The native codegen pipeline is fully operational. All end-to-end tests pass:
 
 | Test | Description | Status | Notes |
 |------|-------------|--------|-------|
 | E2E-1 | `return 42` - basic native compilation | ✅ PASS | Added in compile.zig |
 | E2E-2 | `if (cond) { ... }` - control flow | ✅ PASS | Added in compile.zig |
 | E2E-3 | `return 10 + 32` - arithmetic | ✅ PASS | Added in compile.zig |
-| E2E-4 | Memory operations - load/store | ⏳ SKIP | SIGABRT - stack slot wiring |
+| E2E-4 | Memory operations - stack load/store | ✅ PASS | Fixed - pseudo addressing mode resolution |
 | E2E-5 | Function calls - direct calls | ✅ PASS | Fixed in Feb 2026 - clobber/def collision resolved |
 | E2E-6 | Loops - while/for | ✅ PASS | Fixed in Feb 2026 - label fixup timing |
 
 **Recent Fixes (February 2026)**:
+- Fixed E2E-4: Pseudo addressing modes (`sp_offset`, `slot_offset`) now resolved via `memFinalize()` in emit.zig
 - Fixed clobber/def collision in call instructions by porting Cranelift's gen_call_info pattern
 - Fixed label fixup timing by deferring all fixups to finish() (matching Cranelift's use_label_at_offset)
 - See `audit/regalloc2_port_gaps.md` for gap analysis and change log

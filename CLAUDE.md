@@ -106,12 +106,12 @@ The Go compiler is at `~/learning/go/src/cmd/`. Key files:
 | M15 | ✅ Done | ARC runtime (retain/release in arc.zig, integrated with Linker) |
 | M16 | ✅ Done | Browser imports (import section, import-aware exports in link.zig) |
 
-### Verified Test Coverage (784/787 passing)
+### Verified Test Coverage (785/787 passing)
 
 | Category | Tests | Status |
 |----------|-------|--------|
 | Wasm Codegen | 65+ | ✅ All pass |
-| Native Codegen | 700+ | ✅ All pass (3 skipped) |
+| Native Codegen | 700+ | ✅ All pass (2 skipped) |
 
 ### Known Gaps
 
@@ -123,9 +123,10 @@ The Go compiler is at `~/learning/go/src/cmd/`. Key files:
 | Phase | Status | Description |
 |-------|--------|-------------|
 | Phase 0-6 | ✅ Done | CLIF IR, Wasm translation, MachInst, ARM64/x64, regalloc |
-| Phase 7 | ✅ 95% | Integration complete - all infrastructure done, 2/6 E2E tests passing |
+| Phase 7 | ✅ Done | Integration complete - all 6/6 E2E tests passing |
 
 **Recent Fixes (February 2026):**
+- E2E-4 memory operations: Fixed pseudo addressing modes (`sp_offset`, `slot_offset`) resolution via `memFinalize()` in emit.zig
 - `removeBlockParam()` - SSA construction must remove block params when all predecessors agree (port of ssa.rs:555-556)
 - `InstValuesIterator` - port of Cranelift's inst_values() including branch args
 - `computeUseStates()` - now uses iterator stack matching Cranelift exactly
