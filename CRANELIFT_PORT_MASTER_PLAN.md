@@ -1303,14 +1303,19 @@ All infrastructure is complete and tests pass:
 
 The native codegen pipeline is complete. What remains is testing the full integration:
 
-| Test | Description | Status |
-|------|-------------|--------|
-| E2E-1 | `return 42` - basic native compilation | ⏳ TODO |
-| E2E-2 | `return 10 + 32` - arithmetic | ⏳ TODO |
-| E2E-3 | `if (cond) { ... }` - control flow | ⏳ TODO |
-| E2E-4 | Function calls - direct calls | ⏳ TODO |
-| E2E-5 | Memory operations - load/store | ⏳ TODO |
-| E2E-6 | Loops - while/for | ⏳ TODO |
+| Test | Description | Status | Notes |
+|------|-------------|--------|-------|
+| E2E-1 | `return 42` - basic native compilation | ✅ PASS | Added in compile.zig |
+| E2E-2 | `if (cond) { ... }` - control flow | ✅ PASS | Added in compile.zig |
+| E2E-3 | `return 10 + 32` - arithmetic | ✅ PASS | Added in compile.zig |
+| E2E-4 | Memory operations - load/store | ⏳ SKIP | SIGABRT - stack slot wiring |
+| E2E-5 | Function calls - direct calls | ✅ PASS | Fixed in Feb 2026 - clobber/def collision resolved |
+| E2E-6 | Loops - while/for | ✅ PASS | Fixed in Feb 2026 - label fixup timing |
+
+**Recent Fixes (February 2026)**:
+- Fixed clobber/def collision in call instructions by porting Cranelift's gen_call_info pattern
+- Fixed label fixup timing by deferring all fixups to finish() (matching Cranelift's use_label_at_offset)
+- See `audit/regalloc2_port_gaps.md` for gap analysis and change log
 
 ### Estimated LOC Summary
 

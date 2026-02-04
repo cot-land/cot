@@ -91,12 +91,12 @@ The Go compiler is at `~/learning/go/src/cmd/`. Key files:
 | M15 | ✅ Done | ARC runtime (retain/release in arc.zig, integrated with Linker) |
 | M16 | ✅ Done | Browser imports (import section, import-aware exports in link.zig) |
 
-### Verified Test Coverage (781/783 passing)
+### Verified Test Coverage (784/787 passing)
 
 | Category | Tests | Status |
 |----------|-------|--------|
 | Wasm Codegen | 65+ | ✅ All pass |
-| Native Codegen | 700+ | ✅ All pass (2 skipped) |
+| Native Codegen | 700+ | ✅ All pass (3 skipped) |
 
 ### Known Gaps
 
