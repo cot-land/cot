@@ -19,8 +19,11 @@ On February 4, 2026, E2E testing revealed that native AOT compilation only works
 | While loops | ✅ **FIXED** (Feb 5, 2026) |
 | Params + early return | ✅ **FIXED** (Feb 5, 2026) |
 | Recursion | ✅ **FIXED** (Feb 5, 2026) |
-| Structs | ❌ Untested |
-| Pointers | ❌ Untested |
+| Structs (local) | ✅ Works |
+| Structs (as params) | ❌ Known Wasm codegen limitation |
+| Pointers (read/write) | ✅ Works |
+| Pointer arithmetic | ❌ Bug in Wasm codegen (not native) |
+| Arrays | ✅ Works |
 
 **Feb 5 update (PM):** Fixed vmctx pinned register - params + early return pattern now works.
 - vmctx is now moved to x21 at function entry, excluded from register allocation
