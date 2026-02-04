@@ -1,0 +1,10 @@
+// expect: 42
+// Tier 5: Nested if
+fn main() i64 {
+    if 1 == 1 {
+        if 2 == 2 {
+            return 42
+        }
+    }
+    return 0
+}

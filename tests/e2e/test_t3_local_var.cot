@@ -1,0 +1,7 @@
+// expect: 42
+// Tier 3: Local variables
+fn main() i64 {
+    let x = 42
+    let y = x
+    return y
+}

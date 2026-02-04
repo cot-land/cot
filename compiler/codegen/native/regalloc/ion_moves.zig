@@ -645,7 +645,14 @@ pub const MoveContext = struct {
             return;
         }
 
-        // Clear allocations for any defs between the two positions
+        // Clear allocations for any defs/clobbers between the two positions.
+        // Since we don't have direct access to clobber information here,
+        // we conservatively clear ALL state if there are any instructions
+        // between the two positions. This may miss some optimization opportunities
+        // but ensures correctness when calls or other clobbering instructions exist.
+        //
+        // A call instruction clobbers x0-x17, so any move that was valid before
+        // the call may no longer be valid after it.
         const start_inst: usize = if (from.pos() == .before)
             from.inst().idx()
         else
@@ -655,11 +662,12 @@ pub const MoveContext = struct {
         else
             to.inst().idx() + 1;
 
-        // Note: in a full implementation, we would iterate through instructions
-        // and clear allocations for defs. For now, we skip this as it requires
-        // access to the Function interface which we don't have here.
-        _ = start_inst;
-        _ = end_inst;
+        // If there are any instructions between start and end, clear all state.
+        // This is conservative but safe - clobbers from calls would invalidate
+        // any tracked copy chains.
+        if (end_inst > start_inst) {
+            redundant_moves.clear();
+        }
     }
 };
 

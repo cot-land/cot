@@ -1,0 +1,8 @@
+// expect: 42
+// Tier 7: Simple struct
+struct Point { x: i64, y: i64 }
+
+fn main() i64 {
+    let p = Point { .x = 42, .y = 100 }
+    return p.x
+}

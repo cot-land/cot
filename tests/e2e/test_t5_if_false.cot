@@ -1,0 +1,9 @@
+// expect: 42
+// Tier 5: If with false condition (else branch)
+fn main() i64 {
+    if 1 == 2 {
+        return 0
+    } else {
+        return 42
+    }
+}

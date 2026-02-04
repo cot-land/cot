@@ -1,0 +1,8 @@
+// expect: 30
+// Tier 10: Pointer arithmetic
+fn main() i64 {
+    let arr = [10, 20, 30, 40, 50]
+    let p = &arr[0]
+    let p2 = p + 2
+    return p2.*
+}

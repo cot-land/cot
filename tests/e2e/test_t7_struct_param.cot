@@ -1,0 +1,12 @@
+// expect: 42
+// Tier 7: Struct as function parameter
+struct Point { x: i64, y: i64 }
+
+fn getX(p: Point) i64 {
+    return p.x
+}
+
+fn main() i64 {
+    let p = Point { .x = 42, .y = 100 }
+    return getX(p)
+}

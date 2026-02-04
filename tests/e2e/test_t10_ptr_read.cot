@@ -1,0 +1,7 @@
+// expect: 42
+// Tier 10: Pointer read
+fn main() i64 {
+    let x = 42
+    let p = &x
+    return p.*
+}

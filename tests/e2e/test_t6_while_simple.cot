@@ -1,0 +1,9 @@
+// expect: 42
+// Tier 6: Simple while loop
+fn main() i64 {
+    let i = 0
+    while i < 42 {
+        i = i + 1
+    }
+    return i
+}

@@ -1,0 +1,5 @@
+// expect: 42
+// Tier 1: Return constant
+fn main() i64 {
+    return 42
+}

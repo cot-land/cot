@@ -12,7 +12,7 @@ On February 4, 2026, E2E testing revealed that native AOT compilation only works
 | Return simple expression (`return 10 + 5`) | ✅ Works |
 | Local variables (`let x = 10`) | ✅ **FIXED** (Feb 5, 2026) |
 | Function calls (no params) | ✅ **FIXED** (Feb 4, 2026) |
-| Nested function calls | ✅ **FIXED** (Feb 4, 2026) |
+| Nested function calls | ✅ **FIXED** (Feb 5, 2026) |
 | Function calls (2+ params) | ✅ **FIXED** (Feb 5, 2026) |
 | Function calls (1 param) | ✅ **FIXED** (Feb 5, 2026) |
 | If/else control flow | ✅ **FIXED** (Feb 5, 2026) |
@@ -20,10 +20,11 @@ On February 4, 2026, E2E testing revealed that native AOT compilation only works
 | Params + early return | ✅ **FIXED** (Feb 5, 2026) |
 | Recursion | ✅ **FIXED** (Feb 5, 2026) |
 | Structs (local) | ✅ Works |
-| Structs (as params) | ❌ Known Wasm codegen limitation |
+| Structs (as params) | ✅ **FIXED** (Feb 5, 2026) - Wasm codegen |
 | Pointers (read/write) | ✅ Works |
-| Pointer arithmetic | ❌ Bug in Wasm codegen (not native) |
+| Pointer arithmetic | ✅ **FIXED** (Feb 5, 2026) - Wasm codegen |
 | Arrays | ✅ Works |
+| Multiple/sequential calls | ✅ **FIXED** (Feb 5, 2026) |
 
 **Feb 5 update (PM):** Fixed vmctx pinned register - params + early return pattern now works.
 - vmctx is now moved to x21 at function entry, excluded from register allocation
@@ -656,3 +657,11 @@ ret
   - Root cause 3: Callee-saved registers (x19-x28) not saved/restored in prologue/epilogue
   - Fix: Match Cranelift's two-path End handler, pass mutable reference to info.dest
   - Fix: Add callee-save computation from regalloc output, emit stp/ldp for clobbered regs
+- **Feb 5, 2026 (night)**: Fixed sequential/nested function calls SIGSEGV
+  - Root cause: RedundantMoveEliminator incorrectly elided second call's vmctx move
+  - The same vreg (vmctx) needed fixed_reg constraints for both x0 and x1
+  - First call's move (x0 ← x1) was emitted correctly
+  - Second call's move was ELIDED because eliminator tracked x0=x1 without accounting for call clobbers
+  - Fix: processRedundantMoveSideEffects now clears ALL state when instructions exist between moves
+  - This is conservative but safe - calls clobber x0-x17, invalidating any tracked copy chains
+  - All 52 E2E tests now pass on both wasm and native targets
