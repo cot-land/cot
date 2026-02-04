@@ -124,7 +124,7 @@ ldp x29, x30, [sp], #16     ; Restore FP and LR
 
 ---
 
-## Task 2: Fix Local Variables (SIGSEGV)
+## Task 2: Fix Local Variables (SIGSEGV) - IN PROGRESS
 
 **Error observed:**
 ```
@@ -140,43 +140,59 @@ fn main() int {
 }
 ```
 
-**Pipeline stage:** Either Wasm→CLIF translation OR code emission
+### Root Cause Analysis (February 4, 2026)
 
-**Our files:**
-- `compiler/codegen/native/wasm_to_clif/translator.zig` (local.get/local.set)
-- `compiler/codegen/native/isa/aarch64/lower.zig` (if it's a lowering issue)
-- `compiler/codegen/native/isa/aarch64/inst/emit.zig` (if it's emission)
+**The problem is NOT in Wasm→CLIF translation.** Locals are correctly translated to CLIF Variables using `builder.useVar()` and `builder.defVar()`.
 
-**Reference files:**
-- `~/learning/wasmtime/crates/cranelift/src/translate/code_translator.rs`
-- `~/learning/wasmtime/cranelift/codegen/src/isa/aarch64/lower.isle`
-- `~/learning/wasmtime/cranelift/codegen/src/isa/aarch64/inst/emit.rs`
+**The problem is in Wasm codegen → native execution:**
 
-### Investigation Steps (Follow TROUBLESHOOTING.md)
+1. Cot compiles to Wasm with **SP-based stack frames in linear memory**
+   - `compiler/codegen/wasm/gen.zig` computes `frame_size`
+   - Locals are stored at `SP + offset` in Wasm linear memory
 
-1. **Determine if crash is in translation or emission:**
-   ```bash
-   # Compile to .o file and disassemble
-   ./zig-out/bin/cot test.cot -o test
-   objdump -d test > test.asm
-   # OR
-   lldb test
-   run
-   bt  # backtrace to see where crash occurs
+2. The Wasm is then AOT compiled to native, but the native code still expects:
+   - Global SP to exist at a known memory location
+   - Linear memory to be allocated starting at some base address
+
+3. **The stub in `lower.zig:2147`** uses hardcoded `0x10000` for vmctx_base:
+   ```zig
+   const vmctx_base: u64 = 0x10000;  // STUB - doesn't exist!
    ```
 
-2. **If crash is in generated code:**
-   - Look at the disassembly
-   - Find which instruction crashes
-   - Trace back to what CLIF instruction generated it
-   - Compare with Cranelift's emission for that instruction
+4. Generated code tries to load/store at addresses like `0x20000` → **SIGSEGV**
 
-3. **Check local variable handling:**
-   - How does Cranelift translate `local.get`?
-   - How does Cranelift translate `local.set`?
-   - Are we using stack slots correctly?
+### Fix Approach (Following TROUBLESHOOTING.md)
 
-4. **DO NOT guess the fix.** Find the reference pattern and copy it.
+**Option A: Add runtime memory initialization** (Wasmtime approach)
+- Add BSS section with memory for Wasm linear memory
+- Add startup code to initialize SP
+- Update vmctx_base to point to actual memory
+
+**Option B: Change codegen to avoid Wasm memory for locals**
+- Would require major changes to Wasm codegen
+- Not recommended - breaks Wasm semantics
+
+**Reference:** Look at how Wasmtime initializes `VMContext` in `wasmtime/crates/runtime/src/vmcontext.rs`
+
+### Our files to modify:
+- `compiler/codegen/native/isa/aarch64/lower.zig` (vmctx_base)
+- `compiler/codegen/native/object_module.zig` (add data section)
+- `compiler/driver.zig` (coordinate memory setup)
+
+### Architectural Challenge
+
+The fix is complex because:
+1. `lower.zig` generates hardcoded `mov x0, #0x10000` instructions
+2. This needs to become a **relocation** to a symbol (e.g., `__wasm_memory`)
+3. That symbol needs to be defined as a data section in the object file
+4. The memory needs to be initialized (at least SP set to a valid offset)
+
+This requires changes at multiple levels:
+- CLIF IR generation (reference symbol instead of constant)
+- Lowering (emit relocation instead of immediate)
+- Object file (add BSS/data section)
+
+**Complexity: HIGH** - Affects core memory model for native AOT
 
 ---
 
