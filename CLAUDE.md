@@ -94,59 +94,57 @@ The Go compiler is at `~/learning/go/src/cmd/`. Key files:
 
 ## Current State (February 2026)
 
-### Wasm Backend Progress
+**793 tests pass (0 failures, 0 skipped)** across Wasm and native targets.
 
-| Milestone | Status | Description |
-|-----------|--------|-------------|
-| M1-M3 | ✅ Done | Wasm SSA ops, lowering pass, code generator |
-| M4-M5 | ✅ Done | E2E: return 42, add two numbers |
-| M6-M7 | ✅ Done | Control flow (if/else, loops, break, continue) |
-| M8-M9 | ✅ Done | Function calls (params, recursion), CLI outputs .wasm |
-| M10 | ✅ Done | Linear memory (load/store, SP global, frame allocation) |
-| M11 | ✅ Done | Pointers (off_ptr, add_ptr, sub_ptr) |
-| M12 | ✅ Done | Structs (field read/write via off_ptr) |
-| M13 | ✅ Done | Arrays/Slices (decomposition in lower_wasm, frame size fix) |
-| M14 | ✅ Done | Strings (rewritegeneric + rewritedec passes, Go-matching structure) |
-| M15 | ✅ Done | ARC runtime (retain/release in arc.zig, integrated with Linker) |
-| M16 | ✅ Done | Browser imports (import section, import-aware exports in link.zig) |
+### What's Done
 
-### Verified Test Coverage
+- **Wasm backend (M1-M16):** Complete. Arithmetic, control flow, functions, memory, structs, arrays, strings, ARC, browser imports.
+- **Native AOT (Phase 0-7):** Complete. Cranelift-style CLIF IR, regalloc2, ARM64/x64 backends, Mach-O/ELF output.
+- **ARC runtime (M17-M19):** Complete. Retain/release, heap allocation, destructors.
+- **Language features (M20-M23):** Complete. String ops, array append, for-range loops.
+- **Phase 3 language features:** Methods, enums, unions, switch, type aliases, imports, extern, bitwise, compound assign, optionals, chars, builtins - all verified on both Wasm and native.
 
-| Category | Tests | Status |
-|----------|-------|--------|
-| Wasm Codegen | 65+ | ✅ All pass |
-| Native Codegen | 700+ | ✅ All pass (0 leaks) |
+### What's Missing
 
-### Known Gaps
+**See [GAP_ANALYSIS.md](GAP_ANALYSIS.md) for the full gap analysis.**
 
-- **Struct-by-value params**: Not yet implemented (workaround: use field access directly)
+Bootstrap-0.2 had **619 test cases**. Current cot has **107 test files**. Key missing features:
 
-### AOT Native Progress
-
-| Phase | Status | Description |
-|-------|--------|-------------|
-| Phase 0-7 | ✅ Complete | CLIF IR, Wasm translation, MachInst, ARM64/x64, regalloc, integration |
-
-**Native AOT Status (February 5, 2026): ✅ ALL FEATURES WORKING**
-
-All 52 E2E tests pass (26 wasm + 26 native). See `NATIVE_AOT_FIXES.md` for fix history.
+| Feature | Priority | Why |
+|---------|----------|-----|
+| Float types (f32, f64) | HIGH | Blocks math, real applications |
+| Union payloads | HIGH | Blocks error unions, pattern matching |
+| Closures | HIGH | Blocks callbacks, iterators, event handlers |
+| Error unions (Zig-style `!T`) | HIGH | Blocks robust applications |
+| Function pointers / indirect calls | HIGH | Blocks callbacks, method tables |
+| Defer | MEDIUM | Blocks resource cleanup patterns |
+| Generics | HIGH | Blocks typed collections, standard library |
+| Dynamic lists + maps | MEDIUM | Were in bootstrap-0.2, needed for real apps |
+| String interpolation | MEDIUM | Developer experience |
+| ~493 test cases | HIGH | Robustness, edge case coverage |
 
 ---
 
 ## Key Documents
 
+### Priority (read these first)
+
 | Document | Purpose |
 |----------|---------|
-| `ROADMAP_PHASE2.md` | **NEXT WORK: M17-M24 milestones (ARC, heap, strings, arrays)** |
+| `GAP_ANALYSIS.md` | **PROJECT PRIORITY: Feature + test gap vs bootstrap-0.2, recommended path** |
 | `TROUBLESHOOTING.md` | **MUST READ: Debugging methodology - never invent, always copy reference** |
+| `VISION.md` | Language vision, Phase 3 TODO list, execution roadmap |
+
+### Reference (read when needed)
+
+| Document | Purpose |
+|----------|---------|
 | `docs/BR_TABLE_ARCHITECTURE.md` | br_table dispatch loop pattern - READ if confused about br_table |
-| `CRANELIFT_PORT_MASTER_PLAN.md` | Native AOT codegen - phases and architecture (✅ Complete) |
-| `NATIVE_AOT_FIXES.md` | Historical: Native AOT bug fixes from February 2026 |
 | `WASM_BACKEND.md` | Wasm milestones M1-M16, implementation details |
-| `ROADMAP_PHASE2.md` | M17-M24 detailed plan with Go/Swift research |
-| `TESTING.md` | Testing strategy and test organization |
-| `VISION.md` | Language vision, strategy, roadmap |
-| `README.md` | Project overview and quick start |
+| `ROADMAP_PHASE2.md` | M17-M24 milestones (ARC, heap, strings, arrays) - all complete |
+| `CRANELIFT_PORT_MASTER_PLAN.md` | Native AOT codegen architecture (✅ Complete) |
+| `NATIVE_AOT_FIXES.md` | Historical: Native AOT bug fixes |
+| `PHASE3_COMPLETE.md` | Historical: Phase 3 Wave 1-4 implementation details and Go parity evidence |
 | `../bootstrap-0.2/DESIGN.md` | Technical architecture specification |
 
 ---
@@ -327,18 +325,32 @@ The project succeeds through persistence and copying proven designs, not shortcu
 
 ## Current Tasks
 
-**Native AOT (Phases 0-7) is COMPLETE.** See `CRANELIFT_PORT_MASTER_PLAN.md` for details.
-All 52 E2E tests pass (26 wasm + 26 native).
+**The project priority is closing the gap with bootstrap-0.2.** See [GAP_ANALYSIS.md](GAP_ANALYSIS.md).
 
-### Priority Order (Recommended)
+Every new feature must:
+1. **Work on Wasm** (`--target=wasm32`)
+2. **Work on native** (default target, AOT through CLIF)
+3. **Have test cases** (both `.cot` test files and unit tests)
+4. **Copy the reference implementation** (Go for Wasm path, Zig for language semantics, Cranelift for native path)
 
-1. **M19: Destructor Calls on Release** - Type-specific destructors (partially done - basic destructors work)
-2. **M20-M22: Language features** - String ops, array append, for-range loops
-3. **Browser imports** - Import section for JS interop (console.log, DOM access)
+### Priority: Close the Feature Gap
 
-**Completed:**
-- M17: Frontend Emits Retain/Release ✓ (retain on copy, release at scope exit, forward on return)
-- M18: Heap Allocation ✓ (`new` keyword, cot_alloc, field init, 7 tests pass)
+| Wave | Features | Status |
+|------|----------|--------|
+| **A (Fundamentals)** | Floats, defer, union payloads, error unions, function pointers | TODO |
+| **B (Expressiveness)** | Closures, generics, string interpolation, dynamic collections | TODO |
+| **C (Test Parity)** | Port ~493 test cases from bootstrap-0.2 | TODO |
+
+### Reference Implementations
+
+| Feature | Primary Reference | Location |
+|---------|------------------|----------|
+| Wasm codegen | Go compiler | `~/learning/go/src/cmd/compile/internal/wasm/` |
+| Language semantics | Zig compiler | `~/learning/zig/` (for error unions, comptime, defer) |
+| Native AOT | Cranelift | `~/learning/wasmtime/cranelift/` |
+| Register allocation | regalloc2 | `~/learning/regalloc2/src/` |
+
+**Cot follows Zig's language design** (error unions, defer, comptime) but uses **Go's compilation patterns** (SSA → Wasm) and **Cranelift's native codegen** (CLIF → MachInst → ARM64/x64).
 
 ---
 
@@ -383,7 +395,10 @@ COT_DEBUG=codegen zig test compiler/codegen/wasm_gen.zig
 
 - **5 attempts** at self-hosting with native codegen all failed
 - **Root cause**: Native codegen complexity (register allocation, two ISAs, ABI edge cases)
-- **Solution**: Wasm as primary target (stack machine, single calling convention)
-- **Frontend cleanup** completed: 54% code reduction
-- **Wasm backend** M1-M16 complete: full feature set compiles to .wasm
-- **Cranelift port** ~80% complete: CLIF IR, regalloc, ARM64/x64 backends working
+- **Solution**: Wasm-first architecture (stack machine, single calling convention)
+- **bootstrap-0.2**: Previous compiler with 619 test cases, direct native codegen (AMD64/ARM64)
+- **Current cot**: Wasm-first rewrite with better architecture but fewer features (107 test files)
+- **Wasm backend** M1-M16 complete, **ARC** M17-M19 complete, **Language** M20-M23 complete
+- **Native AOT** complete via Cranelift port (CLIF IR, regalloc2, ARM64/x64)
+- **Phase 3** language features verified on both Wasm and native (793 tests pass)
+- **Next**: Close the gap with bootstrap-0.2 (see GAP_ANALYSIS.md)
