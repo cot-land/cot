@@ -116,14 +116,23 @@ pub const X64LabelUse = struct {
     };
 
     pub fn patch(self: X64LabelUse, buf: []u8, use_offset: buffer_mod.CodeOffset, label_offset: buffer_mod.CodeOffset) void {
+        // Port of Cranelift's label use resolution.
+        // The offset is computed as: label_offset - use_offset + addend
+        // where addend is the pre-existing value at use_offset.
+        // This is critical for jump tables where entries store an addend
+        // (offset from jt_start to entry) that must be preserved.
         const pc_rel = @as(i64, @intCast(label_offset)) - @as(i64, @intCast(use_offset));
         switch (self.kind) {
             .jmp_rel_32, .pc_rel_32 => {
-                const rel32: i32 = @intCast(pc_rel);
+                // Read existing addend and add computed offset
+                const addend = std.mem.readInt(i32, buf[use_offset..][0..4], .little);
+                const rel32: i32 = @intCast(pc_rel + @as(i64, addend));
                 std.mem.writeInt(i32, buf[use_offset..][0..4], rel32, .little);
             },
             .jmp_rel_8 => {
-                const rel8: i8 = @intCast(pc_rel);
+                // Read existing addend and add computed offset
+                const addend: i8 = @bitCast(buf[use_offset]);
+                const rel8: i8 = @intCast(pc_rel + @as(i64, addend));
                 buf[use_offset] = @bitCast(rel8);
             },
         }
@@ -1855,7 +1864,11 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             try sink.put1(0x8D); // LEA opcode
             try sink.put1(encodeModrm(0b00, tmp1_enc & 7, 0b101)); // RIP-relative
             const lea_disp_offset = sink.curOffset();
-            try sink.put4(0); // Placeholder for displacement
+            // RIP-relative addressing: disp = target - RIP, where RIP = disp_offset + 4.
+            // Our patch computes: label_offset - use_offset + addend.
+            // So we need addend = -4 to get: label_offset - disp_offset - 4 = label_offset - RIP.
+            try sink.put4(@as(u32, @bitCast(@as(i32, -4)))); // Addend for RIP-relative
+            try sink.useLabelAtOffset(lea_disp_offset, jt_label, .pc_rel_32);
 
             // movsxd (%tmp1, %idx, 4), %tmp2 - load signed 32-bit, scale by 4
             const movsx_rex = RexPrefix.threeOp(tmp2_enc, idx_enc, tmp1_enc, true, false);
@@ -1879,13 +1892,9 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             try sink.put1(0xFF); // JMP r/m64
             try sink.put1(encodeModrm(0b11, 4, tmp1_enc & 7)); // /4 for indirect jmp
 
-            // Bind the jump table label
+            // Bind the jump table label at current position.
+            // The LEA displacement (from lea_disp_offset) will be patched to point here.
             try sink.bindLabel(jt_label);
-
-            // Patch the LEA displacement to point here
-            _ = lea_disp_offset; // Used implicitly via label
-            // Patch the displacement (would need buffer access, using relocation instead)
-            // Note: the label binding handles the offset automatically
 
             // Emit jump table entries (32-bit signed offsets)
             const jt_start = sink.curOffset();
