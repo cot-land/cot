@@ -397,7 +397,16 @@ pub const Driver = struct {
                 pipeline_debug.log(.codegen, "driver: decode error for function {d}: {any}", .{ func_idx, e });
                 return error.WasmDecodeError;
             };
-            defer self.allocator.free(wasm_ops);
+            defer {
+                // Free inner allocations (br_table targets)
+                for (wasm_ops) |op| {
+                    switch (op) {
+                        .br_table => |data| self.allocator.free(data.targets),
+                        else => {},
+                    }
+                }
+                self.allocator.free(wasm_ops);
+            }
 
             pipeline_debug.log(.codegen, "driver: decoded {d} operators", .{wasm_ops.len});
 
@@ -546,19 +555,20 @@ pub const Driver = struct {
         // Declare and define each function
         for (compiled_funcs, 0..) |*cf, i| {
             // Determine function name from exports, or generate one
-            var func_name: []const u8 = undefined;
-            var found_name = false;
+            var func_name: []const u8 = "";
+            var func_name_allocated = false;
             for (exports) |exp| {
                 if (exp.kind == .func and exp.index == i) {
                     func_name = exp.name;
-                    found_name = true;
                     break;
                 }
             }
-            if (!found_name) {
-                // Generate internal name
+            if (func_name.len == 0) {
+                // Generate internal name (not found in exports)
                 func_name = try std.fmt.allocPrint(self.allocator, "_func_{d}", .{i});
+                func_name_allocated = true;
             }
+            defer if (func_name_allocated) self.allocator.free(func_name);
 
             // For "main" export, rename to "__wasm_main" and generate a wrapper later
             const is_main = std.mem.eql(u8, func_name, "main");
@@ -577,10 +587,10 @@ pub const Driver = struct {
             // Determine linkage - wasm main is local (called by wrapper)
             const linkage: object_module.Linkage = if (is_main)
                 .Local
-            else if (found_name)
-                .Export
+            else if (func_name_allocated)
+                .Local // Internal generated names are local
             else
-                .Local;
+                .Export;
 
             // Declare the function
             const func_id = try module.declareFunction(mangled_name, linkage);
@@ -777,19 +787,20 @@ pub const Driver = struct {
         // Declare and define each function
         for (compiled_funcs, 0..) |*cf, i| {
             // Determine function name from exports, or generate one
-            var func_name: []const u8 = undefined;
-            var found_name = false;
+            var func_name: []const u8 = "";
+            var func_name_allocated = false;
             for (exports) |exp| {
                 if (exp.kind == .func and exp.index == i) {
                     func_name = exp.name;
-                    found_name = true;
                     break;
                 }
             }
-            if (!found_name) {
-                // Generate internal name
+            if (func_name.len == 0) {
+                // Generate internal name (not found in exports)
                 func_name = try std.fmt.allocPrint(self.allocator, "func_{d}", .{i});
+                func_name_allocated = true;
             }
+            defer if (func_name_allocated) self.allocator.free(func_name);
 
             // For "main" export, rename to "__wasm_main" and generate a wrapper later
             const is_main = std.mem.eql(u8, func_name, "main");
@@ -807,10 +818,10 @@ pub const Driver = struct {
             // Determine linkage - wasm main is local (called by wrapper)
             const linkage: object_module.Linkage = if (is_main)
                 .Local
-            else if (found_name)
-                .Export
+            else if (func_name_allocated)
+                .Local // Internal generated names are local
             else
-                .Local;
+                .Export;
 
             // Declare the function
             const func_id = try module.declareFunction(mangled_name, linkage);
