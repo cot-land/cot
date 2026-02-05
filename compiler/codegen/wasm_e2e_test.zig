@@ -565,3 +565,65 @@ test "P3.3: float constant" {
     try std.testing.expect(!result.has_errors);
     try std.testing.expect(result.wasm_bytes.len > 0);
 }
+
+// ============================================================================
+// M22: For-Range Loops
+// ============================================================================
+
+test "M22: for-range numeric sum" {
+    const code =
+        \\fn main() i64 {
+        \\    var sum: i64 = 0
+        \\    for i in 0..5 {
+        \\        sum = sum + i
+        \\    }
+        \\    return sum
+        \\}
+    ;
+
+    var result = try compileToWasm(std.testing.allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+}
+
+test "M22: for-range with index binding" {
+    // for i, x in arr - tests the index_binding feature
+    const code =
+        \\fn main() i64 {
+        \\    var arr = [10, 20, 30]
+        \\    var sum: i64 = 0
+        \\    for i, x in arr {
+        \\        sum = sum + i
+        \\    }
+        \\    return sum
+        \\}
+    ;
+
+    var result = try compileToWasm(std.testing.allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+}
+
+test "M22: for-range index and value" {
+    // Tests using both index and value in loop body
+    const code =
+        \\fn main() i64 {
+        \\    var arr = [10, 20, 30]
+        \\    var sum: i64 = 0
+        \\    for i, x in arr {
+        \\        sum = sum + i + x
+        \\    }
+        \\    return sum
+        \\}
+    ;
+
+    var result = try compileToWasm(std.testing.allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+}

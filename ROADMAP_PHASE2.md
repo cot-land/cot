@@ -901,11 +901,11 @@ fn main() i64 {
 #### Checklist
 
 - [x] Parse `for item in collection { }` syntax
-- [ ] Parse `for i, item in collection { }` with index (DEFERRED)
+- [x] Parse `for i, item in collection { }` with index
 - [x] Parse `for i in start..end { }` numeric range
 - [x] Lower to while loop with index
 - [x] Handle break/continue in for-range
-- [x] Write 5+ test cases (for_range_sum test passes, for-over-array works)
+- [x] Write 5+ test cases (for_range_sum, for_range_index, for_range_index_value)
 
 ---
 

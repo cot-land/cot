@@ -816,6 +816,10 @@ pub const Checker = struct {
         var loop_scope = Scope.init(self.allocator, self.scope);
         defer loop_scope.deinit();
         try loop_scope.define(Symbol.init(fs.binding, .variable, elem_type, null_node, false));
+        // Define index binding if present (for i, x in arr)
+        if (fs.index_binding) |idx_binding| {
+            try loop_scope.define(Symbol.init(idx_binding, .variable, TypeRegistry.I64, null_node, false));
+        }
         const old_scope = self.scope;
         const old_in_loop = self.in_loop;
         self.scope = &loop_scope;

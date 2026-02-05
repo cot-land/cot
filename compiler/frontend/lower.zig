@@ -810,6 +810,12 @@ pub const Lowerer = struct {
         const binding_local = try fb.addLocalWithSize(for_stmt.binding, elem_type, false, elem_size);
         const cur_idx = try fb.emitLoadLocal(idx_local, TypeRegistry.I64, for_stmt.span);
 
+        // Bind the index variable if present (for i, x in arr)
+        if (for_stmt.index_binding) |idx_binding| {
+            const idx_binding_local = try fb.addLocalWithSize(idx_binding, TypeRegistry.I64, false, 8);
+            _ = try fb.emitStoreLocal(idx_binding_local, cur_idx, for_stmt.span);
+        }
+
         const elem_type_info = self.type_reg.get(elem_type);
         const is_struct_elem = elem_type_info == .struct_type;
 
