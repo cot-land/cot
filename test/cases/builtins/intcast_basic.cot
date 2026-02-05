@@ -1,0 +1,8 @@
+// @intCast builtin - cast between integer types
+// EXPECT: exit_code=42
+
+fn main() i64 {
+    let big: i64 = 42
+    let small = @intCast(i32, big)
+    return small
+}

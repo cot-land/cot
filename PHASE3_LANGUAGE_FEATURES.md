@@ -81,9 +81,9 @@ Every feature in this document MUST be implemented by copying from reference imp
 
 | Feature | Syntax | Scanner | Parser | Checker | Lower | Wasm | Native |
 |---------|--------|---------|--------|---------|-------|------|--------|
-| Size of type | `@sizeOf(T)` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Align of type | `@alignOf(T)` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Integer cast | `@intCast(T, v)` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Size of type | `@sizeOf(T)` | ✅ | ✅ | ✅ | ✅ | ✅ | ? |
+| Align of type | `@alignOf(T)` | ✅ | ✅ | ✅ | ✅ | ✅ | ? |
+| Integer cast | `@intCast(T, v)` | ✅ | ✅ | ✅ | ✅ | ✅ | ? |
 | Forward declarations | `fn foo();` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | Labeled break | `break :label` | ✅ | ✅ | ? | ? | ? | ? |
 | Labeled continue | `continue :label` | ✅ | ✅ | ? | ? | ? | ? |
@@ -1132,6 +1132,41 @@ test/cases/builtins/sizeof.cot
 test/cases/builtins/alignof.cot
 test/cases/builtins/intcast.cot
 ```
+
+**Implementation Status:** ✅ COMPLETE (Wave 3)
+
+| Component | Reference | Cot File:Line | Evidence |
+|-----------|-----------|---------------|----------|
+| @sizeOf | Go `typecheck/builtin.go` | `lower.zig:2020-2023` | type_reg.sizeOf → const int |
+| @alignOf | Go `typecheck/builtin.go` | `lower.zig:2024-2027` | type_reg.alignOf → const int |
+| @intCast | Go `wasm/ssa.go:479-501` | `gen.zig:656-676` | i32_wrap_i64, i64_extend_i32_s |
+| Parser | Go `syntax/parser.go` | `parser.zig:561-602` | parseBuiltinCall handles @ |
+| Checker | Go `typecheck/builtin.go` | `checker.zig:478-481` | Type-check builtin args |
+
+**Go pattern for integer conversion (wasm/ssa.go:479-487):**
+```go
+// 64-bit to 32-bit truncation
+getValue64(s, v.Args[0])
+s.Prog(wasm.AI32WrapI64)
+```
+
+**Cot port (gen.zig:656-676):**
+```zig
+.convert => {
+    try self.getValue64(v.args[0]);
+    if (!from_is_32 and to_is_32) {
+        // i64 -> i32: wrap then extend back
+        _ = try self.builder.append(.i32_wrap_i64);
+        _ = try self.builder.append(.i64_extend_i32_s);
+    }
+},
+```
+
+**Tests:**
+- `test/cases/builtins/sizeof_basic.cot` - @sizeOf(i64) = 8 (exit_code=8)
+- `test/cases/builtins/sizeof_struct.cot` - @sizeOf(Point) = 16 (exit_code=16)
+- `test/cases/builtins/alignof_basic.cot` - @alignOf(i64) = 8 (exit_code=8)
+- `test/cases/builtins/intcast_basic.cot` - @intCast(i32, 42) = 42 (exit_code=42)
 
 ---
 

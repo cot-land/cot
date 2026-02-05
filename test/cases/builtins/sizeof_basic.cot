@@ -1,0 +1,6 @@
+// @sizeOf builtin - returns size of type in bytes
+// EXPECT: exit_code=8
+
+fn main() i64 {
+    return @sizeOf(i64)
+}

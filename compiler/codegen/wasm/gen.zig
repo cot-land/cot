@@ -653,6 +653,31 @@ pub const GenState = struct {
                 // No result (void function)
             },
 
+            // Integer conversion (int cast)
+            // Go reference: cmd/compile/internal/wasm/ssa.go:479-501
+            .convert => {
+                const from_type = v.aux.type_ref;
+                const to_type = v.type_idx;
+
+                // Get the value to convert (always as i64)
+                try self.getValue64(v.args[0]);
+
+                // Determine sizes based on type indices
+                // TypeRegistry: I32=4, I64=5
+                const from_is_32 = (from_type == 4); // I32
+                const to_is_32 = (to_type == 4); // I32
+
+                if (!from_is_32 and to_is_32) {
+                    // i64 -> i32: wrap then extend back to i64 for stack consistency
+                    // Go: s.Prog(wasm.AI32WrapI64)
+                    _ = try self.builder.append(.i32_wrap_i64);
+                    _ = try self.builder.append(.i64_extend_i32_s);
+                } else if (from_is_32 and !to_is_32) {
+                    // i32 -> i64: already extended by getValue64
+                }
+                // Same size: no conversion needed
+            },
+
             else => {
                 debug.log(.codegen, "wasm/gen: unhandled op {s}", .{@tagName(v.op)});
             },
