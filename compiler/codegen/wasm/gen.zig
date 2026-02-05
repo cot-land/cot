@@ -266,6 +266,10 @@ pub const GenState = struct {
                 // Booleans are i32 in Wasm (0 or 1)
                 _ = try self.builder.appendFrom(.i32_const, prog_mod.constAddr(if (v.aux_int != 0) @as(i64, 1) else @as(i64, 0)));
             },
+            .const_nil => {
+                // Nil/null is 0 (null pointer)
+                _ = try self.builder.appendFrom(.i64_const, prog_mod.constAddr(0));
+            },
 
             // NOTE: const_string is rewritten to string_make by rewritegeneric.zig
             // NOTE: string_ptr/string_len/slice_ptr/slice_len are decomposed by rewritedec.zig
@@ -567,6 +571,16 @@ pub const GenState = struct {
             // Copy
             .copy => {
                 try self.getValue64(v.args[0]);
+            },
+
+            // Conditional select (ternary)
+            // Go reference: cmd/compile/internal/wasm/ssa.go line 359-363
+            // Stack order: then_val, else_val, condition -> result
+            .cond_select => {
+                try self.getValue64(v.args[1]); // then_value
+                try self.getValue64(v.args[2]); // else_value
+                try self.getValue32(v.args[0]); // condition (must be i32)
+                _ = try self.builder.append(.select);
             },
 
             // Function calls

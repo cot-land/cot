@@ -630,7 +630,33 @@ let f = x >> 2     // Right shift
 
 Go bitwise:
 - `~/learning/go/src/cmd/compile/internal/ssagen/ssa.go` - binary ops
-- `~/learning/go/src/cmd/compile/internal/wasm/ssa.go` - wasm codegen
+- `~/learning/go/src/cmd/compile/internal/wasm/ssa.go:401` - wasm codegen
+
+**Implementation Status:** ✅ COMPLETE (Wave 1)
+
+| Component | Reference | Cot File:Line | Evidence |
+|-----------|-----------|---------------|----------|
+| i64 bitwise | Go `ssa.go:401-406` | `gen.zig:313-345` | getValue64 x2, emit op |
+| i32 bitwise | Go `ssa.go:401-406` | `gen.zig:347-395` | wrap, op, extend |
+| NOT | N/A (Wasm has no NOT) | `gen.zig:397-402` | XOR with -1 |
+
+**Go pattern (ssa.go:401-406):**
+```go
+case ssa.OpWasmI64And, ssa.OpWasmI64Or, ssa.OpWasmI64Xor,
+     ssa.OpWasmI64Shl, ssa.OpWasmI64ShrS, ssa.OpWasmI64ShrU:
+    getValue64(s, v.Args[0])
+    getValue64(s, v.Args[1])
+    s.Prog(v.Op.Asm())
+```
+
+**Cot port (gen.zig:313-320):**
+```zig
+.wasm_i64_and => {
+    try self.getValue64(v.args[0]);
+    try self.getValue64(v.args[1]);
+    _ = try self.builder.append(.i64_and);
+},
+```
 
 **Pipeline Changes:**
 
@@ -733,11 +759,40 @@ let safe = maybe ?? 0  // Null coalesce
 
 **Reference Implementation:**
 
-Swift optionals:
+Swift optionals (for layout/semantics):
 - `~/learning/swift/lib/SILGen/SILGenExpr.cpp` - optional handling
 - `~/learning/swift/lib/IRGen/GenOpaqueLayout.cpp` - optional layout
 
-Go doesn't have optionals, use Swift.
+Go (for Wasm codegen):
+- `~/learning/go/src/cmd/compile/internal/wasm/ssa.go:359-363` - select instruction
+
+**Implementation Status:** ✅ COMPLETE (Wave 2)
+
+| Component | Reference | Cot File:Line | Evidence |
+|-----------|-----------|---------------|----------|
+| `cond_select` | Go `ssa.go:359-363` | `gen.zig:575-582` | Stack order: then, else, cond (i32) |
+| `const_nil` | N/A (trivial) | `gen.zig:269-272` | Nil = i64.const 0 |
+
+**Go select pattern (ssa.go:359-363):**
+```go
+case ssa.OpWasmSelect:
+    getValue64(s, v.Args[0])  // then
+    getValue64(s, v.Args[1])  // else
+    getValue32(s, v.Args[2])  // cond
+    s.Prog(v.Op.Asm())
+```
+
+**Cot port (gen.zig:575-582):**
+```zig
+.cond_select => {
+    try self.getValue64(v.args[1]); // then_value
+    try self.getValue64(v.args[2]); // else_value
+    try self.getValue32(v.args[0]); // condition
+    _ = try self.builder.append(.select);
+},
+```
+
+Note: Arg indices differ because Cot's SSA uses [cond, then, else] order, but Wasm stack order matches Go.
 
 **Memory Layout:**
 ```
@@ -933,7 +988,7 @@ Update this table as features are completed:
 | F7: extern | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
 | F8: bitwise | ✅ | ✅ | ✅ | ✅ | ✅ | ? | ✅ |
 | F9: compound | ✅ | ✅ | ✅ | ✅ | ✅ | ? | ✅ |
-| F10: optional | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| F10: optional | ✅ | ✅ | ✅ | ✅ | ✅ | ? | ✅ |
 | F11: char | ✅ | ✅ | ✅ | ✅ | ✅ | ? | ✅ |
 | F12: builtins | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
 
