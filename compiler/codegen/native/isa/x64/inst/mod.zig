@@ -3,9 +3,6 @@
 //! Ported from Cranelift's `cranelift/codegen/src/isa/x64/inst/mod.rs`
 
 const std = @import("std");
-
-/// ISA identifier for compile-time ISA detection in generic code.
-pub const is_x64 = true;
 const Allocator = std.mem.Allocator;
 
 // Re-export sub-modules
@@ -336,6 +333,9 @@ pub const UnwindInst = union(enum) {
 /// wraps the cranelift-assembler-x64 types. In our Zig port, we define the
 /// common instructions directly and implement encoding in emit.zig.
 pub const Inst = union(enum) {
+    /// ISA identifier for compile-time ISA detection in generic code (e.g. VCode).
+    pub const is_x64 = true;
+
     // Reference to the get_operands module for register allocation.
     // This allows generic code to access I.get_operands.getOperands() and I.get_operands.OperandVisitor.
     pub const get_operands = @import("get_operands.zig");

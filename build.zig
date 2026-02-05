@@ -29,5 +29,20 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    b.step("test", "Run unit tests").dependOn(&b.addRunArtifact(tests).step);
+    const run_tests = b.addRunArtifact(tests);
+    if (b.args) |args| run_tests.addArgs(args);
+    b.step("test", "Run unit tests").dependOn(&run_tests.step);
+
+    // Native E2E tests: zig build test-native
+    // Filters to only run "native:" prefixed tests.
+    const native_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("compiler/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .filters = &.{"native:"},
+    });
+    const run_native = b.addRunArtifact(native_tests);
+    b.step("test-native", "Run native AOT E2E tests (slow)").dependOn(&run_native.step);
 }

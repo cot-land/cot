@@ -238,11 +238,7 @@ test {
     _ = @import("frontend/e2e_test.zig");
     _ = @import("frontend/integration_test.zig");
     _ = @import("codegen/wasm_e2e_test.zig");
-    // DISABLED: native_e2e_test.zig - tests pass individually but hang in test framework
-    // Root cause: Each native compilation takes ~15s, 15 tests = ~4 minutes
-    // Tests do work (verified with standalone test_native_hang.zig)
-    // TODO: Consider running native tests in a separate CI job or with longer timeout
-    // _ = @import("codegen/native_e2e_test.zig");
+    _ = @import("codegen/native_e2e_test.zig");
 }
 
 test "main: findRuntimePath returns error when not found" {

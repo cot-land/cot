@@ -3,9 +3,6 @@
 //! Ported from Cranelift's `cranelift/codegen/src/isa/aarch64/inst/mod.rs`
 
 const std = @import("std");
-
-/// ISA identifier for compile-time ISA detection in generic code.
-pub const is_aarch64 = true;
 const Allocator = std.mem.Allocator;
 
 // Re-export sub-modules
@@ -725,6 +722,9 @@ pub fn ReturnCallInfo(comptime T: type) type {
 
 /// AArch64 machine instruction.
 pub const Inst = union(enum) {
+    /// ISA identifier for compile-time ISA detection in generic code (e.g. VCode).
+    pub const is_aarch64 = true;
+
     // Reference to the get_operands module for register allocation.
     // This allows generic code to access I.get_operands.getOperands() and I.get_operands.OperandVisitor.
     pub const get_operands = @import("get_operands.zig");
