@@ -233,34 +233,80 @@ The official Cot website:
 
 ## Execution Roadmap
 
-### Phase 1: Wasm Backend (Current)
+### Phase 1: Wasm Backend ✅ COMPLETE
 
-**Goal:** Cot 0.3 emits valid Wasm
+**Goal:** Cot emits valid Wasm
 
-See **[WASM_BACKEND.md](WASM_BACKEND.md)** for detailed implementation plan.
+See **[WASM_BACKEND.md](WASM_BACKEND.md)** for implementation details.
 
 ```
-src/codegen/wasm.zig
 ├── Wasm binary format (sections, types, code)
 ├── IR → Wasm stack machine translation
 ├── Function calls and control flow
-└── Test: compile real programs, run in wasmtime
+└── All 26 wasm E2E tests pass
 ```
 
-### Phase 2: Runtime & Memory
+### Phase 2: Runtime & Memory ✅ COMPLETE
 
 **Goal:** ARC memory management works in Wasm
 
 ```
-├── Linear memory allocator
+├── Linear memory allocator (cot_alloc)
 ├── ARC retain/release runtime
-├── String and array support
-└── Test: programs with heap allocation
+├── Destructor calls on release to zero
+├── String concat, indexing, bounds checks
+├── Array literals, append builtin
+└── For-range loops (for x in arr, for i in 0..n)
 ```
 
-### Phase 3: Standard Library
+### Phase 3: Language Features (CURRENT)
 
-**Goal:** Useful standard library for web development
+**Goal:** Port all features from bootstrap-0.2 to match ~90% of Zig syntax
+
+**Reference:** `../bootstrap-0.2/SYNTAX.md` defines all features to implement.
+
+**Keywords parsed but not implemented:**
+```
+├── impl     - Methods on structs
+├── enum     - Enumeration types
+├── union    - Tagged unions
+├── type     - Type aliases
+├── import   - File imports
+├── extern   - External function declarations
+├── switch   - Switch expressions
+└── test     - Test blocks
+```
+
+**Additional features from bootstrap-0.2:**
+```
+├── Optional types (?T)
+├── Bitwise operators (&, |, ^, ~, <<, >>)
+├── Compound assignment (+=, -=, *=, /=, etc.)
+├── Character literals ('a', '\n')
+├── Forward function declarations
+├── Builtins (@sizeOf, @alignOf, @intCast)
+└── Labeled break/continue
+```
+
+### Phase 4: AOT Native Compiler ✅ COMPLETE
+
+**Goal:** Wasm → Native for production performance
+
+See **[CRANELIFT_PORT_MASTER_PLAN.md](CRANELIFT_PORT_MASTER_PLAN.md)** for details.
+
+```
+├── Wasm parser
+├── Wasm → CLIF IR translation
+├── CLIF → MachInst lowering
+├── Register allocation (regalloc2 port)
+├── ARM64 and AMD64 backends
+├── Output ELF/Mach-O
+└── All 26 native E2E tests pass
+```
+
+### Phase 5: Standard Library
+
+**Goal:** Useful standard library written in mature Cot
 
 ```
 std/
@@ -271,31 +317,21 @@ std/
 └── dom (browser API - client only)
 ```
 
-### Phase 4: AOT Native Compiler
+**Requires:** Phase 3 complete (language must be mature first)
 
-**Goal:** Wasm → Native for production performance
-
-```
-├── Wasm parser
-├── Wasm → SSA conversion
-├── Register allocation (reuse existing)
-├── Native codegen (reuse existing ARM64/AMD64)
-└── Output ELF/Mach-O
-```
-
-### Phase 5: Ecosystem
+### Phase 6: Ecosystem
 
 **Goal:** Make Cot usable for real projects
 
 ```
-├── Package manager
+├── Package manager (cot.land)
 ├── Build system
 ├── LSP (editor support)
 ├── Documentation generator
 └── Example applications
 ```
 
-### Phase 6: Self-Hosting (Future)
+### Phase 7: Self-Hosting (Future)
 
 **Goal:** Prove language maturity
 
@@ -311,22 +347,26 @@ std/
 
 ## What Success Looks Like
 
-### Short Term (6 months)
-- Cot compiles to Wasm
-- Hello world runs in browser and server
-- Basic standard library exists
+### Completed ✅
+- Cot compiles to Wasm (Phase 1)
+- ARC memory management works (Phase 2)
+- AOT native compilation works (Phase 4)
+- 790 tests pass, 0 skipped
 
-### Medium Term (1 year)
-- Real web application built in Cot
-- Package manager works
+### Current Focus (Phase 3)
+- Port all language features from bootstrap-0.2
+- Syntax matches ~90% of Zig
+- Methods, enums, unions, switch, imports
+
+### Next (Phase 5-6)
+- Standard library written in Cot
+- Package manager (cot.land)
 - Editor support (LSP)
-- Small community forming
 
-### Long Term (2+ years)
+### Long Term (Phase 7)
 - Self-hosting achieved
 - Production applications in the wild
 - Ecosystem of libraries
-- Zig dependency optional
 
 ---
 
