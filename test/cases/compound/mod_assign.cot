@@ -1,0 +1,8 @@
+// Compound mod-assign: x %= 7
+// EXPECT: exit_code=3
+
+fn main() i64 {
+    var x = 10
+    x %= 7
+    return x
+}

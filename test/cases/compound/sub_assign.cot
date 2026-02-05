@@ -1,0 +1,8 @@
+// Compound sub-assign: x -= 3
+// EXPECT: exit_code=7
+
+fn main() i64 {
+    var x = 10
+    x -= 3
+    return x
+}

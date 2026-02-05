@@ -1,0 +1,8 @@
+// Compound xor-assign: x ^= 15
+// EXPECT: exit_code=240
+
+fn main() i64 {
+    var x = 255
+    x ^= 15
+    return x
+}

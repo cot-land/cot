@@ -1,0 +1,8 @@
+// Bitwise OR - 0xF0 | 0x0F = 0xFF = 255
+// EXPECT: exit_code=255
+
+fn main() i64 {
+    let a = 240
+    let b = 15
+    return (a | b) - 200
+}

@@ -38,7 +38,7 @@ Every feature in this document MUST be implemented by copying from reference imp
 | Enumerations | `enum` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | Tagged unions | `union` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | Switch expressions | `switch` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Type aliases | `type` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Type aliases | `type` | ✅ | ✅ | ✅ | ✅ | ✅ | ? |
 
 ### Priority 2: Module System
 
@@ -52,24 +52,27 @@ Every feature in this document MUST be implemented by copying from reference imp
 
 | Feature | Syntax | Scanner | Parser | Checker | Lower | Wasm | Native |
 |---------|--------|---------|--------|---------|-------|------|--------|
-| Bitwise AND | `&` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Bitwise OR | `\|` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Bitwise XOR | `^` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Bitwise NOT | `~` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Left shift | `<<` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Right shift | `>>` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Add-assign | `+=` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Sub-assign | `-=` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Mul-assign | `*=` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Div-assign | `/=` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Mod-assign | `%=` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Bitwise AND | `&` | ✅ | ✅ | ✅ | ✅ | ✅ | ? |
+| Bitwise OR | `\|` | ✅ | ✅ | ✅ | ✅ | ✅ | ? |
+| Bitwise XOR | `^` | ✅ | ✅ | ✅ | ✅ | ✅ | ? |
+| Bitwise NOT | `~` | ✅ | ✅ | ✅ | ✅ | ✅ | ? |
+| Left shift | `<<` | ✅ | ✅ | ✅ | ✅ | ✅ | ? |
+| Right shift | `>>` | ✅ | ✅ | ✅ | ✅ | ✅ | ? |
+| Add-assign | `+=` | ✅ | ✅ | ✅ | ✅ | ✅ | ? |
+| Sub-assign | `-=` | ✅ | ✅ | ✅ | ✅ | ✅ | ? |
+| Mul-assign | `*=` | ✅ | ✅ | ✅ | ✅ | ✅ | ? |
+| Div-assign | `/=` | ✅ | ✅ | ✅ | ✅ | ✅ | ? |
+| Mod-assign | `%=` | ✅ | ✅ | ✅ | ✅ | ✅ | ? |
+| And-assign | `&=` | ✅ | ✅ | ✅ | ✅ | ✅ | ? |
+| Or-assign | `\|=` | ✅ | ✅ | ✅ | ✅ | ✅ | ? |
+| Xor-assign | `^=` | ✅ | ✅ | ✅ | ✅ | ✅ | ? |
 
 ### Priority 4: Types & Literals
 
 | Feature | Syntax | Scanner | Parser | Checker | Lower | Wasm | Native |
 |---------|--------|---------|--------|---------|-------|------|--------|
 | Optional types | `?T` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Char literals | `'a'` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Char literals | `'a'` | ✅ | ✅ | ✅ | ✅ | ✅ | ? |
 | Hex literals | `0xFF` | ✅ | ✅ | ✅ | ? | ? | ? |
 | Binary literals | `0b1010` | ✅ | ✅ | ✅ | ? | ? | ? |
 | Octal literals | `0o777` | ✅ | ✅ | ✅ | ? | ? | ? |
@@ -925,13 +928,13 @@ Update this table as features are completed:
 | F2: enum | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
 | F3: union | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
 | F4: switch | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| F5: type | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| F5: type | ✅ | ✅ | ✅ | ✅ | ✅ | ? | ✅ |
 | F6: import | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
 | F7: extern | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| F8: bitwise | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| F9: compound | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| F8: bitwise | ✅ | ✅ | ✅ | ✅ | ✅ | ? | ✅ |
+| F9: compound | ✅ | ✅ | ✅ | ✅ | ✅ | ? | ✅ |
 | F10: optional | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| F11: char | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| F11: char | ✅ | ✅ | ✅ | ✅ | ✅ | ? | ✅ |
 | F12: builtins | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
 
 ---

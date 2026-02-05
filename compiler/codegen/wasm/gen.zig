@@ -311,6 +311,97 @@ pub const GenState = struct {
                 _ = try self.builder.append(.i64_rem_s);
             },
 
+            // Bitwise operations (i64)
+            // Go reference: cmd/compile/internal/wasm/ssa.go line 401
+            .wasm_i64_and => {
+                try self.getValue64(v.args[0]);
+                try self.getValue64(v.args[1]);
+                _ = try self.builder.append(.i64_and);
+            },
+            .wasm_i64_or => {
+                try self.getValue64(v.args[0]);
+                try self.getValue64(v.args[1]);
+                _ = try self.builder.append(.i64_or);
+            },
+            .wasm_i64_xor => {
+                try self.getValue64(v.args[0]);
+                try self.getValue64(v.args[1]);
+                _ = try self.builder.append(.i64_xor);
+            },
+            .wasm_i64_shl => {
+                try self.getValue64(v.args[0]);
+                try self.getValue64(v.args[1]);
+                _ = try self.builder.append(.i64_shl);
+            },
+            .wasm_i64_shr_s => {
+                try self.getValue64(v.args[0]);
+                try self.getValue64(v.args[1]);
+                _ = try self.builder.append(.i64_shr_s);
+            },
+            .wasm_i64_shr_u => {
+                try self.getValue64(v.args[0]);
+                try self.getValue64(v.args[1]);
+                _ = try self.builder.append(.i64_shr_u);
+            },
+
+            // Bitwise operations (i32)
+            .wasm_i32_and => {
+                try self.getValue64(v.args[0]);
+                _ = try self.builder.append(.i32_wrap_i64);
+                try self.getValue64(v.args[1]);
+                _ = try self.builder.append(.i32_wrap_i64);
+                _ = try self.builder.append(.i32_and);
+                _ = try self.builder.append(.i64_extend_i32_u);
+            },
+            .wasm_i32_or => {
+                try self.getValue64(v.args[0]);
+                _ = try self.builder.append(.i32_wrap_i64);
+                try self.getValue64(v.args[1]);
+                _ = try self.builder.append(.i32_wrap_i64);
+                _ = try self.builder.append(.i32_or);
+                _ = try self.builder.append(.i64_extend_i32_u);
+            },
+            .wasm_i32_xor => {
+                try self.getValue64(v.args[0]);
+                _ = try self.builder.append(.i32_wrap_i64);
+                try self.getValue64(v.args[1]);
+                _ = try self.builder.append(.i32_wrap_i64);
+                _ = try self.builder.append(.i32_xor);
+                _ = try self.builder.append(.i64_extend_i32_u);
+            },
+            .wasm_i32_shl => {
+                try self.getValue64(v.args[0]);
+                _ = try self.builder.append(.i32_wrap_i64);
+                try self.getValue64(v.args[1]);
+                _ = try self.builder.append(.i32_wrap_i64);
+                _ = try self.builder.append(.i32_shl);
+                _ = try self.builder.append(.i64_extend_i32_u);
+            },
+            .wasm_i32_shr_s => {
+                try self.getValue64(v.args[0]);
+                _ = try self.builder.append(.i32_wrap_i64);
+                try self.getValue64(v.args[1]);
+                _ = try self.builder.append(.i32_wrap_i64);
+                _ = try self.builder.append(.i32_shr_s);
+                _ = try self.builder.append(.i64_extend_i32_s);
+            },
+            .wasm_i32_shr_u => {
+                try self.getValue64(v.args[0]);
+                _ = try self.builder.append(.i32_wrap_i64);
+                try self.getValue64(v.args[1]);
+                _ = try self.builder.append(.i32_wrap_i64);
+                _ = try self.builder.append(.i32_shr_u);
+                _ = try self.builder.append(.i64_extend_i32_u);
+            },
+
+            // Bitwise NOT - Wasm has no NOT, implement as XOR -1
+            // Go reference: Wasm backend transforms ~x to x ^ -1
+            .not => {
+                try self.getValue64(v.args[0]);
+                _ = try self.builder.appendFrom(.i64_const, prog_mod.constAddr(-1));
+                _ = try self.builder.append(.i64_xor);
+            },
+
             // Comparisons (produce i32)
             .wasm_i64_eq => {
                 try self.getValue64(v.args[0]);

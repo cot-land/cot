@@ -1,0 +1,8 @@
+// Bitwise XOR - 0xFF ^ 0x0F = 0xF0 = 240
+// EXPECT: exit_code=240
+
+fn main() i64 {
+    let a = 255
+    let b = 15
+    return (a ^ b) - 200 + 200
+}

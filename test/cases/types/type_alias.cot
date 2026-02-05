@@ -1,0 +1,9 @@
+// Type alias - Int is alias for i64
+// EXPECT: exit_code=42
+
+type Int = i64
+
+fn main() Int {
+    let x: Int = 42
+    return x
+}
