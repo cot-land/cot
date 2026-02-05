@@ -512,8 +512,8 @@ pub const Driver = struct {
         pipeline_debug.log(.codegen, "driver: generating object file for {d} functions", .{compiled_funcs.items.len});
 
         const object_bytes = switch (self.target.os) {
-            .macos => try self.generateMachO(compiled_funcs.items, wasm_module.exports),
-            .linux => try self.generateElf(compiled_funcs.items, wasm_module.exports),
+            .macos => try self.generateMachO(compiled_funcs.items, wasm_module.exports, wasm_module.data_segments),
+            .linux => try self.generateElf(compiled_funcs.items, wasm_module.exports, wasm_module.data_segments),
             .freestanding => return error.UnsupportedObjectFormat,
         };
 
@@ -522,7 +522,7 @@ pub const Driver = struct {
 
     /// Generate Mach-O object file from compiled functions.
     /// Uses ObjectModule to bridge CompiledCode to Mach-O format.
-    fn generateMachO(self: *Driver, compiled_funcs: []const native_compile.CompiledCode, exports: []const wasm_parser.Export) ![]u8 {
+    fn generateMachO(self: *Driver, compiled_funcs: []const native_compile.CompiledCode, exports: []const wasm_parser.Export, data_segments: []const wasm_parser.DataSegment) ![]u8 {
         var module = object_module.ObjectModule.initWithTarget(
             self.allocator,
             .macos,
@@ -593,7 +593,7 @@ pub const Driver = struct {
 
         // If we have a main function, generate the wrapper and static vmctx
         if (main_func_index != null) {
-            try self.generateMainWrapperMachO(&module);
+            try self.generateMainWrapperMachO(&module, data_segments);
         }
 
         // Write to memory buffer
@@ -606,7 +606,7 @@ pub const Driver = struct {
 
     /// Generate the _main wrapper and static vmctx data for Mach-O.
     /// The wrapper initializes vmctx and calls __wasm_main.
-    fn generateMainWrapperMachO(self: *Driver, module: *object_module.ObjectModule) !void {
+    fn generateMainWrapperMachO(self: *Driver, module: *object_module.ObjectModule, data_segments: []const wasm_parser.DataSegment) !void {
         // =================================================================
         // Step 1: Declare and define static vmctx data section
         // Layout (total 384KB = 0x60000):
@@ -622,6 +622,15 @@ pub const Driver = struct {
 
         // Zero initialize
         @memset(vmctx_data, 0);
+
+        // Copy Wasm data segments into linear memory (starts at 0x40000)
+        const linear_memory_base: usize = 0x40000;
+        for (data_segments) |segment| {
+            const dest_offset = linear_memory_base + segment.offset;
+            if (dest_offset + segment.data.len <= vmctx_size) {
+                @memcpy(vmctx_data[dest_offset..][0..segment.data.len], segment.data);
+            }
+        }
 
         // Initialize stack pointer at offset 0x10000 = 64KB into linear memory
         // This means SP starts at heap_base + 0x10000
@@ -743,7 +752,8 @@ pub const Driver = struct {
 
     /// Generate ELF object file from compiled functions.
     /// Uses ObjectModule to bridge CompiledCode to ELF format.
-    fn generateElf(self: *Driver, compiled_funcs: []const native_compile.CompiledCode, exports: []const wasm_parser.Export) ![]u8 {
+    fn generateElf(self: *Driver, compiled_funcs: []const native_compile.CompiledCode, exports: []const wasm_parser.Export, data_segments: []const wasm_parser.DataSegment) ![]u8 {
+        _ = data_segments; // TODO: Copy data segments to ELF data section
         var module = object_module.ObjectModule.initWithTarget(
             self.allocator,
             .linux,

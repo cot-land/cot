@@ -18,6 +18,7 @@ pub const WasmModule = struct {
     globals: []GlobalType,
     exports: []Export,
     code: []FuncCode,
+    data_segments: []DataSegment,
 
     pub fn deinit(self: *WasmModule) void {
         for (self.types) |*t| {
@@ -31,7 +32,15 @@ pub const WasmModule = struct {
         self.allocator.free(self.exports);
         for (self.code) |*c| self.allocator.free(c.locals);
         self.allocator.free(self.code);
+        for (self.data_segments) |*d| self.allocator.free(d.data);
+        self.allocator.free(self.data_segments);
     }
+};
+
+pub const DataSegment = struct {
+    memory_index: u32,
+    offset: u32, // offset in linear memory
+    data: []const u8,
 };
 
 pub const FuncType = struct {
@@ -92,6 +101,7 @@ pub const Parser = struct {
     globals: std.ArrayListUnmanaged(GlobalType),
     exports: std.ArrayListUnmanaged(Export),
     code: std.ArrayListUnmanaged(FuncCode),
+    data_segments: std.ArrayListUnmanaged(DataSegment),
 
     pub fn init(allocator: std.mem.Allocator, bytes: []const u8) Parser {
         return .{
@@ -104,6 +114,7 @@ pub const Parser = struct {
             .globals = .{},
             .exports = .{},
             .code = .{},
+            .data_segments = .{},
         };
     }
 
@@ -119,6 +130,8 @@ pub const Parser = struct {
         self.exports.deinit(self.allocator);
         for (self.code.items) |*c| self.allocator.free(c.locals);
         self.code.deinit(self.allocator);
+        for (self.data_segments.items) |*d| self.allocator.free(d.data);
+        self.data_segments.deinit(self.allocator);
     }
 
     pub fn parse(self: *Parser) !WasmModule {
@@ -132,6 +145,7 @@ pub const Parser = struct {
             .globals = try self.globals.toOwnedSlice(self.allocator),
             .exports = try self.exports.toOwnedSlice(self.allocator),
             .code = try self.code.toOwnedSlice(self.allocator),
+            .data_segments = try self.data_segments.toOwnedSlice(self.allocator),
         };
     }
 
@@ -155,6 +169,7 @@ pub const Parser = struct {
                 @intFromEnum(wasm.Section.global) => try self.parseGlobalSection(section_end),
                 @intFromEnum(wasm.Section.@"export") => try self.parseExportSection(section_end),
                 @intFromEnum(wasm.Section.code) => try self.parseCodeSection(section_end),
+                @intFromEnum(wasm.Section.data) => try self.parseDataSection(section_end),
                 else => self.pos = section_end, // Skip unknown sections
             }
         }
@@ -264,6 +279,55 @@ pub const Parser = struct {
             self.pos = func_end;
 
             try self.code.append(self.allocator, .{ .locals = locals, .body = body });
+        }
+    }
+
+    fn parseDataSection(self: *Parser, end: usize) !void {
+        const count = self.readULEB128();
+        for (0..@intCast(count)) |_| {
+            // Data segment kind: 0 = active (memory 0), 1 = passive, 2 = active (explicit mem)
+            const kind = self.readULEB128();
+
+            var memory_index: u32 = 0;
+            var offset: u32 = 0;
+
+            if (kind == 0) {
+                // Active data segment for memory 0
+                // Parse offset expression (simplified: i32.const N + end)
+                const opcode = self.readByte() orelse return ParseError.UnexpectedEnd;
+                if (opcode == wasm.Op.i32_const) {
+                    const val = self.readSLEB128();
+                    offset = @intCast(@as(u32, @bitCast(@as(i32, @truncate(val)))));
+                }
+                // Skip to end opcode
+                while (self.pos < end) {
+                    if ((self.readByte() orelse break) == wasm.Op.end) break;
+                }
+            } else if (kind == 2) {
+                // Active data segment with explicit memory index
+                memory_index = @intCast(self.readULEB128());
+                const opcode = self.readByte() orelse return ParseError.UnexpectedEnd;
+                if (opcode == wasm.Op.i32_const) {
+                    const val = self.readSLEB128();
+                    offset = @intCast(@as(u32, @bitCast(@as(i32, @truncate(val)))));
+                }
+                while (self.pos < end) {
+                    if ((self.readByte() orelse break) == wasm.Op.end) break;
+                }
+            }
+            // kind == 1 is passive (no offset expr), just read data
+
+            // Read data bytes
+            const data_len = self.readULEB128();
+            const data = try self.allocator.alloc(u8, @intCast(data_len));
+            @memcpy(data, self.bytes[self.pos..][0..@intCast(data_len)]);
+            self.pos += @intCast(data_len);
+
+            try self.data_segments.append(self.allocator, .{
+                .memory_index = memory_index,
+                .offset = offset,
+                .data = data,
+            });
         }
     }
 
