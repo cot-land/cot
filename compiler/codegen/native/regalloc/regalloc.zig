@@ -333,6 +333,7 @@ pub fn runWithCtx(
     // Phase 2: Create pregs and vregs
     // Ported from: self.create_pregs_and_vregs() in liveranges.rs
     const num_vregs = func.numVregs();
+    _ = func.numBlocks(); // Verify function has blocks
     try liveness_ctx.createPregsAndVregs(num_vregs, env);
 
     // Phase 3: Compute liveness

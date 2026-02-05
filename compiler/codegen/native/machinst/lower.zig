@@ -1139,7 +1139,8 @@ pub fn Lower(comptime I: type) type {
         }
 
         fn addBlockParams(self: *Self, block: Block) !void {
-            for (self.f.dfg.blockParams(block)) |param| {
+            const clif_params = self.f.dfg.blockParams(block);
+            for (clif_params) |param| {
                 const regs = self.value_regs.get(param);
                 for (regs.regs()) |r| {
                     const vreg = r.toVirtualReg().?;

@@ -474,51 +474,94 @@ pub const X64LowerBackend = struct {
         const block_params = ctx.f.dfg.blockParams(entry_block);
         if (block_params.len == 0) return;
 
-        // Allocate CallArgPairs for each function parameter
+        // Allocate CallArgPairs for register arguments
+        // NOTE: Don't defer free - the Args instruction owns this memory
         var arg_pairs = try ctx.allocator.alloc(CallArgPair, block_params.len);
+        var arg_pairs_count: usize = 0;
         var int_arg_idx: usize = 0;
         var float_arg_idx: usize = 0;
+        var stack_arg_offset: i32 = 16; // First stack arg is at [rbp+16]
 
-        for (block_params, 0..) |param, i| {
+        // Collect stack arguments to emit loads after the Args instruction
+        var stack_args = try ctx.allocator.alloc(struct { vreg: Reg, offset: i32, ty: Type }, block_params.len);
+        defer ctx.allocator.free(stack_args);
+        var stack_args_count: usize = 0;
+
+        for (block_params) |param| {
             // Get the vreg assigned to this param
             const value_regs = ctx.value_regs.get(param);
             const vreg = value_regs.onlyReg() orelse continue;
 
             // Get the type to determine if it's float or int
             const ty = ctx.f.dfg.valueType(param);
+            const vreg_class = vreg.class();
 
             // Determine the physical register for this argument
             // System V AMD64 ABI: integers in rdi,rsi,rdx,rcx,r8,r9; floats in xmm0-xmm7
-            const preg: PReg = if (ty.isFloat())
-                blk: {
-                    if (float_arg_idx >= abi.SYSV_ARG_FPRS.len) {
-                        // Stack argument - skip for now
-                        continue;
-                    }
+            // Use the vreg's class, not the type's isFloat() to ensure consistency
+            if (vreg_class == .float) {
+                if (float_arg_idx >= abi.SYSV_ARG_FPRS.len) {
+                    // Stack argument for float
+                    stack_args[stack_args_count] = .{ .vreg = vreg, .offset = stack_arg_offset, .ty = ty };
+                    stack_args_count += 1;
+                    stack_arg_offset += 8;
+                } else {
                     const enc = abi.SYSV_ARG_FPRS[float_arg_idx];
                     float_arg_idx += 1;
-                    break :blk regs.fprPreg(enc);
+                    const preg = regs.fprPreg(enc);
+                    arg_pairs[arg_pairs_count] = CallArgPair{
+                        .vreg = vreg,
+                        .preg = preg,
+                    };
+                    arg_pairs_count += 1;
                 }
-            else
-                blk: {
-                    if (int_arg_idx >= abi.SYSV_ARG_GPRS.len) {
-                        // Stack argument - skip for now
-                        continue;
-                    }
+            } else {
+                if (int_arg_idx >= abi.SYSV_ARG_GPRS.len) {
+                    // Stack argument for integer - load from [rbp+offset]
+                    stack_args[stack_args_count] = .{ .vreg = vreg, .offset = stack_arg_offset, .ty = ty };
+                    stack_args_count += 1;
+                    stack_arg_offset += 8;
+                } else {
                     const enc = abi.SYSV_ARG_GPRS[int_arg_idx];
                     int_arg_idx += 1;
-                    break :blk regs.gprPreg(enc);
-                };
-
-            // Create CallArgPair: vreg (def) = preg (fixed physical register)
-            arg_pairs[i] = CallArgPair{
-                .vreg = vreg,
-                .preg = preg,
-            };
+                    const preg = regs.gprPreg(enc);
+                    arg_pairs[arg_pairs_count] = CallArgPair{
+                        .vreg = vreg,
+                        .preg = preg,
+                    };
+                    arg_pairs_count += 1;
+                }
+            }
         }
 
-        // Emit the Args instruction
-        ctx.emit(Inst.genArgs(arg_pairs)) catch return;
+        // Emit the Args instruction for register arguments
+        ctx.emit(Inst.genArgs(arg_pairs[0..arg_pairs_count])) catch return;
+
+        // Emit loads for stack arguments
+        // These load from the incoming argument area (above return address)
+        // Stack layout at function entry (after prologue):
+        //   [rbp+0]  = saved rbp
+        //   [rbp+8]  = return address
+        //   [rbp+16] = 7th argument (first stack arg)
+        //   [rbp+24] = 8th argument
+        //   etc.
+        for (stack_args[0..stack_args_count]) |stack_arg| {
+            const vreg_gpr = WritableGpr.fromReg(Gpr.unwrapNew(stack_arg.vreg));
+            // Use SyntheticAmode.incoming_arg to let the code generator resolve the actual offset
+            // The offset_val is relative to the start of the incoming argument area
+            const amode = SyntheticAmode{
+                .incoming_arg = .{
+                    .offset_val = @intCast(stack_arg.offset - 16), // Adjust: incoming_arg offset starts at 0
+                },
+            };
+            ctx.emit(Inst{
+                .mov_m_r = .{
+                    .size = .size64,
+                    .src = amode,
+                    .dst = vreg_gpr,
+                },
+            }) catch return;
+        }
 
         // Check if we have a vmctx parameter using Function.specialParam
         // vmctx is typically the first integer parameter (rdi)
