@@ -261,31 +261,45 @@ See **[WASM_BACKEND.md](WASM_BACKEND.md)** for implementation details.
 
 ### Phase 3: Language Features (CURRENT)
 
-**Goal:** Port all features from bootstrap-0.2 to match ~90% of Zig syntax
+**Goal:** Reach feature parity with bootstrap-0.2 (619 test cases) and add features needed for standard library.
 
-**Reference:** `../bootstrap-0.2/SYNTAX.md` defines all features to implement.
+**See [GAP_ANALYSIS.md](GAP_ANALYSIS.md) for detailed comparison with bootstrap-0.2.**
 
-**Keywords parsed but not implemented:**
+**Phase 3 features DONE (verified on both Wasm and native):**
 ```
-├── impl     - Methods on structs
-├── enum     - Enumeration types
-├── union    - Tagged unions
-├── type     - Type aliases
-├── import   - File imports
-├── extern   - External function declarations
-├── switch   - Switch expressions
-└── test     - Test blocks
+├── ✅ impl     - Methods on structs
+├── ✅ enum     - Enumeration types (simple + explicit values)
+├── ✅ union    - Tagged unions (without payloads)
+├── ✅ type     - Type aliases
+├── ✅ import   - File imports (with cycle detection)
+├── ✅ extern   - External function declarations
+├── ✅ switch   - Switch expressions
+├── ✅ Optional types (?T, .?, ??)
+├── ✅ Bitwise operators (&, |, ^, ~, <<, >>)
+├── ✅ Compound assignment (+=, -=, *=, /=, %=, &=, |=, ^=)
+├── ✅ Character literals ('a', '\n')
+├── ✅ Builtins (@sizeOf, @alignOf, @intCast)
+├── ✅ For-range loops (for x in arr, for i in 0..n)
+├── ✅ ARC (retain/release, destructors, heap allocation)
+├── ✅ String ops (concat, indexing, bounds checks)
+└── ✅ Array literals and append
 ```
 
-**Additional features from bootstrap-0.2:**
+**Phase 3 features TODO (blocking standard library):**
 ```
-├── Optional types (?T)
-├── Bitwise operators (&, |, ^, ~, <<, >>)
-├── Compound assignment (+=, -=, *=, /=, etc.)
-├── Character literals ('a', '\n')
-├── Forward function declarations
-├── Builtins (@sizeOf, @alignOf, @intCast)
-└── Labeled break/continue
+├── Float types (f32, f64) - blocks math/science
+├── Union payloads - blocks error unions, pattern matching
+├── Closures - blocks callbacks, iterators, event handlers
+├── Function pointers / indirect calls - blocks method tables
+├── Defer - blocks resource cleanup
+├── Error unions (Zig-style !T, try, catch |err| - no throw) - blocks real apps
+├── String interpolation - blocks developer experience
+├── Generics - blocks collections, standard library
+├── Dynamic lists - list_new, push, get, set (was in bootstrap-0.2)
+├── Maps/dictionaries - map_new, set, get, has (was in bootstrap-0.2)
+├── Global variables - only locals currently supported
+├── Test blocks - parsed but no runner
+└── ~493 test cases to port from bootstrap-0.2
 ```
 
 ### Phase 4: AOT Native Compiler ✅ COMPLETE
@@ -350,16 +364,17 @@ std/
 ### Completed ✅
 - Cot compiles to Wasm (Phase 1)
 - ARC memory management works (Phase 2)
-- AOT native compilation works (Phase 4)
-- 790 tests pass, 0 skipped
+- Phase 3 Wave 1-4 language features (methods, enums, unions, switch, imports, extern, bitwise, optionals, etc.)
+- AOT native compilation works (Phase 4) - all Phase 3 features verified on native
+- 793 tests pass, 0 skipped
 
-### Current Focus (Phase 3)
-- Port all language features from bootstrap-0.2
-- Syntax matches ~90% of Zig
-- Methods, enums, unions, switch, imports
+### Current Focus (Phase 3 Completion)
+- **Feature gap:** Floats, closures, generics, error handling, union payloads, defer
+- **Test gap:** 107 test files vs bootstrap-0.2's 619 (see [GAP_ANALYSIS.md](GAP_ANALYSIS.md))
+- **Priority:** Complete features that block standard library (Phase 5)
 
 ### Next (Phase 5-6)
-- Standard library written in Cot
+- Standard library written in Cot (requires Phase 3 complete)
 - Package manager (cot.land)
 - Editor support (LSP)
 
