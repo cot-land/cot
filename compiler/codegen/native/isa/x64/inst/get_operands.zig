@@ -304,10 +304,15 @@ fn syntheticAmodeOperands(amode: *SyntheticAmode, visitor: *OperandVisitor) void
 fn amodeOperands(amode: *Amode, visitor: *OperandVisitor) void {
     switch (amode.*) {
         .imm_reg => |*m| {
-            // Don't track RSP/RBP as they're fixed
-            if (m.base.hwEnc() != regs.GprEnc.RSP and m.base.hwEnc() != regs.GprEnc.RBP) {
-                visitor.regUse(&m.base);
+            // Don't track RSP/RBP as they're fixed physical registers.
+            // Only check hwEnc for physical registers (virtual registers should be tracked).
+            if (m.base.toRealReg()) |rreg| {
+                const enc = rreg.preg.hwEnc();
+                if (enc == regs.GprEnc.RSP or enc == regs.GprEnc.RBP) {
+                    return; // Skip fixed registers
+                }
             }
+            visitor.regUse(&m.base);
         },
         .imm_reg_reg_shift => |*m| {
             visitor.gprUse(&m.base);
