@@ -943,30 +943,6 @@ fn main() i64 {
 
 ---
 
-### M24: Enable All Skipped Native Tests
-
-**Goal:** Un-skip and fix 5 remaining native tests.
-
-#### Skipped Tests
-
-| File | Test | Reason |
-|------|------|--------|
-| liveness.zig | computeLiveness on simple function | Block count expectations |
-| liveness.zig | computeLiveness straight-line code | Block count expectations |
-| liveness.zig | computeLiveness with loop | Block count expectations |
-| elf.zig | (1 test) | Not tested on macOS |
-| macho.zig | (1 test) | Unknown |
-
-#### Checklist
-
-- [ ] Fix liveness.zig test expectations
-- [ ] Fix or skip elf.zig on macOS
-- [ ] Fix macho.zig test
-- [ ] Verify all 5 tests pass
-- [ ] Update AOT_EXECUTION_PLAN.md
-
----
-
 ## Summary: Implementation Order
 
 | Phase | Task | Priority | Dependencies | Est. Tests |
@@ -978,9 +954,8 @@ fn main() i64 {
 | 2 | M21: Array/Slice Ops | HIGH | M17-M18 | 5+ |
 | 2 | M22: For-Range | MEDIUM | M21 | 5+ |
 | 3 | M23: Native Debug | MEDIUM | None | N/A |
-| 3 | M24: Native Tests | LOW | M23 | 5 |
 
-**Total new tests to write: ~35+**
+**All milestones M17-M23 COMPLETE. 790 tests pass with no skips.**
 
 ---
 

@@ -168,6 +168,10 @@ pub const MachOWriter = struct {
     }
 
     pub fn deinit(self: *MachOWriter) void {
+        // Free allocated symbol names before freeing the array
+        for (self.string_literals.items) |lit| {
+            self.allocator.free(lit.symbol);
+        }
         const lists = .{
             &self.text_data, &self.data, &self.cstring_data, &self.string_literals,
             &self.symbols, &self.relocations, &self.data_relocations, &self.strings,
@@ -536,9 +540,18 @@ test "MachOWriter basic usage" {
 }
 
 test "MachOWriter string deduplication" {
-    // Native codegen not yet fully implemented - skip until AOT backend is ready
-    // TODO: Fix memory leak in addStringLiteral when native codegen is completed
-    return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var writer = MachOWriter.init(allocator);
+    defer writer.deinit();
+
+    // Add same string twice - should return same symbol
+    const sym1 = try writer.addStringLiteral("hello");
+    const sym2 = try writer.addStringLiteral("hello");
+    try std.testing.expectEqualStrings(sym1, sym2);
+
+    // Different string should get different symbol
+    const sym3 = try writer.addStringLiteral("world");
+    try std.testing.expect(!std.mem.eql(u8, sym1, sym3));
 }
 
 test "RelocationInfo encoding" {

@@ -171,6 +171,10 @@ pub const ElfWriter = struct {
         self.relocations.deinit(self.allocator);
         self.strtab.deinit(self.allocator);
         self.shstrtab.deinit(self.allocator);
+        // Free allocated symbol names before freeing the array
+        for (self.string_literals.items) |lit| {
+            self.allocator.free(lit.symbol);
+        }
         self.string_literals.deinit(self.allocator);
     }
 
@@ -524,7 +528,16 @@ test "ElfWriter basic" {
 }
 
 test "ElfWriter string deduplication" {
-    // Native codegen not yet fully implemented - skip until AOT backend is ready
-    // TODO: Fix memory leak in addStringLiteral when native codegen is completed
-    return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var writer = ElfWriter.init(allocator);
+    defer writer.deinit();
+
+    // Add same string twice - should return same symbol
+    const sym1 = try writer.addStringLiteral("hello");
+    const sym2 = try writer.addStringLiteral("hello");
+    try std.testing.expectEqualStrings(sym1, sym2);
+
+    // Different string should get different symbol
+    const sym3 = try writer.addStringLiteral("world");
+    try std.testing.expect(!std.mem.eql(u8, sym1, sym3));
 }
