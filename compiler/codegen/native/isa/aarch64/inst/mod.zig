@@ -3,6 +3,9 @@
 //! Ported from Cranelift's `cranelift/codegen/src/isa/aarch64/inst/mod.rs`
 
 const std = @import("std");
+
+/// ISA identifier for compile-time ISA detection in generic code.
+pub const is_aarch64 = true;
 const Allocator = std.mem.Allocator;
 
 // Re-export sub-modules
