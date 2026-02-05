@@ -377,6 +377,7 @@ pub const SSABuilder = struct {
 
             .str_concat => |s| try self.convertStrConcat(s, node.type_idx, cur),
             .string_header => |s| try self.convertStringHeader(s, node.type_idx, cur),
+            .slice_header => |s| try self.convertSliceHeader(s, node.type_idx, cur),
 
             .union_init => |u| try self.convertUnionInit(u, node.type_idx, cur),
             .union_tag => |u| try self.convertUnionTag(u, node.type_idx, cur),
@@ -964,6 +965,15 @@ pub const SSABuilder = struct {
         const ptr = try self.convertNode(s.ptr) orelse return error.MissingValue;
         const len = try self.convertNode(s.len) orelse return error.MissingValue;
         const val = try self.func.newValue(.string_make, type_idx, cur, self.cur_pos);
+        val.addArg2(ptr, len);
+        try cur.addValue(self.allocator, val);
+        return val;
+    }
+
+    fn convertSliceHeader(self: *SSABuilder, s: ir.SliceHeader, type_idx: TypeIndex, cur: *Block) !*Value {
+        const ptr = try self.convertNode(s.ptr) orelse return error.MissingValue;
+        const len = try self.convertNode(s.len) orelse return error.MissingValue;
+        const val = try self.func.newValue(.slice_make, type_idx, cur, self.cur_pos);
         val.addArg2(ptr, len);
         try cur.addValue(self.allocator, val);
         return val;

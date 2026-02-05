@@ -85,6 +85,7 @@ pub const MapGet = struct { handle: NodeIndex, key: NodeIndex };
 pub const MapHas = struct { handle: NodeIndex, key: NodeIndex };
 pub const StrConcat = struct { left: NodeIndex, right: NodeIndex };
 pub const StringHeader = struct { ptr: NodeIndex, len: NodeIndex };
+pub const SliceHeader = struct { ptr: NodeIndex, len: NodeIndex };
 pub const UnionInit = struct { variant_idx: u32, payload: ?NodeIndex };
 pub const UnionTag = struct { value: NodeIndex };
 pub const UnionPayload = struct { variant_idx: u32, value: NodeIndex };
@@ -114,7 +115,7 @@ pub const Node = struct {
         convert: Convert,
         list_new: ListNew, list_push: ListPush, list_get: ListGet, list_set: ListSet, list_len: ListLen, list_free: ListLen,
         map_new: MapNew, map_set: MapSet, map_get: MapGet, map_has: MapHas, map_free: ListLen,
-        str_concat: StrConcat, string_header: StringHeader,
+        str_concat: StrConcat, string_header: StringHeader, slice_header: SliceHeader,
         union_init: UnionInit, union_tag: UnionTag, union_payload: UnionPayload,
         ptr_cast: PtrCast, int_to_ptr: IntToPtr, ptr_to_int: PtrToInt,
         type_metadata: TypeMetadata,

@@ -404,6 +404,7 @@ pub const Checker = struct {
         if (self.tree.getNode(c.callee)) |cn| if (cn.asExpr()) |ce| if (ce == .ident) {
             const name = ce.ident.name;
             if (std.mem.eql(u8, name, "len")) return self.checkBuiltinLen(c);
+            if (std.mem.eql(u8, name, "append")) return self.checkBuiltinAppend(c);
             if (std.mem.eql(u8, name, "print") or std.mem.eql(u8, name, "println") or std.mem.eql(u8, name, "eprint") or std.mem.eql(u8, name, "eprintln")) {
                 if (c.args.len == 1) _ = try self.checkExpr(c.args[0]);
                 return TypeRegistry.VOID;
@@ -453,6 +454,21 @@ pub const Checker = struct {
         if (arg_type == TypeRegistry.STRING) return TypeRegistry.INT;
         const arg = self.types.get(arg_type);
         return switch (arg) { .array, .slice, .list => TypeRegistry.INT, else => blk: { self.err.errorWithCode(c.span.start, .e300, "len() argument must be string, array, slice, or list"); break :blk invalid_type; } };
+    }
+
+    fn checkBuiltinAppend(self: *Checker, c: ast.Call) CheckError!TypeIndex {
+        if (c.args.len != 2) { self.err.errorWithCode(c.span.start, .e300, "append() expects two arguments"); return invalid_type; }
+        const slice_type = try self.checkExpr(c.args[0]);
+        const elem_type = try self.checkExpr(c.args[1]);
+        const slice = self.types.get(slice_type);
+        const expected_elem = switch (slice) {
+            .array => |a| a.elem,
+            .slice => |s| s.elem,
+            else => { self.err.errorWithCode(c.span.start, .e300, "append() first argument must be array or slice"); return invalid_type; },
+        };
+        if (!self.types.isAssignable(elem_type, expected_elem))
+            self.err.errorWithCode(c.span.start, .e300, "append() element type mismatch");
+        return self.types.makeSlice(expected_elem) catch invalid_type;
     }
 
     fn checkBuiltinCall(self: *Checker, bc: ast.BuiltinCall) CheckError!TypeIndex {

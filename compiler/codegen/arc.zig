@@ -59,8 +59,8 @@ pub const RuntimeFunctions = struct {
     /// cot_string_concat index
     string_concat_idx: u32,
 
-    /// cot_append index (stub for now)
-    append_idx: u32,
+    /// cot_slice_append index: (old_ptr, old_len, elem_ptr, elem_size) -> new_ptr
+    slice_append_idx: u32,
 
     /// cot_memset_zero index (stub for now)
     memset_zero_idx: u32,
@@ -99,7 +99,7 @@ pub const ALLOC_NAME = "cot_alloc";
 pub const RETAIN_NAME = "cot_retain";
 pub const RELEASE_NAME = "cot_release";
 pub const STRING_CONCAT_NAME = "cot_string_concat";
-pub const APPEND_NAME = "cot_append";
+pub const SLICE_APPEND_NAME = "cot_slice_append";
 pub const MEMSET_ZERO_NAME = "cot_memset_zero";
 
 // =============================================================================
@@ -171,17 +171,18 @@ pub fn addToLinker(allocator: std.mem.Allocator, linker: *wasm_link.Linker) !Run
         .exported = false,
     });
 
-    // Generate stub append function (TODO: implement properly for arrays)
-    // Takes (arr_ptr, element_ptr) -> new_arr_ptr
-    const append_type = try linker.addType(
-        &[_]ValType{ .i64, .i64 },
+    // Generate slice append function
+    // cot_slice_append(old_ptr, old_len, elem_ptr, elem_size) -> new_ptr
+    // Go reference: runtime/slice.go growslice (simplified - always reallocates)
+    const slice_append_type = try linker.addType(
+        &[_]ValType{ .i64, .i64, .i64, .i64 },
         &[_]ValType{.i64},
     );
-    const append_body = try generateI64StubBody(allocator);
-    const append_idx = try linker.addFunc(.{
-        .name = APPEND_NAME,
-        .type_idx = append_type,
-        .code = append_body,
+    const slice_append_body = try generateSliceAppendBody(allocator, heap_ptr_global);
+    const slice_append_idx = try linker.addFunc(.{
+        .name = SLICE_APPEND_NAME,
+        .type_idx = slice_append_type,
+        .code = slice_append_body,
         .exported = false,
     });
 
@@ -204,7 +205,7 @@ pub fn addToLinker(allocator: std.mem.Allocator, linker: *wasm_link.Linker) !Run
         .retain_idx = retain_idx,
         .release_idx = release_idx,
         .string_concat_idx = string_concat_idx,
-        .append_idx = append_idx,
+        .slice_append_idx = slice_append_idx,
         .memset_zero_idx = memset_zero_idx,
         .heap_ptr_global = heap_ptr_global,
         .destructor_type = destructor_type,
@@ -487,6 +488,78 @@ fn generateStringConcatBody(allocator: std.mem.Allocator, heap_ptr_global: u32) 
     try code.emitLocalGet(2); // src = s2_ptr (i64)
     try code.emitI32WrapI64();
     try code.emitLocalGet(3); // len = s2_len (i64)
+    try code.emitI32WrapI64();
+    try code.emitMemoryCopy();
+
+    // Return (i64)new_ptr
+    try code.emitLocalGet(5);
+    try code.emitI64ExtendI32U();
+
+    return code.finish();
+}
+
+/// Generates bytecode for cot_slice_append(old_ptr, old_len, elem_ptr, elem_size) -> new_ptr
+/// Allocates new slice with len+1 elements, copies old data, copies new element.
+/// Go reference: runtime/slice.go growslice (simplified - no capacity tracking)
+fn generateSliceAppendBody(allocator: std.mem.Allocator, heap_ptr_global: u32) ![]const u8 {
+    var code = wasm.CodeBuilder.init(allocator);
+    defer code.deinit();
+
+    // Parameters:
+    //   local 0: old_ptr (i64)
+    //   local 1: old_len (i64)
+    //   local 2: elem_ptr (i64)
+    //   local 3: elem_size (i64)
+    // Locals:
+    //   local 4: new_size (i32) - total bytes for new slice
+    //   local 5: new_ptr (i32) - pointer to new allocation
+    //   local 6: old_size (i32) - bytes to copy from old slice
+    _ = try code.declareLocals(&[_]wasm.ValType{ .i32, .i32, .i32 });
+
+    // old_size = (i32)old_len * (i32)elem_size
+    try code.emitLocalGet(1); // old_len (i64)
+    try code.emitI32WrapI64();
+    try code.emitLocalGet(3); // elem_size (i64)
+    try code.emitI32WrapI64();
+    try code.emitI32Mul();
+    try code.emitLocalSet(6); // old_size
+
+    // new_size = old_size + (i32)elem_size
+    try code.emitLocalGet(6);
+    try code.emitLocalGet(3);
+    try code.emitI32WrapI64();
+    try code.emitI32Add();
+
+    // Align to 8 bytes: (new_size + 7) & ~7
+    try code.emitI32Const(7);
+    try code.emitI32Add();
+    try code.emitI32Const(-8);
+    try code.emitI32And();
+    try code.emitLocalSet(4); // new_size (aligned)
+
+    // new_ptr = heap_ptr
+    try code.emitGlobalGet(heap_ptr_global);
+    try code.emitLocalTee(5); // new_ptr
+
+    // heap_ptr = heap_ptr + new_size
+    try code.emitLocalGet(4);
+    try code.emitI32Add();
+    try code.emitGlobalSet(heap_ptr_global);
+
+    // Copy old data: memory.copy(new_ptr, old_ptr, old_size)
+    try code.emitLocalGet(5); // dest = new_ptr (i32)
+    try code.emitLocalGet(0); // src = old_ptr (i64)
+    try code.emitI32WrapI64();
+    try code.emitLocalGet(6); // len = old_size (i32)
+    try code.emitMemoryCopy();
+
+    // Copy new element: memory.copy(new_ptr + old_size, elem_ptr, elem_size)
+    try code.emitLocalGet(5); // new_ptr
+    try code.emitLocalGet(6); // old_size
+    try code.emitI32Add(); // dest = new_ptr + old_size
+    try code.emitLocalGet(2); // src = elem_ptr (i64)
+    try code.emitI32WrapI64();
+    try code.emitLocalGet(3); // len = elem_size (i64)
     try code.emitI32WrapI64();
     try code.emitMemoryCopy();
 

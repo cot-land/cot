@@ -987,7 +987,7 @@ pub const Driver = struct {
         try func_indices.put(self.allocator, arc.RETAIN_NAME, arc_funcs.retain_idx);
         try func_indices.put(self.allocator, arc.RELEASE_NAME, arc_funcs.release_idx);
         try func_indices.put(self.allocator, arc.STRING_CONCAT_NAME, arc_funcs.string_concat_idx);
-        try func_indices.put(self.allocator, arc.APPEND_NAME, arc_funcs.append_idx);
+        try func_indices.put(self.allocator, arc.SLICE_APPEND_NAME, arc_funcs.slice_append_idx);
         try func_indices.put(self.allocator, arc.MEMSET_ZERO_NAME, arc_funcs.memset_zero_idx);
 
         // Add user function names (offset by ARC function count)

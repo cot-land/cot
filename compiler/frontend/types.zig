@@ -239,6 +239,7 @@ pub const TypeRegistry = struct {
         return if (self.get(idx) == .pointer) self.get(idx).pointer.elem else invalid_type;
     }
     pub fn isArray(self: *const TypeRegistry, idx: TypeIndex) bool { return self.get(idx) == .array; }
+    pub fn isSlice(self: *const TypeRegistry, idx: TypeIndex) bool { return self.get(idx) == .slice; }
 
     pub fn sizeOf(self: *const TypeRegistry, idx: TypeIndex) u32 {
         if (idx == UNTYPED_INT or idx == UNTYPED_FLOAT) return 8;

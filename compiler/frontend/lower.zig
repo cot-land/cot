@@ -400,10 +400,13 @@ pub const Lowerer = struct {
             }
 
             const is_array = self.type_reg.isArray(type_idx);
+            const is_slice = self.type_reg.isSlice(type_idx);
             const is_struct_literal = if (value_expr) |e| e == .struct_init else false;
 
             if (type_idx == TypeRegistry.STRING) {
                 try self.lowerStringInit(local_idx, var_stmt.value, var_stmt.span);
+            } else if (is_slice) {
+                try self.lowerSliceInit(local_idx, var_stmt.value, type_idx, var_stmt.span);
             } else if (is_array) {
                 try self.lowerArrayInit(local_idx, var_stmt.value, var_stmt.span);
             } else if (is_struct_literal) {
@@ -556,6 +559,21 @@ pub const Lowerer = struct {
         const ptr_type = self.type_reg.makePointer(TypeRegistry.U8) catch TypeRegistry.VOID;
         const ptr_val = try fb.emitSlicePtr(str_node, ptr_type, span);
         const len_val = try fb.emitSliceLen(str_node, span);
+        _ = try fb.emitStoreLocalField(local_idx, 0, 0, ptr_val, span);
+        _ = try fb.emitStoreLocalField(local_idx, 1, 8, len_val, span);
+    }
+
+    fn lowerSliceInit(self: *Lowerer, local_idx: ir.LocalIdx, value_idx: NodeIndex, slice_type: TypeIndex, span: Span) !void {
+        const fb = self.current_func orelse return;
+        const slice_node = try self.lowerExprNode(value_idx);
+        if (slice_node == ir.null_node) return;
+        // Slices have the same layout as strings: (ptr, len)
+        // Go reference: rewritedec.go Store of SliceMake decomposes to ptr+len stores
+        const slice_info = self.type_reg.get(slice_type);
+        const elem_type = if (slice_info == .slice) slice_info.slice.elem else TypeRegistry.U8;
+        const ptr_type = self.type_reg.makePointer(elem_type) catch TypeRegistry.VOID;
+        const ptr_val = try fb.emitSlicePtr(slice_node, ptr_type, span);
+        const len_val = try fb.emitSliceLen(slice_node, span);
         _ = try fb.emitStoreLocalField(local_idx, 0, 0, ptr_val, span);
         _ = try fb.emitStoreLocalField(local_idx, 1, 8, len_val, span);
     }
@@ -1035,8 +1053,28 @@ pub const Lowerer = struct {
         if (right == ir.null_node) return ir.null_node;
         const result_type = self.inferBinaryType(bin.op, bin.left, bin.right);
 
+        // String concatenation: emit call to cot_string_concat + string_make
+        // Go reference: walk/expr.go:walkAddString transforms OADDSTR to concatstring call
         if (result_type == TypeRegistry.STRING and bin.op == .add) {
-            return try fb.emit(ir.Node.init(.{ .str_concat = .{ .left = left, .right = right } }, result_type, bin.span));
+            const ptr_type = try self.type_reg.makePointer(TypeRegistry.U8);
+
+            // Extract ptr1, len1 from left string
+            const ptr1 = try fb.emitSlicePtr(left, ptr_type, bin.span);
+            const len1 = try fb.emitSliceLen(left, bin.span);
+
+            // Extract ptr2, len2 from right string
+            const ptr2 = try fb.emitSlicePtr(right, ptr_type, bin.span);
+            const len2 = try fb.emitSliceLen(right, bin.span);
+
+            // Call cot_string_concat(ptr1, len1, ptr2, len2) -> new_ptr
+            var args = [_]ir.NodeIndex{ ptr1, len1, ptr2, len2 };
+            const new_ptr = try fb.emitCall("cot_string_concat", &args, false, TypeRegistry.I64, bin.span);
+
+            // Compute new_len = len1 + len2
+            const new_len = try fb.emitBinary(.add, len1, len2, TypeRegistry.I64, bin.span);
+
+            // Create string_header(new_ptr, new_len) - this creates a string_make in SSA
+            return try fb.emit(ir.Node.init(.{ .string_header = .{ .ptr = new_ptr, .len = new_len } }, TypeRegistry.STRING, bin.span));
         }
         if (bin.op == .coalesce) {
             const left_type_idx = self.inferExprType(bin.left);
@@ -1628,6 +1666,7 @@ pub const Lowerer = struct {
             if (std.mem.eql(u8, name, "eprint")) return try self.lowerBuiltinPrint(call, false, 2);
             if (std.mem.eql(u8, name, "eprintln")) return try self.lowerBuiltinPrint(call, true, 2);
             if (std.mem.eql(u8, name, "__string_make")) return try self.lowerBuiltinStringMake(call);
+            if (std.mem.eql(u8, name, "append")) return try self.lowerBuiltinAppend(call);
         }
 
         // Regular function call
@@ -1772,10 +1811,8 @@ pub const Lowerer = struct {
                 const local_type_idx = fb.locals.items[local_idx].type_idx;
                 const local_type = self.type_reg.get(local_type_idx);
                 if (local_type_idx == TypeRegistry.STRING) return try fb.emitFieldLocal(local_idx, 1, 8, TypeRegistry.I64, call.span);
-                if (local_type == .slice) {
-                    const slice_val = try fb.emitLoadLocal(local_idx, local_type_idx, call.span);
-                    return try fb.emitSliceLen(slice_val, call.span);
-                }
+                // Slices have same layout as strings: (ptr, len) - read len at offset 8
+                if (local_type == .slice) return try fb.emitFieldLocal(local_idx, 1, 8, TypeRegistry.I64, call.span);
                 if (local_type == .array) return try fb.emitConstInt(@intCast(local_type.array.length), TypeRegistry.INT, call.span);
             }
         }
@@ -1802,6 +1839,73 @@ pub const Lowerer = struct {
         const ptr_val = try self.lowerExprNode(call.args[0]);
         const len_val = try self.lowerExprNode(call.args[1]);
         return try fb.emit(ir.Node.init(.{ .string_header = .{ .ptr = ptr_val, .len = len_val } }, TypeRegistry.STRING, call.span));
+    }
+
+    /// Lower append(slice, elem) builtin
+    /// Go reference: walk/builtin.go walkAppend (simplified - always reallocates)
+    fn lowerBuiltinAppend(self: *Lowerer, call: ast.Call) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+        if (call.args.len != 2) return ir.null_node;
+
+        // Infer types
+        const slice_type_idx = self.inferExprType(call.args[0]);
+        const slice_type = self.type_reg.get(slice_type_idx);
+        const elem_type_idx: TypeIndex = switch (slice_type) {
+            .slice => |s| s.elem,
+            .array => |a| a.elem,
+            else => return ir.null_node,
+        };
+        const elem_size = self.type_reg.sizeOf(elem_type_idx);
+        const result_type = self.type_reg.makeSlice(elem_type_idx) catch return ir.null_node;
+        const ptr_type = try self.type_reg.makePointer(elem_type_idx);
+
+        // Get ptr and len from source - different for arrays vs slices
+        var old_ptr: ir.NodeIndex = ir.null_node;
+        var old_len: ir.NodeIndex = ir.null_node;
+
+        const arg_node = self.tree.getNode(call.args[0]) orelse return ir.null_node;
+        const arg_expr = arg_node.asExpr() orelse return ir.null_node;
+
+        if (slice_type == .array) {
+            // For arrays: ptr is address of the array, len is static length
+            if (arg_expr == .ident) {
+                if (fb.lookupLocal(arg_expr.ident.name)) |local_idx| {
+                    old_ptr = try fb.emitAddrLocal(local_idx, ptr_type, call.span);
+                    old_len = try fb.emitConstInt(@intCast(slice_type.array.length), TypeRegistry.I64, call.span);
+                }
+            }
+        } else if (slice_type == .slice) {
+            // For slices: read ptr (field 0) and len (field 1) from the slice local
+            if (arg_expr == .ident) {
+                if (fb.lookupLocal(arg_expr.ident.name)) |local_idx| {
+                    old_ptr = try fb.emitFieldLocal(local_idx, 0, 0, ptr_type, call.span);
+                    old_len = try fb.emitFieldLocal(local_idx, 1, 8, TypeRegistry.I64, call.span);
+                }
+            }
+        }
+
+        if (old_ptr == ir.null_node or old_len == ir.null_node) return ir.null_node;
+
+        // Lower element value
+        const elem_val = try self.lowerExprNode(call.args[1]);
+
+        // Store element to temp so we have a pointer to it
+        const temp_name = try std.fmt.allocPrint(self.allocator, "__append_elem_{d}", .{fb.locals.items.len});
+        const temp_idx = try fb.addLocalWithSize(temp_name, elem_type_idx, false, elem_size);
+        _ = try fb.emitStoreLocal(temp_idx, elem_val, call.span);
+        const elem_ptr = try fb.emitAddrLocal(temp_idx, ptr_type, call.span);
+
+        // Call cot_slice_append(old_ptr, old_len, elem_ptr, elem_size) -> new_ptr
+        const elem_size_val = try fb.emitConstInt(@intCast(elem_size), TypeRegistry.I64, call.span);
+        var args = [_]ir.NodeIndex{ old_ptr, old_len, elem_ptr, elem_size_val };
+        const new_ptr = try fb.emitCall("cot_slice_append", &args, false, TypeRegistry.I64, call.span);
+
+        // Compute new_len = old_len + 1
+        const one = try fb.emitConstInt(1, TypeRegistry.I64, call.span);
+        const new_len = try fb.emitBinary(.add, old_len, one, TypeRegistry.I64, call.span);
+
+        // Return slice_header(new_ptr, new_len)
+        return try fb.emit(ir.Node.init(.{ .slice_header = .{ .ptr = new_ptr, .len = new_len } }, result_type, call.span));
     }
 
     fn lowerBuiltinPrint(self: *Lowerer, call: ast.Call, is_println: bool, fd: i32) Error!ir.NodeIndex {

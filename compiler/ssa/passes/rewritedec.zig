@@ -76,6 +76,8 @@ fn rewriteValue(allocator: std.mem.Allocator, f: *Func, block: *Block, v: *Value
 
         // ====================================================================
         // String concatenation (Go: runtime concatstrings lowering)
+        // NOTE: string_concat is now rarely seen here - lower.zig emits call + string_make directly
+        // following Go's walkAddString pattern. This rewrite handles any edge cases.
         // ====================================================================
         .string_concat => rewriteStringConcat(allocator, f, block, v),
 

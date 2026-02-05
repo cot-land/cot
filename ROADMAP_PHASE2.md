@@ -423,14 +423,14 @@ fn main() i64 {
 
 #### Checklist
 
-- [ ] Define metadata struct layout
-- [ ] Generate metadata for each struct type
-- [ ] Parse `fn deinit(self)` in struct body
-- [ ] Generate destructor wrapper function
-- [ ] Store destructor index in metadata
-- [ ] Add `call_indirect` to release path
-- [ ] Add Wasm table section for indirect calls
-- [ ] Write test cases
+- [x] Define metadata struct layout (driver.zig:883-884: type_id, size, destructor_ptr = 12 bytes)
+- [x] Generate metadata for each struct type (driver.zig:886-901)
+- [x] Parse `fn deinit(self)` in struct body (driver.zig:867-880: detects *_deinit functions)
+- [x] Generate destructor wrapper function (normal method lowering: TypeName_deinit)
+- [x] Store destructor index in metadata (driver.zig:894: offset 8)
+- [x] Add `call_indirect` to release path (arc.zig:416-420)
+- [x] Add Wasm table section for indirect calls (link.zig:305-315, 412-432)
+- [x] Write test cases (7 tests pass: destructor_called, new_auto_release, new_nested_scope, etc.)
 
 ---
 
@@ -599,12 +599,12 @@ fn main() i64 {
 
 #### Checklist
 
-- [ ] Add `string_concat` SSA op
-- [ ] Generate `cot_string_concat` runtime function
-- [ ] Lower `+` operator for strings
-- [ ] Implement string indexing with bounds check
-- [ ] Add `load_u8` for byte access
-- [ ] Write 5+ test cases
+- [x] Add `string_concat` SSA op (op.zig:67 - but now rarely used)
+- [x] Generate `cot_string_concat` runtime function (arc.zig:428-498)
+- [x] Lower `+` operator for strings (lower.zig:1038-1057 - follows Go's walkAddString pattern)
+- [x] Implement string indexing with bounds check (lower.zig:1302-1318)
+- [x] Add `load_u8` for byte access (via emitIndexValue with elem_size=1)
+- [x] Write 5+ test cases (9 tests: concat_*, index_*, len_*)
 
 ---
 
@@ -772,14 +772,14 @@ fn main() i64 {
 
 #### Checklist
 
-- [ ] Parse array literal `[1, 2, 3]`
-- [ ] Add `slice_cap` SSA op
-- [ ] Generate `cot_makeslice` runtime
-- [ ] Generate `cot_growslice` runtime
-- [ ] Lower array literals
-- [ ] Lower `append` builtin
-- [ ] Implement grow logic with capacity doubling
-- [ ] Write 5+ test cases
+- [x] Parse array literal `[1, 2, 3]`
+- [ ] Add `slice_cap` SSA op (DEFERRED: simplified to (ptr, len) without capacity)
+- [ ] Generate `cot_makeslice` runtime (DEFERRED: arrays stored in stack frame)
+- [x] Generate `cot_slice_append` runtime (simplified: always reallocates)
+- [x] Lower array literals (stores elements in stack frame)
+- [x] Lower `append` builtin (checker.zig + lower.zig)
+- [ ] Implement grow logic with capacity doubling (DEFERRED: always reallocates for simplicity)
+- [x] Write 5+ test cases (6 array tests pass including append_one)
 
 ---
 
