@@ -56,6 +56,9 @@ pub const Cleanup = struct {
     value: NodeIndex,
     type_idx: TypeIndex,
     state: CleanupState,
+    /// Optional local variable index that owns this value.
+    /// Used to identify cleanup when forwarding ownership on return.
+    local_idx: ?ir.LocalIdx,
 
     pub fn init(kind: CleanupKind, value: NodeIndex, type_idx: TypeIndex) Cleanup {
         return .{
@@ -63,6 +66,18 @@ pub const Cleanup = struct {
             .value = value,
             .type_idx = type_idx,
             .state = .active,
+            .local_idx = null,
+        };
+    }
+
+    /// Create a cleanup for a value stored in a local variable.
+    pub fn initForLocal(kind: CleanupKind, value: NodeIndex, type_idx: TypeIndex, local_idx: ir.LocalIdx) Cleanup {
+        return .{
+            .kind = kind,
+            .value = value,
+            .type_idx = type_idx,
+            .state = .active,
+            .local_idx = local_idx,
         };
     }
 
@@ -104,6 +119,39 @@ pub const CleanupStack = struct {
         if (handle.isValid() and handle.index < self.items.items.len) {
             self.items.items[handle.index].state = .dead;
         }
+    }
+
+    /// Find and disable a cleanup for a specific local variable.
+    /// Used when forwarding ownership on return - the returned local's cleanup
+    /// should not be emitted since ownership transfers to caller.
+    /// Returns true if a cleanup was found and disabled.
+    pub fn disableForLocal(self: *CleanupStack, local_idx: ir.LocalIdx) bool {
+        for (self.items.items) |*cleanup| {
+            if (cleanup.isActive() and cleanup.local_idx == local_idx) {
+                cleanup.state = .dead;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// Update an existing cleanup to associate it with a local variable.
+    /// Called after storing an ARC value to a local.
+    pub fn setLocalForHandle(self: *CleanupStack, handle: CleanupHandle, local_idx: ir.LocalIdx) void {
+        if (handle.isValid() and handle.index < self.items.items.len) {
+            self.items.items[handle.index].local_idx = local_idx;
+        }
+    }
+
+    /// Check if a local variable has an active ARC cleanup registered.
+    /// Used when copying values to determine if retain is needed.
+    pub fn hasCleanupForLocal(self: *const CleanupStack, local_idx: ir.LocalIdx) bool {
+        for (self.items.items) |cleanup| {
+            if (cleanup.isActive() and cleanup.local_idx == local_idx) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /// Get number of active cleanups (for defer depth tracking).

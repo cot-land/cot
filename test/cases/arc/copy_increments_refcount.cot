@@ -1,0 +1,25 @@
+// Verify that copying an ARC value increments refcount
+// The destructor should only be called once (when refcount reaches 0)
+// EXPECT: exit_code=1
+
+var destructor_count: i64 = 0
+
+struct Counter {
+    value: i64,
+}
+
+impl Counter {
+    fn deinit(self: *Counter) {
+        destructor_count = destructor_count + 1
+    }
+}
+
+fn main() i64 {
+    {
+        let c1 = new Counter { value: 42 }
+        let c2 = c1  // Copy - refcount should be 2
+        // When scope ends, both c1 and c2 released
+        // But destructor should only be called once (refcount 2 -> 1 -> 0)
+    }
+    return destructor_count  // Should be 1
+}

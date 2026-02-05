@@ -144,15 +144,15 @@ fn main() i64 {
 
 #### Checklist
 
-- [ ] Create `ManagedValue` struct in `arc_insertion.zig`
-- [ ] Create `CleanupStack` with push/emit operations
-- [ ] Modify `lower.zig` to track owned values
-- [ ] Insert `retain` on assignment (copy semantics)
-- [ ] Insert `release` at scope exit
-- [ ] Forward ownership on return (disable cleanup)
-- [ ] Skip ARC for trivial types (i64, f64, bool)
-- [ ] Write 5+ test cases
-- [ ] Verify with Wasm execution
+- [x] Create `ManagedValue` struct in `arc_insertion.zig`
+- [x] Create `CleanupStack` with push/emit operations
+- [x] Modify `lower.zig` to track owned values
+- [x] Insert `retain` on assignment (copy semantics)
+- [x] Insert `release` at scope exit
+- [x] Forward ownership on return (disable cleanup)
+- [x] Skip ARC for trivial types (i64, f64, bool)
+- [x] Write 5+ test cases (5 tests in test/cases/arc/)
+- [x] Verify with Wasm execution
 
 ---
 

@@ -322,6 +322,20 @@ pub const Lowerer = struct {
         if (ret.value != null_node) {
             const lowered = try self.lowerExprNode(ret.value);
             if (lowered != ir.null_node) value_node = lowered;
+
+            // Forward ownership: if returning a local with ARC cleanup, disable it.
+            // The caller receives ownership - we don't release here.
+            // Reference: Swift's ManagedValue::forward() pattern
+            const ret_node = self.tree.getNode(ret.value);
+            if (ret_node) |node| {
+                if (node.asExpr()) |expr| {
+                    if (expr == .ident) {
+                        if (fb.lookupLocal(expr.ident.name)) |local_idx| {
+                            _ = self.cleanup_stack.disableForLocal(local_idx);
+                        }
+                    }
+                }
+            }
         }
         try self.emitDeferredExprs(0);
         try self.emitCleanups(0);
@@ -410,6 +424,30 @@ pub const Lowerer = struct {
                     const value_node = try self.lowerExprNode(var_stmt.value);
                     if (value_node == ir.null_node) return;
                     _ = try fb.emitStoreLocal(local_idx, value_node, var_stmt.span);
+
+                    // Register cleanup for ARC values.
+                    // Reference: Swift's ManagedValue pattern - owned values get cleanups
+                    const is_new_expr = if (value_expr) |e| e == .new_expr else false;
+                    if (is_new_expr) {
+                        // Value from `new` expression - register cleanup
+                        const cleanup = arc.Cleanup.initForLocal(.release, value_node, type_idx, local_idx);
+                        _ = try self.cleanup_stack.push(cleanup);
+                    } else if (value_expr) |e| {
+                        // Check if copying from an ARC local - need to retain
+                        // Reference: Swift's emitManagedCopy
+                        if (e == .ident) {
+                            if (fb.lookupLocal(e.ident.name)) |src_local_idx| {
+                                if (self.cleanup_stack.hasCleanupForLocal(src_local_idx)) {
+                                    // Source has ARC cleanup - emit retain and register new cleanup
+                                    var retain_args = [_]ir.NodeIndex{value_node};
+                                    const retained = try fb.emitCall("cot_retain", &retain_args, false, type_idx, var_stmt.span);
+                                    _ = try fb.emitStoreLocal(local_idx, retained, var_stmt.span);
+                                    const cleanup = arc.Cleanup.initForLocal(.release, retained, type_idx, local_idx);
+                                    _ = try self.cleanup_stack.push(cleanup);
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1481,13 +1519,11 @@ pub const Lowerer = struct {
             }
         }
 
-        // Register cleanup to release the allocated object when scope exits
-        // Reference: Swift's ManagedValue pattern - owned values get cleanups
-        const final_ptr = try fb.emitLoadLocal(temp_idx, ptr_type, ne.span);
-        _ = try self.cleanup_stack.push(arc.Cleanup.init(.release, final_ptr, ptr_type));
-
-        // Return the pointer to the allocated object
-        return final_ptr;
+        // Return the pointer to the allocated object.
+        // NOTE: Cleanup is NOT registered here - it's registered in lowerLocalVarDecl
+        // when the result is stored to a local variable. This allows the cleanup to
+        // be associated with the local for proper ownership tracking on return.
+        return try fb.emitLoadLocal(temp_idx, ptr_type, ne.span);
     }
 
     fn lowerIfExpr(self: *Lowerer, if_expr: ast.IfExpr) Error!ir.NodeIndex {

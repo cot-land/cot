@@ -1,0 +1,14 @@
+// Test that copying an ARC value retains it
+// EXPECT: exit_code=42
+
+struct Box {
+    value: i64,
+}
+
+fn main() i64 {
+    let box = new Box { value: 42 }
+    let box2 = box  // Should retain: refcount goes from 1 to 2
+    // At function end, both box and box2 are released
+    // Final refcount should be 0, object freed
+    return box2.value
+}
