@@ -168,9 +168,11 @@ pub const OperandVisitor = union(enum) {
                 c.defs.append(c.allocator, reg.*) catch unreachable;
             },
             .callback => |cb| {
-                // For reuse, both use and def refer to the same register
-                cb.func(cb.ctx, reg.regMut(), .reuse, .use, .early);
+                // IMPORTANT: Callback order must match collectOperands order (defs first, then uses).
+                // collectOperands builds: [defs..., uses...], so we call def first, then use.
+                // Both refer to the same register (reuse pattern).
                 cb.func(cb.ctx, reg.regMut(), .reuse, .def, .late);
+                cb.func(cb.ctx, reg.regMut(), .reuse, .use, .early);
             },
         }
     }
@@ -246,9 +248,12 @@ pub const OperandVisitor = union(enum) {
                 c.defs.append(c.allocator, Writable(Reg).fromReg(reg)) catch unreachable;
             },
             .callback => |cb| {
+                // IMPORTANT: Callback order must match collectOperands order (defs first, then uses).
+                // collectOperands builds: [defs..., uses...], so we call def first, then use.
+                // Both refer to the same register (reuse pattern).
                 const reg_ptr = wgpr.regMut().regMut();
-                cb.func(cb.ctx, reg_ptr, .reuse, .use, .early);
                 cb.func(cb.ctx, reg_ptr, .reuse, .def, .late);
+                cb.func(cb.ctx, reg_ptr, .reuse, .use, .early);
             },
         }
     }
@@ -278,9 +283,12 @@ pub const OperandVisitor = union(enum) {
                 c.defs.append(c.allocator, Writable(Reg).fromReg(reg)) catch unreachable;
             },
             .callback => |cb| {
+                // IMPORTANT: Callback order must match collectOperands order (defs first, then uses).
+                // collectOperands builds: [defs..., uses...], so we call def first, then use.
+                // Both refer to the same register (reuse pattern).
                 const reg_ptr = wxmm.regMut().regMut();
-                cb.func(cb.ctx, reg_ptr, .reuse, .use, .early);
                 cb.func(cb.ctx, reg_ptr, .reuse, .def, .late);
+                cb.func(cb.ctx, reg_ptr, .reuse, .use, .early);
             },
         }
     }

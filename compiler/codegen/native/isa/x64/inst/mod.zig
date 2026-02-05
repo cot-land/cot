@@ -1124,20 +1124,31 @@ pub const Inst = union(enum) {
             fn callback(
                 ctx_ptr: *anyopaque,
                 reg: *Reg,
-                _: Inst.get_operands.OperandConstraint,
+                constraint: Inst.get_operands.OperandConstraint,
                 _: Inst.get_operands.OperandKind,
                 _: Inst.get_operands.OperandPos,
             ) void {
                 const ctx: *@This() = @ptrCast(@alignCast(ctx_ptr));
 
-                // Only virtual registers have allocations.
-                // Physical registers are already resolved and don't consume allocations.
-                if (!reg.isVirtual()) return;
+                // For reuse constraints, the same register is visited twice (def and use).
+                // Both visits correspond to allocations in collectOperands, so we must
+                // consume an allocation for each, even if the register is now physical
+                // (converted by the previous callback on the same register).
+                //
+                // For non-reuse constraints, only virtual registers have allocations.
+                // Physical registers (that were never virtual) don't consume allocations.
+                const should_consume = reg.isVirtual() or (constraint == .reuse);
+                if (!should_consume) return;
 
                 if (ctx.idx >= ctx.allocs.len) return;
 
                 const alloc = ctx.allocs[ctx.idx];
                 ctx.idx += 1;
+
+                // Only apply allocation if register is still virtual.
+                // For reuse patterns, the first callback converts the register,
+                // and the second callback just consumes (without re-applying).
+                if (!reg.isVirtual()) return;
 
                 if (alloc.asReg()) |regalloc_preg| {
                     // Convert regalloc PReg to machinst PReg

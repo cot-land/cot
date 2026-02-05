@@ -1843,13 +1843,22 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
         // Ported from Cranelift's emit.rs JmpTableSeq
         //---------------------------------------------------------------------
         .jmp_table_seq => |jt| {
-            // Generate:
+            // Generate a jump table dispatch sequence.
+            // We need two temp registers because MOVSXD uses one as base and writes to another.
+            //
+            // Normal sequence (when tmp1 != tmp2):
             //   lea start_of_jump_table(%rip), %tmp1
             //   movsxd (%tmp1, %idx, 4), %tmp2
             //   add %tmp2, %tmp1
             //   jmp *%tmp1
-            // start_of_jump_table:
-            //   .long offset0, offset1, ...
+            //
+            // When tmp1 == tmp2 (regalloc gave same register), we use an alternative sequence:
+            //   lea start_of_jump_table(%rip), %tmp1
+            //   shl $2, %idx           ; idx *= 4
+            //   add %idx, %tmp1        ; tmp1 = table_base + idx*4
+            //   movsxd (%tmp1), %idx   ; idx = offset (reuses idx since we're done with it)
+            //   add %idx, %tmp1        ; tmp1 = base + idx*4 + offset = target
+            //   jmp *%tmp1
 
             const idx_enc = jt.idx.hwEnc();
             const tmp1_enc = jt.tmp1.toReg().hwEnc();
@@ -1858,32 +1867,65 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             // Get label for start of jump table
             const jt_label = try sink.getLabel();
 
-            // lea start_of_jump_table(%rip), %tmp1
-            const lea_rex = RexPrefix.twoOp(tmp1_enc, 0, true, false);
-            try lea_rex.encode(sink);
-            try sink.put1(0x8D); // LEA opcode
-            try sink.put1(encodeModrm(0b00, tmp1_enc & 7, 0b101)); // RIP-relative
-            const lea_disp_offset = sink.curOffset();
-            // RIP-relative addressing: disp = target - RIP, where RIP = disp_offset + 4.
-            // Our patch computes: label_offset - use_offset + addend.
-            // So we need addend = -4 to get: label_offset - disp_offset - 4 = label_offset - RIP.
-            try sink.put4(@as(u32, @bitCast(@as(i32, -4)))); // Addend for RIP-relative
-            try sink.useLabelAtOffset(lea_disp_offset, jt_label, .pc_rel_32);
+            if (tmp1_enc == tmp2_enc) {
+                // Alternative sequence when tmp1 == tmp2
+                // lea start_of_jump_table(%rip), %tmp1
+                const lea_rex = RexPrefix.twoOp(tmp1_enc, 0, true, false);
+                try lea_rex.encode(sink);
+                try sink.put1(0x8D);
+                try sink.put1(encodeModrm(0b00, tmp1_enc & 7, 0b101));
+                const lea_disp_offset = sink.curOffset();
+                try sink.put4(@as(u32, @bitCast(@as(i32, -4))));
+                try sink.useLabelAtOffset(lea_disp_offset, jt_label, .pc_rel_32);
 
-            // movsxd (%tmp1, %idx, 4), %tmp2 - load signed 32-bit, scale by 4
-            const movsx_rex = RexPrefix.threeOp(tmp2_enc, idx_enc, tmp1_enc, true, false);
-            try movsx_rex.encode(sink);
-            try sink.put1(0x63); // MOVSXD opcode
-            // ModRM: mod=00, reg=tmp2, rm=100 (SIB follows)
-            try sink.put1(encodeModrm(0b00, tmp2_enc & 7, 0b100));
-            // SIB: scale=2 (multiply by 4), index=idx, base=tmp1
-            try sink.put1(encodeSib(2, idx_enc & 7, tmp1_enc & 7));
+                // shl $2, %idx (idx *= 4)
+                const shl_rex = RexPrefix.oneOp(idx_enc, true, false);
+                try shl_rex.encode(sink);
+                try sink.put1(0xC1); // SHL r/m64, imm8
+                try sink.put1(encodeModrm(0b11, 4, idx_enc & 7)); // /4 for SHL
+                try sink.put1(2); // shift by 2 (multiply by 4)
 
-            // add %tmp2, %tmp1
-            const add_rex = RexPrefix.twoOp(tmp2_enc, tmp1_enc, true, false);
-            try add_rex.encode(sink);
-            try sink.put1(0x01); // ADD r/m64, r64
-            try sink.put1(encodeModrm(0b11, tmp2_enc & 7, tmp1_enc & 7));
+                // add %idx, %tmp1 (tmp1 = base + idx*4)
+                const add1_rex = RexPrefix.twoOp(idx_enc, tmp1_enc, true, false);
+                try add1_rex.encode(sink);
+                try sink.put1(0x01);
+                try sink.put1(encodeModrm(0b11, idx_enc & 7, tmp1_enc & 7));
+
+                // movsxd (%tmp1), %idx (load offset into idx, reusing idx since we're done with original value)
+                const movsx_rex = RexPrefix.twoOp(idx_enc, tmp1_enc, true, false);
+                try movsx_rex.encode(sink);
+                try sink.put1(0x63);
+                try sink.put1(encodeModrm(0b00, idx_enc & 7, tmp1_enc & 7));
+
+                // add %idx, %tmp1 (tmp1 = (base + idx*4) + offset)
+                const add2_rex = RexPrefix.twoOp(idx_enc, tmp1_enc, true, false);
+                try add2_rex.encode(sink);
+                try sink.put1(0x01);
+                try sink.put1(encodeModrm(0b11, idx_enc & 7, tmp1_enc & 7));
+            } else {
+                // Normal sequence when tmp1 != tmp2
+                // lea start_of_jump_table(%rip), %tmp1
+                const lea_rex = RexPrefix.twoOp(tmp1_enc, 0, true, false);
+                try lea_rex.encode(sink);
+                try sink.put1(0x8D);
+                try sink.put1(encodeModrm(0b00, tmp1_enc & 7, 0b101));
+                const lea_disp_offset = sink.curOffset();
+                try sink.put4(@as(u32, @bitCast(@as(i32, -4))));
+                try sink.useLabelAtOffset(lea_disp_offset, jt_label, .pc_rel_32);
+
+                // movsxd (%tmp1, %idx, 4), %tmp2
+                const movsx_rex = RexPrefix.threeOp(tmp2_enc, idx_enc, tmp1_enc, true, false);
+                try movsx_rex.encode(sink);
+                try sink.put1(0x63);
+                try sink.put1(encodeModrm(0b00, tmp2_enc & 7, 0b100));
+                try sink.put1(encodeSib(2, idx_enc & 7, tmp1_enc & 7));
+
+                // add %tmp2, %tmp1
+                const add_rex = RexPrefix.twoOp(tmp2_enc, tmp1_enc, true, false);
+                try add_rex.encode(sink);
+                try sink.put1(0x01);
+                try sink.put1(encodeModrm(0b11, tmp2_enc & 7, tmp1_enc & 7));
+            }
 
             // jmp *%tmp1 (indirect jump)
             if (isExtendedReg(tmp1_enc)) {
