@@ -125,28 +125,11 @@ The Go compiler is at `~/learning/go/src/cmd/`. Key files:
 
 | Phase | Status | Description |
 |-------|--------|-------------|
-| Phase 0-6 | ✅ Done | CLIF IR, Wasm translation, MachInst, ARM64/x64, regalloc |
-| Phase 7 | 🔄 Partial | Basic expressions work, complex features broken |
+| Phase 0-7 | ✅ Complete | CLIF IR, Wasm translation, MachInst, ARM64/x64, regalloc, integration |
 
-**⚠️ NATIVE AOT STATUS (February 4, 2026)**
+**Native AOT Status (February 5, 2026): ✅ ALL FEATURES WORKING**
 
-| Feature | Native Status |
-|---------|---------------|
-| Return constant (`return 42`) | ✅ Works |
-| Simple expression (`return 10 + 5`) | ✅ Works |
-| Function calls (no params) | ✅ **FIXED** |
-| Nested function calls | ✅ **FIXED** |
-| Local variables | ❌ SIGSEGV (needs memory init) |
-| Function calls (with params) | ❌ SIGSEGV (needs memory init) |
-| If/else | ❌ SIGSEGV |
-| Loops, recursion, structs | ❌ Untested (likely broken) |
-
-**See `NATIVE_AOT_FIXES.md` for the detailed fix plan.**
-
-**Recent Fixes (February 4, 2026):**
-- Fixed function call prologue/epilogue (save/restore link register)
-- Added `callType()` method to detect call instructions
-- Following Cranelift pattern from `vcode.rs:compute_clobbers_and_function_calls()`
+All 52 E2E tests pass (26 wasm + 26 native). See `NATIVE_AOT_FIXES.md` for fix history.
 
 ---
 
@@ -154,10 +137,11 @@ The Go compiler is at `~/learning/go/src/cmd/`. Key files:
 
 | Document | Purpose |
 |----------|---------|
-| `NATIVE_AOT_FIXES.md` | **CURRENT WORK: Native AOT bugs and fix plan** |
+| `ROADMAP_PHASE2.md` | **NEXT WORK: M17-M24 milestones (ARC, heap, strings, arrays)** |
 | `TROUBLESHOOTING.md` | **MUST READ: Debugging methodology - never invent, always copy reference** |
-| `docs/BR_TABLE_ARCHITECTURE.md` | **br_table dispatch loop pattern - READ if confused about br_table** |
-| `CRANELIFT_PORT_MASTER_PLAN.md` | Native AOT codegen - phases and architecture |
+| `docs/BR_TABLE_ARCHITECTURE.md` | br_table dispatch loop pattern - READ if confused about br_table |
+| `CRANELIFT_PORT_MASTER_PLAN.md` | Native AOT codegen - phases and architecture (✅ Complete) |
+| `NATIVE_AOT_FIXES.md` | Historical: Native AOT bug fixes from February 2026 |
 | `WASM_BACKEND.md` | Wasm milestones M1-M16, implementation details |
 | `ROADMAP_PHASE2.md` | M17-M24 detailed plan with Go/Swift research |
 | `TESTING.md` | Testing strategy and test organization |
@@ -343,14 +327,15 @@ The project succeeds through persistence and copying proven designs, not shortcu
 
 ## Current Tasks
 
-**See `CRANELIFT_PORT_MASTER_PLAN.md` for native AOT status.**
+**Native AOT (Phases 0-7) is COMPLETE.** See `CRANELIFT_PORT_MASTER_PLAN.md` for details.
+All 52 E2E tests pass (26 wasm + 26 native).
 
 ### Priority Order (Recommended)
 
-1. **Complete Phase 7** - Wire Cranelift port into driver.zig for native binary output
-2. **M21-M22: Language features** - String ops, array append, for-range loops
-3. **Browser imports** - Import section for JS interop (console.log, DOM access)
-4. **E2E testing** - Full end-to-end test programs combining all features
+1. **M17: Frontend Emits Retain/Release** - ARC insertion (see ROADMAP_PHASE2.md)
+2. **M18: Heap Allocation** - `new` keyword support
+3. **M20-M22: Language features** - String ops, array append, for-range loops
+4. **Browser imports** - Import section for JS interop (console.log, DOM access)
 
 ---
 
