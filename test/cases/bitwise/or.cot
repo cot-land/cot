@@ -1,5 +1,5 @@
-// Bitwise OR - 0xF0 | 0x0F = 0xFF = 255
-// EXPECT: exit_code=255
+// Bitwise OR - 0xF0 | 0x0F = 0xFF = 255, then 255 - 200 = 55
+// EXPECT: exit_code=55
 
 fn main() i64 {
     let a = 240

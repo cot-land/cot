@@ -1755,7 +1755,9 @@ pub const Lowerer = struct {
                     const base_expr = base_node.asExpr() orelse return ir.null_node;
                     if (base_expr == .ident) {
                         if (fb.lookupLocal(base_expr.ident.name)) |local_idx| {
-                            break :blk try fb.emitAddrLocal(local_idx, base_type_idx, fa.span);
+                            // Use pointer type so SSA builder doesn't decompose as struct value
+                            const ptr_type = self.type_reg.makePointer(base_type_idx) catch TypeRegistry.I64;
+                            break :blk try fb.emitAddrLocal(local_idx, ptr_type, fa.span);
                         }
                         if (self.builder.lookupGlobal(base_expr.ident.name)) |g| {
                             const ptr_type = self.type_reg.makePointer(base_type_idx) catch base_type_idx;

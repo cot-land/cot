@@ -34,10 +34,10 @@ Every feature in this document MUST be implemented by copying from reference imp
 
 | Feature | Keyword | Scanner | Parser | Checker | Lower | Wasm | Native |
 |---------|---------|---------|--------|---------|-------|------|--------|
-| Methods on structs | `impl` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Enumerations | `enum` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Tagged unions | `union` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Switch expressions | `switch` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Methods on structs | `impl` | ✅ | ✅ | ✅ | ✅ | ✅ | ? |
+| Enumerations | `enum` | ✅ | ✅ | ✅ | ✅ | ✅ | ? |
+| Tagged unions | `union` | ✅ | ✅ | ✅ | ✅ | ✅ | ? |
+| Switch expressions | `switch` | ✅ | ✅ | ✅ | ✅ | ✅ | ? |
 | Type aliases | `type` | ✅ | ✅ | ✅ | ✅ | ✅ | ? |
 
 ### Priority 2: Module System
@@ -71,7 +71,7 @@ Every feature in this document MUST be implemented by copying from reference imp
 
 | Feature | Syntax | Scanner | Parser | Checker | Lower | Wasm | Native |
 |---------|--------|---------|--------|---------|-------|------|--------|
-| Optional types | `?T` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Optional types | `?T` | ✅ | ✅ | ✅ | ✅ | ✅ | ? |
 | Char literals | `'a'` | ✅ | ✅ | ✅ | ✅ | ✅ | ? |
 | Hex literals | `0xFF` | ✅ | ✅ | ✅ | ? | ? | ? |
 | Binary literals | `0b1010` | ✅ | ✅ | ✅ | ? | ? | ? |
@@ -498,6 +498,32 @@ test/cases/types/type_alias_struct.cot
 test/cases/types/type_alias_function.cot
 ```
 
+**Implementation Status:** ✅ COMPLETE (Wave 1)
+
+| Component | Reference | Cot File:Line | Evidence |
+|-----------|-----------|---------------|----------|
+| Type alias decl | Go `types2/alias.go:11-38` | `parser.zig` | Parse `type Name = Type` |
+| Alias resolution | Go `types2/decl.go` | `types.zig` | lookupByName resolves aliases |
+| Type checking | Go `types2/decl.go` | `checker.zig` | Aliases expand during type check |
+
+**Go pattern (types2/alias.go:11-18):**
+```go
+// An Alias represents an alias type.
+// Alias types are created by alias declarations such as:
+//
+//	type A = int
+//
+// The type on the right-hand side of the declaration can be accessed
+// using [Alias.Rhs]. This type may itself be an alias.
+```
+
+**Cot implementation:**
+Type aliases are resolved during type registration. When `type UserId = i64` is parsed, `UserId` is registered as mapping to the underlying `i64` type.
+
+**Tests:**
+- `test/cases/types/type_alias.cot` - Basic type alias (exit_code=42)
+- `test/cases/types/struct_alias.cot` - Struct type alias (exit_code=30)
+
 ---
 
 ### F6: File Imports
@@ -847,6 +873,131 @@ test/cases/optional/optional_coalesce.cot
 
 ---
 
+## Wave 3: Expressions - Implementation Status
+
+### F2: Enumerations
+
+**Implementation Status:** ✅ COMPLETE (Wave 3)
+
+| Component | Reference | Cot File:Line | Evidence |
+|-----------|-----------|---------------|----------|
+| Enum type | Go `types2/named.go` | `types.zig` | enum_type with backing_type, variants |
+| Variant access | Go `types2/expr.go` | `lower.zig` | Field access on enum type returns variant value |
+| Type conversion | Go `types2/assignments.go` | `types.zig:isAssignable` | enum → backing_type implicit conversion |
+
+**Go pattern:**
+Go's `iota` enums are constants with a backing integer type. Cot follows the same pattern where enum variants map to sequential integers (or explicit values).
+
+**Cot implementation:**
+```zig
+// types.zig - enum to backing type conversion
+if (from_t == .enum_type) return self.isAssignable(from_t.enum_type.backing_type, to);
+```
+
+**Tests:**
+- `test/cases/enum/simple.cot` - Basic enum with implicit values (exit_code=1)
+- `test/cases/enum/explicit_value.cot` - Enum with explicit integer values (exit_code=100)
+
+### F3: Tagged Unions
+
+**Implementation Status:** ✅ COMPLETE (Wave 3)
+
+| Component | Reference | Cot File:Line | Evidence |
+|-----------|-----------|---------------|----------|
+| Union type | Go `types2/union.go` | `types.zig` | union_type with tag_type, variants |
+| Variant access | - | `lower.zig:lowerFieldAccess` | Union.Variant returns tag integer |
+| Type conversion | Go `types2/assignments.go` | `types.zig:isAssignable` | union → tag_type implicit conversion |
+
+**Cot implementation:**
+```zig
+// types.zig - union to tag type conversion
+if (from_t == .union_type) return self.isAssignable(from_t.union_type.tag_type, to);
+
+// lower.zig - union variant access
+if (base_type == .union_type) {
+    for (base_type.union_type.variants, 0..) |variant, i| {
+        if (std.mem.eql(u8, variant.name, fa.field)) {
+            return try fb.emitConstInt(@intCast(i), base_type_idx, fa.span);
+        }
+    }
+}
+```
+
+**Tests:**
+- `test/cases/union/simple.cot` - Basic union with variants (exit_code=1)
+
+**Note:** Payload unions (e.g., `Result.Ok(42)`) are future work. Current implementation supports simple tagged unions without payloads.
+
+### F4: Switch Expressions
+
+**Implementation Status:** ✅ COMPLETE (Wave 3)
+
+| Component | Reference | Cot File:Line | Evidence |
+|-----------|-----------|---------------|----------|
+| Switch parsing | Go `syntax/parser.go` | `parser.zig` | switch expr { cases } |
+| Switch lowering | Go `walk/switch.go:128-161` | `lower.zig` | exprSwitch pattern → if/else cascade |
+| Enum matching | Go `walk/switch.go:156` | `lower.zig` | s.Emit generates comparisons |
+
+**Go pattern (walk/switch.go:128-161):**
+```go
+// An exprSwitch walks an expression switch.
+type exprSwitch struct {
+    exprname ir.Node // value being switched on
+    done     ir.Nodes
+    clauses  []exprClause
+}
+
+func (s *exprSwitch) Emit(out *ir.Nodes) {
+    s.flush()
+    out.Append(s.done.Take()...)
+}
+```
+
+Go's `exprSwitch` generates a series of comparisons (if/else cascade) for switch expressions. Cot follows the same pattern: each case becomes an if-else branch comparing the switch value to the case value.
+
+**Cot implementation:**
+Switch expressions are lowered to cascading if/else statements. Each case `value => result` becomes `if (expr == value) { result }`.
+
+**Tests:**
+- `test/cases/switch/simple.cot` - Switch on integer (exit_code=20)
+- `test/cases/switch/enum_switch.cot` - Switch on enum (exit_code=50)
+
+---
+
+## Wave 4: Methods - Implementation Status
+
+### F1: Methods (impl blocks)
+
+**Implementation Status:** ✅ COMPLETE (Wave 4)
+
+| Component | Reference | Cot File:Line | Evidence |
+|-----------|-----------|---------------|----------|
+| impl parsing | Swift SIL | `parser.zig` | impl TypeName { fn... } |
+| Method registration | Go `types2/lookup.go` | `checker.zig:158-169` | registerMethod in method_registry |
+| Method lookup | Go `types2/lookup.go` | `types.zig:204-208` | lookupMethod by type_name, method_name |
+| Method call | Swift `SILGenApply.cpp` | `lower.zig:1740-1815` | lowerMethodCall, synthesize Type_method name |
+| Receiver passing | Swift `SILGenApply.cpp` | `lower.zig:1755-1773` | Use pointer type for addr_local to avoid struct decomposition |
+
+**Key Fix (Feb 2026):**
+
+The receiver pointer must be emitted with a **pointer type**, not the struct type. Otherwise, the SSA builder's struct decomposition logic (for structs 8-16 bytes) incorrectly decomposes the address as field values.
+
+**Before (broken):**
+```zig
+break :blk try fb.emitAddrLocal(local_idx, base_type_idx, fa.span);  // Point type
+```
+
+**After (fixed):**
+```zig
+const ptr_type = self.type_reg.makePointer(base_type_idx) catch TypeRegistry.I64;
+break :blk try fb.emitAddrLocal(local_idx, ptr_type, fa.span);  // *Point type
+```
+
+**Tests:**
+- `test/cases/methods/simple.cot` - Method call returning sum of fields (exit_code=30)
+
+---
+
 ### F11: Character Literals
 
 **Syntax:**
@@ -894,6 +1045,34 @@ test/cases/chars/char_simple.cot
 test/cases/chars/char_escape.cot
 test/cases/chars/char_in_string.cot
 ```
+
+**Implementation Status:** ✅ COMPLETE (Wave 1)
+
+| Component | Reference | Cot File:Line | Evidence |
+|-----------|-----------|---------------|----------|
+| Char scanning | Go `syntax/scanner.go:628` | `scanner.zig` | Scan 'c' as char literal |
+| Escape sequences | Go `syntax/scanner.go:590-606` | `scanner.zig` | Handle \n, \t, \\, \' |
+| Char as integer | Go semantics | `lower.zig` | Char literal → i64 constant |
+
+**Go pattern (syntax/scanner.go:628):**
+```go
+func (s *scanner) rune() {
+    ok := true
+    s.nextch()
+    if s.ch == '\'' {
+        s.errorf("empty rune literal or unescaped '")
+        ok = false
+    }
+    // ... scan character or escape sequence
+}
+```
+
+**Cot implementation:**
+Character literals are scanned as single-character tokens and lowered to i64 constants (the ASCII value). Escape sequences like `\n` (10), `\t` (9), `\\` (92), `\'` (39) are handled during scanning.
+
+**Tests:**
+- `test/cases/chars/char_simple.cot` - Basic char 'A' = 65 (exit_code=65)
+- `test/cases/chars/char_escape.cot` - Escape '\n' = 10 (exit_code=10)
 
 ---
 
