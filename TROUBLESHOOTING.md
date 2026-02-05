@@ -37,7 +37,29 @@ Every line of Cot is ported from somewhere. There are NO exceptions.
 | MachInst ARM64 | `compiler/codegen/native/isa/aarch64/` | Cranelift ARM64 | `~/learning/wasmtime/cranelift/codegen/src/isa/aarch64/` |
 | MachInst x64 | `compiler/codegen/native/isa/x64/` | Cranelift x64 | `~/learning/wasmtime/cranelift/codegen/src/isa/x86/` |
 | Register Alloc | `compiler/codegen/native/regalloc/` | regalloc2 | `~/learning/wasmtime/cranelift/codegen/src/machinst/reg.rs` + regalloc2 crate |
+| **ARC Insertion** | `compiler/frontend/arc_insertion.zig` | **Swift SILGen** | `~/learning/swift/lib/SILGen/` (ManagedValue.h, Cleanup.h, SILGenExpr.cpp) |
 | ARC Runtime | `compiler/codegen/wasm/arc.zig` | Swift ARC | `~/learning/swift/stdlib/public/runtime/HeapObject.cpp` |
+
+### ARC Implementation: MUST Copy Swift
+
+**⚠️ CRITICAL: ARC is complex. Swift has solved this problem. Copy their solution.**
+
+For M17-M19 (ARC features), the reference is Swift's SILGen layer:
+
+| Feature | Our File | Swift Reference |
+|---------|----------|-----------------|
+| ManagedValue (owned values) | `arc_insertion.zig` | `~/learning/swift/lib/SILGen/ManagedValue.h:40-456` |
+| Cleanup stack (deferred release) | `arc_insertion.zig` | `~/learning/swift/lib/SILGen/Cleanup.h:85-317` |
+| Emit copy/retain | `arc_insertion.zig` | `~/learning/swift/lib/SILGen/SILGenExpr.cpp:70-109` |
+| Destructor dispatch | `arc.zig` | `~/learning/swift/stdlib/public/runtime/HeapObject.cpp:216-268` |
+
+**DO NOT invent ARC logic.** Swift's approach:
+1. `ManagedValue` pairs each value with an optional cleanup handle
+2. `CleanupStack` tracks deferred releases in LIFO order
+3. Scope exit emits all active cleanups in reverse order
+4. Ownership transfer disables cleanup (no double-release)
+
+Copy these patterns exactly.
 
 ---
 
