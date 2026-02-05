@@ -1618,11 +1618,16 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
         },
 
         //---------------------------------------------------------------------
-        // Pseudo-instructions (should be lowered before emission)
+        // Pseudo-instructions
         //---------------------------------------------------------------------
-        .args, .rets => {
-            // These are pseudo-instructions used for ABI handling
-            // They should be expanded before emission
+        .args => {
+            // This is a pseudo-instruction that defines function argument registers.
+            // Emit nothing - it's purely for regalloc register constraints.
+        },
+        .rets => {
+            // Port of Cranelift: Inst::Rets emits as ret.
+            // The register constraints are handled by regalloc; this just emits the return.
+            try sink.put1(0xC3); // RET
         },
 
         //---------------------------------------------------------------------

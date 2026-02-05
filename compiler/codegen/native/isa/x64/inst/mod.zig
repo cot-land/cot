@@ -1000,6 +1000,20 @@ pub const Inst = union(enum) {
         return machinst_reg.PRegSet.empty();
     }
 
+    /// Generate an Args instruction for function parameters.
+    /// Port of Cranelift's gen_args from abi.rs.
+    /// This is a pseudo-instruction that tells regalloc which vregs are
+    /// defined by function arguments in which registers. Emits nothing.
+    pub fn genArgs(args_pairs: []const CallArgPair) Inst {
+        return .{ .args = .{ .args_list = args_pairs } };
+    }
+
+    /// Generate a Rets instruction for return values.
+    /// Port of Cranelift's gen_rets from abi.rs.
+    pub fn genRets(ret_pairs: []const CallArgPair) Inst {
+        return .{ .rets = .{ .rets_list = ret_pairs } };
+    }
+
     /// Create a return instruction.
     pub fn genRet(stack_bytes_to_pop: u32) Inst {
         return .{ .ret = .{ .stack_bytes_to_pop = stack_bytes_to_pop } };

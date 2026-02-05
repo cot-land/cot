@@ -46,6 +46,8 @@ const WritableGpr = inst_mod.args.WritableGpr;
 const Xmm = inst_mod.args.Xmm;
 const WritableXmm = inst_mod.args.WritableXmm;
 const GprEnc = regs.GprEnc;
+const PReg = inst_mod.PReg;
+const CallArgPair = inst_mod.CallArgPair;
 
 // Import ABI module
 const abi = @import("abi.zig");
@@ -237,6 +239,10 @@ pub const X64LowerBackend = struct {
             // Function address
             .func_addr => self.lowerFuncAddr(ctx, ir_inst),
 
+            // Stack operations
+            .stack_load => self.lowerStackLoad(ctx, ir_inst),
+            .stack_store => self.lowerStackStore(ctx, ir_inst),
+
             // Global values
             // Port of cranelift/codegen/src/legalizer/globalvalue.rs
             .global_value => self.lowerGlobalValue(ctx, ir_inst),
@@ -375,18 +381,128 @@ pub const X64LowerBackend = struct {
                 }) catch return null;
             },
             .@"return" => {
-                // Return instruction
-                ctx.emit(Inst{ .ret = .{ .stack_bytes_to_pop = 0 } }) catch return null;
+                // Port of Cranelift's gen_return pattern from lower.rs.
+                // Instead of emitting explicit moves to return registers, we:
+                // 1. Collect CallArgPair entries mapping vregs to physical return registers
+                // 2. Emit Inst.rets with those pairs
+                // 3. regalloc2 sees the reg_fixed_use constraints and inserts moves as needed
+
+                const num_inputs = ctx.numInputs(ir_inst);
+
+                // Allocate space for return pairs
+                // System V AMD64 ABI: integer returns in RAX, RDX; float returns in XMM0, XMM1
+                var ret_pairs = ctx.allocator.alloc(CallArgPair, num_inputs) catch return null;
+                var pair_idx: usize = 0;
+                var int_ret_idx: usize = 0;
+                var float_ret_idx: usize = 0;
+
+                for (0..num_inputs) |i| {
+                    const ret_val = ctx.putInputInRegs(ir_inst, i);
+                    const ret_reg = ret_val.onlyReg() orelse continue;
+                    const ty = ctx.inputTy(ir_inst, i);
+
+                    // Determine the physical register for this return value
+                    const preg: PReg = if (ty.isFloat())
+                        blk: {
+                            if (float_ret_idx >= abi.SYSV_RET_FPRS.len) continue;
+                            const enc = abi.SYSV_RET_FPRS[float_ret_idx];
+                            float_ret_idx += 1;
+                            break :blk regs.fprPreg(enc);
+                        }
+                    else
+                        blk: {
+                            if (int_ret_idx >= abi.SYSV_RET_GPRS.len) continue;
+                            const enc = abi.SYSV_RET_GPRS[int_ret_idx];
+                            int_ret_idx += 1;
+                            break :blk regs.gprPreg(enc);
+                        };
+
+                    // Create CallArgPair mapping vreg to preg
+                    // regalloc2 will see reg_fixed_use(vreg, preg) from get_operands
+                    // and ensure vreg is in preg at this point, inserting moves as needed
+                    ret_pairs[pair_idx] = CallArgPair{
+                        .vreg = ret_reg,
+                        .preg = preg,
+                    };
+                    pair_idx += 1;
+                }
+
+                // Emit the rets instruction with the return pairs
+                // This is a pseudo-instruction that tells regalloc about the constraints
+                // and emits as just a `ret` instruction
+                ctx.emit(Inst.genRets(ret_pairs[0..pair_idx])) catch return null;
+            },
+            .trap => {
+                // Trap instruction - emit undefined instruction (UD2).
+                // This is a terminator that causes a hardware trap.
+                ctx.emit(Inst{
+                    .ud2 = .{ .trap_code = .unreachable_code_reached },
+                }) catch return null;
             },
             else => return null,
         }
     }
 
     /// Generate the Args pseudo-instruction for function parameters.
-    /// TODO: Implement proper x64 ABI (rdi, rsi, rdx, rcx, r8, r9 for integers).
-    pub fn genArgSetup(_: *const Self, _: *LowerCtx) !void {
-        // Stub for x64 - not yet implemented.
-        // For now, tests mainly focus on aarch64.
+    /// Port of Cranelift's gen_args pattern from abi.rs.
+    /// This creates fixed register constraints (rdi, rsi, etc.) for function params.
+    ///
+    /// System V AMD64 ABI:
+    /// - Integer args: RDI, RSI, RDX, RCX, R8, R9
+    /// - Float args: XMM0-XMM7
+    pub fn genArgSetup(_: *const Self, ctx: *LowerCtx) !void {
+        // Get the entry block
+        const entry_block = ctx.f.layout.entryBlock() orelse return;
+
+        // Get the entry block's params (which are function parameters)
+        const block_params = ctx.f.dfg.blockParams(entry_block);
+        if (block_params.len == 0) return;
+
+        // Allocate CallArgPairs for each function parameter
+        var arg_pairs = try ctx.allocator.alloc(CallArgPair, block_params.len);
+        var int_arg_idx: usize = 0;
+        var float_arg_idx: usize = 0;
+
+        for (block_params, 0..) |param, i| {
+            // Get the vreg assigned to this param
+            const value_regs = ctx.value_regs.get(param);
+            const vreg = value_regs.onlyReg() orelse continue;
+
+            // Get the type to determine if it's float or int
+            const ty = ctx.f.dfg.valueType(param);
+
+            // Determine the physical register for this argument
+            // System V AMD64 ABI: integers in rdi,rsi,rdx,rcx,r8,r9; floats in xmm0-xmm7
+            const preg: PReg = if (ty.isFloat())
+                blk: {
+                    if (float_arg_idx >= abi.SYSV_ARG_FPRS.len) {
+                        // Stack argument - skip for now
+                        continue;
+                    }
+                    const enc = abi.SYSV_ARG_FPRS[float_arg_idx];
+                    float_arg_idx += 1;
+                    break :blk regs.fprPreg(enc);
+                }
+            else
+                blk: {
+                    if (int_arg_idx >= abi.SYSV_ARG_GPRS.len) {
+                        // Stack argument - skip for now
+                        continue;
+                    }
+                    const enc = abi.SYSV_ARG_GPRS[int_arg_idx];
+                    int_arg_idx += 1;
+                    break :blk regs.gprPreg(enc);
+                };
+
+            // Create CallArgPair: vreg (def) = preg (fixed physical register)
+            arg_pairs[i] = CallArgPair{
+                .vreg = vreg,
+                .preg = preg,
+            };
+        }
+
+        // Emit the Args instruction
+        ctx.emit(Inst.genArgs(arg_pairs)) catch return;
     }
 
     // =========================================================================
@@ -398,8 +514,12 @@ pub const X64LowerBackend = struct {
         const ty = ctx.outputTy(ir_inst, 0);
         const size = operandSizeFromType(ty);
 
-        // Get the constant value
-        const imm: u64 = 42; // Placeholder
+        // Get constant value - first try the constant map, then fall back to instruction data
+        // Port of Cranelift's iconst lowering from x64/lower.isle
+        const value: u64 = ctx.getConstant(ir_inst) orelse blk: {
+            const imm = ctx.data(ir_inst).getImmediate() orelse return null;
+            break :blk @bitCast(imm);
+        };
 
         // Allocate destination register
         const dst = ctx.allocTmp(ty) catch return null;
@@ -410,7 +530,7 @@ pub const X64LowerBackend = struct {
         ctx.emit(Inst{
             .imm = .{
                 .dst_size = size,
-                .simm64 = imm,
+                .simm64 = value,
                 .dst = dst_gpr,
             },
         }) catch return null;
@@ -1275,6 +1395,104 @@ pub const X64LowerBackend = struct {
             ctx.emit(Inst{
                 .mov_r_m = .{
                     .size = operandSizeFromType(src_ty),
+                    .src = src_gpr,
+                    .dst = amode,
+                },
+            }) catch return null;
+        }
+
+        return InstOutput{};
+    }
+
+    // =========================================================================
+    // Stack operations
+    // =========================================================================
+
+    fn lowerStackLoad(self: *const Self, ctx: *LowerCtx, ir_inst: ClifInst) ?InstOutput {
+        _ = self;
+        const ty = ctx.outputTy(ir_inst, 0);
+
+        const dst = ctx.allocTmp(ty) catch return null;
+        const dst_reg = dst.onlyReg() orelse return null;
+
+        // Get stack slot from instruction data
+        const inst_data = ctx.data(ir_inst);
+        const slot = inst_data.getStackSlot() orelse return null;
+        const extra_offset = inst_data.getOffset() orelse 0;
+
+        // Get the slot's byte offset from computed stackslot offsets
+        // Port of cranelift/codegen/src/machinst/abi.rs Callee::sized_stackslot_offsets
+        const slot_base_offset = ctx.sizedStackslotOffset(slot);
+        const slot_byte_offset = @as(i32, @intCast(slot_base_offset)) + extra_offset;
+
+        // Use slotOffset for stack-relative addressing
+        const amode = SyntheticAmode.slotOffset(slot_byte_offset);
+
+        if (ty.isFloat()) {
+            const op: SseOpcode = if (ty.bytes() == 4) .movss else .movsd;
+            const dst_xmm = WritableXmm.fromReg(Xmm.unwrapNew(dst_reg.toReg()));
+
+            ctx.emit(Inst{
+                .xmm_mov_m_r = .{
+                    .op = op,
+                    .src = amode,
+                    .dst = dst_xmm,
+                },
+            }) catch return null;
+        } else {
+            const dst_gpr = WritableGpr.fromReg(Gpr.unwrapNew(dst_reg.toReg()));
+
+            ctx.emit(Inst{
+                .mov_m_r = .{
+                    .size = operandSizeFromType(ty),
+                    .src = amode,
+                    .dst = dst_gpr,
+                },
+            }) catch return null;
+        }
+
+        var output = InstOutput{};
+        output.append(ValueRegs(Reg).one(dst_reg.toReg())) catch return null;
+        return output;
+    }
+
+    fn lowerStackStore(self: *const Self, ctx: *LowerCtx, ir_inst: ClifInst) ?InstOutput {
+        _ = self;
+        const val_ty = ctx.inputTy(ir_inst, 0);
+
+        const val = ctx.putInputInRegs(ir_inst, 0);
+        const val_reg = val.onlyReg() orelse return null;
+
+        // Get stack slot from instruction data
+        const inst_data = ctx.data(ir_inst);
+        const slot = inst_data.getStackSlot() orelse return null;
+        const extra_offset = inst_data.getOffset() orelse 0;
+
+        // Get the slot's byte offset from computed stackslot offsets
+        // Port of cranelift/codegen/src/machinst/abi.rs Callee::sized_stackslot_offsets
+        const slot_base_offset = ctx.sizedStackslotOffset(slot);
+        const slot_byte_offset = @as(i32, @intCast(slot_base_offset)) + extra_offset;
+
+        // Use slotOffset for stack-relative addressing
+        const amode = SyntheticAmode.slotOffset(slot_byte_offset);
+
+        if (val_ty.isFloat()) {
+            const op: SseOpcode = if (val_ty.bytes() == 4) .movss else .movsd;
+            const src_xmm = Xmm.unwrapNew(val_reg);
+
+            ctx.emit(Inst{
+                .xmm_mov_r_m = .{
+                    .op = op,
+                    .src = src_xmm,
+                    .dst = amode,
+                },
+            }) catch return null;
+        } else {
+            const src_gpr = Gpr.unwrapNew(val_reg);
+
+            ctx.emit(Inst{
+                .mov_r_m = .{
+                    .size = operandSizeFromType(val_ty),
                     .src = src_gpr,
                     .dst = amode,
                 },
