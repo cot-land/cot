@@ -1,4 +1,37 @@
-# Phase 3: Language Features Execution Plan
+# Phase 3: Language Features - Status & Execution Plan
+
+## Current Status (February 2026)
+
+**Phase 3 is substantially complete.** All core language features work on both Wasm and native.
+
+### Wave 1-4: COMPLETE
+- Methods (`impl`), enums, tagged unions, switch, type aliases
+- Imports, extern, test blocks (Wasm)
+- Bitwise ops, compound assignment, optionals, chars, builtins
+
+### Wave 5: COMPLETE (Feb 6, 2026)
+
+| Feature | Wasm | Native | E2E Tests | Implementation |
+|---------|------|--------|-----------|----------------|
+| **Floats (f32, f64)** | ✅ | ✅ | 1W+1N | Full FPU support, native mov_to_fpu |
+| **Union payloads** | ✅ | ✅ | 4W+4N | switch with payload capture |
+| **Error unions (!T)** | ✅ | ✅ | 2W+2N | `error{...}`, `E!T`, `try`, `catch` |
+| **Function pointers** | ✅ | ✅ | 3W+3N | table+element, call_indirect, AOT dispatch |
+| **Closures** | ✅ | ✅ | 4W+4N | Uniform repr, CTXT global, captures |
+| **Defer** | ✅ | ✅ | 3W+3N | Unified cleanup stack (Swift pattern) |
+| **ARC coverage** | ✅ | ✅ | 4W+4N | call→+1, copy retain, reassignment |
+| **Global variables** | ✅ | stub | 3W | read, write, multi-function |
+| **Sized integers** | ✅ | ✅ | - | i8-u64, @intCast |
+| **Slice syntax** | ✅ | ✅ | - | arr[start:end], Go decomposition |
+
+### Remaining TODO
+- Generics (blocks standard library)
+- Dynamic lists and maps (requires generics)
+- String interpolation
+- Traits/interfaces
+- Test runner
+
+---
 
 ## Critical Methodology
 

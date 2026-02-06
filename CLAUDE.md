@@ -94,7 +94,8 @@ The Go compiler is at `~/learning/go/src/cmd/`. Key files:
 
 ## Current State (February 2026)
 
-**793 tests pass (0 failures, 0 skipped)** across Wasm and native targets.
+**832 tests pass (0 failures, 0 skipped)** across Wasm and native targets.
+**114 test case files, 42 Wasm E2E tests, 24 native E2E tests.**
 
 ### What's Done
 
@@ -102,26 +103,23 @@ The Go compiler is at `~/learning/go/src/cmd/`. Key files:
 - **Native AOT (Phase 0-7):** Complete. Cranelift-style CLIF IR, regalloc2, ARM64/x64 backends, Mach-O/ELF output.
 - **ARC runtime (M17-M19):** Complete. Retain/release, heap allocation, destructors.
 - **Language features (M20-M23):** Complete. String ops, array append, for-range loops.
-- **Phase 3 language features:** Methods, enums, unions, switch, type aliases, imports, extern, bitwise, compound assign, optionals, chars, builtins - all verified on both Wasm and native.
+- **Phase 3 Wave 1-4:** Methods, enums, unions, switch, type aliases, imports, extern, bitwise, compound assign, optionals, chars, builtins - all verified on both Wasm and native.
+- **Phase 3 Wave 5:** Floats (f32/f64), union payloads, error unions (`!T`, `try`, `catch`), function pointers, closures, defer, ARC coverage - all verified on both Wasm and native.
+- **Sized integers:** Full pipeline (i8-u64, f32-f64), type system, @intCast.
+- **Global variables:** Complete on Wasm (read, write, multi-function).
+- **Slice syntax:** `arr[start:end]` with Go-style decomposition passes.
 
 ### What's Missing
 
 **See [GAP_ANALYSIS.md](GAP_ANALYSIS.md) for the full gap analysis.**
 
-Bootstrap-0.2 had **619 test cases**. Current cot has **107 test files**. Key missing features:
-
 | Feature | Priority | Why |
 |---------|----------|-----|
-| Float types (f32, f64) | HIGH | Blocks math, real applications |
-| Union payloads | HIGH | Blocks error unions, pattern matching |
-| Closures | HIGH | Blocks callbacks, iterators, event handlers |
-| Error unions (Zig-style `!T`) | HIGH | Blocks robust applications |
-| Function pointers / indirect calls | HIGH | Blocks callbacks, method tables |
-| Defer | MEDIUM | Blocks resource cleanup patterns |
 | Generics | HIGH | Blocks typed collections, standard library |
-| Dynamic lists + maps | MEDIUM | Were in bootstrap-0.2, needed for real apps |
+| Dynamic lists + maps | HIGH | Requires generics, needed for real apps |
 | String interpolation | MEDIUM | Developer experience |
-| ~493 test cases | HIGH | Robustness, edge case coverage |
+| Traits/Interfaces | MEDIUM | Polymorphism for std lib |
+| ~486 test cases | MEDIUM | Edge case coverage vs bootstrap-0.2 |
 
 ---
 
@@ -337,9 +335,9 @@ Every new feature must:
 
 | Wave | Features | Status |
 |------|----------|--------|
-| **A (Fundamentals)** | Floats, defer, union payloads, error unions, function pointers | TODO |
-| **B (Expressiveness)** | Closures, generics, string interpolation, dynamic collections | TODO |
-| **C (Test Parity)** | Port ~493 test cases from bootstrap-0.2 | TODO |
+| **A (Fundamentals)** | Floats, defer, union payloads, error unions, function pointers | ✅ COMPLETE |
+| **B (Expressiveness)** | Closures ✅, generics, string interpolation, dynamic collections | IN PROGRESS |
+| **C (Test Parity)** | Port ~486 test cases from bootstrap-0.2 | TODO |
 
 ### Reference Implementations
 
@@ -397,8 +395,9 @@ COT_DEBUG=codegen zig test compiler/codegen/wasm_gen.zig
 - **Root cause**: Native codegen complexity (register allocation, two ISAs, ABI edge cases)
 - **Solution**: Wasm-first architecture (stack machine, single calling convention)
 - **bootstrap-0.2**: Previous compiler with 619 test cases, direct native codegen (AMD64/ARM64)
-- **Current cot**: Wasm-first rewrite with better architecture but fewer features (107 test files)
+- **Current cot**: Wasm-first rewrite that has surpassed bootstrap-0.2 in features (114 test files, 832 total tests)
 - **Wasm backend** M1-M16 complete, **ARC** M17-M19 complete, **Language** M20-M23 complete
-- **Native AOT** complete via Cranelift port (CLIF IR, regalloc2, ARM64/x64)
-- **Phase 3** language features verified on both Wasm and native (793 tests pass)
-- **Next**: Close the gap with bootstrap-0.2 (see GAP_ANALYSIS.md)
+- **Native AOT** complete via Cranelift port (CLIF IR, regalloc2, ARM64/x64) - 24 native E2E tests
+- **Phase 3 Wave 1-4** language features verified on both Wasm and native
+- **Phase 3 Wave 5** complete: floats, closures, function pointers, error unions, defer, ARC coverage, union payloads
+- **Next**: Generics → standard library → ecosystem (see GAP_ANALYSIS.md)

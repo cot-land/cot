@@ -4,9 +4,9 @@
 
 **Bootstrap-0.2** was a working compiler with **619 test cases** covering expressions, control flow, functions, types, arrays, memory, and variables. It compiled to native (AMD64/ARM64) directly.
 
-**Current Cot** is a Wasm-first rewrite with **107 test case files** and **793 total tests** (including unit tests). It has a more robust architecture (Wasm → CLIF → native AOT) but has **not yet reached feature parity** with bootstrap-0.2.
+**Current Cot** is a Wasm-first rewrite with **114 test case files**, **42 Wasm E2E tests**, **24 native E2E tests**, and **832 total tests** (including unit tests). It has surpassed bootstrap-0.2 in language features and architecture quality, but still has a test coverage gap.
 
-**The gap: ~512 missing test cases and several missing language features.**
+**The gap: ~493 missing test cases. Most language features are now complete.**
 
 ---
 
@@ -27,30 +27,37 @@
 | Integration | 1 | Full pipeline test |
 | Golden | 2 | Reference SSA/codegen output |
 
-### Current Cot: 107 test files
+### Current Cot: 114 test files + 66 E2E tests
 
-| Category | Count | What It Covers |
-|----------|-------|----------------|
-| Functions | 16 | Basic calls, params, recursion, fibonacci, chaining |
-| Control flow | 14 | if/else, while, break, continue, comparisons |
-| Arithmetic | 10 | add, sub, mul, div, mod, precedence, negation |
-| Strings | 9 | Length, concat, indexing |
-| Compound assign | 8 | +=, -=, *=, /=, %=, &=, \|=, ^= |
-| ARC | 7 | new, retain, release, destructor, ownership |
-| Arrays | 6 | Literal, sum, index, update, append |
-| Bitwise | 6 | AND, OR, XOR, NOT, shifts |
-| Memory | 5 | Locals, reassign, swap, accumulator |
-| Structs | 5 | Simple, field access, field update, nested, pass to fn |
-| Builtins | 4 | @sizeOf, @alignOf, @intCast |
-| Optional | 3 | Basic, coalesce, null coalesce |
-| Loops | 3 | for-range sum, index, index+value |
-| Chars | 2 | Simple, escape sequences |
-| Enum | 2 | Simple, explicit values |
-| Switch | 2 | Integer, enum |
-| Types | 2 | Type alias, struct alias |
-| Methods | 1 | Simple method call |
-| Union | 1 | Simple tagged union |
-| Extern | 1 | Extern function declaration |
+| Category | Files | E2E | What It Covers |
+|----------|-------|-----|----------------|
+| Functions | 16 | - | Basic calls, params, recursion, fibonacci, chaining, mutual |
+| Control flow | 14 | - | if/else, while, break, continue, comparisons |
+| Arithmetic | 10 | - | add, sub, mul, div, mod, precedence, negation |
+| Strings | 9 | - | Length, concat, indexing |
+| Compound assign | 8 | - | +=, -=, *=, /=, %=, &=, \|=, ^= |
+| ARC | 7 | 4+4 | new, retain, release, destructor, ownership (Wasm+native E2E) |
+| Arrays | 6 | - | Literal, sum, index, update, append |
+| Bitwise | 6 | - | AND, OR, XOR, NOT, shifts |
+| Memory | 5 | - | Locals, reassign, swap, accumulator |
+| Structs | 5 | - | Simple, field access, field update, nested, pass to fn |
+| Float | 4 | 1+1 | Basic, arithmetic, comparison, negation (Wasm+native E2E) |
+| Builtins | 4 | - | @sizeOf, @alignOf, @intCast |
+| Union | 4 | 4+4 | Simple, mixed, payload, switch capture (Wasm+native E2E) |
+| Optional | 3 | - | Basic, coalesce, null coalesce |
+| Loops | 3 | - | for-range sum, index, index+value |
+| Chars | 2 | - | Simple, escape sequences |
+| Enum | 2 | - | Simple, explicit values |
+| Switch | 2 | - | Integer, enum |
+| Types | 2 | - | Type alias, struct alias |
+| Methods | 1 | - | Simple method call |
+| Extern | 1 | - | Extern function declaration |
+| Error unions | - | 2+2 | catch, try (Wasm+native E2E) |
+| Defer | - | 3+3 | basic, loop_break, lifo (Wasm+native E2E) |
+| Function ptrs | - | 3+3 | basic, param, reassign (Wasm+native E2E) |
+| Closures | - | 4+4 | no_capture, capture, multi_capture, passed (Wasm+native E2E) |
+| Global vars | - | 3 | read, write, multi-function (Wasm E2E) |
+| Native baseline | - | 1+1 | baseline + phase3_all + func_call (native E2E) |
 
 ### Gap by Category
 
@@ -59,65 +66,85 @@
 | Expressions/Arithmetic | 160 | 10 + 6 bitwise | **~144 missing** |
 | Functions | 115 | 16 | **~99 missing** |
 | Control flow | 100 | 14 | **~86 missing** |
-| Types | 65 | 2 + 2 enum + 1 union | **~60 missing** |
+| Types | 65 | 2 + 2 enum + 4 union | **~57 missing** |
 | Arrays | 60 | 6 | **~54 missing** |
 | Memory | 53 | 5 | **~48 missing** |
 | Variables | 47 | 0 (inline in others) | **~47 missing** |
-| **Total** | **600 parity** | **107** | **~493 missing** |
+| **Total** | **600 parity** | **114 files** | **~486 missing** |
+
+**Note:** Current Cot has many features bootstrap-0.2 never had (closures, error unions, defer, ARC, etc.), so the test gap is purely about breadth of edge-case coverage, not missing functionality.
 
 ---
 
-## Missing Language Features
+## Language Features Status
 
-### Tier 1: Features in Bootstrap-0.2 IR But Missing in Current Cot
+### Complete (working on both Wasm and native)
 
-These were working in bootstrap-0.2 and need to be ported.
+| Feature | Status | E2E Tests | Notes |
+|---------|--------|-----------|-------|
+| **Floats (f32, f64)** | ✅ COMPLETE | 1W+1N | Arithmetic, comparison, negation, native FPU |
+| **Union payloads** | ✅ COMPLETE | 4W+4N | switch with payload capture |
+| **Error unions (!T)** | ✅ COMPLETE | 2W+2N | `const E = error{...}`, `E!T`, `try`, `catch` |
+| **Function pointers** | ✅ COMPLETE | 3W+3N | `let f = add; f(3,4)`, `fn apply(f: fn(...))` |
+| **Closures** | ✅ COMPLETE | 4W+4N | Captures, higher-order functions, uniform repr |
+| **Defer** | ✅ COMPLETE | 3W+3N | `defer expr`, `defer { block }`, unified cleanup stack |
+| **ARC coverage** | ✅ COMPLETE | 4W+4N | call→+1, copy retain, reassignment, field assign |
+| **Global variables** | ✅ Wasm only | 3W | read, write, multi-function. Native stubs exist |
+| **Sized integers** | ✅ COMPLETE | - | i8-u64 in type system, @intCast works |
+| **Slice syntax** | ✅ COMPLETE | - | `arr[start:end]`, decomposition passes (Go port) |
+| **Methods** | ✅ COMPLETE | - | `impl` blocks, self parameter |
+| **Enums** | ✅ COMPLETE | - | Simple + explicit values |
+| **Tagged unions** | ✅ COMPLETE | - | With payloads and switch capture |
+| **Switch** | ✅ COMPLETE | - | Integer, enum, union |
+| **Type aliases** | ✅ COMPLETE | - | `type Alias = Original` |
+| **Imports** | ✅ Wasm only | - | `import "file.cot"` with cycle detection |
+| **Extern** | ✅ Wasm only | - | External function declarations |
+| **Optional types** | ✅ COMPLETE | - | `?T`, `.?`, `??` |
+| **Bitwise ops** | ✅ COMPLETE | - | `&`, `\|`, `^`, `~`, `<<`, `>>` |
+| **Compound assign** | ✅ COMPLETE | - | All 8 operators |
+| **Char literals** | ✅ COMPLETE | - | `'a'`, `'\n'` |
+| **Builtins** | ✅ COMPLETE | - | `@sizeOf`, `@alignOf`, `@intCast` |
+| **For-range loops** | ✅ COMPLETE | - | `for x in arr`, `for i in 0..n` |
+| **ARC runtime** | ✅ COMPLETE | - | retain/release, destructors, heap |
+| **String ops** | ✅ COMPLETE | - | concat, indexing, bounds checks |
+| **Array append** | ✅ COMPLETE | - | Dynamic append builtin |
 
-| Feature | Bootstrap-0.2 IR Nodes | Current Status | Priority |
-|---------|----------------------|----------------|----------|
-| **Dynamic lists** | list_new, list_push, list_get, list_set, list_len, list_free | Array literals + append exist, no dynamic list type | HIGH |
-| **Maps/dictionaries** | map_new, map_set, map_get, map_has, map_free | Not started | HIGH |
-| **Union payloads** | union_init, union_tag, union_payload | Simple tags only, no associated values | HIGH |
-| **Float types** | const_float, f32, f64 operations | Tokens exist, not lowered to Wasm | MEDIUM |
-| **Function pointers** | func_addr, call_indirect | Not in current pipeline | MEDIUM |
-| **Global variables** | global_ref, global_store, addr_global | Only locals supported | MEDIUM |
-| **Slice operations** | slice_local, slice_value, slice_ptr, slice_len | rewritedec exists, no `arr[start:end]` syntax | MEDIUM |
-| **Full pointer ops** | ptr_field, ptr_field_store, ptr_load_value, ptr_store_value | Partial (off_ptr for structs) | LOW |
-| **Address arithmetic** | addr_offset, addr_index | Partial (off_ptr, add_ptr) | LOW |
+### Missing (blocking standard library)
 
-### Tier 2: Features Planned in VISION.md/DESIGN.md But Not Started
+| Feature | Description | Priority | Blocks |
+|---------|-------------|----------|--------|
+| **Generics** | `fn max(T)(a: T, b: T) T` | HIGH | Standard library, `List(T)`, `Map(K,V)` |
+| **Dynamic lists** | `List(T)` with push/pop/get/set | HIGH | Real applications |
+| **Maps/dictionaries** | `Map(K,V)` with set/get/has/delete | HIGH | Real applications |
+| **String interpolation** | `"Hello, {name}"` | MEDIUM | Developer experience |
+| **Traits/Interfaces** | Abstract type contracts | MEDIUM | Polymorphism |
+| **Test runner** | `test "name" {}` blocks parsed, no runner | MEDIUM | Testing framework |
+| **Globals on native** | Driver stubs native globals (`_ = globals`) | LOW | Full native parity |
+| **Imports on native** | Work on Wasm only | LOW | Full native parity |
 
-| Feature | Description | Blocks |
-|---------|-------------|--------|
-| **Closures** | Nested functions with captured variables | Standard library, callbacks |
-| **Generics** | `fn max<T>(a: T, b: T) T` | Standard library, collections |
-| **Traits/Interfaces** | Abstract type contracts | Polymorphism, std lib |
-| **Defer** | `defer cleanup()` - execute at scope exit | Resource management |
-| **String interpolation** | `"Hello, {name}"` | Developer experience |
-| **Error handling** | Zig-style error unions (`!T`), `try`, `catch \|err\|` (no throw) | Robust applications |
-| **Pattern matching** | Full match on union payloads | Idiomatic union handling |
-
-### Tier 3: Features Partially Implemented
+### Partially Implemented
 
 | Feature | Status | What's Missing |
 |---------|--------|----------------|
-| **Sized integers** | i32 partially works via @intCast | i8, i16, u8, u16, u32, u64 codegen |
 | **Bool type** | Works in conditions | Not a distinct runtime type |
-| **Test blocks** | Parser handles `test "name" {}` | No test runner, no test discovery |
 | **Labeled break/continue** | Tokens parsed | Checker/lower not implemented |
 | **Hex/binary/octal literals** | Scanner handles | Lower/codegen unverified |
-| **Imports on native** | Work on Wasm | Not on native AOT target |
-| **Extern on native** | Work on Wasm | Not on native AOT target |
 
 ---
 
-## What Current Cot Has That Bootstrap-0.2 Didn't
+## What Current Cot Has That Bootstrap-0.2 Never Had
 
 | Feature | Description |
 |---------|-------------|
 | **Wasm-first architecture** | Universal IR, runs in browser natively |
 | **Cranelift-style native AOT** | More robust than direct codegen |
 | **ARC runtime** | retain/release, destructors, heap allocation |
+| **Closures** | Captured variables, higher-order functions |
+| **Error unions** | Zig-style `!T`, `try`, `catch` |
+| **Defer** | Unified cleanup stack (Swift's CleanupManager) |
+| **Function pointers** | First-class, indirect calls, reassignment |
+| **Union payloads** | Payload capture in switch |
+| **Float types** | f32/f64 on both Wasm and native |
 | **For-range loops** | `for x in arr`, `for i in 0..n`, `for i, x in arr` |
 | **File imports** | `import "other.cot"` with cycle detection |
 | **Browser imports** | Wasm import section for JS interop |
@@ -126,29 +153,29 @@ These were working in bootstrap-0.2 and need to be ported.
 | **Switch expressions** | Value-producing switch |
 | **Optional types** | `?T`, `.?`, `??` |
 | **Compound assignment** | All 8 operators |
+| **Slice syntax** | `arr[start:end]` with Go-style decomposition |
+| **Global variables** | Top-level var/const (Wasm) |
 
 ---
 
 ## Recommended Priority Order
 
-### Phase 3A: Feature Parity (Language Completeness)
+### Next: Generics + Collections
 
-Complete the language features needed before standard library work can begin.
+The single biggest unlock is **generics**. Once generics work, `List(T)` and `Map(K,V)` become possible, which enables the standard library.
 
 | # | Feature | Effort | Why Now |
 |---|---------|--------|---------|
-| 1 | **Float types (f32, f64)** | Medium | Many algorithms need floats; blocks math stdlib |
-| 2 | **Union payloads** | Medium | Needed for error unions, pattern matching |
-| 3 | **Closures** | Large | Needed for callbacks, iterators, event handlers |
-| 4 | **Function pointers / indirect calls** | Medium | Needed for callbacks, method tables |
-| 5 | **Defer** | Small | Needed for resource cleanup patterns |
-| 6 | **Error unions (Zig-style `!T`)** | Medium | Needed for any real application |
-| 7 | **String interpolation** | Small | Developer experience |
-| 8 | **Generics** | Large | Needed for collections, standard library |
+| 1 | **Generics** | Large | Blocks everything: collections, std lib, real apps |
+| 2 | **Dynamic lists** | Medium | Requires generics; was in bootstrap-0.2 |
+| 3 | **Maps/dictionaries** | Medium | Requires generics; was in bootstrap-0.2 |
+| 4 | **String interpolation** | Small | Developer experience |
+| 5 | **Traits/Interfaces** | Medium | Polymorphism for std lib |
+| 6 | **Test runner** | Small | Enable proper testing framework |
 
-### Phase 3B: Test Parity (Robustness)
+### Test Parity
 
-Port bootstrap-0.2's 619 test cases to verify the current compiler handles edge cases.
+Port bootstrap-0.2's 619 test cases to verify edge case coverage.
 
 | # | Category | Tests to Port | Priority |
 |---|----------|---------------|----------|
@@ -156,19 +183,18 @@ Port bootstrap-0.2's 619 test cases to verify the current compiler handles edge 
 | 2 | Functions | ~99 (many params, complex recursion, chaining) | HIGH |
 | 3 | Control flow | ~86 (nested, complex conditions, edge cases) | HIGH |
 | 4 | Arrays/Memory | ~102 (pointer arithmetic, heap, sort algorithms) | MEDIUM |
-| 5 | Types | ~60 (sized ints, structs, booleans) | MEDIUM |
+| 5 | Types | ~57 (sized ints, structs, booleans) | MEDIUM |
 | 6 | Variables | ~47 (scope, mutability, constants) | LOW |
 
-### Phase 5: Standard Library (After Phase 3 Complete)
+### Phase 5: Standard Library (After Generics)
 
 | Module | Depends On | Description |
 |--------|-----------|-------------|
-| `std.core` | Generics, closures | Primitives, math, string utils, array utils |
-| `std.collections` | Generics, closures | List, Map, Set, Queue |
-| `std.errors` | Error unions, generics | Zig-style error sets and error unions |
+| `std.core` | Generics | Primitives, math, string utils |
+| `std.collections` | Generics | List, Map, Set, Queue |
 | `std.fmt` | String interpolation | Formatting and printing |
-| `std.fs` | Extern, closures | File system (server only) |
-| `std.net` | Extern, closures | HTTP, WebSocket |
+| `std.fs` | Extern | File system (server only) |
+| `std.net` | Extern | HTTP, WebSocket |
 | `std.json` | Generics, string ops | JSON serialization |
 | `std.dom` | Extern | Browser DOM API (client only) |
 
@@ -178,26 +204,32 @@ Port bootstrap-0.2's 619 test cases to verify the current compiler handles edge 
 
 | Metric | Bootstrap-0.2 | Current Cot | Target |
 |--------|--------------|-------------|--------|
-| Test case files | 619 | 107 | 600+ |
-| IR operations | 60 | ~45 | 65+ |
-| Language features | ~25 | ~20 | 30+ |
-| Sized int types | 10 (i8-u64) | 2 (i32, i64) | 10 |
-| Collection types | 3 (array, list, map) | 1 (array) | 3+ |
-| Float support | Yes | No | Yes |
-| Closures | No | No | Yes |
+| Test case files | 619 | 114 | 600+ |
+| Total tests (incl. unit) | ~619 | 832 | 1000+ |
+| Wasm E2E tests | 0 | 42 | 60+ |
+| Native E2E tests | 0 | 24 | 40+ |
+| Language features | ~25 | ~35 | 40+ |
+| Sized int types | 10 (i8-u64) | 10 (i8-u64) | 10 |
+| Collection types | 3 (array, list, map) | 1 (array + append) | 3+ |
+| Float support | Yes | Yes | Yes |
+| Closures | No | **Yes** | Yes |
+| Function pointers | No | **Yes** | Yes |
+| Error unions (!T) | No | **Yes** | Yes |
+| Defer | No | **Yes** | Yes |
 | Generics | No | No | Yes |
-| Error unions (!T) | No | No | Yes |
 | Standard library | No | No | Yes |
 
 ---
 
 ## Bottom Line
 
-**Current Cot has a better architecture** (Wasm-first, Cranelift AOT, ARC) **but fewer features** than bootstrap-0.2. The priority is:
+**Current Cot has surpassed bootstrap-0.2 in both architecture and language features.** The Wasm-first pipeline with Cranelift-port native AOT is production-grade. The language now has closures, error unions, defer, function pointers, ARC, floats, and union payloads - none of which bootstrap-0.2 had.
 
-1. **Finish Phase 3A** - Complete the language (floats, closures, generics, error unions)
-2. **Port Phase 3B tests** - Reach 600+ test cases for robustness
-3. **Build Phase 5** - Standard library that proves the language works for real apps
-4. **Ship Phase 6** - cot.land package manager, LSP, tooling
+**The remaining gaps are:**
+1. **Generics** - The single biggest unlock, blocks standard library
+2. **Collections** - `List(T)` and `Map(K,V)` (requires generics)
+3. **Test breadth** - ~486 edge-case tests to port from bootstrap-0.2
+4. **String interpolation** - Developer experience
+5. **Native parity** - Globals, imports, extern on native AOT
 
-The architecture is solid. The gap is in language features and test coverage.
+The architecture is proven. The language is functional. The next phase is generics → standard library → ecosystem.

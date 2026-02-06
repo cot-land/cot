@@ -285,21 +285,29 @@ See **[WASM_BACKEND.md](WASM_BACKEND.md)** for implementation details.
 └── ✅ Array literals and append
 ```
 
+**Phase 3 Wave 5 DONE (verified on both Wasm and native):**
+```
+├── ✅ Float types (f32, f64) - arithmetic, comparison, native FPU
+├── ✅ Union payloads - switch with payload capture
+├── ✅ Error unions (Zig-style !T, try, catch) - error sets, error propagation
+├── ✅ Function pointers - first-class, indirect calls, reassignment
+├── ✅ Closures - captured variables, higher-order functions, uniform representation
+├── ✅ Defer - unified cleanup stack (Swift's CleanupManager pattern)
+├── ✅ ARC coverage - call→+1, copy retain, reassignment, field assign
+├── ✅ Global variables - read, write, multi-function (Wasm)
+├── ✅ Sized integers - i8-u64, full type system, @intCast
+└── ✅ Slice syntax - arr[start:end], Go-style decomposition
+```
+
 **Phase 3 features TODO (blocking standard library):**
 ```
-├── Float types (f32, f64) - blocks math/science
-├── Union payloads - blocks error unions, pattern matching
-├── Closures - blocks callbacks, iterators, event handlers
-├── Function pointers / indirect calls - blocks method tables
-├── Defer - blocks resource cleanup
-├── Error unions (Zig-style !T, try, catch |err| - no throw) - blocks real apps
-├── String interpolation - blocks developer experience
 ├── Generics - blocks collections, standard library
-├── Dynamic lists - list_new, push, get, set (was in bootstrap-0.2)
-├── Maps/dictionaries - map_new, set, get, has (was in bootstrap-0.2)
-├── Global variables - only locals currently supported
-├── Test blocks - parsed but no runner
-└── ~493 test cases to port from bootstrap-0.2
+├── Dynamic lists - List(T) with push/pop/get/set (requires generics)
+├── Maps/dictionaries - Map(K,V) with set/get/has/delete (requires generics)
+├── String interpolation - blocks developer experience
+├── Traits/Interfaces - blocks polymorphism
+├── Test runner - blocks testing framework
+└── ~486 test cases to port from bootstrap-0.2
 ```
 
 ### Phase 4: AOT Native Compiler ✅ COMPLETE
@@ -309,13 +317,13 @@ See **[WASM_BACKEND.md](WASM_BACKEND.md)** for implementation details.
 See **[CRANELIFT_PORT_MASTER_PLAN.md](CRANELIFT_PORT_MASTER_PLAN.md)** for details.
 
 ```
-├── Wasm parser
+├── Wasm parser (with element section for call_indirect)
 ├── Wasm → CLIF IR translation
 ├── CLIF → MachInst lowering
 ├── Register allocation (regalloc2 port)
 ├── ARM64 and AMD64 backends
-├── Output ELF/Mach-O
-└── All 26 native E2E tests pass
+├── Output ELF/Mach-O (Cranelift 3-phase: declare/define/finish)
+└── All 24 native E2E tests pass
 ```
 
 ### Phase 5: Standard Library
@@ -365,13 +373,14 @@ std/
 - Cot compiles to Wasm (Phase 1)
 - ARC memory management works (Phase 2)
 - Phase 3 Wave 1-4 language features (methods, enums, unions, switch, imports, extern, bitwise, optionals, etc.)
-- AOT native compilation works (Phase 4) - all Phase 3 features verified on native
-- 793 tests pass, 0 skipped
+- Phase 3 Wave 5 language features (floats, closures, function pointers, error unions, defer, ARC coverage, union payloads)
+- AOT native compilation works (Phase 4) - 24 native E2E tests pass
+- 832 tests pass, 0 failures, 0 skipped
 
-### Current Focus (Phase 3 Completion)
-- **Feature gap:** Floats, closures, generics, error handling, union payloads, defer
-- **Test gap:** 107 test files vs bootstrap-0.2's 619 (see [GAP_ANALYSIS.md](GAP_ANALYSIS.md))
-- **Priority:** Complete features that block standard library (Phase 5)
+### Current Focus (Generics + Standard Library)
+- **Feature gap:** Generics, dynamic collections, string interpolation, traits
+- **Test gap:** 114 test files vs bootstrap-0.2's 619 (see [GAP_ANALYSIS.md](GAP_ANALYSIS.md))
+- **Priority:** Generics (blocks standard library)
 
 ### Next (Phase 5-6)
 - Standard library written in Cot (requires Phase 3 complete)
