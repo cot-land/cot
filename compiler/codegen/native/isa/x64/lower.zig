@@ -1043,19 +1043,42 @@ pub const X64LowerBackend = struct {
 
     fn lowerFconst(_: *const Self, ctx: *LowerCtx, ir_inst: ClifInst) ?InstOutput {
         const ty = ctx.outputTy(ir_inst, 0);
+        const is_f32 = ty.eql(ClifType.F32);
+        const data = ctx.data(ir_inst);
+
+        // Get float constant bit pattern
+        // Cranelift: f64const stores as unary_ieee64, f32const as unary_ieee32
+        const bits: u64 = if (is_f32)
+            @as(u64, @as(u32, @bitCast(data.unary_ieee32.imm)))
+        else
+            @bitCast(data.unary_ieee64.imm);
+
+        // Step 1: Load constant bits into GPR
+        // For 0, this emits XOR which is a pure def (no use dependency)
+        const gpr_size: OperandSize = if (is_f32) .size32 else .size64;
+        const gpr_ty = if (is_f32) ClifType.I32 else ClifType.I64;
+        const gpr_tmp = ctx.allocTmp(gpr_ty) catch return null;
+        const gpr_reg = gpr_tmp.onlyReg() orelse return null;
+        const gpr = WritableGpr.fromReg(Gpr.unwrapNew(gpr_reg.toReg()));
+
+        ctx.emit(Inst{
+            .imm = .{
+                .dst_size = gpr_size,
+                .simm64 = bits,
+                .dst = gpr,
+            },
+        }) catch return null;
+
+        // Step 2: Move from GPR to XMM using movd (32-bit) or movq (64-bit)
         const dst = ctx.allocTmp(ty) catch return null;
         const dst_reg = dst.onlyReg() orelse return null;
-
-        // Floating-point constants need to be loaded from memory or materialized
-        // This is a simplified version
         const dst_xmm = WritableXmm.fromReg(Xmm.unwrapNew(dst_reg.toReg()));
 
-        // XOR the register with itself to zero it (for zero constant)
-        const op: SseOpcode = if (ty.bytes() == 4) .movss else .movsd;
         ctx.emit(Inst{
-            .xmm_unary_rm_r = .{
-                .op = op,
-                .src = XmmMem{ .inner = RegMem{ .reg = dst_xmm.toReg().toReg() } },
+            .gpr_to_xmm = .{
+                .op = if (is_f32) .movd else .movq,
+                .src = GprMem{ .inner = RegMem{ .reg = gpr.toReg().toReg() } },
+                .src_size = gpr_size,
                 .dst = dst_xmm,
             },
         }) catch return null;
