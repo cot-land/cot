@@ -241,6 +241,34 @@ pub const OperandVisitor = union(enum) {
         }
     }
 
+    /// Add all clobbered registers from a PRegSet.
+    /// Port of Cranelift's call instruction clobber handling.
+    /// This is CRITICAL for correct code generation - without it, values in
+    /// caller-saved registers are not preserved across function calls.
+    pub fn addClobbers(self: *OperandVisitor, clobbers: mod.PRegSet) void {
+        switch (self.*) {
+            .collector => |c| {
+                // Iterate through all GPRs (RAX=0 through R15=15)
+                var i: u8 = 0;
+                while (i < 16) : (i += 1) {
+                    const preg = regs.gprPreg(i);
+                    if (clobbers.contains(preg)) {
+                        c.clobbers.append(c.allocator, preg) catch unreachable;
+                    }
+                }
+                // Iterate through all XMM registers (XMM0 through XMM15)
+                i = 0;
+                while (i < 16) : (i += 1) {
+                    const preg = regs.fprPreg(i);
+                    if (clobbers.contains(preg)) {
+                        c.clobbers.append(c.allocator, preg) catch unreachable;
+                    }
+                }
+            },
+            .callback => {},
+        }
+    }
+
     //=========================================================================
     // Helper methods for GPR/XMM types
     // These handle the nested type structure: WritableGpr = Writable(Gpr),
@@ -566,6 +594,11 @@ pub fn getOperands(inst: *Inst, visitor: *OperandVisitor) void {
             for (p.info.defs.items) |ret| {
                 visitor.regFixedDef(ret.vreg, ret.location.reg);
             }
+            // CRITICAL: Add clobbered registers so regalloc knows to spill
+            // values that are live across the call. Without this, values in
+            // caller-saved registers (RAX, RCX, RDX, RSI, RDI, R8-R11, XMM0-15)
+            // would be clobbered by the call but regalloc wouldn't know to save them.
+            visitor.addClobbers(p.info.clobbers);
         },
         .call_unknown => |*p| {
             regMemOperands(&p.info.dest, visitor);
@@ -575,6 +608,8 @@ pub fn getOperands(inst: *Inst, visitor: *OperandVisitor) void {
             for (p.info.defs.items) |ret| {
                 visitor.regFixedDef(ret.vreg, ret.location.reg);
             }
+            // CRITICAL: Add clobbered registers for indirect calls too
+            visitor.addClobbers(p.info.clobbers);
         },
 
         //=====================================================================

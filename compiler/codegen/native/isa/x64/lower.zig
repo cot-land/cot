@@ -1739,7 +1739,7 @@ pub const X64LowerBackend = struct {
             .dest = ext_func.name,
             .uses = .{},
             .defs = .{},
-            .clobbers = PRegSet.empty,
+            .clobbers = PRegSet.empty(),
             .callee_conv = .system_v,
             .caller_conv = .system_v,
             .opcode = null,
@@ -1748,19 +1748,21 @@ pub const X64LowerBackend = struct {
 
         // Build System V AMD64 clobber set: RAX, RCX, RDX, RSI, RDI, R8-R11, XMM0-15
         // Port of Cranelift's get_regs_clobbered_by_call
-        var clobbers = PRegSet.empty;
-        // Integer caller-saved: RAX(0), RCX(1), RDX(2), RSI(6), RDI(7), R8-R11(8-11)
-        clobbers = clobbers.add(regs.gprPreg(GprEnc.RAX));
-        clobbers = clobbers.add(regs.gprPreg(GprEnc.RCX));
-        clobbers = clobbers.add(regs.gprPreg(GprEnc.RDX));
-        clobbers = clobbers.add(regs.gprPreg(GprEnc.RSI));
-        clobbers = clobbers.add(regs.gprPreg(GprEnc.RDI));
-        clobbers = clobbers.add(regs.gprPreg(GprEnc.R8));
-        clobbers = clobbers.add(regs.gprPreg(GprEnc.R9));
-        clobbers = clobbers.add(regs.gprPreg(GprEnc.R10));
-        clobbers = clobbers.add(regs.gprPreg(GprEnc.R11));
-        // TODO: Add float clobbers XMM0-XMM15 (requires fixing x64 PRegSet to use regalloc's PRegSet)
-        // For now, skip float clobbers since we don't use float values yet
+        // Using regalloc-compatible PRegSet with .with() for building the set
+        var clobbers = PRegSet.empty()
+            .with(regs.gprPreg(GprEnc.RAX))
+            .with(regs.gprPreg(GprEnc.RCX))
+            .with(regs.gprPreg(GprEnc.RDX))
+            .with(regs.gprPreg(GprEnc.RSI))
+            .with(regs.gprPreg(GprEnc.RDI))
+            .with(regs.gprPreg(GprEnc.R8))
+            .with(regs.gprPreg(GprEnc.R9))
+            .with(regs.gprPreg(GprEnc.R10))
+            .with(regs.gprPreg(GprEnc.R11));
+        // Add float clobbers XMM0-XMM15 (all are caller-saved in System V)
+        for (0..16) |i| {
+            clobbers = clobbers.with(regs.fprPreg(@intCast(i)));
+        }
 
         // System V ABI integer argument registers (in order)
         const int_arg_pregs = [_]PReg{

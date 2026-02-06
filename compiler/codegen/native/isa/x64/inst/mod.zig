@@ -253,23 +253,8 @@ pub const CallOpcode = enum {
 };
 
 /// Physical register set (for clobbers).
-pub const PRegSet = struct {
-    bits: u64 = 0,
-
-    pub const empty = PRegSet{};
-
-    pub fn add(self: PRegSet, preg: PReg) PRegSet {
-        return PRegSet{ .bits = self.bits | (@as(u64, 1) << @intCast(preg.index())) };
-    }
-
-    pub fn contains(self: PRegSet, preg: PReg) bool {
-        return (self.bits & (@as(u64, 1) << @intCast(preg.index()))) != 0;
-    }
-
-    pub fn remove(self: *PRegSet, preg: PReg) void {
-        self.bits &= ~(@as(u64, 1) << @intCast(preg.index()));
-    }
-};
+/// Import from machinst_reg to support full 256-bit register space (all classes).
+pub const PRegSet = machinst_reg.PRegSet;
 
 //=============================================================================
 // Atomic operations
@@ -1783,6 +1768,10 @@ pub const Inst = union(enum) {
         fixed_frame_storage_size: u32 = 0,
         outgoing_args_size: u32 = 0,
         stackslots_size: u32 = 0,
+        /// Callee-saved registers that were used and need to be saved/restored.
+        /// Contains GPR hardware encodings (e.g., 3=RBX, 12=R12, etc.)
+        clobbered_callee_saves: [5]u8 = undefined,
+        num_clobbered_callee_saves: usize = 0,
     };
 
     /// Generate prologue instructions for stack frame setup.
@@ -1792,6 +1781,7 @@ pub const Inst = union(enum) {
     /// Following Cranelift pattern from abi.rs gen_prologue():
     /// - Push rbp (save frame pointer)
     /// - mov rbp, rsp (establish frame)
+    /// - Push callee-saved registers
     ///
     /// Reference: cranelift/codegen/src/isa/x64/abi.rs gen_prologue_frame_setup()
     pub fn genPrologue(frame_layout: *const FrameLayout) abi.BoundedArray(Inst, 16) {
@@ -1816,6 +1806,17 @@ pub const Inst = union(enum) {
             });
         }
 
+        // Push callee-saved registers that were used
+        // These are pushed after rbp so they're below it on the stack
+        for (0..frame_layout.num_clobbered_callee_saves) |i| {
+            const reg_enc = frame_layout.clobbered_callee_saves[i];
+            insts.appendAssumeCapacity(.{
+                .push = .{
+                    .src = Gpr.unwrapNew(regs.gpr(reg_enc)),
+                },
+            });
+        }
+
         return insts;
     }
 
@@ -1824,13 +1825,26 @@ pub const Inst = union(enum) {
     /// Returns a bounded array of instructions that should be emitted.
     ///
     /// Following Cranelift pattern from abi.rs gen_epilogue():
+    /// - Pop callee-saved registers (reverse order)
     /// - mov rsp, rbp (restore stack pointer)
     /// - pop rbp (restore frame pointer)
     ///
     /// Reference: cranelift/codegen/src/isa/x64/abi.rs gen_epilogue_frame_restore()
-    pub fn genEpilogue(frame_layout: *const FrameLayout) abi.BoundedArray(Inst, 8) {
-        var insts = abi.BoundedArray(Inst, 8){};
+    pub fn genEpilogue(frame_layout: *const FrameLayout) abi.BoundedArray(Inst, 16) {
+        var insts = abi.BoundedArray(Inst, 16){};
         const setup_frame = frame_layout.setup_area_size > 0;
+
+        // Pop callee-saved registers in reverse order
+        var i: usize = frame_layout.num_clobbered_callee_saves;
+        while (i > 0) {
+            i -= 1;
+            const reg_enc = frame_layout.clobbered_callee_saves[i];
+            insts.appendAssumeCapacity(.{
+                .pop = .{
+                    .dst = WritableGpr.fromReg(Gpr.unwrapNew(regs.gpr(reg_enc))),
+                },
+            });
+        }
 
         if (setup_frame) {
             // mov rsp, rbp

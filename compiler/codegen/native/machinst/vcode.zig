@@ -856,14 +856,83 @@ pub fn VCode(comptime I: type) type {
             // ISA detection for architecture-specific code
             const is_aarch64 = @hasDecl(I, "is_aarch64");
 
+            // ================================================================
+            // x64-specific: Collect clobbered callee-saved registers
+            // System V callee-saved: RBX(3), R12(12), R13(13), R14(14), R15(15)
+            // Note: R15 is the pinned vmctx register, so we don't treat it as
+            // callee-saved for allocation purposes (it's managed separately).
+            // ================================================================
+            var x64_clobbered_regs: [5]u8 = undefined; // max 5 callee-saves
+            var x64_num_clobbered: usize = 0;
+            var x64_clobber_size: u32 = 0;
+
+            if (!is_aarch64) {
+                var clobbered_set: u16 = 0;
+                // System V callee-saved: RBX=3, R12=12, R13=13, R14=14 (skip R15=pinned)
+                const callee_save_mask: u16 = (1 << 3) | (1 << 12) | (1 << 13) | (1 << 14);
+
+                // Check regalloc moves (edits) for callee-saved register usage
+                for (output.edits.items) |edit_at_point| {
+                    switch (edit_at_point.edit) {
+                        .move => |m| {
+                            if (m.to.asReg()) |preg| {
+                                if (preg.class() == .int) {
+                                    const hw_enc = preg.hwEnc();
+                                    if (hw_enc < 16) {
+                                        clobbered_set |= (@as(u16, 1) << @intCast(hw_enc));
+                                    }
+                                }
+                            }
+                        },
+                    }
+                }
+
+                // Check regalloc allocations for callee-saved register usage
+                for (output.allocs.items) |allocation| {
+                    if (allocation.asReg()) |preg| {
+                        if (preg.class() == .int) {
+                            const hw_enc = preg.hwEnc();
+                            if (hw_enc < 16) {
+                                clobbered_set |= (@as(u16, 1) << @intCast(hw_enc));
+                            }
+                        }
+                    }
+                }
+
+                clobbered_set &= callee_save_mask;
+
+                // Collect clobbered registers in order
+                const callee_save_regs = [_]u8{ 3, 12, 13, 14 }; // RBX, R12, R13, R14
+                for (callee_save_regs) |reg| {
+                    if (clobbered_set & (@as(u16, 1) << @intCast(reg)) != 0) {
+                        x64_clobbered_regs[x64_num_clobbered] = reg;
+                        x64_num_clobbered += 1;
+                        x64_clobber_size += 8; // 8 bytes per GPR
+                    }
+                }
+
+                // If there are clobbered callee-saves, we need a frame
+                if (x64_num_clobbered > 0) {
+                    needs_frame = true;
+                }
+            }
+
             // Compute frame layout for x64 (not needed for ARM64 direct emit)
-            const frame_layout = if (!is_aarch64 and @hasDecl(I, "FrameLayout")) I.FrameLayout{
+            var frame_layout = if (!is_aarch64 and @hasDecl(I, "FrameLayout")) I.FrameLayout{
                 .setup_area_size = if (needs_frame) 16 else 0, // RBP + return addr
-                .clobber_size = 0, // No callee-saved regs for now
+                .clobber_size = x64_clobber_size,
                 .fixed_frame_storage_size = 0,
                 .outgoing_args_size = 0,
                 .stackslots_size = frame_size,
+                .num_clobbered_callee_saves = x64_num_clobbered,
             } else void{};
+
+            // Copy clobbered registers to frame layout
+            if (!is_aarch64 and @hasDecl(I, "FrameLayout")) {
+                for (0..x64_num_clobbered) |i| {
+                    frame_layout.clobbered_callee_saves[i] = x64_clobbered_regs[i];
+                }
+            }
 
             // ================================================================
             // ARM64-specific: Collect clobbered callee-saved registers

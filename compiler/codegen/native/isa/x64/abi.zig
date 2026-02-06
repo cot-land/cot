@@ -820,55 +820,11 @@ pub const UnwindInst = union(enum) {
 };
 
 //=============================================================================
-// PRegSet for x64
+// PRegSet for x64 - import from inst/mod.zig (which uses regalloc's PRegSet)
 //=============================================================================
 
-/// A set of physical registers for x64.
-pub const PRegSet = struct {
-    /// Bitmap of integer registers (rax-r15).
-    int_regs: u16 = 0,
-    /// Bitmap of vector/float registers (xmm0-xmm15).
-    vec_regs: u16 = 0,
-
-    pub const empty = PRegSet{};
-
-    /// Add a register to the set.
-    pub fn with(self: PRegSet, preg: PReg) PRegSet {
-        var result = self;
-        switch (preg.class()) {
-            .int => result.int_regs |= @as(u16, 1) << @intCast(preg.hwEnc()),
-            .float => result.vec_regs |= @as(u16, 1) << @intCast(preg.hwEnc()),
-            .vector => unreachable,
-        }
-        return result;
-    }
-
-    /// Add a register to the set (mutable).
-    pub fn add(self: *PRegSet, preg: PReg) void {
-        switch (preg.class()) {
-            .int => self.int_regs |= @as(u16, 1) << @intCast(preg.hwEnc()),
-            .float => self.vec_regs |= @as(u16, 1) << @intCast(preg.hwEnc()),
-            .vector => unreachable,
-        }
-    }
-
-    /// Check if a register is in the set.
-    pub fn contains(self: PRegSet, preg: PReg) bool {
-        return switch (preg.class()) {
-            .int => (self.int_regs & (@as(u16, 1) << @intCast(preg.hwEnc()))) != 0,
-            .float => (self.vec_regs & (@as(u16, 1) << @intCast(preg.hwEnc()))) != 0,
-            .vector => false,
-        };
-    }
-
-    /// Union of two sets.
-    pub fn unionWith(self: PRegSet, other: PRegSet) PRegSet {
-        return .{
-            .int_regs = self.int_regs | other.int_regs,
-            .vec_regs = self.vec_regs | other.vec_regs,
-        };
-    }
-};
+/// Use the regalloc-compatible PRegSet that supports the full register space.
+pub const PRegSet = inst.PRegSet;
 
 //=============================================================================
 // Default clobber sets
@@ -942,39 +898,67 @@ pub fn createRegEnv(enable_pinned_reg: bool) MachineEnv {
 
 //=============================================================================
 // Default clobber sets
+// Using regalloc-compatible PRegSet with .with() for compile-time construction
 //=============================================================================
 
 /// System V x64 clobbers: rax, rcx, rdx, rsi, rdi, r8-r11, and all xmm.
 pub const DEFAULT_SYSV_CLOBBERS: PRegSet = blk: {
-    var set = PRegSet.empty;
-    // Caller-saved GPRs
-    set.int_regs |= (1 << GprEnc.RAX) | (1 << GprEnc.RCX) | (1 << GprEnc.RDX);
-    set.int_regs |= (1 << GprEnc.RSI) | (1 << GprEnc.RDI);
-    set.int_regs |= (1 << GprEnc.R8) | (1 << GprEnc.R9) | (1 << GprEnc.R10) | (1 << GprEnc.R11);
-    // All XMM are caller-saved in System V
-    set.vec_regs = 0xFFFF;
+    // Start with empty set and add caller-saved GPRs
+    var set = PRegSet.empty()
+        .with(gprPreg(GprEnc.RAX))
+        .with(gprPreg(GprEnc.RCX))
+        .with(gprPreg(GprEnc.RDX))
+        .with(gprPreg(GprEnc.RSI))
+        .with(gprPreg(GprEnc.RDI))
+        .with(gprPreg(GprEnc.R8))
+        .with(gprPreg(GprEnc.R9))
+        .with(gprPreg(GprEnc.R10))
+        .with(gprPreg(GprEnc.R11));
+    // All XMM are caller-saved in System V (xmm0-xmm15)
+    var i: u8 = 0;
+    while (i < 16) : (i += 1) {
+        set = set.with(fprPreg(i));
+    }
     break :blk set;
 };
 
 /// Windows x64 clobbers: rax, rcx, rdx, r8-r11, xmm0-xmm5.
 pub const DEFAULT_WIN64_CLOBBERS: PRegSet = blk: {
-    var set = PRegSet.empty;
-    // Caller-saved GPRs
-    set.int_regs |= (1 << GprEnc.RAX) | (1 << GprEnc.RCX) | (1 << GprEnc.RDX);
-    set.int_regs |= (1 << GprEnc.R8) | (1 << GprEnc.R9) | (1 << GprEnc.R10) | (1 << GprEnc.R11);
+    // Caller-saved GPRs (note: RSI/RDI are callee-saved on Windows!)
+    var set = PRegSet.empty()
+        .with(gprPreg(GprEnc.RAX))
+        .with(gprPreg(GprEnc.RCX))
+        .with(gprPreg(GprEnc.RDX))
+        .with(gprPreg(GprEnc.R8))
+        .with(gprPreg(GprEnc.R9))
+        .with(gprPreg(GprEnc.R10))
+        .with(gprPreg(GprEnc.R11));
     // Only XMM0-5 are caller-saved in Windows
-    set.vec_regs = 0x003F;
+    var i: u8 = 0;
+    while (i < 6) : (i += 1) {
+        set = set.with(fprPreg(i));
+    }
     break :blk set;
 };
 
 /// All registers clobbered (for exceptions).
-pub const ALL_CLOBBERS: PRegSet = .{
-    .int_regs = 0xFFFF,
-    .vec_regs = 0xFFFF,
+pub const ALL_CLOBBERS: PRegSet = blk: {
+    var set = PRegSet.empty();
+    // All GPRs
+    var i: u8 = 0;
+    while (i < 16) : (i += 1) {
+        set = set.with(gprPreg(i));
+    }
+    // All XMMs
+    i = 0;
+    while (i < 16) : (i += 1) {
+        set = set.with(fprPreg(i));
+    }
+    break :blk set;
 };
 
 /// No clobbers.
-pub const NO_CLOBBERS: PRegSet = PRegSet.empty;
+pub const NO_CLOBBERS: PRegSet = PRegSet.empty();
 
 //=============================================================================
 // X64MachineDeps - main ABI implementation
@@ -2079,7 +2063,7 @@ test "FrameLayout" {
 }
 
 test "PRegSet" {
-    var set = PRegSet.empty;
+    var set = PRegSet.empty();
 
     // Add RAX
     set.add(PReg.init(GprEnc.RAX, .int));
@@ -2091,10 +2075,11 @@ test "PRegSet" {
     try std.testing.expect(set.contains(PReg.init(XmmEnc.XMM0, .float)));
     try std.testing.expect(!set.contains(PReg.init(XmmEnc.XMM1, .float)));
 
-    // Test unionWith
-    var set2 = PRegSet.empty;
+    // Test union via unionFrom
+    var set2 = PRegSet.empty();
     set2.add(PReg.init(GprEnc.RBX, .int));
-    const combined = set.unionWith(set2);
+    var combined = set;
+    combined.unionFrom(set2);
     try std.testing.expect(combined.contains(PReg.init(GprEnc.RAX, .int)));
     try std.testing.expect(combined.contains(PReg.init(GprEnc.RBX, .int)));
 }

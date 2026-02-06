@@ -527,6 +527,28 @@ pub fn computeLiveness(
     // Check entry block has no liveins.
     // Port of regalloc2: if !self.liveins[self.func.entry_block().index()].is_empty() { return Err(EntryLivein) }
     if (!ctx.liveins.items[func.entryBlock().idx()].isEmpty()) {
+        std.debug.print("\n[liveness] EntryLivein error: entry block has live-in vregs:\n", .{});
+        std.debug.print("  entry block idx: {d}, num_vregs: {d}\n", .{ func.entryBlock().idx(), func.numVregs() });
+        var it = ctx.liveins.items[func.entryBlock().idx()].iter();
+        while (it.next()) |vreg_idx| {
+            std.debug.print("  vreg v{d}", .{vreg_idx});
+            // Find where this vreg is used
+            for (0..func.numBlocks()) |blk_idx| {
+                const block = Block.new(blk_idx);
+                const insns = func.blockInsns(block);
+                var inst_idx = insns.from.index;
+                while (inst_idx < insns.to.index) : (inst_idx += 1) {
+                    const inst = Inst.new(inst_idx);
+                    const operands = func.instOperands(inst);
+                    for (operands) |op| {
+                        if (op.vreg().vreg() == vreg_idx) {
+                            std.debug.print(" [inst {d} block {d} {s}]", .{ inst_idx, blk_idx, @tagName(op.kind()) });
+                        }
+                    }
+                }
+            }
+            std.debug.print("\n", .{});
+        }
         return error.EntryLivein;
     }
 }
