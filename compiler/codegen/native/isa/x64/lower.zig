@@ -534,7 +534,28 @@ pub const X64LowerBackend = struct {
             }
         }
 
+        // Check if we have a vmctx parameter using Function.specialParam
+        // vmctx is typically the first integer parameter (rdi)
+        const has_vmctx = ctx.f.specialParam(.vmctx) != null;
+
+        // If we have a vmctx parameter, move it to the pinned register (r15)
+        // MUST happen BEFORE Args instruction so regalloc edits for Args
+        // don't clobber rdi before we save vmctx.
+        // Port of Cranelift's set_pinned_reg pattern
+        if (has_vmctx) {
+            // vmctx is in rdi (first int arg), move to r15 (pinned reg)
+            // mov r15, rdi
+            ctx.emit(Inst{
+                .mov_r_r = .{
+                    .size = .size64,
+                    .src = Gpr.unwrapNew(regs.rdi()), // vmctx is in rdi
+                    .dst = WritableGpr.fromReg(Gpr.unwrapNew(regs.pinnedReg())),
+                },
+            }) catch return;
+        }
+
         // Emit the Args instruction for register arguments
+        // (regalloc edits may move params around, but vmctx is already saved)
         ctx.emit(Inst.genArgs(arg_pairs[0..arg_pairs_count])) catch return;
 
         // Emit loads for stack arguments
@@ -559,25 +580,6 @@ pub const X64LowerBackend = struct {
                     .size = .size64,
                     .src = amode,
                     .dst = vreg_gpr,
-                },
-            }) catch return;
-        }
-
-        // Check if we have a vmctx parameter using Function.specialParam
-        // vmctx is typically the first integer parameter (rdi)
-        const has_vmctx = ctx.f.specialParam(.vmctx) != null;
-
-        // If we have a vmctx parameter, move it to the pinned register (r15)
-        // Port of Cranelift's set_pinned_reg pattern
-        // This ensures vmctx is always available in r15, which is excluded from allocation
-        if (has_vmctx) {
-            // vmctx is in rdi (first int arg), move to r15 (pinned reg)
-            // mov r15, rdi
-            ctx.emit(Inst{
-                .mov_r_r = .{
-                    .size = .size64,
-                    .src = Gpr.unwrapNew(regs.rdi()), // vmctx is in rdi
-                    .dst = WritableGpr.fromReg(Gpr.unwrapNew(regs.pinnedReg())),
                 },
             }) catch return;
         }
