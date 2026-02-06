@@ -1137,11 +1137,20 @@ pub const Driver = struct {
                 }
             }
             var params: [16]wasm.ValType = undefined;
-            for (0..param_count) |i| {
-                params[i] = .i64;
+            for (ir_func.params, 0..) |param, i| {
+                const is_float = param.type_idx == types_mod.TypeRegistry.F64 or
+                    param.type_idx == types_mod.TypeRegistry.F32;
+                params[i] = if (is_float) .f64 else .i64;
             }
             const has_return = ir_func.return_type != types_mod.TypeRegistry.VOID;
-            const results: []const wasm.ValType = if (has_return) &[_]wasm.ValType{.i64} else &[_]wasm.ValType{};
+            const ret_is_float = ir_func.return_type == types_mod.TypeRegistry.F64 or
+                ir_func.return_type == types_mod.TypeRegistry.F32;
+            const results: []const wasm.ValType = if (!has_return)
+                &[_]wasm.ValType{}
+            else if (ret_is_float)
+                &[_]wasm.ValType{.f64}
+            else
+                &[_]wasm.ValType{.i64};
 
             // Add function type to linker
             const type_idx = try linker.addType(params[0..param_count], results);

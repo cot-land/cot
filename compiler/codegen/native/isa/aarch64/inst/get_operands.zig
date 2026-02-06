@@ -531,6 +531,10 @@ pub fn getOperands(inst: *Inst, visitor: *OperandVisitor) void {
             visitor.regDef(&p.rd);
             visitor.regUse(&p.rn);
         },
+        .mov_to_fpu => |*p| {
+            visitor.regDef(&p.rd); // float register (def)
+            visitor.regUse(&p.rn); // int register (use)
+        },
         .fpu_round => |*p| {
             visitor.regDef(&p.rd);
             visitor.regUse(&p.rn);

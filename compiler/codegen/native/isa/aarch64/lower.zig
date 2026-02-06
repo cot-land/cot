@@ -1289,22 +1289,84 @@ pub const AArch64LowerBackend = struct {
     fn lowerFconst(self: *const Self, ctx: *LowerCtx, ir_inst: ClifInst) ?InstOutput {
         _ = self;
         const ty = ctx.outputTy(ir_inst, 0);
+        const fpu_size = scalarSizeFromType(ty) orelse return null;
+        const data = ctx.data(ir_inst);
 
+        // Get float constant bit pattern
+        // Cranelift: f64const stores as unary_ieee64, f32const as unary_ieee32
+        const is_f32 = ty.eql(ClifType.F32);
+        const bits: u64 = if (is_f32)
+            @as(u64, @as(u32, @bitCast(data.unary_ieee32.imm)))
+        else
+            @bitCast(data.unary_ieee64.imm);
+
+        // Cranelift pattern (inst.isle:4071):
+        //   (rule (lower (has_type $F64 (f64const (u64_from_ieee64 n))))
+        //     (mov_to_fpu (imm $I64 (ImmExtend.Zero) n) (ScalarSize.Size64)))
+        // Step 1: Load constant bits into GPR temp (integer movz/movk)
+        const int_size: OperandSize = if (is_f32) .size32 else .size64;
+        const int_ty = if (is_f32) ClifType.I32 else ClifType.I64;
+        const gpr_tmp = ctx.allocTmp(int_ty) catch return null;
+        const gpr_reg = gpr_tmp.onlyReg() orelse return null;
+
+        // Emit movz + movk (same pattern as lowerIconst)
+        if (MoveWideConst.maybeFromU64(bits)) |imm| {
+            ctx.emit(Inst{ .mov_wide = .{
+                .op = .movz,
+                .rd = gpr_reg,
+                .imm = imm,
+                .size = int_size,
+            } }) catch return null;
+        } else {
+            // Multi-instruction: movz for bits 0-15, movk for higher halfwords
+            ctx.emit(Inst{ .mov_wide = .{
+                .op = .movz,
+                .rd = gpr_reg,
+                .imm = MoveWideConst.maybeWithShift(@truncate(bits & 0xFFFF), 0) orelse return null,
+                .size = int_size,
+            } }) catch return null;
+
+            const bits_16_31: u16 = @truncate((bits >> 16) & 0xFFFF);
+            if (bits_16_31 != 0) {
+                ctx.emit(Inst{ .mov_wide = .{
+                    .op = .movk,
+                    .rd = gpr_reg,
+                    .imm = MoveWideConst.maybeWithShift(bits_16_31, 16) orelse return null,
+                    .size = int_size,
+                } }) catch return null;
+            }
+
+            if (int_size == .size64) {
+                const bits_32_47: u16 = @truncate((bits >> 32) & 0xFFFF);
+                if (bits_32_47 != 0) {
+                    ctx.emit(Inst{ .mov_wide = .{
+                        .op = .movk,
+                        .rd = gpr_reg,
+                        .imm = MoveWideConst.maybeWithShift(bits_32_47, 32) orelse return null,
+                        .size = int_size,
+                    } }) catch return null;
+                }
+
+                const bits_48_63: u16 = @truncate((bits >> 48) & 0xFFFF);
+                if (bits_48_63 != 0) {
+                    ctx.emit(Inst{ .mov_wide = .{
+                        .op = .movk,
+                        .rd = gpr_reg,
+                        .imm = MoveWideConst.maybeWithShift(bits_48_63, 48) orelse return null,
+                        .size = int_size,
+                    } }) catch return null;
+                }
+            }
+        }
+
+        // Step 2: FMOV from GPR to FPU (Cranelift: MovToFpu)
         const dst = ctx.allocTmp(ty) catch return null;
         const dst_reg = dst.onlyReg() orelse return null;
-
-        // For FP constants, we typically load from a constant pool
-        // or use fmov with immediate (limited to certain values)
-        // This is a placeholder - full implementation would check
-        // if the constant fits in fmov immediate or use constant pool
-        ctx.emit(Inst{
-            .mov_wide = .{
-                .op = .movz,
-                .rd = Writable(Reg).fromReg(dst_reg.toReg()),
-                .imm = MoveWideConst.maybeWithShift(0, 0) orelse return null,
-                .size = .size64,
-            },
-        }) catch return null;
+        ctx.emit(Inst{ .mov_to_fpu = .{
+            .rd = dst_reg,
+            .rn = gpr_reg.toReg(),
+            .size = fpu_size,
+        } }) catch return null;
 
         var output = InstOutput{};
         output.append(ValueRegs(Reg).one(dst_reg.toReg())) catch return null;

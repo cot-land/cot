@@ -289,6 +289,19 @@ pub const LivenessContext = struct {
         @memset(self.scratch_vreg_ranges.items, LiveRangeIndex.invalid());
     }
 
+    /// Record the class of a VReg from its operand.
+    /// Port of regalloc2 data_structures.rs:547 observe_vreg_class.
+    /// Must be called for every VReg encountered during liveness analysis
+    /// so that the class field is populated before merge/process phases.
+    pub fn observeVregClass(self: *Self, vreg: VReg) void {
+        const idx = vreg.vreg();
+        if (idx < self.vregs.items.len) {
+            const old_class = self.vregs.items[idx].class;
+            std.debug.assert(old_class == null or old_class.? == vreg.class());
+            self.vregs.items[idx].class = vreg.class();
+        }
+    }
+
     /// Add a live range for a vreg. Merges with previous range if contiguous.
     /// Ranges are built in reverse order (bottom-to-top instruction scan).
     pub fn addLiverangeToVreg(
@@ -462,6 +475,8 @@ pub fn computeLiveness(
             for (succs, 0..) |_, succ_idx| {
                 for (func.branchBlockparams(block, insns.last(), succ_idx)) |param| {
                     try live.set(param.vreg(), true);
+                    // Port of regalloc2 liveranges.rs:310
+                    ctx.observeVregClass(param);
                 }
             }
         }
@@ -481,6 +496,8 @@ pub fn computeLiveness(
                             .def => try live.set(op.vreg().vreg(), false),
                         }
                     }
+                    // Port of regalloc2 liveranges.rs:332
+                    ctx.observeVregClass(op.vreg());
                 }
             }
         }
@@ -488,6 +505,8 @@ pub fn computeLiveness(
         // Remove block params from live set
         for (func.blockParams(block)) |param| {
             try live.set(param.vreg(), false);
+            // Port of regalloc2 liveranges.rs:339
+            ctx.observeVregClass(param);
         }
 
         // Propagate to predecessors

@@ -851,7 +851,7 @@ pub fn VCode(comptime I: type) type {
             // Port of Cranelift's gen_prologue/gen_epilogue from abi.rs
             // Reference: cranelift/codegen/src/machinst/vcode.rs:868-876
             // ================================================================
-            const needs_frame = (function_calls != .None) or (frame_size > 0);
+            var needs_frame = (function_calls != .None) or (frame_size > 0);
 
             // ISA detection for architecture-specific code
             const is_aarch64 = @hasDecl(I, "is_aarch64");
@@ -876,26 +876,32 @@ pub fn VCode(comptime I: type) type {
                 var clobbered_set: u32 = 0;
                 const callee_save_mask: u32 = 0x1FF80000; // bits 19-28 (x19-x28)
 
-                // Add registers from regalloc moves (edits)
+                // Add integer registers from regalloc moves (edits)
+                // Must check class() to avoid confusing float PRegs (e.g. d22)
+                // with integer PRegs (e.g. x22) that share the same hwEnc.
                 for (output.edits.items) |edit_at_point| {
                     switch (edit_at_point.edit) {
                         .move => |m| {
                             if (m.to.asReg()) |preg| {
-                                const hw_enc = preg.hwEnc();
-                                if (hw_enc >= 19 and hw_enc <= 28) {
-                                    clobbered_set |= (@as(u32, 1) << @intCast(hw_enc));
+                                if (preg.class() == .int) {
+                                    const hw_enc = preg.hwEnc();
+                                    if (hw_enc >= 19 and hw_enc <= 28) {
+                                        clobbered_set |= (@as(u32, 1) << @intCast(hw_enc));
+                                    }
                                 }
                             }
                         },
                     }
                 }
 
-                // Add registers from instruction def operands
+                // Add integer registers from instruction def operands
                 for (output.allocs.items) |allocation| {
                     if (allocation.asReg()) |preg| {
-                        const hw_enc = preg.hwEnc();
-                        if (hw_enc >= 19 and hw_enc <= 28) {
-                            clobbered_set |= (@as(u32, 1) << @intCast(hw_enc));
+                        if (preg.class() == .int) {
+                            const hw_enc = preg.hwEnc();
+                            if (hw_enc >= 19 and hw_enc <= 28) {
+                                clobbered_set |= (@as(u32, 1) << @intCast(hw_enc));
+                            }
                         }
                     }
                 }
@@ -910,28 +916,33 @@ pub fn VCode(comptime I: type) type {
                     }
                 }
 
+                // If there are clobbered callee-saves, we need a frame
+                if (num_clobbered > 0) {
+                    needs_frame = true;
+                }
+
                 // Emit ARM64 prologue if needed
                 if (needs_frame) {
                     // stp fp, lr, [sp, #-16]!
                     try buffer.put4(0xa9bf7bfd);
                     // mov fp, sp
                     try buffer.put4(0x910003fd);
-                }
 
-                // Save clobbered callee-saved registers (ARM64)
-                var save_idx: usize = 0;
-                while (save_idx + 1 < num_clobbered) : (save_idx += 2) {
-                    const rt = clobbered_regs[save_idx];
-                    const rt2 = clobbered_regs[save_idx + 1];
-                    // stp rt, rt2, [sp, #-16]!
-                    const enc: u32 = 0xa9bf03e0 | (@as(u32, rt2) << 10) | @as(u32, rt);
-                    try buffer.put4(enc);
-                }
-                if (save_idx < num_clobbered) {
-                    const rt = clobbered_regs[save_idx];
-                    // str rt, [sp, #-16]!
-                    const enc: u32 = 0xf81f0fe0 | @as(u32, rt);
-                    try buffer.put4(enc);
+                    // Save clobbered callee-saved registers
+                    var save_idx: usize = 0;
+                    while (save_idx + 1 < num_clobbered) : (save_idx += 2) {
+                        const rt = clobbered_regs[save_idx];
+                        const rt2 = clobbered_regs[save_idx + 1];
+                        // stp rt, rt2, [sp, #-16]!
+                        const enc: u32 = 0xa9bf03e0 | (@as(u32, rt2) << 10) | @as(u32, rt);
+                        try buffer.put4(enc);
+                    }
+                    if (save_idx < num_clobbered) {
+                        const rt = clobbered_regs[save_idx];
+                        // str rt, [sp, #-16]!
+                        const enc: u32 = 0xf81f0fe0 | @as(u32, rt);
+                        try buffer.put4(enc);
+                    }
                 }
             }
 

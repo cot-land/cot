@@ -1441,9 +1441,16 @@ pub fn hasLoweringSideEffect(f: *const Function, inst: Inst) bool {
 /// Check if an instruction is a 64-bit constant.
 pub fn isConstant64Bit(f: *const Function, inst: Inst) ?u64 {
     const inst_data = f.dfg.getInst(inst);
-    if (inst_data.opcode() == .iconst) {
+    const opcode = inst_data.opcode();
+    if (opcode == .iconst) {
         // Extract the constant value from the immediate field
         return inst_data.getImmediateUnsigned();
+    }
+    if (opcode == .f64const) {
+        return @bitCast(inst_data.unary_ieee64.imm);
+    }
+    if (opcode == .f32const) {
+        return @as(u64, @as(u32, @bitCast(inst_data.unary_ieee32.imm)));
     }
     return null;
 }

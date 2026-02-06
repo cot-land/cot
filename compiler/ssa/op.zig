@@ -52,6 +52,10 @@ pub const Op = enum(u16) {
     add32f, sub32f, mul32f, div32f, neg32f, sqrt32f,
     add64f, sub64f, mul64f, div64f, neg64f, sqrt64f,
 
+    // === Float Comparisons ===
+    eq64f, ne64f, lt64f, le64f, gt64f, ge64f,
+    eq32f, ne32f, lt32f, le32f, gt32f, ge32f,
+
     // === Memory Operations ===
     load, store,
     load8, load16, load32, load64, store8, store16, store32, store64,
@@ -314,6 +318,14 @@ const op_info_table = blk: {
         table[@intFromEnum(op)] = .{ .name = @tagName(op), .arg_len = 2, .commutative = true };
     }
     for ([_]Op{ .lt, .le, .gt, .ge, .ult, .ule, .ugt, .uge }) |op| {
+        table[@intFromEnum(op)] = .{ .name = @tagName(op), .arg_len = 2 };
+    }
+
+    // Float comparisons (2 args, eq/ne commutative)
+    for ([_]Op{ .eq64f, .ne64f, .eq32f, .ne32f }) |op| {
+        table[@intFromEnum(op)] = .{ .name = @tagName(op), .arg_len = 2, .commutative = true };
+    }
+    for ([_]Op{ .lt64f, .le64f, .gt64f, .ge64f, .lt32f, .le32f, .gt32f, .ge32f }) |op| {
         table[@intFromEnum(op)] = .{ .name = @tagName(op), .arg_len = 2 };
     }
 

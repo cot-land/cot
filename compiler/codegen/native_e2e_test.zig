@@ -5,9 +5,7 @@
 //! Each test compiles a single Cot program, links it, runs it, and checks exit code.
 //! Returns 0 on success or a unique error code identifying which check failed.
 //!
-//! KNOWN BUG: Function calls produce infinite loops in native code due to the
-//! dispatch loop (br_table) not correctly re-reading PC_B on loop iteration.
-//! All tests here avoid function calls until this is fixed.
+//! Function calls, float locals, and Phase 3 language features all work.
 
 const std = @import("std");
 const Driver = @import("../driver.zig").Driver;
@@ -287,4 +285,26 @@ test "native: function call" {
         \\fn main() i64 { return double(10); }
     ;
     try expectExitCode(std.testing.allocator, code, 20, "func_call");
+}
+
+// ============================================================================
+// Float support: f64 locals, arithmetic, comparison
+// ============================================================================
+
+test "native: float locals" {
+    // Tests f64 locals compile, link, and run correctly.
+    // Prior bugs fixed:
+    // 1. machregToVec crash: missing observeVregClass in liveness.zig
+    // 2. SIGBUS: clobbered reg collection didn't check preg.class(),
+    //    treating float d22 as integer x22 (callee-saved), causing
+    //    stack imbalance (save without restore)
+    // 3. emitFpuLoadStore didn't call memFinalize for pseudo AModes
+    const code =
+        \\fn main() i64 {
+        \\    let x: f64 = 3.14;
+        \\    let y: f64 = 0.0;
+        \\    return 0;
+        \\}
+    ;
+    try expectExitCode(std.testing.allocator, code, 0, "float_locals");
 }

@@ -107,43 +107,45 @@ pub fn assemble(allocator: std.mem.Allocator, sym: *Symbol) !AssembledFunc {
     // Wasm params are locals 0..param_count-1 (not declared, part of func signature)
     // Declared locals start at index param_count:
     // - PC_B (i32) at index param_count (if dispatch loop)
-    // - Value locals (i64) at indices param_count+1, param_count+2, ...
+    // - i64 value locals at indices param_count+1, ..., param_count+N
+    // - f64 value locals at indices param_count+N+1, ..., param_count+N+M
 
     const param_count: u64 = sym.param_count;
+    const float_count: u64 = sym.float_local_count;
 
-    // Calculate number of declared i64 locals (value locals after PC_B)
+    // Calculate number of declared value locals (after PC_B)
     // max_local_idx includes params, so subtract param_count and 1 for PC_B
-    const declared_i64_count: u64 = if (max_local_idx > param_count + 1)
+    const total_value_locals: u64 = if (max_local_idx > param_count + 1)
         max_local_idx - param_count - 1
     else
         0;
+    const i64_value_locals: u64 = if (total_value_locals >= float_count) total_value_locals - float_count else total_value_locals;
 
-    if (has_dispatch_loop) {
-        // Need PC_B as i32 local at index param_count
-        if (declared_i64_count > 0) {
-            // Two local groups: 1 i32 (PC_B) + N i64 (value locals)
-            try writeULEB128(allocator, &w, 2); // 2 local groups
+    // Count how many local groups we need
+    var num_groups: u64 = 0;
+    if (has_dispatch_loop) num_groups += 1; // PC_B (i32)
+    if (i64_value_locals > 0) num_groups += 1; // i64 locals
+    if (float_count > 0) num_groups += 1; // f64 locals
+
+    if (num_groups == 0 and !has_dispatch_loop and max_local_idx <= param_count) {
+        try writeULEB128(allocator, &w, 0); // 0 local groups
+    } else {
+        try writeULEB128(allocator, &w, num_groups);
+        if (has_dispatch_loop) {
             try writeULEB128(allocator, &w, 1); // 1 i32 local (PC_B)
             try w.append(allocator, @intFromEnum(c.ValType.i32));
-            try writeULEB128(allocator, &w, declared_i64_count); // N i64 locals
-            try w.append(allocator, @intFromEnum(c.ValType.i64));
-        } else {
-            // Just PC_B
-            try writeULEB128(allocator, &w, 1); // 1 local group
-            try writeULEB128(allocator, &w, 1); // 1 i32 local
-            try w.append(allocator, @intFromEnum(c.ValType.i32));
         }
-    } else if (max_local_idx > param_count) {
-        // No dispatch loop, just i64 value locals (after params)
-        const declared_locals = max_local_idx - param_count;
-        try writeULEB128(allocator, &w, 1); // 1 local group
-        try writeULEB128(allocator, &w, declared_locals); // count
-        try w.append(allocator, @intFromEnum(c.ValType.i64)); // type
-    } else {
-        try writeULEB128(allocator, &w, 0); // 0 local groups
+        if (i64_value_locals > 0) {
+            try writeULEB128(allocator, &w, i64_value_locals);
+            try w.append(allocator, @intFromEnum(c.ValType.i64));
+        }
+        if (float_count > 0) {
+            try writeULEB128(allocator, &w, float_count);
+            try w.append(allocator, @intFromEnum(c.ValType.f64));
+        }
     }
 
-    debugLog( "  {d} total locals, {d} params, {d} declared", .{ max_local_idx, param_count, if (has_dispatch_loop) declared_i64_count + 1 else max_local_idx - param_count });
+    debugLog( "  {d} total locals, {d} params, {d} i64, {d} f64", .{ max_local_idx, param_count, i64_value_locals, float_count });
 
     // ========================================================================
     // Encode instructions

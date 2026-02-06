@@ -98,6 +98,7 @@ pub fn generateFunc(
     var sym = Symbol.init(ssa_func.name);
     sym.frame_size = gen_state.frame_size;
     sym.param_count = gen_state.param_count;
+    sym.float_local_count = gen_state.float_local_count;
     sym.text = gen_state.builder.first;
 
     // Step 2: Preprocess - transform pseudo-instructions, add dispatch loop (Go's wasmobj.go)

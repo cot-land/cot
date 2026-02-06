@@ -19,6 +19,7 @@ const Block = @import("../block.zig").Block;
 const Func = @import("../func.zig").Func;
 const Op = @import("../op.zig").Op;
 const TypeIndex = @import("../value.zig").TypeIndex;
+const TypeRegistry = @import("../../frontend/types.zig").TypeRegistry;
 const debug = @import("../../pipeline_debug.zig");
 
 /// Lower a function's generic ops to Wasm-specific ops.
@@ -138,6 +139,23 @@ fn lowerValue(v: *Value) bool {
         .sqrt32f => .wasm_f32_sqrt,
 
         // ====================================================================
+        // Float Comparisons
+        // ====================================================================
+        .eq64f => .wasm_f64_eq,
+        .ne64f => .wasm_f64_ne,
+        .lt64f => .wasm_f64_lt,
+        .le64f => .wasm_f64_le,
+        .gt64f => .wasm_f64_gt,
+        .ge64f => .wasm_f64_ge,
+
+        .eq32f => .wasm_f32_eq,
+        .ne32f => .wasm_f32_ne,
+        .lt32f => .wasm_f32_lt,
+        .le32f => .wasm_f32_le,
+        .gt32f => .wasm_f32_gt,
+        .ge32f => .wasm_f32_ge,
+
+        // ====================================================================
         // Type Conversions
         // ====================================================================
         .sign_ext32to64 => .wasm_i64_extend_i32_s,
@@ -153,9 +171,9 @@ fn lowerValue(v: *Value) bool {
         .cvt32fto64 => .wasm_i64_trunc_f32_s,
 
         // ====================================================================
-        // Memory Operations
+        // Memory Operations (type-aware for float support)
         // ====================================================================
-        .load, .load64 => .wasm_i64_load,
+        .load, .load64 => if (isFloatType(v.type_idx)) .wasm_f64_load else .wasm_i64_load,
         .load32 => .wasm_i32_load,
         .load32s => .wasm_i64_load32_s,
         .load16 => .wasm_i64_load16_u,
@@ -163,7 +181,7 @@ fn lowerValue(v: *Value) bool {
         .load8 => .wasm_i64_load8_u,
         .load8s => .wasm_i64_load8_s,
 
-        .store, .store64 => .wasm_i64_store,
+        .store, .store64 => if (v.args.len >= 2 and isFloatType(v.args[1].type_idx)) .wasm_f64_store else .wasm_i64_store,
         .store32 => .wasm_i64_store32,
         .store16 => .wasm_i64_store16,
         .store8 => .wasm_i64_store8,
@@ -339,6 +357,10 @@ fn lowerValue(v: *Value) bool {
         return true;
     }
     return false;
+}
+
+fn isFloatType(type_idx: TypeIndex) bool {
+    return type_idx == TypeRegistry.F64 or type_idx == TypeRegistry.F32 or type_idx == TypeRegistry.UNTYPED_FLOAT;
 }
 
 // ============================================================================

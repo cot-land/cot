@@ -1218,6 +1218,14 @@ pub const Inst = union(enum) {
         rn: Reg,
     },
 
+    // Move from GPR to FPU register (FMOV Dd, Xn / FMOV Sd, Wn).
+    // Cranelift: MovToFpu { rd, rn, size }
+    mov_to_fpu: struct {
+        rd: Writable(Reg), // FPU destination
+        rn: Reg, // GPR source
+        size: ScalarSize,
+    },
+
     // FPU load (32-bit).
     fpu_load32: struct {
         rd: Writable(Reg),
@@ -1533,8 +1541,17 @@ pub const Inst = union(enum) {
     },
 
     /// Generic constructor for a load (zero-extending where appropriate).
+    /// Port of Cranelift mod.rs:207-246 gen_load
     pub fn genLoad(into_reg: Writable(Reg), mem: AMode, ty: Type, flags: MemFlags) Inst {
-        // Use bits() for type comparison since CLIF Type is a struct, not enum
+        if (ty.isFloat() or ty.isVector()) {
+            const bits_val = ty.bits();
+            return switch (bits_val) {
+                128 => Inst{ .fpu_load128 = .{ .rd = into_reg, .mem = mem, .flags = flags } },
+                64 => Inst{ .fpu_load64 = .{ .rd = into_reg, .mem = mem, .flags = flags } },
+                32 => Inst{ .fpu_load32 = .{ .rd = into_reg, .mem = mem, .flags = flags } },
+                else => unreachable,
+            };
+        }
         const bits_val = ty.bits();
         if (bits_val <= 8) return Inst{ .uload8 = .{ .rd = into_reg, .mem = mem, .flags = flags } };
         if (bits_val <= 16) return Inst{ .uload16 = .{ .rd = into_reg, .mem = mem, .flags = flags } };
@@ -1544,8 +1561,17 @@ pub const Inst = union(enum) {
     }
 
     /// Generic constructor for a store.
+    /// Port of Cranelift mod.rs:249-287 gen_store
     pub fn genStore(mem: AMode, from_reg: Reg, ty: Type, flags: MemFlags) Inst {
-        // Use bits() for type comparison since CLIF Type is a struct, not enum
+        if (ty.isFloat() or ty.isVector()) {
+            const bits_val = ty.bits();
+            return switch (bits_val) {
+                128 => Inst{ .fpu_store128 = .{ .rd = from_reg, .mem = mem, .flags = flags } },
+                64 => Inst{ .fpu_store64 = .{ .rd = from_reg, .mem = mem, .flags = flags } },
+                32 => Inst{ .fpu_store32 = .{ .rd = from_reg, .mem = mem, .flags = flags } },
+                else => unreachable,
+            };
+        }
         const bits_val = ty.bits();
         if (bits_val <= 8) return Inst{ .store8 = .{ .rd = from_reg, .mem = mem, .flags = flags } };
         if (bits_val <= 16) return Inst{ .store16 = .{ .rd = from_reg, .mem = mem, .flags = flags } };

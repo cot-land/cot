@@ -27,6 +27,7 @@ const BlockKind = @import("../../ssa/block.zig").BlockKind;
 const SsaFunc = @import("../../ssa/func.zig").Func;
 const SsaOp = @import("../../ssa/op.zig").Op;
 
+const TypeRegistry = @import("../../frontend/types.zig").TypeRegistry;
 const debug = @import("../../pipeline_debug.zig");
 
 /// Error type for code generation
@@ -67,6 +68,9 @@ pub const GenState = struct {
 
     /// Frame size for locals
     frame_size: i32 = 0,
+
+    /// Number of f64 locals (at end of declared local range, after all i64 locals)
+    float_local_count: u32 = 0,
 
     /// Maps function names to Wasm function indices
     func_indices: ?*const FuncIndexMap = null,
@@ -442,6 +446,64 @@ pub const GenState = struct {
                 _ = try self.builder.append(.i64_eqz);
             },
 
+            // Float arithmetic (f64)
+            .wasm_f64_add => {
+                try self.getValue64(v.args[0]);
+                try self.getValue64(v.args[1]);
+                _ = try self.builder.append(.f64_add);
+            },
+            .wasm_f64_sub => {
+                try self.getValue64(v.args[0]);
+                try self.getValue64(v.args[1]);
+                _ = try self.builder.append(.f64_sub);
+            },
+            .wasm_f64_mul => {
+                try self.getValue64(v.args[0]);
+                try self.getValue64(v.args[1]);
+                _ = try self.builder.append(.f64_mul);
+            },
+            .wasm_f64_div => {
+                try self.getValue64(v.args[0]);
+                try self.getValue64(v.args[1]);
+                _ = try self.builder.append(.f64_div);
+            },
+            .wasm_f64_neg => {
+                try self.getValue64(v.args[0]);
+                _ = try self.builder.append(.f64_neg);
+            },
+
+            // Float comparisons (f64) - produce i32
+            .wasm_f64_eq => {
+                try self.getValue64(v.args[0]);
+                try self.getValue64(v.args[1]);
+                _ = try self.builder.append(.f64_eq);
+            },
+            .wasm_f64_ne => {
+                try self.getValue64(v.args[0]);
+                try self.getValue64(v.args[1]);
+                _ = try self.builder.append(.f64_ne);
+            },
+            .wasm_f64_lt => {
+                try self.getValue64(v.args[0]);
+                try self.getValue64(v.args[1]);
+                _ = try self.builder.append(.f64_lt);
+            },
+            .wasm_f64_le => {
+                try self.getValue64(v.args[0]);
+                try self.getValue64(v.args[1]);
+                _ = try self.builder.append(.f64_le);
+            },
+            .wasm_f64_gt => {
+                try self.getValue64(v.args[0]);
+                try self.getValue64(v.args[1]);
+                _ = try self.builder.append(.f64_gt);
+            },
+            .wasm_f64_ge => {
+                try self.getValue64(v.args[0]);
+                try self.getValue64(v.args[1]);
+                _ = try self.builder.append(.f64_ge);
+            },
+
             // Memory operations
             .wasm_i64_load => {
                 try self.getValue64(v.args[0]);
@@ -455,6 +517,21 @@ pub const GenState = struct {
                 try self.getValue64(v.args[1]); // value
                 const p = try self.builder.append(.i64_store);
                 p.to = prog_mod.constAddr(v.aux_int); // offset
+            },
+
+            // Float memory operations
+            .wasm_f64_load => {
+                try self.getValue64(v.args[0]);
+                _ = try self.builder.append(.i32_wrap_i64);
+                const p = try self.builder.append(.f64_load);
+                p.from = prog_mod.constAddr(v.aux_int);
+            },
+            .wasm_f64_store => {
+                try self.getValue64(v.args[0]); // address
+                _ = try self.builder.append(.i32_wrap_i64);
+                try self.getValue64(v.args[1]); // value
+                const p = try self.builder.append(.f64_store);
+                p.to = prog_mod.constAddr(v.aux_int);
             },
 
             // Sized memory loads - Go reference: wasm/ssa.go loadOp()
@@ -765,7 +842,8 @@ pub const GenState = struct {
         }
     }
 
-    /// Allocate locals for values that need them
+    /// Allocate locals for values that need them.
+    /// Two-pass: i64 locals first, then f64 locals (so assemble.zig can use contiguous groups).
     fn allocateLocals(self: *GenState) !void {
         // Count parameters - Wasm assigns them to locals 0..param_count-1 automatically
         for (self.func.blocks.items) |block| {
@@ -784,19 +862,38 @@ pub const GenState = struct {
         // Value locals start after PC_B (param_count+1, param_count+2, ...)
         self.next_local = self.param_count + 1;
 
-        // Allocate locals for other values
+        // Pass 1: Allocate i64 locals (non-float values)
         for (self.func.blocks.items) |block| {
             for (block.values.items) |v| {
                 if (v.op == .arg) continue;
                 if (v.uses == 0 and !v.hasSideEffects()) continue;
                 if (isRematerializable(v)) continue;
                 if (isCmp(v)) continue;
+                if (isFloatType(v.type_idx)) continue; // Skip floats for pass 2
 
                 const local_idx = self.next_local;
                 self.next_local += 1;
                 try self.value_to_local.put(self.allocator, v.id, local_idx);
             }
         }
+
+        // Pass 2: Allocate f64 locals (float values - contiguous at end)
+        var float_count: u32 = 0;
+        for (self.func.blocks.items) |block| {
+            for (block.values.items) |v| {
+                if (v.op == .arg) continue;
+                if (v.uses == 0 and !v.hasSideEffects()) continue;
+                if (isRematerializable(v)) continue;
+                if (isCmp(v)) continue;
+                if (!isFloatType(v.type_idx)) continue; // Only floats in pass 2
+
+                const local_idx = self.next_local;
+                self.next_local += 1;
+                float_count += 1;
+                try self.value_to_local.put(self.allocator, v.id, local_idx);
+            }
+        }
+        self.float_local_count = float_count;
     }
 
     /// Compute byte offset for a local variable by summing sizes of all preceding locals.
@@ -868,6 +965,10 @@ fn isCmp(v: *const SsaValue) bool {
         => true,
         else => false,
     };
+}
+
+fn isFloatType(type_idx: @import("../../ssa/value.zig").TypeIndex) bool {
+    return type_idx == TypeRegistry.F64 or type_idx == TypeRegistry.F32 or type_idx == TypeRegistry.UNTYPED_FLOAT;
 }
 
 // ============================================================================

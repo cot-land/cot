@@ -122,13 +122,22 @@ fn compileToWasm(backing: std.mem.Allocator, code: []const u8) !WasmResult {
         try lower_wasm.lower(ssa_func);
 
         // Determine function signature
-        const param_count = countParams(ssa_func);
+        const param_count: u32 = @intCast(ir_func.params.len);
         var params: [16]ValType = undefined;
-        for (0..param_count) |i| {
-            params[i] = .i64;
+        for (ir_func.params, 0..) |param, i| {
+            const is_float = param.type_idx == types.TypeRegistry.F64 or
+                param.type_idx == types.TypeRegistry.F32;
+            params[i] = if (is_float) .f64 else .i64;
         }
         const has_return = ir_func.return_type != types.TypeRegistry.VOID;
-        const results: []const ValType = if (has_return) &[_]ValType{.i64} else &[_]ValType{};
+        const ret_is_float = ir_func.return_type == types.TypeRegistry.F64 or
+            ir_func.return_type == types.TypeRegistry.F32;
+        const results: []const ValType = if (!has_return)
+            &[_]ValType{}
+        else if (ret_is_float)
+            &[_]ValType{.f64}
+        else
+            &[_]ValType{.i64};
 
         // Add type
         const type_idx = try module.addFuncType(params[0..param_count], results);

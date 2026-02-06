@@ -328,8 +328,14 @@ pub const FuncTranslator = struct {
             const variable = try self.builder.declareVar(var_type);
             self.locals.appendAssumeCapacity(variable);
 
-            // Initialize local to zero
-            const zero = try self.builder.ins().iconst(var_type, 0);
+            // Initialize local to zero (Cranelift: func_translator.rs:174-195)
+            const zero = if (var_type.isFloat())
+                if (var_type.eql(Type.F32))
+                    try self.builder.ins().f32const(0.0)
+                else
+                    try self.builder.ins().f64const(0.0)
+            else
+                try self.builder.ins().iconst(var_type, 0);
             try self.builder.defVar(variable, zero);
         }
     }

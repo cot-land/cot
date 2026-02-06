@@ -772,9 +772,17 @@ fn encDmbIsh() u32 {
 }
 
 /// Helper to emit FPU load/store instructions.
-fn emitFpuLoadStore(sink: *MachBuffer, op: u32, rd: Reg, mem: AMode, is_load: bool) !void {
+fn emitFpuLoadStore(sink: *MachBuffer, op: u32, rd: Reg, mem: AMode, is_load: bool, state: *const EmitState) !void {
     _ = is_load;
-    switch (mem) {
+
+    // Finalize pseudo addressing modes (slot_offset, sp_offset, etc.)
+    // Matches Cranelift emit.rs which calls mem_finalize() for FPU loads/stores
+    // just like integer loads/stores.
+    const finalized = memFinalize(mem, state);
+    try emitPreInsts(sink, &finalized);
+    const final_mem = finalized.amode;
+
+    switch (final_mem) {
         .unscaled => |m| {
             try sink.put4(encLdstSimm9(op, m.simm9, 0b00, m.rn, rd));
         },
@@ -800,7 +808,7 @@ fn emitFpuLoadStore(sink: *MachBuffer, op: u32, rd: Reg, mem: AMode, is_load: bo
             try sink.put4(encLdstSimm9(op, m.simm9, 0b01, stackReg(), rd));
         },
         .label, .fp_offset, .sp_offset, .incoming_arg, .slot_offset, .reg_offset, .constant => {
-            @panic("Pseudo addressing mode not resolved before emission");
+            @panic("Pseudo addressing mode not resolved by memFinalize");
         },
     }
 }
@@ -1384,6 +1392,17 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, emit_info: *const EmitInfo, st
             try sink.put4(encFputoint(enc >> 16, payload.rd, payload.rn));
         },
 
+        // Move from GPR to FPU register (FMOV Dd, Xn / FMOV Sd, Wn)
+        // Cranelift emit.rs:2250-2258
+        .mov_to_fpu => |payload| {
+            const template: u32 = switch (payload.size) {
+                .size32 => 0b000_11110_00_1_00_111_000000_00000_00000, // FMOV Sd, Wn
+                .size64 => 0b100_11110_01_1_00_111_000000_00000_00000, // FMOV Dd, Xn
+                else => unreachable,
+            };
+            try sink.put4(template | (machregToGpr(payload.rn) << 5) | machregToVec(payload.rd.toReg()));
+        },
+
         // Integer to FPU conversion
         .int_to_fpu => |payload| {
             const enc: u32 = switch (payload.op) {
@@ -1402,33 +1421,33 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, emit_info: *const EmitInfo, st
         // FPU loads
         .fpu_load32 => |payload| {
             const op: u32 = 0b1011110001; // LDR (32-bit FP)
-            try emitFpuLoadStore(sink, op, payload.rd.toReg(), payload.mem, true);
+            try emitFpuLoadStore(sink, op, payload.rd.toReg(), payload.mem, true, state);
         },
 
         .fpu_load64 => |payload| {
             const op: u32 = 0b1111110001; // LDR (64-bit FP)
-            try emitFpuLoadStore(sink, op, payload.rd.toReg(), payload.mem, true);
+            try emitFpuLoadStore(sink, op, payload.rd.toReg(), payload.mem, true, state);
         },
 
         .fpu_load128 => |payload| {
             const op: u32 = 0b0011110011; // LDR (128-bit FP/SIMD)
-            try emitFpuLoadStore(sink, op, payload.rd.toReg(), payload.mem, true);
+            try emitFpuLoadStore(sink, op, payload.rd.toReg(), payload.mem, true, state);
         },
 
         // FPU stores
         .fpu_store32 => |payload| {
             const op: u32 = 0b1011110000; // STR (32-bit FP)
-            try emitFpuLoadStore(sink, op, payload.rd, payload.mem, false);
+            try emitFpuLoadStore(sink, op, payload.rd, payload.mem, false, state);
         },
 
         .fpu_store64 => |payload| {
             const op: u32 = 0b1111110000; // STR (64-bit FP)
-            try emitFpuLoadStore(sink, op, payload.rd, payload.mem, false);
+            try emitFpuLoadStore(sink, op, payload.rd, payload.mem, false, state);
         },
 
         .fpu_store128 => |payload| {
             const op: u32 = 0b0011110010; // STR (128-bit FP/SIMD)
-            try emitFpuLoadStore(sink, op, payload.rd, payload.mem, false);
+            try emitFpuLoadStore(sink, op, payload.rd, payload.mem, false, state);
         },
 
         .mov_to_nzcv => |payload| {

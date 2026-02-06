@@ -544,7 +544,17 @@ pub const SSABuilder = struct {
         const left = try self.convertNode(b.left) orelse return error.MissingValue;
         const right = try self.convertNode(b.right) orelse return error.MissingValue;
 
-        const op_kind: Op = switch (b.op) {
+        // For comparisons, result type is bool - check operand type instead
+        const operand_type = left.type_idx;
+        const is_float = operand_type == TypeRegistry.F64 or operand_type == TypeRegistry.F32 or operand_type == TypeRegistry.UNTYPED_FLOAT;
+
+        const op_kind: Op = if (is_float) switch (b.op) {
+            .add => .add64f, .sub => .sub64f, .mul => .mul64f, .div => .div64f,
+            .eq => .eq64f, .ne => .ne64f, .lt => .lt64f, .le => .le64f, .gt => .gt64f, .ge => .ge64f,
+            .mod => return error.MissingValue, // No float modulo in Wasm
+            .bit_and, .bit_or, .bit_xor, .shl, .shr => return error.MissingValue, // Bitwise ops don't apply to floats
+            .@"and", .@"or" => unreachable,
+        } else switch (b.op) {
             .add => .add, .sub => .sub, .mul => .mul, .div => .div, .mod => .mod,
             .eq => .eq, .ne => .ne, .lt => .lt, .le => .le, .gt => .gt, .ge => .ge,
             .bit_and => .and_, .bit_or => .or_, .bit_xor => .xor, .shl => .shl, .shr => .shr,
@@ -559,8 +569,10 @@ pub const SSABuilder = struct {
 
     fn convertUnary(self: *SSABuilder, u: ir.Unary, type_idx: TypeIndex, cur: *Block) !*Value {
         const operand = try self.convertNode(u.operand) orelse return error.MissingValue;
+        const is_float = type_idx == TypeRegistry.F64 or type_idx == TypeRegistry.F32 or type_idx == TypeRegistry.UNTYPED_FLOAT;
         const op_kind: Op = switch (u.op) {
-            .neg => .neg, .not => .not, .bit_not => .not, .optional_unwrap => .copy,
+            .neg => if (is_float) .neg64f else .neg,
+            .not => .not, .bit_not => .not, .optional_unwrap => .copy,
         };
         const val = try self.func.newValue(op_kind, type_idx, cur, self.cur_pos);
         val.addArg(operand);
