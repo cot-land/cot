@@ -472,6 +472,13 @@ pub const GenState = struct {
                 _ = try self.builder.append(.f64_neg);
             },
 
+            // Integer negation: 0 - x (Wasm has no i64.neg)
+            .neg => {
+                _ = try self.builder.appendFrom(.i64_const, prog_mod.constAddr(0));
+                try self.getValue64(v.args[0]);
+                _ = try self.builder.append(.i64_sub);
+            },
+
             // Float comparisons (f64) - produce i32
             .wasm_f64_eq => {
                 try self.getValue64(v.args[0]);

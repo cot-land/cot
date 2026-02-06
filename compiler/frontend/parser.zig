@@ -178,6 +178,31 @@ pub const Parser = struct {
         if (!self.check(.ident)) { self.err.errorWithCode(self.pos(), .e203, "expected variable name"); return null; }
         const name = self.tok.text;
         self.advance();
+
+        // Check for error set declaration: const MyError = error { Fail, NotFound }
+        if (is_const and self.check(.assign)) {
+            const saved_tok = self.tok;
+            const saved_peek = self.peek_tok;
+            self.advance(); // consume '='
+            if (self.check(.kw_error) and self.peekToken().tok == .lbrace) {
+                self.advance(); // consume 'error'
+                self.advance(); // consume '{'
+                var variants = std.ArrayListUnmanaged([]const u8){};
+                defer variants.deinit(self.allocator);
+                while (!self.check(.rbrace) and !self.check(.eof)) {
+                    if (!self.check(.ident)) break;
+                    try variants.append(self.allocator, self.tok.text);
+                    self.advance();
+                    if (!self.match(.comma)) break;
+                }
+                if (!self.expect(.rbrace)) return null;
+                return try self.tree.addDecl(.{ .error_set_decl = .{ .name = name, .variants = try self.allocator.dupe([]const u8, variants.items), .span = Span.init(start, self.pos()) } });
+            }
+            // Not an error set, restore state and continue as normal var decl
+            self.tok = saved_tok;
+            self.peek_tok = saved_peek;
+        }
+
         var type_expr: NodeIndex = null_node;
         if (self.match(.colon)) type_expr = try self.parseType() orelse null_node;
         var value: NodeIndex = null_node;
@@ -311,7 +336,7 @@ pub const Parser = struct {
         }
         if (self.match(.lnot)) {
             const inner = try self.parseType() orelse return null;
-            return try self.tree.addExpr(.{ .type_expr = .{ .kind = .{ .error_union = inner }, .span = Span.init(start, self.pos()) } });
+            return try self.tree.addExpr(.{ .type_expr = .{ .kind = .{ .error_union = .{ .elem = inner } }, .span = Span.init(start, self.pos()) } });
         }
         if (self.match(.mul)) {
             const inner = try self.parseType() orelse return null;
@@ -345,6 +370,12 @@ pub const Parser = struct {
                     return try self.tree.addExpr(.{ .type_expr = .{ .kind = .{ .list = elem }, .span = Span.init(start, self.pos()) } });
                 } else { self.syntaxError("unknown generic type"); return null; }
             }
+            // Check for E!T (error union with named error set)
+            if (self.match(.lnot)) {
+                const error_set_node = try self.tree.addExpr(.{ .type_expr = .{ .kind = .{ .named = type_name }, .span = Span.init(start, self.pos()) } });
+                const elem = try self.parseType() orelse return null;
+                return try self.tree.addExpr(.{ .type_expr = .{ .kind = .{ .error_union = .{ .error_set = error_set_node, .elem = elem } }, .span = Span.init(start, self.pos()) } });
+            }
             return try self.tree.addExpr(.{ .type_expr = .{ .kind = .{ .named = type_name }, .span = Span.init(start, self.pos()) } });
         }
 
@@ -375,6 +406,20 @@ pub const Parser = struct {
 
         var left = try self.parseUnaryExpr() orelse return null;
         while (true) {
+            // Handle catch as a low-precedence postfix operator (precedence 1)
+            if (self.check(.kw_catch) and min_prec <= 1) {
+                const left_span = self.tree.getNode(left).?.span();
+                self.advance();
+                // Optional capture: catch |err| { ... }
+                var capture: []const u8 = "";
+                if (self.match(.@"or")) {
+                    if (self.check(.ident)) { capture = self.tok.text; self.advance(); } else { self.syntaxError("expected identifier for error capture"); return null; }
+                    if (!self.expect(.@"or")) return null;
+                }
+                const fallback = try self.parseBinaryExpr(2) orelse { self.err.errorWithCode(self.pos(), .e201, "expected expression after 'catch'"); return null; };
+                left = try self.tree.addExpr(.{ .catch_expr = .{ .operand = left, .capture = capture, .fallback = fallback, .span = Span.init(left_span.start, self.pos()) } });
+                continue;
+            }
             const op = self.tok.tok;
             const prec = op.precedence();
             if (prec < min_prec or prec == 0) break;
@@ -394,6 +439,11 @@ pub const Parser = struct {
                 self.advance();
                 const operand = try self.parseUnaryExpr() orelse return null;
                 return try self.tree.addExpr(.{ .addr_of = .{ .operand = operand, .span = Span.init(start, self.pos()) } });
+            },
+            .kw_try => {
+                self.advance();
+                const operand = try self.parsePrimaryExpr() orelse return null;
+                return try self.tree.addExpr(.{ .try_expr = .{ .operand = operand, .span = Span.init(start, self.pos()) } });
             },
             .sub, .lnot, .not, .kw_not => {
                 const op = self.tok.tok;
@@ -550,6 +600,15 @@ pub const Parser = struct {
                     .fields = try self.allocator.dupe(ast.FieldInit, fields.items),
                     .span = Span.init(start, self.pos()),
                 } });
+            },
+            .kw_error => {
+                // error.Variant
+                self.advance();
+                if (!self.expect(.period)) return null;
+                if (!self.check(.ident)) { self.syntaxError("expected error variant name"); return null; }
+                const error_name = self.tok.text;
+                self.advance();
+                return try self.tree.addExpr(.{ .error_literal = .{ .error_name = error_name, .span = Span.init(start, self.pos()) } });
             },
             .period => {
                 self.advance();

@@ -99,7 +99,7 @@ pub const Checker = struct {
     fn collectTypeDecl(self: *Checker, idx: NodeIndex) CheckError!void {
         const decl = (self.tree.getNode(idx) orelse return).asDecl() orelse return;
         switch (decl) {
-            .struct_decl, .enum_decl, .union_decl, .type_alias => try self.collectDecl(idx),
+            .struct_decl, .enum_decl, .union_decl, .type_alias, .error_set_decl => try self.collectDecl(idx),
             else => {},
         }
     }
@@ -147,6 +147,12 @@ pub const Checker = struct {
                 const union_type = try self.buildUnionType(u);
                 try self.scope.define(Symbol.init(u.name, .type_name, union_type, idx, false));
                 try self.types.registerNamed(u.name, union_type);
+            },
+            .error_set_decl => |es| {
+                if (self.scope.isDefined(es.name)) { self.err.errorWithCode(es.span.start, .e302, "redefined identifier"); return; }
+                const es_type = try self.types.add(.{ .error_set = .{ .name = es.name, .variants = es.variants } });
+                try self.scope.define(Symbol.init(es.name, .type_name, es_type, idx, false));
+                try self.types.registerNamed(es.name, es_type);
             },
             // Go reference: types2/alias.go - Alias stores RHS and resolves through it
             .type_alias => |t| {
@@ -323,6 +329,9 @@ pub const Checker = struct {
             .new_expr => |ne| self.checkNewExpr(ne),
             .builtin_call => |bc| self.checkBuiltinCall(bc),
             .string_interp => |si| self.checkStringInterp(si),
+            .try_expr => |te| self.checkTryExpr(te),
+            .catch_expr => |ce| self.checkCatchExpr(ce),
+            .error_literal => |el| self.checkErrorLiteral(el),
             .addr_of => |ao| self.checkAddrOf(ao),
             .deref => |d| self.checkDeref(d),
             .type_expr, .bad_expr => invalid_type,
@@ -544,8 +553,28 @@ pub const Checker = struct {
                 return invalid_type;
             },
             .union_type => |ut| {
+                // .tag pseudo-field returns tag value as i64
+                if (std.mem.eql(u8, f.field, "tag")) return TypeRegistry.I64;
+                // Check if base is a type name (constructor) vs value (extraction)
+                const is_type_access = blk: {
+                    const base_node = self.tree.getNode(f.base);
+                    const base_expr = if (base_node) |n| n.asExpr() else null;
+                    if (base_expr) |e| {
+                        if (e == .ident) {
+                            if (self.scope.lookup(e.ident.name)) |sym| {
+                                break :blk sym.kind == .type_name;
+                            }
+                        }
+                    }
+                    break :blk false;
+                };
                 for (ut.variants) |v| if (std.mem.eql(u8, v.name, f.field)) {
                     if (v.payload_type == invalid_type) return base_type;
+                    if (!is_type_access) {
+                        // Payload extraction: r.Ok returns the payload
+                        return v.payload_type;
+                    }
+                    // Constructor: Result.Ok returns function type
                     const params = try self.allocator.alloc(types.FuncParam, 1);
                     params[0] = .{ .name = "payload", .type_idx = v.payload_type };
                     return try self.types.add(.{ .func = .{ .params = params, .return_type = base_type } });
@@ -681,16 +710,48 @@ pub const Checker = struct {
 
     fn checkSwitchExpr(self: *Checker, se: ast.SwitchExpr) CheckError!TypeIndex {
         const subject_type = try self.checkExpr(se.subject);
+        const subject_info = self.types.get(subject_type);
+        const is_union = subject_info == .union_type;
         var result_type: TypeIndex = TypeRegistry.VOID;
         var first = true;
         for (se.cases) |case| {
             for (case.patterns) |val_idx| _ = try self.checkExpr(val_idx);
-            const body_type = try self.checkExpr(case.body);
-            if (first) { result_type = self.materializeType(body_type); first = false; }
+
+            // If union switch with capture, define capture variable in a new scope
+            if (is_union and case.capture.len > 0) {
+                const payload_type = self.resolveUnionCaptureType(subject_info.union_type, case.patterns);
+                var capture_scope = Scope.init(self.allocator, self.scope);
+                defer capture_scope.deinit();
+                const old_scope = self.scope;
+                self.scope = &capture_scope;
+                try capture_scope.define(Symbol.init(case.capture, .variable, payload_type, ast.null_node, false));
+                const body_type = try self.checkExpr(case.body);
+                self.scope = old_scope;
+                if (first) { result_type = self.materializeType(body_type); first = false; }
+            } else {
+                const body_type = try self.checkExpr(case.body);
+                if (first) { result_type = self.materializeType(body_type); first = false; }
+            }
         }
         if (se.else_body != null_node) _ = try self.checkExpr(se.else_body);
-        _ = subject_type;
         return result_type;
+    }
+
+    /// Resolve the payload type for a union switch case capture from its patterns.
+    fn resolveUnionCaptureType(self: *Checker, ut: types.UnionType, patterns: []const NodeIndex) TypeIndex {
+        // Use the first pattern to determine the variant
+        if (patterns.len == 0) return TypeRegistry.VOID;
+        // Pattern is typically a field_access like Result.Ok
+        const node = self.tree.getNode(patterns[0]) orelse return TypeRegistry.VOID;
+        const expr = node.asExpr() orelse return TypeRegistry.VOID;
+        const field_name = switch (expr) {
+            .field_access => |fa| fa.field,
+            else => return TypeRegistry.VOID,
+        };
+        for (ut.variants) |v| {
+            if (std.mem.eql(u8, v.name, field_name)) return v.payload_type;
+        }
+        return TypeRegistry.VOID;
     }
 
     fn checkBlock(self: *Checker, b: ast.BlockExpr) CheckError!TypeIndex {
@@ -719,6 +780,49 @@ pub const Checker = struct {
     fn checkAddrOf(self: *Checker, ao: ast.AddrOf) CheckError!TypeIndex {
         const operand_type = try self.checkExpr(ao.operand);
         return try self.types.makePointer(operand_type);
+    }
+
+    fn checkTryExpr(self: *Checker, te: ast.TryExpr) CheckError!TypeIndex {
+        const operand_type = try self.checkExpr(te.operand);
+        const operand_info = self.types.get(operand_type);
+        if (operand_info != .error_union) {
+            self.err.errorWithCode(te.span.start, .e300, "try requires error union type");
+            return invalid_type;
+        }
+        // Enclosing function must return an error union
+        const ret_info = self.types.get(self.current_return_type);
+        if (ret_info != .error_union) {
+            self.err.errorWithCode(te.span.start, .e300, "try in non-error-returning function");
+        }
+        return operand_info.error_union.elem;
+    }
+
+    fn checkCatchExpr(self: *Checker, ce: ast.CatchExpr) CheckError!TypeIndex {
+        const operand_type = try self.checkExpr(ce.operand);
+        const operand_info = self.types.get(operand_type);
+        if (operand_info != .error_union) {
+            self.err.errorWithCode(ce.span.start, .e300, "catch requires error union type");
+            return try self.checkExpr(ce.fallback);
+        }
+        const elem_type = operand_info.error_union.elem;
+        _ = try self.checkExpr(ce.fallback);
+        return elem_type;
+    }
+
+    fn checkErrorLiteral(self: *Checker, el: ast.ErrorLiteral) CheckError!TypeIndex {
+        // error.X returns an error set type; the specific set is inferred from context
+        // For now, look up any error set that has this variant
+        const ret_info = self.types.get(self.current_return_type);
+        if (ret_info == .error_union and ret_info.error_union.error_set != types.invalid_type) {
+            const es_info = self.types.get(ret_info.error_union.error_set);
+            if (es_info == .error_set) {
+                for (es_info.error_set.variants) |v| {
+                    if (std.mem.eql(u8, v, el.error_name)) return ret_info.error_union.error_set;
+                }
+            }
+        }
+        // Allow it through type checking, resolve at lowering time
+        return self.current_return_type;
     }
 
     fn checkDeref(self: *Checker, d: ast.Deref) CheckError!TypeIndex {
@@ -859,7 +963,14 @@ pub const Checker = struct {
             .named => |n| self.types.lookupByName(n) orelse if (self.scope.lookup(n)) |s| if (s.kind == .type_name) s.type_idx else invalid_type else { self.err.errorWithCode(te.span.start, .e301, "undefined type"); return invalid_type; },
             .pointer => |e| self.types.makePointer(try self.resolveTypeExpr(e)),
             .optional => |e| self.types.makeOptional(try self.resolveTypeExpr(e)),
-            .error_union => |e| self.types.makeErrorUnion(try self.resolveTypeExpr(e)),
+            .error_union => |eu| blk: {
+                const elem = try self.resolveTypeExpr(eu.elem);
+                if (eu.error_set != ast.null_node) {
+                    const es_type = try self.resolveTypeExpr(eu.error_set);
+                    break :blk self.types.makeErrorUnionWithSet(elem, es_type);
+                }
+                break :blk self.types.makeErrorUnion(elem);
+            },
             .slice => |e| self.types.makeSlice(try self.resolveTypeExpr(e)),
             .array => |a| blk: {
                 const elem = try self.resolveTypeExpr(a.elem);

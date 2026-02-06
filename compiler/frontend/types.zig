@@ -64,7 +64,8 @@ pub const BasicKind = enum(u8) {
 // Composite types
 pub const PointerType = struct { elem: TypeIndex };
 pub const OptionalType = struct { elem: TypeIndex };
-pub const ErrorUnionType = struct { elem: TypeIndex };
+pub const ErrorSetType = struct { name: []const u8, variants: []const []const u8 };
+pub const ErrorUnionType = struct { elem: TypeIndex, error_set: TypeIndex = std.math.maxInt(TypeIndex) };
 pub const SliceType = struct { elem: TypeIndex };
 pub const ArrayType = struct { elem: TypeIndex, length: u64 };
 pub const MapType = struct { key: TypeIndex, value: TypeIndex };
@@ -85,6 +86,7 @@ pub const Type = union(enum) {
     pointer: PointerType,
     optional: OptionalType,
     error_union: ErrorUnionType,
+    error_set: ErrorSetType,
     slice: SliceType,
     array: ArrayType,
     map: MapType,
@@ -225,6 +227,7 @@ pub const TypeRegistry = struct {
     pub fn makePointer(self: *TypeRegistry, elem: TypeIndex) !TypeIndex { return self.add(.{ .pointer = .{ .elem = elem } }); }
     pub fn makeOptional(self: *TypeRegistry, elem: TypeIndex) !TypeIndex { return self.add(.{ .optional = .{ .elem = elem } }); }
     pub fn makeErrorUnion(self: *TypeRegistry, elem: TypeIndex) !TypeIndex { return self.add(.{ .error_union = .{ .elem = elem } }); }
+    pub fn makeErrorUnionWithSet(self: *TypeRegistry, elem: TypeIndex, error_set: TypeIndex) !TypeIndex { return self.add(.{ .error_union = .{ .elem = elem, .error_set = error_set } }); }
     pub fn makeSlice(self: *TypeRegistry, elem: TypeIndex) !TypeIndex { return self.add(.{ .slice = .{ .elem = elem } }); }
     pub fn makeArray(self: *TypeRegistry, elem: TypeIndex, len: u64) !TypeIndex { return self.add(.{ .array = .{ .elem = elem, .length = len } }); }
     pub fn makeMap(self: *TypeRegistry, key: TypeIndex, value: TypeIndex) !TypeIndex { return self.add(.{ .map = .{ .key = key, .value = value } }); }
@@ -245,20 +248,30 @@ pub const TypeRegistry = struct {
         if (idx == UNTYPED_INT or idx == UNTYPED_FLOAT) return 8;
         return switch (self.get(idx)) {
             .basic => |k| k.size(),
-            .pointer, .map, .list, .func => 8,
+            .pointer, .map, .list, .func, .error_set => 8,
             .optional, .error_union => 16,
             .slice => 24,  // Go's slice: (ptr=8, len=8, cap=8)
             .array => |a| @intCast(self.sizeOf(a.elem) * a.length),
             .struct_type => |s| s.size,
             .enum_type => |e| self.sizeOf(e.backing_type),
-            .union_type => 24,
+            .union_type => |u| blk: {
+                var max_payload: u32 = 0;
+                for (u.variants) |v| {
+                    if (v.payload_type != invalid_type) {
+                        const ps = self.sizeOf(v.payload_type);
+                        if (ps > max_payload) max_payload = ps;
+                    }
+                }
+                const payload_aligned = if (max_payload == 0) @as(u32, 0) else ((max_payload + 7) / 8) * 8;
+                break :blk 8 + payload_aligned;
+            },
         };
     }
 
     pub fn alignmentOf(self: *const TypeRegistry, idx: TypeIndex) u32 {
         return switch (self.get(idx)) {
             .basic => |k| if (k.size() == 0) 1 else k.size(),
-            .pointer, .func, .optional, .error_union, .slice, .map, .list, .union_type => 8,
+            .pointer, .func, .optional, .error_union, .error_set, .slice, .map, .list, .union_type => 8,
             .array => |a| self.alignmentOf(a.elem),
             .struct_type => |s| s.alignment,
             .enum_type => |e| self.alignmentOf(e.backing_type),
@@ -282,6 +295,8 @@ pub const TypeRegistry = struct {
             .pointer => true,
             // Functions are trivial (just code pointers)
             .func => true,
+            // Error sets are trivial (just integer indices)
+            .error_set => true,
             // Enums with trivial backing type are trivial
             .enum_type => |e| self.isTrivial(e.backing_type),
             // Arrays/slices of trivial elements are trivial
@@ -325,6 +340,7 @@ pub const TypeRegistry = struct {
             .struct_type => |sa| std.mem.eql(u8, sa.name, tb.struct_type.name),
             .enum_type => |ea| std.mem.eql(u8, ea.name, tb.enum_type.name),
             .union_type => |ua| std.mem.eql(u8, ua.name, tb.union_type.name),
+            .error_set => |es| std.mem.eql(u8, es.name, tb.error_set.name),
             .func => false,
         };
     }
@@ -345,6 +361,12 @@ pub const TypeRegistry = struct {
 
         // T -> ?T
         if (to_t == .optional) return self.isAssignable(from, to_t.optional.elem);
+
+        // T -> E!T (success value coercion) and ErrorSet -> E!T (error coercion)
+        if (to_t == .error_union) {
+            if (self.isAssignable(from, to_t.error_union.elem)) return true;
+            if (from_t == .error_set) return true;
+        }
 
         // Same basic types
         if (from_t == .basic and to_t == .basic and from_t.basic == to_t.basic) return true;

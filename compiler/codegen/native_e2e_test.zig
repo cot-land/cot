@@ -308,3 +308,108 @@ test "native: float locals" {
     ;
     try expectExitCode(std.testing.allocator, code, 0, "float_locals");
 }
+
+// ============================================================================
+// Union payloads: tag + payload init, tag check, payload extraction
+// ============================================================================
+
+test "native: union payload" {
+    const code =
+        \\union Result { Ok: i64, Err: i32 }
+        \\fn main() i64 {
+        \\    let r: Result = Result.Ok(42)
+        \\    if r.tag != 0 { return 1 }
+        \\    let val = r.Ok
+        \\    if val != 42 { return 2 }
+        \\    let e: Result = Result.Err(99)
+        \\    if e.tag != 1 { return 3 }
+        \\    return 0
+        \\}
+    ;
+    try expectExitCode(std.testing.allocator, code, 0, "union_payload");
+}
+
+test "native: union mixed payload and unit" {
+    const code =
+        \\union Event { Click: i64, Hover, KeyPress: i64 }
+        \\fn main() i64 {
+        \\    let e1: Event = Event.Hover
+        \\    if e1.tag != 1 { return 1 }
+        \\    let e2: Event = Event.Click(100)
+        \\    if e2.tag != 0 { return 2 }
+        \\    let clicks = e2.Click
+        \\    if clicks != 100 { return 3 }
+        \\    return 0
+        \\}
+    ;
+    try expectExitCode(std.testing.allocator, code, 0, "union_mixed");
+}
+
+test "native: union switch with payload capture" {
+    const code =
+        \\union Result { Ok: i64, Err: i32 }
+        \\fn main() i64 {
+        \\    let r: Result = Result.Ok(42)
+        \\    switch r {
+        \\        Result.Ok |val| => { return val },
+        \\        Result.Err |e| => { return e },
+        \\    }
+        \\    return 99
+        \\}
+    ;
+    // First test: union switch WITHOUT capture (tag-only)
+    const code_no_capture =
+        \\union Result { Ok: i64, Err: i32 }
+        \\fn main() i64 {
+        \\    let r: Result = Result.Ok(42)
+        \\    switch r {
+        \\        Result.Ok => { return 10 },
+        \\        Result.Err => { return 20 },
+        \\    }
+        \\    return 99
+        \\}
+    ;
+    try expectExitCode(std.testing.allocator, code_no_capture, 10, "union_switch_no_capture");
+    try expectExitCode(std.testing.allocator, code, 42, "union_switch_capture");
+}
+
+// ============================================================================
+// Error unions: catch, try propagation
+// ============================================================================
+
+test "native: error union catch" {
+    const code =
+        \\const MyError = error { Fail, NotFound }
+        \\fn mayFail(x: i64) MyError!i64 {
+        \\    if x < 0 { return error.Fail }
+        \\    return x * 2
+        \\}
+        \\fn main() i64 {
+        \\    let result = mayFail(-1) catch 99
+        \\    if result != 99 { return 1 }
+        \\    let success = mayFail(5) catch 99
+        \\    if success != 10 { return 2 }
+        \\    return 0
+        \\}
+    ;
+    try expectExitCode(std.testing.allocator, code, 0, "error_union_catch");
+}
+
+test "native: error union try propagation" {
+    const code =
+        \\const MyError = error { Fail }
+        \\fn inner() MyError!i64 {
+        \\    return error.Fail
+        \\}
+        \\fn outer() MyError!i64 {
+        \\    let x = try inner()
+        \\    return x + 1
+        \\}
+        \\fn main() i64 {
+        \\    let result = outer() catch 42
+        \\    if result != 42 { return 1 }
+        \\    return 0
+        \\}
+    ;
+    try expectExitCode(std.testing.allocator, code, 0, "error_union_try");
+}

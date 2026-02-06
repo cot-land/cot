@@ -141,7 +141,7 @@ pub const Lowerer = struct {
             .struct_decl => |d| try self.lowerStructDecl(d),
             .impl_block => |d| try self.lowerImplBlock(d),
             .test_decl => |d| if (self.test_mode) try self.lowerTestDecl(d),
-            .enum_decl, .union_decl, .type_alias, .import_decl, .bad_decl => {},
+            .enum_decl, .union_decl, .type_alias, .import_decl, .error_set_decl, .bad_decl => {},
         }
     }
 
@@ -320,13 +320,39 @@ pub const Lowerer = struct {
         const fb = self.current_func orelse return;
         var value_node: ?ir.NodeIndex = null;
         if (ret.value != null_node) {
-            const lowered = try self.lowerExprNode(ret.value);
-            if (lowered != ir.null_node) value_node = lowered;
+            // Check if the return expression is an error literal in an error union function
+            const ret_node = self.tree.getNode(ret.value);
+            const is_error_literal = if (ret_node) |n| if (n.asExpr()) |e| e == .error_literal else false else false;
+
+            // Check if function returns error union and value is a success type (needs wrapping)
+            const ret_type = fb.return_type;
+            const ret_type_info = self.type_reg.get(ret_type);
+            const is_error_union_fn = ret_type_info == .error_union;
+
+            if (is_error_literal and is_error_union_fn) {
+                // error.X in error union function — lowerErrorLiteral returns a pointer to the EU
+                const lowered = try self.lowerExprNode(ret.value);
+                if (lowered != ir.null_node) value_node = lowered;
+            } else if (is_error_union_fn) {
+                // Success value in error union function — wrap as tag=0, payload=value
+                // Returns a POINTER to the error union in the stack frame
+                const lowered = try self.lowerExprNode(ret.value);
+                if (lowered != ir.null_node) {
+                    const eu_size = self.type_reg.sizeOf(ret_type);
+                    const tmp_local = try fb.addLocalWithSize("__ret_eu", ret_type, false, eu_size);
+                    const tag_zero = try fb.emitConstInt(0, TypeRegistry.I64, ret.span);
+                    _ = try fb.emitStoreLocalField(tmp_local, 0, 0, tag_zero, ret.span);
+                    _ = try fb.emitStoreLocalField(tmp_local, 1, 8, lowered, ret.span);
+                    value_node = try fb.emitAddrLocal(tmp_local, TypeRegistry.I64, ret.span);
+                }
+            } else {
+                const lowered = try self.lowerExprNode(ret.value);
+                if (lowered != ir.null_node) value_node = lowered;
+            }
 
             // Forward ownership: if returning a local with ARC cleanup, disable it.
             // The caller receives ownership - we don't release here.
             // Reference: Swift's ManagedValue::forward() pattern
-            const ret_node = self.tree.getNode(ret.value);
             if (ret_node) |node| {
                 if (node.asExpr()) |expr| {
                     if (expr == .ident) {
@@ -411,6 +437,8 @@ pub const Lowerer = struct {
                 try self.lowerArrayInit(local_idx, var_stmt.value, var_stmt.span);
             } else if (is_struct_literal) {
                 try self.lowerStructInit(local_idx, var_stmt.value, var_stmt.span);
+            } else if (self.type_reg.get(type_idx) == .union_type) {
+                try self.lowerUnionInit(local_idx, var_stmt.value, type_idx, var_stmt.span);
             } else {
                 const type_info = self.type_reg.get(type_idx);
                 const is_struct_copy = type_info == .struct_type and value_expr != null and
@@ -550,6 +578,53 @@ pub const Lowerer = struct {
                 }
             }
         }
+    }
+
+    fn lowerUnionInit(self: *Lowerer, local_idx: ir.LocalIdx, value_idx: NodeIndex, type_idx: TypeIndex, span: Span) !void {
+        const fb = self.current_func orelse return;
+        const type_info = self.type_reg.get(type_idx);
+        const union_type = if (type_info == .union_type) type_info.union_type else return;
+        const value_node_ast = self.tree.getNode(value_idx) orelse return;
+        const value_expr = value_node_ast.asExpr() orelse return;
+
+        // Case 1: Payload variant call - Result.Ok(42)
+        if (value_expr == .call) {
+            const call = value_expr.call;
+            const callee_node_ast = self.tree.getNode(call.callee) orelse return;
+            const callee_expr = callee_node_ast.asExpr() orelse return;
+            if (callee_expr == .field_access) {
+                const fa = callee_expr.field_access;
+                for (union_type.variants, 0..) |v, i| {
+                    if (std.mem.eql(u8, v.name, fa.field)) {
+                        // Store tag at offset 0
+                        const tag_val = try fb.emitConstInt(@intCast(i), TypeRegistry.I64, span);
+                        _ = try fb.emitStoreLocalField(local_idx, 0, 0, tag_val, span);
+                        // Store payload at offset 8
+                        if (call.args.len > 0) {
+                            const payload_val = try self.lowerExprNode(call.args[0]);
+                            _ = try fb.emitStoreLocalField(local_idx, 1, 8, payload_val, span);
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Case 2: Unit variant - State.Running
+        if (value_expr == .field_access) {
+            const fa = value_expr.field_access;
+            for (union_type.variants, 0..) |v, i| {
+                if (std.mem.eql(u8, v.name, fa.field)) {
+                    const tag_val = try fb.emitConstInt(@intCast(i), TypeRegistry.I64, span);
+                    _ = try fb.emitStoreLocalField(local_idx, 0, 0, tag_val, span);
+                    return;
+                }
+            }
+        }
+
+        // Fallback: generic store
+        const val = try self.lowerExprNode(value_idx);
+        if (val != ir.null_node) _ = try fb.emitStoreLocal(local_idx, val, span);
     }
 
     fn lowerStringInit(self: *Lowerer, local_idx: ir.LocalIdx, value_idx: NodeIndex, span: Span) !void {
@@ -998,6 +1073,9 @@ pub const Lowerer = struct {
             .index => |idx| return try self.lowerIndex(idx),
             .array_literal => |al| return try self.lowerArrayLiteral(al),
             .slice_expr => |se| return try self.lowerSliceExpr(se),
+            .try_expr => |te| return try self.lowerTryExpr(te),
+            .catch_expr => |ce| return try self.lowerCatchExpr(ce),
+            .error_literal => |el| return try self.lowerErrorLiteral(el),
             .builtin_call => |bc| return try self.lowerBuiltinCall(bc),
             .switch_expr => |se| return try self.lowerSwitchExpr(se),
             .struct_init => |si| return try self.lowerStructInitExpr(si),
@@ -1237,12 +1315,35 @@ pub const Lowerer = struct {
             return ir.null_node;
         }
 
-        // Union variant (simple, no payload)
-        // Go reference: tagged unions use tag value for variant discrimination
+        // Union: .tag pseudo-field, payload extraction, or variant tag
         if (base_type == .union_type) {
+            // Resolve base to local if possible (same pattern as struct field access)
+            const base_node_ast = self.tree.getNode(fa.base);
+            const base_expr = if (base_node_ast) |n| n.asExpr() else null;
+            const base_local: ?ir.LocalIdx = if (base_expr != null and base_expr.? == .ident)
+                fb.lookupLocal(base_expr.?.ident.name)
+            else
+                null;
+
+            // .tag pseudo-field returns the tag value (offset 0)
+            if (std.mem.eql(u8, fa.field, "tag")) {
+                if (base_local) |lidx| {
+                    return try fb.emitFieldLocal(lidx, 0, 0, TypeRegistry.I64, fa.span);
+                }
+                const base_val = try self.lowerExprNode(fa.base);
+                return try fb.emitFieldValue(base_val, 0, 0, TypeRegistry.I64, fa.span);
+            }
             for (base_type.union_type.variants, 0..) |variant, i| {
                 if (std.mem.eql(u8, variant.name, fa.field)) {
-                    // Return tag value (variant index)
+                    if (variant.payload_type != types.invalid_type) {
+                        // Payload extraction: load from union at offset 8
+                        if (base_local) |lidx| {
+                            return try fb.emitFieldLocal(lidx, 1, 8, variant.payload_type, fa.span);
+                        }
+                        const base_val = try self.lowerExprNode(fa.base);
+                        return try fb.emitFieldValue(base_val, 1, 8, variant.payload_type, fa.span);
+                    }
+                    // Unit variant: return tag index
                     return try fb.emitConstInt(@intCast(i), base_type_idx, fa.span);
                 }
             }
@@ -1597,12 +1698,29 @@ pub const Lowerer = struct {
 
     fn lowerSwitchExpr(self: *Lowerer, se: ast.SwitchExpr) Error!ir.NodeIndex {
         const result_type = if (se.cases.len > 0) self.inferExprType(se.cases[0].body) else if (se.else_body != null_node) self.inferExprType(se.else_body) else TypeRegistry.VOID;
-        if (result_type == TypeRegistry.VOID) return try self.lowerSwitchStatement(se);
+        // Union switches with captures always use statement form (need block scoping for captures)
+        const subject_type = self.inferExprType(se.subject);
+        const is_union = self.type_reg.get(subject_type) == .union_type;
+        if (result_type == TypeRegistry.VOID or (is_union and self.hasCapture(se))) return try self.lowerSwitchStatement(se);
         return try self.lowerSwitchAsSelect(se, result_type);
+    }
+
+    fn hasCapture(self: *Lowerer, se: ast.SwitchExpr) bool {
+        _ = self;
+        for (se.cases) |case| {
+            if (case.capture.len > 0) return true;
+        }
+        return false;
     }
 
     fn lowerSwitchStatement(self: *Lowerer, se: ast.SwitchExpr) Error!ir.NodeIndex {
         const fb = self.current_func orelse return ir.null_node;
+        const subject_type = self.inferExprType(se.subject);
+        const subject_info = self.type_reg.get(subject_type);
+        const is_union = subject_info == .union_type;
+
+        if (is_union) return try self.lowerUnionSwitch(se, subject_type, subject_info.union_type);
+
         const subject = try self.lowerExprNode(se.subject);
         const merge_block = try fb.newBlock("switch.end");
 
@@ -1628,6 +1746,99 @@ pub const Lowerer = struct {
         }
         fb.setBlock(merge_block);
         return ir.null_node;
+    }
+
+    fn lowerUnionSwitch(self: *Lowerer, se: ast.SwitchExpr, subject_type: TypeIndex, ut: types.UnionType) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+
+        // Store subject into a local so we can extract tag/payload via field offsets
+        const subject_local = blk: {
+            // Check if subject is already a local (ident)
+            const subj_node = self.tree.getNode(se.subject) orelse break :blk null;
+            const subj_expr = subj_node.asExpr() orelse break :blk null;
+            if (subj_expr == .ident) {
+                break :blk fb.lookupLocal(subj_expr.ident.name);
+            }
+            break :blk null;
+        } orelse blk: {
+            // Create temp local for the subject
+            const size = self.type_reg.sizeOf(subject_type);
+            const tmp_name = "__switch_subj";
+            const tmp_local = try fb.addLocalWithSize(tmp_name, subject_type, false, size);
+            const subj_val = try self.lowerExprNode(se.subject);
+            _ = try fb.emitStoreLocal(tmp_local, subj_val, se.span);
+            break :blk tmp_local;
+        };
+
+        // Extract tag from union (offset 0)
+        const tag_val = try fb.emitFieldLocal(subject_local, 0, 0, TypeRegistry.I64, se.span);
+        const merge_block = try fb.newBlock("switch.end");
+
+        var i: usize = 0;
+        while (i < se.cases.len) : (i += 1) {
+            const case = se.cases[i];
+            var case_cond: ir.NodeIndex = ir.null_node;
+
+            for (case.patterns) |pattern_idx| {
+                // Resolve pattern to variant index
+                const variant_idx = self.resolveUnionVariantIndex(pattern_idx, ut);
+                if (variant_idx) |vidx| {
+                    const idx_val = try fb.emitConstInt(@intCast(vidx), TypeRegistry.I64, se.span);
+                    const pattern_cond = try fb.emitBinary(.eq, tag_val, idx_val, TypeRegistry.BOOL, se.span);
+                    case_cond = if (case_cond == ir.null_node) pattern_cond else try fb.emitBinary(.@"or", case_cond, pattern_cond, TypeRegistry.BOOL, se.span);
+                }
+            }
+
+            const case_block = try fb.newBlock("switch.case");
+            const next_block = if (i + 1 < se.cases.len) try fb.newBlock("switch.next") else if (se.else_body != null_node) try fb.newBlock("switch.else") else merge_block;
+            if (case_cond != ir.null_node) _ = try fb.emitBranch(case_cond, case_block, next_block, se.span);
+            fb.setBlock(case_block);
+
+            // If capture, create a scoped local for the payload
+            if (case.capture.len > 0) {
+                const scope_depth = fb.markScopeEntry();
+                const payload_type = self.resolveUnionPayloadType(case.patterns, ut);
+                const payload_size = self.type_reg.sizeOf(payload_type);
+                const capture_local = try fb.addLocalWithSize(case.capture, payload_type, false, payload_size);
+                const payload_val = try fb.emitFieldLocal(subject_local, 1, 8, payload_type, se.span);
+                _ = try fb.emitStoreLocal(capture_local, payload_val, se.span);
+                if (!try self.lowerBlockNode(case.body)) _ = try fb.emitJump(merge_block, se.span);
+                fb.restoreScope(scope_depth);
+            } else {
+                if (!try self.lowerBlockNode(case.body)) _ = try fb.emitJump(merge_block, se.span);
+            }
+
+            fb.setBlock(next_block);
+        }
+
+        if (se.else_body != null_node) {
+            if (!try self.lowerBlockNode(se.else_body)) _ = try fb.emitJump(merge_block, se.span);
+        }
+        fb.setBlock(merge_block);
+        return ir.null_node;
+    }
+
+    /// Resolve a switch case pattern expression to a union variant index.
+    fn resolveUnionVariantIndex(self: *Lowerer, pattern_idx: NodeIndex, ut: types.UnionType) ?usize {
+        const node = self.tree.getNode(pattern_idx) orelse return null;
+        const expr = node.asExpr() orelse return null;
+        const field_name = switch (expr) {
+            .field_access => |fa| fa.field,
+            else => return null,
+        };
+        for (ut.variants, 0..) |v, i| {
+            if (std.mem.eql(u8, v.name, field_name)) return i;
+        }
+        return null;
+    }
+
+    /// Resolve the payload type from a pattern's first variant.
+    fn resolveUnionPayloadType(self: *Lowerer, patterns: []const ast.NodeIndex, ut: types.UnionType) TypeIndex {
+        if (patterns.len == 0) return TypeRegistry.VOID;
+        if (self.resolveUnionVariantIndex(patterns[0], ut)) |vidx| {
+            return ut.variants[vidx].payload_type;
+        }
+        return TypeRegistry.VOID;
     }
 
     fn lowerSwitchAsSelect(self: *Lowerer, se: ast.SwitchExpr, result_type: TypeIndex) Error!ir.NodeIndex {
@@ -1674,6 +1885,20 @@ pub const Lowerer = struct {
                     if (self.chk.lookupMethod(name, fa.field)) |method_info| {
                         return try self.lowerMethodCall(call, fa, method_info);
                     }
+                }
+
+                // Union variant constructor: Result.Ok(42)
+                if (base_type == .union_type) {
+                    for (base_type.union_type.variants, 0..) |v, i| {
+                        if (std.mem.eql(u8, v.name, fa.field)) {
+                            const payload: ?ir.NodeIndex = if (call.args.len > 0)
+                                try self.lowerExprNode(call.args[0])
+                            else
+                                null;
+                            return try fb.emitUnionInit(@intCast(i), payload, base_type_idx, fa.span);
+                        }
+                    }
+                    return ir.null_node;
                 }
             }
         }
@@ -2133,8 +2358,157 @@ pub const Lowerer = struct {
                 const ret_type = self.resolveTypeNode(fn_type.ret);
                 return self.type_reg.makeFunc(param_types.items, ret_type) catch TypeRegistry.VOID;
             },
+            .error_union => |eu| {
+                const elem = self.resolveTypeNode(eu.elem);
+                if (eu.error_set != null_node) {
+                    const es_type = self.resolveTypeNode(eu.error_set);
+                    if (es_type != TypeRegistry.VOID) {
+                        return self.type_reg.makeErrorUnionWithSet(elem, es_type) catch TypeRegistry.VOID;
+                    }
+                }
+                return self.type_reg.makeErrorUnion(elem) catch TypeRegistry.VOID;
+            },
             else => return TypeRegistry.VOID,
         }
+    }
+
+    /// Lower error.X literal — constructs an error union value with tag=1 and error index as payload.
+    /// Returns a POINTER to the error union in the stack frame (16-byte value can't be
+    /// returned by value in Wasm's single-i64 return convention).
+    fn lowerErrorLiteral(self: *Lowerer, el: ast.ErrorLiteral) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+        // Get the function's return type (must be error union)
+        const ret_type = fb.return_type;
+        const ret_info = self.type_reg.get(ret_type);
+        if (ret_info != .error_union) return ir.null_node;
+
+        // Look up the error variant index
+        var error_idx: i64 = 0;
+        if (ret_info.error_union.error_set != types.invalid_type) {
+            const es_info = self.type_reg.get(ret_info.error_union.error_set);
+            if (es_info == .error_set) {
+                for (es_info.error_set.variants, 0..) |v, i| {
+                    if (std.mem.eql(u8, v, el.error_name)) { error_idx = @intCast(i); break; }
+                }
+            }
+        }
+
+        // Create error union: tag=1 (error), payload=error_idx
+        const size = self.type_reg.sizeOf(ret_type);
+        const tmp_local = try fb.addLocalWithSize("__err_tmp", ret_type, false, size);
+        const tag_val = try fb.emitConstInt(1, TypeRegistry.I64, el.span);
+        _ = try fb.emitStoreLocalField(tmp_local, 0, 0, tag_val, el.span);
+        const idx_val = try fb.emitConstInt(error_idx, TypeRegistry.I64, el.span);
+        _ = try fb.emitStoreLocalField(tmp_local, 1, 8, idx_val, el.span);
+        // Return pointer to the error union (not the value itself)
+        return try fb.emitAddrLocal(tmp_local, TypeRegistry.I64, el.span);
+    }
+
+    /// Lower try expr — unwrap error union, propagate error to caller if tag != 0.
+    /// The operand (function call) returns a POINTER to the error union in the callee's
+    /// stack frame. We read through the pointer immediately (safe in single-threaded Wasm).
+    fn lowerTryExpr(self: *Lowerer, te: ast.TryExpr) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+
+        // Get the error union type from the operand
+        const operand_type = self.inferExprType(te.operand);
+        const operand_info = self.type_reg.get(operand_type);
+        if (operand_info != .error_union) {
+            return try self.lowerExprNode(te.operand);
+        }
+        const elem_type = operand_info.error_union.elem;
+
+        // Call returns a POINTER to the error union
+        const eu_ptr = try self.lowerExprNode(te.operand);
+
+        // Read tag at [ptr + 0]
+        const tag_val = try fb.emitPtrLoadValue(eu_ptr, TypeRegistry.I64, te.span);
+        const zero = try fb.emitConstInt(0, TypeRegistry.I64, te.span);
+        const is_error = try fb.emitBinary(.ne, tag_val, zero, TypeRegistry.BOOL, te.span);
+
+        // Branch: if error, propagate; if ok, continue
+        const err_block = try fb.newBlock("try.err");
+        const ok_block = try fb.newBlock("try.ok");
+        _ = try fb.emitBranch(is_error, err_block, ok_block, te.span);
+
+        // Error block: copy the error union to our own frame and return pointer to it
+        fb.setBlock(err_block);
+        const our_ret_type = fb.return_type;
+        const eu_size = self.type_reg.sizeOf(our_ret_type);
+        const err_local = try fb.addLocalWithSize("__try_err", our_ret_type, false, eu_size);
+        // Copy tag
+        _ = try fb.emitStoreLocalField(err_local, 0, 0, tag_val, te.span);
+        // Copy error payload
+        const payload_addr = try fb.emitAddrOffset(eu_ptr, 8, TypeRegistry.I64, te.span);
+        const err_payload = try fb.emitPtrLoadValue(payload_addr, TypeRegistry.I64, te.span);
+        _ = try fb.emitStoreLocalField(err_local, 1, 8, err_payload, te.span);
+        const err_ret = try fb.emitAddrLocal(err_local, TypeRegistry.I64, te.span);
+        _ = try fb.emitRet(err_ret, te.span);
+
+        // OK block: read the success payload at [ptr + 8]
+        fb.setBlock(ok_block);
+        const payload_addr_ok = try fb.emitAddrOffset(eu_ptr, 8, TypeRegistry.I64, te.span);
+        return try fb.emitPtrLoadValue(payload_addr_ok, elem_type, te.span);
+    }
+
+    /// Lower catch expr — unwrap error union, use fallback on error.
+    /// The operand (function call) returns a POINTER to the error union.
+    fn lowerCatchExpr(self: *Lowerer, ce: ast.CatchExpr) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+
+        // Get the error union type from the operand
+        const operand_type = self.inferExprType(ce.operand);
+        const operand_info = self.type_reg.get(operand_type);
+        if (operand_info != .error_union) {
+            return try self.lowerExprNode(ce.operand);
+        }
+        const elem_type = operand_info.error_union.elem;
+
+        // Call returns a POINTER to the error union
+        const eu_ptr = try self.lowerExprNode(ce.operand);
+
+        // Read tag at [ptr + 0]
+        const tag_val = try fb.emitPtrLoadValue(eu_ptr, TypeRegistry.I64, ce.span);
+        const zero = try fb.emitConstInt(0, TypeRegistry.I64, ce.span);
+        const is_ok = try fb.emitBinary(.eq, tag_val, zero, TypeRegistry.BOOL, ce.span);
+
+        // Allocate result local in caller's frame
+        const result_size = self.type_reg.sizeOf(elem_type);
+        const result_local = try fb.addLocalWithSize("__catch_result", elem_type, false, result_size);
+
+        // Branch
+        const ok_block = try fb.newBlock("catch.ok");
+        const err_block = try fb.newBlock("catch.err");
+        const merge_block = try fb.newBlock("catch.merge");
+        _ = try fb.emitBranch(is_ok, ok_block, err_block, ce.span);
+
+        // OK block: read success payload from [ptr + 8], store to result
+        fb.setBlock(ok_block);
+        const payload_addr = try fb.emitAddrOffset(eu_ptr, 8, TypeRegistry.I64, ce.span);
+        const success_val = try fb.emitPtrLoadValue(payload_addr, elem_type, ce.span);
+        _ = try fb.emitStoreLocal(result_local, success_val, ce.span);
+        _ = try fb.emitJump(merge_block, ce.span);
+
+        // Error block: evaluate fallback
+        fb.setBlock(err_block);
+        if (ce.capture.len > 0) {
+            const scope_depth = fb.markScopeEntry();
+            const err_payload_addr = try fb.emitAddrOffset(eu_ptr, 8, TypeRegistry.I64, ce.span);
+            const err_val = try fb.emitPtrLoadValue(err_payload_addr, TypeRegistry.I64, ce.span);
+            const capture_local = try fb.addLocalWithSize(ce.capture, TypeRegistry.I64, false, 8);
+            _ = try fb.emitStoreLocal(capture_local, err_val, ce.span);
+            const fallback_val = try self.lowerExprNode(ce.fallback);
+            _ = try fb.emitStoreLocal(result_local, fallback_val, ce.span);
+            fb.restoreScope(scope_depth);
+        } else {
+            const fallback_val = try self.lowerExprNode(ce.fallback);
+            _ = try fb.emitStoreLocal(result_local, fallback_val, ce.span);
+        }
+        _ = try fb.emitJump(merge_block, ce.span);
+
+        // Merge block: load result
+        fb.setBlock(merge_block);
+        return try fb.emitLoadLocal(result_local, elem_type, ce.span);
     }
 
     fn inferExprType(self: *Lowerer, idx: NodeIndex) TypeIndex {

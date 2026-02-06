@@ -334,6 +334,7 @@ pub const FuncBuilder = struct {
     pub fn emitPtrToInt(self: *FuncBuilder, operand: NodeIndex, target_type: TypeIndex, span: Span) !NodeIndex { return self.emit(Node.init(.{ .ptr_to_int = .{ .operand = operand } }, target_type, span)); }
     pub fn emitMakeSlice(self: *FuncBuilder, base_ptr: NodeIndex, start: ?NodeIndex, end: NodeIndex, elem_size: u32, type_idx: TypeIndex, span: Span) !NodeIndex { return self.emitSliceValue(base_ptr, start, end, elem_size, type_idx, span); }
     pub fn emitTypeMetadata(self: *FuncBuilder, type_name: []const u8, span: Span) !NodeIndex { return self.emit(Node.init(.{ .type_metadata = .{ .type_name = type_name } }, TypeRegistry.I64, span)); }
+    pub fn emitUnionInit(self: *FuncBuilder, variant_idx: u32, payload: ?NodeIndex, type_idx: TypeIndex, span: Span) !NodeIndex { return self.emit(Node.init(.{ .union_init = .{ .variant_idx = variant_idx, .payload = payload } }, type_idx, span)); }
 
     pub fn build(self: *FuncBuilder) !Func {
         var params = std.ArrayListUnmanaged(Local){};

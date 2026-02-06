@@ -593,8 +593,6 @@ pub fn buildLiveranges(
                 // Branch args must match block params - this is a CLIF invariant.
                 // If they don't match, there's a bug in CLIF construction.
                 if (params_in.len != params_out.len) {
-                    std.debug.print("LIVENESS ERROR: block {d} -> succ {d} (succ_idx={d})\n", .{ block_idx, succ.idx(), succ_idx });
-                    std.debug.print("  params_in.len={d} params_out.len={d}\n", .{ params_in.len, params_out.len });
                     @panic("branch args must match block params");
                 }
 

@@ -596,10 +596,17 @@ pub const DataFlowGraph = struct {
                     b.blocks[1].args = try self.value_lists.push(b.blocks[1].args, val);
                 }
             },
-            .branch_table => {
-                // Branch tables are not typically modified during SSA construction.
-                // If needed, this would require updating all entries targeting dest_block
-                // in the jump table. For now, this is not implemented.
+            .branch_table => |*bt| {
+                // Port of Cranelift: branch_destination_mut iterates all jump table entries.
+                // Reference: cranelift/codegen/src/ir/instructions.rs branch_destination_mut
+                // and cranelift/frontend/src/ssa.rs finish_predecessors_lookup (lines 567-577)
+                if (self.jump_tables.getMut(bt.table)) |jt| {
+                    for (jt.table.items) |*entry| {
+                        if (entry.block.index == dest_block.index) {
+                            entry.args = try self.value_lists.push(entry.args, val);
+                        }
+                    }
+                }
             },
             else => {
                 // Not a branch instruction, nothing to do

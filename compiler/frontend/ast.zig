@@ -29,6 +29,7 @@ pub const Decl = union(enum) {
     type_alias: TypeAlias,
     import_decl: ImportDecl,
     impl_block: ImplBlock,
+    error_set_decl: ErrorSetDecl,
     test_decl: TestDecl,
     bad_decl: BadDecl,
 
@@ -46,6 +47,7 @@ pub const EnumDecl = struct { name: []const u8, backing_type: NodeIndex, variant
 pub const UnionDecl = struct { name: []const u8, variants: []const UnionVariant, span: Span };
 pub const TypeAlias = struct { name: []const u8, target: NodeIndex, span: Span };
 pub const ImportDecl = struct { path: []const u8, span: Span };
+pub const ErrorSetDecl = struct { name: []const u8, variants: []const []const u8, span: Span };
 pub const BadDecl = struct { span: Span };
 
 pub const Field = struct { name: []const u8, type_expr: NodeIndex, default_value: NodeIndex, span: Span };
@@ -73,6 +75,9 @@ pub const Expr = union(enum) {
     builtin_call: BuiltinCall,
     string_interp: StringInterp,
     type_expr: TypeExpr,
+    try_expr: TryExpr,
+    catch_expr: CatchExpr,
+    error_literal: ErrorLiteral,
     addr_of: AddrOf,
     deref: Deref,
     bad_expr: BadExpr,
@@ -114,13 +119,16 @@ pub const TypeKind = union(enum) {
     named: []const u8,
     pointer: NodeIndex,
     optional: NodeIndex,
-    error_union: NodeIndex,
+    error_union: struct { error_set: NodeIndex = null_node, elem: NodeIndex },
     slice: NodeIndex,
     array: struct { size: NodeIndex, elem: NodeIndex },
     map: struct { key: NodeIndex, value: NodeIndex },
     list: NodeIndex,
     function: struct { params: []const NodeIndex, ret: NodeIndex },
 };
+pub const TryExpr = struct { operand: NodeIndex, span: Span };
+pub const CatchExpr = struct { operand: NodeIndex, capture: []const u8, fallback: NodeIndex, span: Span };
+pub const ErrorLiteral = struct { error_name: []const u8, span: Span };
 pub const AddrOf = struct { operand: NodeIndex, span: Span };
 pub const Deref = struct { operand: NodeIndex, span: Span };
 pub const BadExpr = struct { span: Span };
@@ -225,6 +233,7 @@ pub const Ast = struct {
                     .struct_decl => |s| if (s.fields.len > 0) self.allocator.free(s.fields),
                     .enum_decl => |e| if (e.variants.len > 0) self.allocator.free(e.variants),
                     .union_decl => |u| if (u.variants.len > 0) self.allocator.free(u.variants),
+                    .error_set_decl => |e| if (e.variants.len > 0) self.allocator.free(e.variants),
                     else => {},
                 },
                 .expr => |expr| switch (expr) {

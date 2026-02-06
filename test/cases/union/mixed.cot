@@ -1,0 +1,21 @@
+// Union with mixed payload and unit variants
+// EXPECT: exit_code=0
+
+union Event { Click: i64, Hover, KeyPress: i64 }
+
+fn main() i64 {
+    let e1: Event = Event.Hover
+    if e1.tag != 1 { return 1 }
+
+    let e2: Event = Event.Click(100)
+    if e2.tag != 0 { return 2 }
+    let clicks = e2.Click
+    if clicks != 100 { return 3 }
+
+    let e3: Event = Event.KeyPress(65)
+    if e3.tag != 2 { return 4 }
+    let key = e3.KeyPress
+    if key != 65 { return 5 }
+
+    return 0
+}

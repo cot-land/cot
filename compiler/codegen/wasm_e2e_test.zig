@@ -636,3 +636,110 @@ test "M22: for-range index and value" {
     try std.testing.expect(!result.has_errors);
     try std.testing.expect(result.wasm_bytes.len > 0);
 }
+
+test "wasm e2e: union with payload" {
+    const code =
+        \\union Result { Ok: i64, Err: i32 }
+        \\fn main() i64 {
+        \\    let r: Result = Result.Ok(42)
+        \\    if r.tag != 0 { return 1 }
+        \\    let val = r.Ok
+        \\    if val != 42 { return 2 }
+        \\    let e: Result = Result.Err(99)
+        \\    if e.tag != 1 { return 3 }
+        \\    return 0
+        \\}
+    ;
+
+    var result = try compileToWasm(std.testing.allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+}
+
+test "wasm e2e: union mixed payload and unit variants" {
+    const code =
+        \\union Event { Click: i64, Hover, KeyPress: i64 }
+        \\fn main() i64 {
+        \\    let e1: Event = Event.Hover
+        \\    if e1.tag != 1 { return 1 }
+        \\    let e2: Event = Event.Click(100)
+        \\    if e2.tag != 0 { return 2 }
+        \\    let clicks = e2.Click
+        \\    if clicks != 100 { return 3 }
+        \\    return 0
+        \\}
+    ;
+
+    var result = try compileToWasm(std.testing.allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+}
+
+test "wasm e2e: union switch with payload capture" {
+    const code =
+        \\union Result { Ok: i64, Err: i32 }
+        \\fn main() i64 {
+        \\    let r: Result = Result.Ok(42)
+        \\    switch r {
+        \\        Result.Ok |val| => { return val },
+        \\        Result.Err |e| => { return e },
+        \\    }
+        \\    return 99
+        \\}
+    ;
+
+    var result = try compileToWasm(std.testing.allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+}
+
+test "wasm e2e: error union catch" {
+    const code =
+        \\const MyError = error { Fail, NotFound }
+        \\fn mayFail(x: i64) MyError!i64 {
+        \\    if x < 0 { return error.Fail }
+        \\    return x * 2
+        \\}
+        \\fn main() i64 {
+        \\    let result = mayFail(-1) catch 99
+        \\    if result != 99 { return 1 }
+        \\    let success = mayFail(5) catch 99
+        \\    if success != 10 { return 2 }
+        \\    return 0
+        \\}
+    ;
+
+    var result = try compileToWasm(std.testing.allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+}
+
+test "wasm e2e: error union try propagation" {
+    const code =
+        \\const MyError = error { Fail }
+        \\fn inner() MyError!i64 { return error.Fail }
+        \\fn outer() MyError!i64 {
+        \\    let x = try inner()
+        \\    return x + 1
+        \\}
+        \\fn main() i64 {
+        \\    let result = outer() catch 42
+        \\    if result != 42 { return 1 }
+        \\    return 0
+        \\}
+    ;
+
+    var result = try compileToWasm(std.testing.allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+}

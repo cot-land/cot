@@ -737,38 +737,54 @@ pub const FuncTranslator = struct {
             _ = try self.builder.ins().brTable(selector, jt);
         } else {
             // Jump arguments case - need to split edges
-            // For now, emit a series of conditional branches as fallback
-            // This matches Cranelift's edge-splitting approach but simplified
+            // Port of code_translator.rs lines 526-568
+            // Create intermediate blocks with NO args, then fill them in after br_table
+            const allocator = self.builder.getAllocator();
+
+            // Track unique depths -> intermediate blocks
+            var dest_block_sequence = std.ArrayListUnmanaged(struct { depth: usize, block: Block }){};
+            defer dest_block_sequence.deinit(allocator);
+            var dest_block_map = std.AutoHashMapUnmanaged(usize, Block){};
+            defer dest_block_map.deinit(allocator);
+
+            var jt_targets = try allocator.alloc(Block, targets.len);
+            defer allocator.free(jt_targets);
 
             for (targets, 0..) |depth, i| {
-                const frame = self.state.getFrameMut(depth);
-                frame.setBranchedToExit();
-                const destination = frame.brDestination();
-                const args = self.state.peekn(jump_args_count);
-
-                // Create comparison: selector == i
-                const idx_val = try self.builder.ins().iconst(Type.I32, @intCast(i));
-                const cmp = try self.builder.ins().icmp(.eq, selector, idx_val);
-
-                // Create next block for fall-through
-                const next_block = try self.builder.createBlock();
-
-                // Conditional branch
-                _ = try self.builder.ins().brif(cmp, destination, args, next_block, &[_]Value{});
-
-                self.builder.switchToBlock(next_block);
-                try self.builder.sealBlock(next_block);
-
-                // F1 Fix: Ensure block is in Layout after switching
-                try self.builder.ensureInsertedBlock();
+                const gop = try dest_block_map.getOrPut(allocator, @intCast(depth));
+                if (!gop.found_existing) {
+                    const block = try self.builder.createBlock();
+                    try dest_block_sequence.append(allocator, .{ .depth = @intCast(depth), .block = block });
+                    gop.value_ptr.* = block;
+                }
+                jt_targets[i] = gop.value_ptr.*;
             }
 
-            // Default case
-            const default_frame = self.state.getFrameMut(default);
-            default_frame.setBranchedToExit();
-            const default_dest = default_frame.brDestination();
-            const args = self.state.peekn(jump_args_count);
-            _ = try self.builder.ins().jump(default_dest, args);
+            // Default target intermediate block
+            const default_gop = try dest_block_map.getOrPut(allocator, @intCast(default));
+            if (!default_gop.found_existing) {
+                const block = try self.builder.createBlock();
+                try dest_block_sequence.append(allocator, .{ .depth = @intCast(default), .block = block });
+                default_gop.value_ptr.* = block;
+            }
+            const default_branch_block = default_gop.value_ptr.*;
+
+            // Emit br_table to intermediate blocks (no args)
+            const jt = try self.builder.createJumpTable(default_branch_block, jt_targets);
+            _ = try self.builder.ins().brTable(selector, jt);
+
+            // Fill in each intermediate block: jump to real destination with args
+            for (dest_block_sequence.items) |entry| {
+                self.builder.switchToBlock(entry.block);
+                try self.builder.sealBlock(entry.block);
+                try self.builder.ensureInsertedBlock();
+
+                const real_frame = self.state.getFrameMut(@intCast(entry.depth));
+                real_frame.setBranchedToExit();
+                const real_dest = real_frame.brDestination();
+                const args = self.state.peekn(jump_args_count);
+                _ = try self.builder.ins().jump(real_dest, args);
+            }
         }
 
         self.state.popn(jump_args_count);

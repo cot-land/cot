@@ -1016,11 +1016,23 @@ pub const FuncInstBuilder = struct {
             .table = jt,
         } });
 
-        // Declare successors from jump table
+        // Declare successors from jump table.
+        // Port of cranelift/frontend/src/frontend.rs lines 151-180:
+        // Jump tables can have the same successor appear multiple times,
+        // so we must deduplicate before declaring predecessors.
+        // "Callers are expected to avoid adding the same predecessor more
+        //  than once in the case of a jump table." - cranelift ssa.rs
         if (self.builder.func.getJumpTable(jt)) |jt_data| {
-            try self.builder.declareSuccessor(jt_data.defaultBlock().block, inst);
-            for (jt_data.asSlice()) |entry| {
-                try self.builder.declareSuccessor(entry.block, inst);
+            // Use a simple set to track unique blocks already declared
+            const allocator = self.builder.func_ctx.allocator;
+            var seen = std.AutoHashMapUnmanaged(u32, void){};
+            defer seen.deinit(allocator);
+
+            for (jt_data.allBranches()) |entry| {
+                const gop = try seen.getOrPut(allocator, entry.block.index);
+                if (!gop.found_existing) {
+                    try self.builder.declareSuccessor(entry.block, inst);
+                }
             }
         }
 

@@ -1,0 +1,10 @@
+union Result { Ok: i64, Err: i32 }
+
+fn main() i64 {
+    let r: Result = Result.Ok(42)
+    switch r {
+        Result.Ok |val| => { return val },
+        Result.Err |e| => { return e },
+    }
+    return 99
+}

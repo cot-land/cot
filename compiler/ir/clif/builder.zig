@@ -336,7 +336,7 @@ pub const InstructionData = union(enum) {
             .brif => |*d| &d.blocks,
             .branch_table => |d| blk: {
                 if (jump_tables.getMut(d.table)) |jt| {
-                    break :blk jt.asMutSlice();
+                    break :blk jt.allBranchesMut();
                 }
                 break :blk &[_]BlockCall{};
             },
