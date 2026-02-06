@@ -394,6 +394,23 @@ pub const Lowerer = struct {
         return false;
     }
 
+    /// Check if an expression's root local has an active ARC cleanup.
+    /// Walks chains: a.b.c → checks if a has cleanup.
+    /// Reference: Swift checks ManagedValue::hasCleanup() on base.
+    fn baseHasCleanup(self: *Lowerer, base_idx: NodeIndex) bool {
+        const base_node = self.tree.getNode(base_idx) orelse return false;
+        const base_expr = base_node.asExpr() orelse return false;
+        if (base_expr == .ident) {
+            const fb = self.current_func orelse return false;
+            if (fb.lookupLocal(base_expr.ident.name)) |local_idx| {
+                return self.cleanup_stack.hasCleanupForLocal(local_idx);
+            }
+        }
+        if (base_expr == .field_access) return self.baseHasCleanup(base_expr.field_access.base);
+        if (base_expr == .index) return self.baseHasCleanup(base_expr.index.base);
+        return false;
+    }
+
     /// Evaluate a deferred AST node — may be an expression or a statement.
     fn lowerDeferredNode(self: *Lowerer, node_idx: ast.NodeIndex) Error!void {
         const node = self.tree.getNode(node_idx) orelse return;
@@ -530,25 +547,33 @@ pub const Lowerer = struct {
                     _ = try fb.emitStoreLocal(local_idx, value_node, var_stmt.span);
 
                     // Register cleanup for ARC values.
-                    // Reference: Swift's ManagedValue pattern - owned values get cleanups
-                    const is_new_expr = if (value_expr) |e| e == .new_expr else false;
-                    if (is_new_expr) {
-                        // Value from `new` expression - register cleanup
-                        const cleanup = arc.Cleanup.initForLocal(.release, value_node, type_idx, local_idx);
-                        _ = try self.cleanup_stack.push(cleanup);
-                    } else if (value_expr) |e| {
-                        // Check if copying from an ARC local - need to retain
-                        // Reference: Swift's emitManagedCopy
-                        if (e == .ident) {
-                            if (fb.lookupLocal(e.ident.name)) |src_local_idx| {
-                                if (self.cleanup_stack.hasCleanupForLocal(src_local_idx)) {
-                                    // Source has ARC cleanup - emit retain and register new cleanup
-                                    var retain_args = [_]ir.NodeIndex{value_node};
-                                    const retained = try fb.emitCall("cot_retain", &retain_args, false, type_idx, var_stmt.span);
-                                    _ = try fb.emitStoreLocal(local_idx, retained, var_stmt.span);
-                                    const cleanup = arc.Cleanup.initForLocal(.release, retained, type_idx, local_idx);
-                                    _ = try self.cleanup_stack.push(cleanup);
+                    // Reference: Swift's emitManagedRValueWithCleanup (SILGenExpr.cpp:375-390)
+                    if (self.type_reg.couldBeARC(type_idx)) {
+                        const is_owned = if (value_expr) |e| (e == .new_expr or e == .call) else false;
+
+                        if (is_owned) {
+                            // +1 value (new or call returning owned): just register cleanup
+                            const cleanup = arc.Cleanup.initForLocal(.release, value_node, type_idx, local_idx);
+                            _ = try self.cleanup_stack.push(cleanup);
+                        } else if (value_expr) |e| {
+                            // +0 value (borrowed): retain + register cleanup
+                            const needs_retain = blk: {
+                                if (e == .ident) {
+                                    if (fb.lookupLocal(e.ident.name)) |src_local_idx| {
+                                        break :blk self.cleanup_stack.hasCleanupForLocal(src_local_idx);
+                                    }
                                 }
+                                if (e == .field_access) break :blk self.baseHasCleanup(e.field_access.base);
+                                if (e == .index) break :blk self.baseHasCleanup(e.index.base);
+                                if (e == .deref) break :blk self.baseHasCleanup(e.deref.operand);
+                                break :blk false;
+                            };
+                            if (needs_retain) {
+                                var retain_args = [_]ir.NodeIndex{value_node};
+                                const retained = try fb.emitCall("cot_retain", &retain_args, false, type_idx, var_stmt.span);
+                                _ = try fb.emitStoreLocal(local_idx, retained, var_stmt.span);
+                                const cleanup = arc.Cleanup.initForLocal(.release, retained, type_idx, local_idx);
+                                _ = try self.cleanup_stack.push(cleanup);
                             }
                         }
                     }
@@ -764,17 +789,28 @@ pub const Lowerer = struct {
                     _ = try fb.emitGlobalStore(g.idx, id.name, value_node, assign.span);
                 }
             },
-            .field_access => |fa| try self.lowerFieldAssign(fa, value_node, assign.span),
-            .index => |idx| try self.lowerIndexAssign(idx, value_node, assign.span),
+            .field_access => |fa| try self.lowerFieldAssign(fa, value_node, assign.value, assign.span),
+            .index => |idx| try self.lowerIndexAssign(idx, value_node, assign.value, assign.span),
             .deref => |d| {
                 const ptr_node = try self.lowerExprNode(d.operand);
+                // ARC: release old value at *ptr before storing new
+                const ptr_type_idx = self.inferExprType(d.operand);
+                const ptr_type_info = self.type_reg.get(ptr_type_idx);
+                if (ptr_type_info == .pointer) {
+                    const pointee_type = ptr_type_info.pointer.elem;
+                    if (self.type_reg.couldBeARC(pointee_type) and self.baseHasCleanup(d.operand)) {
+                        const old_val = try fb.emitPtrLoadValue(ptr_node, pointee_type, assign.span);
+                        var release_args = [_]ir.NodeIndex{old_val};
+                        _ = try fb.emitCall("cot_release", &release_args, false, TypeRegistry.VOID, assign.span);
+                    }
+                }
                 _ = try fb.emitPtrStoreValue(ptr_node, value_node, assign.span);
             },
             else => {},
         }
     }
 
-    fn lowerFieldAssign(self: *Lowerer, fa: ast.FieldAccess, value_node: ir.NodeIndex, span: Span) !void {
+    fn lowerFieldAssign(self: *Lowerer, fa: ast.FieldAccess, value_node: ir.NodeIndex, rhs_ast: NodeIndex, span: Span) !void {
         const fb = self.current_func orelse return;
         const base_type_idx = self.inferExprType(fa.base);
         const base_type = self.type_reg.get(base_type_idx);
@@ -798,7 +834,27 @@ pub const Lowerer = struct {
 
                 if (base_type == .pointer) {
                     const ptr_val = try self.lowerExprNode(fa.base);
-                    _ = try fb.emitStoreFieldValue(ptr_val, field_idx, field_offset, value_node, span);
+
+                    // ARC: release old field value before storing new
+                    if (self.type_reg.couldBeARC(field.type_idx) and self.baseHasCleanup(fa.base)) {
+                        const old_val = try fb.emitFieldValue(ptr_val, field_idx, field_offset, field.type_idx, span);
+                        var release_args = [_]ir.NodeIndex{old_val};
+                        _ = try fb.emitCall("cot_release", &release_args, false, TypeRegistry.VOID, span);
+
+                        // Retain new value if borrowed (+0)
+                        const rhs_node = self.tree.getNode(rhs_ast);
+                        const rhs_expr = if (rhs_node) |n| n.asExpr() else null;
+                        const is_owned = if (rhs_expr) |e| (e == .new_expr or e == .call) else false;
+                        if (!is_owned) {
+                            var retain_args = [_]ir.NodeIndex{value_node};
+                            const retained = try fb.emitCall("cot_retain", &retain_args, false, field.type_idx, span);
+                            _ = try fb.emitStoreFieldValue(ptr_val, field_idx, field_offset, retained, span);
+                        } else {
+                            _ = try fb.emitStoreFieldValue(ptr_val, field_idx, field_offset, value_node, span);
+                        }
+                    } else {
+                        _ = try fb.emitStoreFieldValue(ptr_val, field_idx, field_offset, value_node, span);
+                    }
                 } else if (base_expr == .ident) {
                     if (fb.lookupLocal(base_expr.ident.name)) |local_idx| {
                         _ = try fb.emitStoreLocalField(local_idx, field_idx, field_offset, value_node, span);
@@ -813,7 +869,7 @@ pub const Lowerer = struct {
         }
     }
 
-    fn lowerIndexAssign(self: *Lowerer, idx: ast.Index, value_node: ir.NodeIndex, span: Span) !void {
+    fn lowerIndexAssign(self: *Lowerer, idx: ast.Index, value_node: ir.NodeIndex, rhs_ast: NodeIndex, span: Span) !void {
         const fb = self.current_func orelse return;
         const base_type_idx = self.inferExprType(idx.base);
         const base_type = self.type_reg.get(base_type_idx);
@@ -826,6 +882,30 @@ pub const Lowerer = struct {
         const index_node = try self.lowerExprNode(idx.idx);
         const base_node = self.tree.getNode(idx.base) orelse return;
         const base_expr = base_node.asExpr() orelse return;
+
+        // ARC: release old element before storing new
+        const arc_elem = self.type_reg.couldBeARC(elem_type) and self.baseHasCleanup(idx.base);
+        if (arc_elem) {
+            // Load old element and release it
+            if (base_expr == .ident) {
+                if (fb.lookupLocal(base_expr.ident.name)) |local_idx| {
+                    const old_val = try fb.emitIndexLocal(local_idx, index_node, elem_size, elem_type, span);
+                    var release_args = [_]ir.NodeIndex{old_val};
+                    _ = try fb.emitCall("cot_release", &release_args, false, TypeRegistry.VOID, span);
+
+                    // Retain new value if borrowed (+0)
+                    const rhs_node = self.tree.getNode(rhs_ast);
+                    const rhs_expr = if (rhs_node) |n| n.asExpr() else null;
+                    const is_owned = if (rhs_expr) |e| (e == .new_expr or e == .call) else false;
+                    const store_val = if (!is_owned) blk: {
+                        var retain_args = [_]ir.NodeIndex{value_node};
+                        break :blk try fb.emitCall("cot_retain", &retain_args, false, elem_type, span);
+                    } else value_node;
+                    _ = try fb.emitStoreIndexLocal(local_idx, index_node, store_val, elem_size, span);
+                    return;
+                }
+            }
+        }
 
         if (base_expr == .ident) {
             if (fb.lookupLocal(base_expr.ident.name)) |local_idx| {

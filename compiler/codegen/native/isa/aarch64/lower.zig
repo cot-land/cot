@@ -499,12 +499,10 @@ pub const AArch64LowerBackend = struct {
             };
         }
 
-        // Emit the Args instruction
-        try ctx.emit(Inst.genArgs(arg_pairs));
-
         // If we have a vmctx parameter, move it to the pinned register (x21)
+        // MUST happen BEFORE Args instruction so regalloc edits for Args
+        // don't clobber x0 before we save vmctx.
         // Port of Cranelift's set_pinned_reg from lower.isle:2791-2792
-        // This ensures vmctx is always available in x21, which is excluded from allocation
         if (has_vmctx) {
             // vmctx is in x0 (first int arg), move to x21 (pinned reg)
             // orr x21, xzr, x0  (equivalent to mov x21, x0)
@@ -518,6 +516,9 @@ pub const AArch64LowerBackend = struct {
                 },
             });
         }
+
+        // Emit the Args instruction (regalloc edits may move params around)
+        try ctx.emit(Inst.genArgs(arg_pairs));
     }
 
     // =========================================================================

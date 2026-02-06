@@ -322,6 +322,15 @@ pub const TypeRegistry = struct {
         return !self.isTrivial(idx);
     }
 
+    /// Returns true if type could be an ARC-managed heap pointer.
+    /// Only *StructType can come from `new`. Raw pointers (*i64) are trivial.
+    /// Reference: Swift TypeLowering — only class types (heap) are non-trivial.
+    pub fn couldBeARC(self: *const TypeRegistry, idx: TypeIndex) bool {
+        const t = self.get(idx);
+        if (t != .pointer) return false;
+        return self.get(t.pointer.elem) == .struct_type;
+    }
+
     pub fn equal(self: *const TypeRegistry, a: TypeIndex, b: TypeIndex) bool {
         if (a == b) return true;
         if (a == invalid_type or b == invalid_type) return false;

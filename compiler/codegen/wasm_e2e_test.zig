@@ -799,3 +799,77 @@ test "wasm e2e: defer with loop break" {
     try std.testing.expect(!result.has_errors);
     try std.testing.expect(result.wasm_bytes.len > 0);
 }
+
+test "wasm e2e: ARC function returning new" {
+    const code =
+        \\struct Foo { x: i64 }
+        \\fn createFoo(val: i64) *Foo {
+        \\    return new Foo { x: val }
+        \\}
+        \\fn main() i64 {
+        \\    let p = createFoo(42)
+        \\    return p.x
+        \\}
+    ;
+
+    var result = try compileToWasm(std.testing.allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+}
+
+test "wasm e2e: ARC copy from local" {
+    const code =
+        \\struct Foo { x: i64 }
+        \\fn main() i64 {
+        \\    let p = new Foo { x: 10 }
+        \\    let q = p
+        \\    return q.x
+        \\}
+    ;
+
+    var result = try compileToWasm(std.testing.allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+}
+
+test "wasm e2e: ARC reassignment" {
+    const code =
+        \\struct Foo { x: i64 }
+        \\fn main() i64 {
+        \\    var p = new Foo { x: 1 }
+        \\    let q = new Foo { x: 2 }
+        \\    p = q
+        \\    return p.x
+        \\}
+    ;
+
+    var result = try compileToWasm(std.testing.allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+}
+
+test "wasm e2e: ARC return forwarding" {
+    const code =
+        \\struct Foo { x: i64 }
+        \\fn makeFoo() *Foo {
+        \\    let p = new Foo { x: 77 }
+        \\    return p
+        \\}
+        \\fn main() i64 {
+        \\    let f = makeFoo()
+        \\    return f.x
+        \\}
+    ;
+
+    var result = try compileToWasm(std.testing.allocator, code);
+    defer result.deinit();
+
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+}
