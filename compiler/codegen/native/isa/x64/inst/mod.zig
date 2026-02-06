@@ -1002,6 +1002,14 @@ pub const Inst = union(enum) {
         };
     }
 
+    /// Check if this instruction is an unconditional trap.
+    pub fn isTrap(self: Inst) bool {
+        return switch (self) {
+            .ud2 => true,
+            else => false,
+        };
+    }
+
     /// Check if this instruction is a terminator and what kind.
     /// Ported from cranelift/codegen/src/isa/x64/inst/mod.rs is_term()
     pub fn isTerm(self: Inst) MachTerminator {

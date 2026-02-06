@@ -478,15 +478,18 @@ pub const AArch64LowerBackend = struct {
             const ty = ctx.f.dfg.valueType(param);
 
             // Determine the physical register for this argument
-            // ARM64 ABI: integers in x0-x7, floats in v0-v7
+            // Internal CC: integers in x0-x15, floats in v0-v7
+            // x0-x15 are all caller-saved; x16-x17 reserved for linker (IP0/IP1)
             const preg: PReg = if (ty.isFloat())
                 blk: {
+                    std.debug.assert(float_arg_idx < 8);
                     const idx = float_arg_idx;
                     float_arg_idx += 1;
                     break :blk regs.vregPreg(idx);
                 }
             else
                 blk: {
+                    std.debug.assert(int_arg_idx < 16);
                     const idx = int_arg_idx;
                     int_arg_idx += 1;
                     break :blk regs.xregPreg(idx);
@@ -497,6 +500,7 @@ pub const AArch64LowerBackend = struct {
                 .vreg = Writable(Reg).fromReg(vreg),
                 .preg = preg,
             };
+
         }
 
         // If we have a vmctx parameter, move it to the pinned register (x21)
@@ -1903,8 +1907,11 @@ pub const AArch64LowerBackend = struct {
             const arg_reg = arg_val.onlyReg() orelse continue;
             const arg_ty = ctx.inputTy(ir_inst, idx);
 
-            if (!arg_ty.isFloat() and int_arg_idx < 8) {
+            if (!arg_ty.isFloat() and int_arg_idx < 16) {
                 // Add to uses: this vreg MUST be in this preg at the call
+                // Internal CC uses x0-x15 for integer args (x0-x7 standard AAPCS64,
+                // x8-x15 extended for our Wasm-internal calling convention).
+                // All x0-x15 are caller-saved and in clobber set.
                 call_info.uses.append(ctx.allocator, .{
                     .vreg = arg_reg,
                     .preg = regs.xregPreg(int_arg_idx),
@@ -1955,8 +1962,8 @@ pub const AArch64LowerBackend = struct {
         // Port of cranelift/codegen/src/isa/aarch64/lower.isle:2542-2551
         // The callee address is the first input, remaining inputs are arguments.
         //
-        // AAPCS64 ABI:
-        // - Integer/pointer arguments: X0-X7
+        // Internal calling convention (Wasm-internal):
+        // - Integer/pointer arguments: X0-X15 (extended from AAPCS64 X0-X7)
         // - Float arguments: V0-V7
         // - Return value: X0 (integer), V0 (float)
         // - Caller-saved (clobbered): X0-X17, V0-V31
@@ -1985,7 +1992,7 @@ pub const AArch64LowerBackend = struct {
             .try_call_info = null,
         };
 
-        // Build AAPCS64 clobber set: X0-X17 and V0-V31 are caller-saved
+        // Build clobber set: X0-X17 and V0-V31 are caller-saved
         // Port of Cranelift's get_regs_clobbered_by_call
         var clobbers = inst_mod.PRegSet.empty();
         var i: u8 = 0;
@@ -2007,8 +2014,9 @@ pub const AArch64LowerBackend = struct {
             const arg_reg = arg_val.onlyReg() orelse continue;
             const arg_ty = ctx.inputTy(ir_inst, idx);
 
-            if (!arg_ty.isFloat() and int_arg_idx < 8) {
+            if (!arg_ty.isFloat() and int_arg_idx < 16) {
                 // Add to uses: this vreg MUST be in this preg at the call
+                // Internal CC uses x0-x15 for integer args.
                 call_ind_info.uses.append(ctx.allocator, .{
                     .vreg = arg_reg,
                     .preg = regs.xregPreg(int_arg_idx),

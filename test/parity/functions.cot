@@ -1,0 +1,788 @@
+// Parity tests: Functions
+// Ported from bootstrap-0.2/test/parity/functions/ (115 tests)
+// Skipped: 011,012 (global mutation), 036,037,050,051,052,082 (extern/ptr)
+// Each test function returns 0 on pass, 1 on fail.
+// main() returns total number of failures (0 = all pass).
+
+// === Helper functions (prefixed to avoid collisions) ===
+
+fn fn01_get42() i64 { return 42; }
+fn fn02_sum5(a: i64, b: i64, c: i64, d: i64, e: i64) i64 { return a + b + c + d + e; }
+fn fn03_fib(n: i64) i64 {
+    if n <= 1 { return n; }
+    return fn03_fib(n - 1) + fn03_fib(n - 2);
+}
+fn fn04_is_odd(n: i64) i64 {
+    if n == 0 { return 0; }
+    return fn04_is_even(n - 1);
+}
+fn fn04_is_even(n: i64) i64 {
+    if n == 0 { return 1; }
+    return fn04_is_odd(n - 1);
+}
+fn fn05_sum6(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64) i64 {
+    return a + b + c + d + e + f;
+}
+fn fn06_sum7(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64) i64 {
+    return a + b + c + d + e + f + g;
+}
+fn fn07_sum8(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64) i64 {
+    return a + b + c + d + e + f + g + h;
+}
+fn fn08_double(x: i64) i64 { return x * 2; }
+fn fn08_triple(x: i64) i64 { return x * 3; }
+fn fn08_apply_both(x: i64) i64 { return fn08_double(fn08_triple(x)); }
+fn fn09_factorial(n: i64) i64 {
+    if n <= 1 { return 1; }
+    return n * fn09_factorial(n - 1);
+}
+fn fn10_square(x: i64) i64 { return x * x; }
+fn fn13_f1(x: i64) i64 { return x + 1; }
+fn fn13_f2(x: i64) i64 { return fn13_f1(x) + 1; }
+fn fn13_f3(x: i64) i64 { return fn13_f2(x) + 1; }
+fn fn13_f4(x: i64) i64 { return fn13_f3(x) + 1; }
+fn fn14_double(x: i64) i64 { return x * 2; }
+fn fn15_add(a: i64, b: i64) i64 { return a + b; }
+fn fn15_triple(x: i64) i64 { return x * 3; }
+fn fn16_inc(x: i64) i64 { return x + 1; }
+fn fn17_collatz_steps(n: i64) i64 {
+    var steps: i64 = 0;
+    var x: i64 = n;
+    while x != 1 {
+        if (x % 2) == 0 { x = x / 2; }
+        else { x = x * 3 + 1; }
+        steps = steps + 1;
+    }
+    return steps;
+}
+fn fn18_is_prime(n: i64) i64 {
+    if n < 2 { return 0; }
+    var i: i64 = 2;
+    while i * i <= n {
+        if (n % i) == 0 { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+fn fn19_count_primes(n: i64) i64 {
+    var count: i64 = 0;
+    var i: i64 = 2;
+    while i <= n {
+        if fn18_is_prime(i) != 0 { count = count + 1; }
+        i = i + 1;
+    }
+    return count;
+}
+fn fn20_fib(n: i64) i64 {
+    if n <= 1 { return n; }
+    var a: i64 = 0;
+    var b: i64 = 1;
+    var i: i64 = 2;
+    while i <= n {
+        var t: i64 = a + b;
+        a = b;
+        b = t;
+        i = i + 1;
+    }
+    return b;
+}
+fn fn21_triangle(n: i64) i64 { return n * (n + 1) / 2; }
+fn fn22_double(x: i64) i64 { return x * 2; }
+fn fn22_apply_twice(x: i64) i64 { return fn22_double(fn22_double(x)); }
+fn fn23_add5(x: i64) i64 { return x + 5; }
+fn fn23_mul2(x: i64) i64 { return x * 2; }
+fn fn23_compose(x: i64) i64 { return fn23_mul2(fn23_add5(x)); }
+fn fn24_ack(m: i64, n: i64) i64 {
+    if m == 0 { return n + 1; }
+    if n == 0 { return fn24_ack(m - 1, 1); }
+    return fn24_ack(m - 1, fn24_ack(m, n - 1));
+}
+fn fn25_sum_range(a: i64, b: i64) i64 {
+    var sum: i64 = 0;
+    var i: i64 = a;
+    while i <= b {
+        sum = sum + i;
+        i = i + 1;
+    }
+    return sum;
+}
+fn fn26_identity(x: i64) i64 { return x; }
+fn fn27_swap_sub(a: i64, b: i64) i64 { return b - a; }
+fn fn28_ignore_second(a: i64, b: i64) i64 { return a; }
+fn fn29_use_all(a: i64, b: i64, c: i64, d: i64) i64 { return ((a - b) * c) + d; }
+fn fn30_f1(x: i64) i64 { return x + 1; }
+fn fn30_f2(x: i64) i64 { return fn30_f1(x) + 1; }
+fn fn30_f3(x: i64) i64 { return fn30_f2(x) + 1; }
+fn fn30_f4(x: i64) i64 { return fn30_f3(x) + 1; }
+fn fn30_f5(x: i64) i64 { return fn30_f4(x) + 1; }
+fn fn31_a(x: i64) i64 { return fn31_b(x + 1); }
+fn fn31_b(x: i64) i64 { return fn31_c(x + 1); }
+fn fn31_c(x: i64) i64 { return fn31_d(x + 1); }
+fn fn31_d(x: i64) i64 { return fn31_e(x + 1); }
+fn fn31_e(x: i64) i64 { return fn31_f(x + 1); }
+fn fn31_f(x: i64) i64 { return x; }
+fn fn32_sum9(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: i64) i64 {
+    return a + b + c + d + e + f + g + h + i;
+}
+fn fn33_countdown(n: i64) i64 {
+    if n <= 0 { return 0; }
+    return fn33_countdown(n - 1);
+}
+fn fn34_sum_rec(n: i64) i64 {
+    if n <= 0 { return 0; }
+    return n + fn34_sum_rec(n - 1);
+}
+fn fn35_mult_rec(a: i64, b: i64) i64 {
+    if b <= 0 { return 0; }
+    return a + fn35_mult_rec(a, b - 1);
+}
+fn fn38_add1(x: i64) i64 { return x + 1; }
+fn fn38_nested3(x: i64) i64 { return fn38_add1(fn38_add1(fn38_add1(x))); }
+fn fn39_double(x: i64) i64 { return x * 2; }
+fn fn39_call_in_binop(a: i64, b: i64) i64 { return fn39_double(a) + fn39_double(b); }
+fn fn40_add(a: i64, b: i64) i64 { return a + b; }
+fn fn40_mul(a: i64, b: i64) i64 { return a * b; }
+fn fn40_call_in_call(x: i64) i64 { return fn40_add(fn40_mul(x, 2), fn40_mul(x, 3)); }
+fn fn41_inc(x: i64) i64 { return x + 1; }
+fn fn41_add(a: i64, b: i64) i64 { return a + b; }
+fn fn41_both_args(x: i64, y: i64) i64 { return fn41_add(fn41_inc(x), fn41_inc(y)); }
+fn fn42_rec_sum(a: i64, b: i64, c: i64) i64 {
+    if a <= 0 { return c; }
+    return fn42_rec_sum(a - 1, b, c + b);
+}
+fn fn43_ping(n: i64) i64 {
+    if n <= 0 { return 0; }
+    return fn43_pong(n - 1) + 1;
+}
+fn fn43_pong(n: i64) i64 {
+    if n <= 0 { return 0; }
+    return fn43_ping(n - 1) + 1;
+}
+fn fn46_double(x: i64) i64 { return x * 2; }
+fn fn46_triple(x: i64) i64 { return x * 3; }
+fn fn46_quadruple(x: i64) i64 { return x * 4; }
+fn fn47_add(a: i64, b: i64) i64 { return a + b; }
+fn fn47_mul(a: i64, b: i64) i64 { return a * b; }
+fn fn48_is_even(x: i64) i64 { if x % 2 == 0 { return 1; } return 0; }
+fn fn49_square(x: i64) i64 { return x * x; }
+fn fn53_add(a: i64, b: i64) i64 { return a + b; }
+fn fn54_adder(base: i64, x: i64) i64 { return base + x; }
+fn fn55_double(x: i64) i64 { return x * 2; }
+fn fn56_square(x: i64) i64 { return x * x; }
+fn fn57_fib_iter(n: i64) i64 {
+    if n <= 1 { return n; }
+    var a: i64 = 0;
+    var b: i64 = 1;
+    var i: i64 = 2;
+    while i <= n {
+        var tmp: i64 = a + b;
+        a = b;
+        b = tmp;
+        i = i + 1;
+    }
+    return b;
+}
+fn fn58_fact_iter(n: i64) i64 {
+    var result: i64 = 1;
+    var i: i64 = 2;
+    while i <= n {
+        result = result * i;
+        i = i + 1;
+    }
+    return result;
+}
+fn fn59_power(base: i64, exp: i64) i64 {
+    var result: i64 = 1;
+    var i: i64 = 0;
+    while i < exp { result = result * base; i = i + 1; }
+    return result;
+}
+fn fn60_is_prime(n: i64) i64 {
+    if n <= 1 { return 0; }
+    if n <= 3 { return 1; }
+    if n % 2 == 0 { return 0; }
+    var i: i64 = 3;
+    while i * i <= n { if n % i == 0 { return 0; } i = i + 2; }
+    return 1;
+}
+fn fn61_collatz_steps(n: i64) i64 {
+    var steps: i64 = 0;
+    var x: i64 = n;
+    while x > 1 {
+        if x % 2 == 0 { x = x / 2; } else { x = 3 * x + 1; }
+        steps = steps + 1;
+    }
+    return steps;
+}
+fn fn62_digit_sum(n: i64) i64 {
+    var sum: i64 = 0;
+    var x: i64 = n;
+    while x > 0 { sum = sum + (x % 10); x = x / 10; }
+    return sum;
+}
+fn fn63_reverse_num(n: i64) i64 {
+    var rev: i64 = 0;
+    var x: i64 = n;
+    while x > 0 { rev = rev * 10 + (x % 10); x = x / 10; }
+    return rev;
+}
+fn fn64_count_digits(n: i64) i64 {
+    if n == 0 { return 1; }
+    var count: i64 = 0;
+    var x: i64 = n;
+    while x > 0 { count = count + 1; x = x / 10; }
+    return count;
+}
+fn fn65_min(a: i64, b: i64) i64 { if a < b { return a; } return b; }
+fn fn65_max(a: i64, b: i64) i64 { if a > b { return a; } return b; }
+fn fn66_clamp(x: i64, lo: i64, hi: i64) i64 {
+    if x < lo { return lo; }
+    if x > hi { return hi; }
+    return x;
+}
+fn fn67_abs(x: i64) i64 { if x < 0 { return 0 - x; } return x; }
+fn fn68_sign(x: i64) i64 {
+    if x < 0 { return 0 - 1; }
+    if x > 0 { return 1; }
+    return 0;
+}
+fn fn69_gcd(a: i64, b: i64) i64 {
+    var x: i64 = a;
+    var y: i64 = b;
+    while y > 0 { var t: i64 = y; y = x % y; x = t; }
+    return x;
+}
+fn fn70_lcm(a: i64, b: i64) i64 { return (a / fn69_gcd(a, b)) * b; }
+fn fn71_sum_of_squares(n: i64) i64 {
+    var sum: i64 = 0;
+    var i: i64 = 1;
+    while i <= n { sum = sum + i * i; i = i + 1; }
+    return sum;
+}
+fn fn72_sum_of_cubes(n: i64) i64 {
+    var sum: i64 = 0;
+    var i: i64 = 1;
+    while i <= n { sum = sum + i * i * i; i = i + 1; }
+    return sum;
+}
+fn fn73_nth_prime(n: i64) i64 {
+    var count: i64 = 0;
+    var num: i64 = 2;
+    while count < n {
+        if fn60_is_prime(num) == 1 {
+            count = count + 1;
+            if count == n { return num; }
+        }
+        num = num + 1;
+    }
+    return num;
+}
+fn fn74_triangular(n: i64) i64 { return n * (n + 1) / 2; }
+fn fn75_is_perfect_square(n: i64) i64 {
+    var i: i64 = 1;
+    while i * i <= n { if i * i == n { return 1; } i = i + 1; }
+    return 0;
+}
+fn fn76_isqrt(n: i64) i64 {
+    var x: i64 = n;
+    var y: i64 = (x + 1) / 2;
+    while y < x { x = y; y = (x + n / x) / 2; }
+    return x;
+}
+fn fn77_count_divisors(n: i64) i64 {
+    var count: i64 = 0;
+    var i: i64 = 1;
+    while i <= n { if n % i == 0 { count = count + 1; } i = i + 1; }
+    return count;
+}
+fn fn78_sum_divisors(n: i64) i64 {
+    var sum: i64 = 0;
+    var i: i64 = 1;
+    while i <= n { if n % i == 0 { sum = sum + i; } i = i + 1; }
+    return sum;
+}
+fn fn79_fast_pow(base: i64, exp: i64) i64 {
+    var result: i64 = 1;
+    var b: i64 = base;
+    var e: i64 = exp;
+    while e > 0 {
+        if e % 2 == 1 { result = result * b; }
+        e = e / 2;
+        b = b * b;
+    }
+    return result;
+}
+fn fn80_mod_pow(base: i64, exp: i64, m: i64) i64 {
+    var result: i64 = 1;
+    var b: i64 = base % m;
+    var e: i64 = exp;
+    while e > 0 {
+        if e % 2 == 1 { result = (result * b) % m; }
+        e = e / 2;
+        b = (b * b) % m;
+    }
+    return result;
+}
+fn fn83_count_down(n: i64) i64 {
+    if n <= 0 { return 0; }
+    return fn83_count_down(n - 1) + 1;
+}
+fn fn84_sum_to(n: i64) i64 {
+    if n <= 0 { return 0; }
+    return n + fn84_sum_to(n - 1);
+}
+fn fn85_factorial(n: i64) i64 {
+    if n <= 1 { return 1; }
+    return n * fn85_factorial(n - 1);
+}
+fn fn86_is_odd(n: i64) i64 {
+    if n == 0 { return 0; }
+    return fn86_is_even(n - 1);
+}
+fn fn86_is_even(n: i64) i64 {
+    if n == 0 { return 1; }
+    return fn86_is_odd(n - 1);
+}
+fn fn87_collatz_rec(n: i64) i64 {
+    if n == 1 { return 0; }
+    if n % 2 == 0 { return 1 + fn87_collatz_rec(n / 2); }
+    return 1 + fn87_collatz_rec(3 * n + 1);
+}
+fn fn88_digit_sum(n: i64) i64 {
+    var x: i64 = n;
+    if x < 0 { x = 0 - x; }
+    if x < 10 { return x; }
+    return x % 10 + fn88_digit_sum(x / 10);
+}
+fn fn89_count_digits(n: i64) i64 {
+    var x: i64 = n;
+    if x < 0 { x = 0 - x; }
+    if x < 10 { return 1; }
+    return 1 + fn89_count_digits(x / 10);
+}
+fn fn90_reverse_helper(n: i64, acc: i64) i64 {
+    if n == 0 { return acc; }
+    return fn90_reverse_helper(n / 10, acc * 10 + n % 10);
+}
+fn fn91_is_palindrome(n: i64) i64 {
+    if n < 0 { return 0; }
+    if fn90_reverse_helper(n, 0) == n { return 1; }
+    return 0;
+}
+fn fn92_is_power_of_two(n: i64) i64 {
+    if n <= 0 { return 0; }
+    if n == 1 { return 1; }
+    if n % 2 != 0 { return 0; }
+    return fn92_is_power_of_two(n / 2);
+}
+fn fn93_log2_floor(n: i64) i64 {
+    if n < 1 { return 0 - 1; }
+    if n == 1 { return 0; }
+    return 1 + fn93_log2_floor(n / 2);
+}
+fn fn94_sum_to_n(n: i64) i64 {
+    if n <= 0 { return 0; }
+    return n + fn94_sum_to_n(n - 1);
+}
+fn fn95_sum_squares(n: i64) i64 {
+    if n <= 0 { return 0; }
+    return n * n + fn95_sum_squares(n - 1);
+}
+fn fn96_power(base: i64, exp: i64) i64 {
+    if exp == 0 { return 1; }
+    return base * fn96_power(base, exp - 1);
+}
+fn fn97_power_iter(base: i64, exp: i64) i64 {
+    var result: i64 = 1;
+    var i: i64 = 0;
+    while i < exp { result = result * base; i = i + 1; }
+    return result;
+}
+fn fn98_factorial_iter(n: i64) i64 {
+    var result: i64 = 1;
+    var i: i64 = 2;
+    while i <= n { result = result * i; i = i + 1; }
+    return result;
+}
+fn fn99_triangle(n: i64) i64 { return n * (n + 1) / 2; }
+fn fn100_square(n: i64) i64 { return n * n; }
+fn fn101_cube(n: i64) i64 { return n * n * n; }
+fn fn102_sum_cubes(n: i64) i64 {
+    var sum: i64 = 0;
+    var i: i64 = 1;
+    while i <= n { sum = sum + i * i * i; i = i + 1; }
+    return sum;
+}
+fn fn103_double(n: i64) i64 { return n + n; }
+fn fn104_half(n: i64) i64 { return n / 2; }
+fn fn105_negate(n: i64) i64 { return 0 - n; }
+fn fn106_inc(n: i64) i64 { return n + 1; }
+fn fn107_dec(n: i64) i64 { return n - 1; }
+fn fn108_is_zero(n: i64) i64 { if n == 0 { return 1; } return 0; }
+fn fn109_is_positive(n: i64) i64 { if n > 0 { return 1; } return 0; }
+fn fn110_is_negative(n: i64) i64 { if n < 0 { return 1; } return 0; }
+fn fn111_clamp(x: i64, lo: i64, hi: i64) i64 {
+    if x < lo { return lo; }
+    if x > hi { return hi; }
+    return x;
+}
+fn fn112_lerp(a: i64, b: i64, t: i64) i64 { return a + (b - a) * t / 100; }
+fn fn113_avg(a: i64, b: i64) i64 { return (a + b) / 2; }
+fn fn114_abs(x: i64) i64 { if x < 0 { return 0 - x; } return x; }
+fn fn114_distance(a: i64, b: i64) i64 { return fn114_abs(a - b); }
+fn fn115_inc(n: i64) i64 { return n + 1; }
+fn fn115_double(n: i64) i64 { return n * 2; }
+fn fn115_square(n: i64) i64 { return n * n; }
+
+// === Test functions ===
+
+fn test_fn_001() i64 { if fn01_get42() != 42 { return 1; } return 0; }
+fn test_fn_002() i64 { if fn02_sum5(1, 2, 3, 4, 5) != 15 { return 1; } return 0; }
+fn test_fn_003() i64 { if fn03_fib(10) != 55 { return 1; } return 0; }
+fn test_fn_004() i64 { if fn04_is_even(10) != 1 { return 1; } return 0; }
+fn test_fn_005() i64 { if fn05_sum6(1, 2, 3, 4, 5, 6) != 21 { return 1; } return 0; }
+fn test_fn_006() i64 { if fn06_sum7(1, 2, 3, 4, 5, 6, 7) != 28 { return 1; } return 0; }
+fn test_fn_007() i64 { if fn07_sum8(1, 2, 3, 4, 5, 6, 7, 8) != 36 { return 1; } return 0; }
+fn test_fn_008() i64 { if fn08_apply_both(5) != 30 { return 1; } return 0; }
+fn test_fn_009() i64 { if fn09_factorial(5) != 120 { return 1; } return 0; }
+fn test_fn_010() i64 {
+    if fn10_square(3) + fn10_square(4) != 25 { return 1; }
+    return 0;
+}
+// 011: skipped (global mutation)
+// 012: skipped (global mutation)
+fn test_fn_013() i64 { if fn13_f4(0) != 4 { return 1; } return 0; }
+fn test_fn_014() i64 {
+    if fn14_double(5) <= 8 { return 1; }
+    return 0;
+}
+fn test_fn_015() i64 { if fn15_add(fn15_triple(2), fn15_triple(3)) != 15 { return 1; } return 0; }
+fn test_fn_016() i64 {
+    var a: i64 = fn16_inc(0);
+    var b: i64 = fn16_inc(a);
+    var c: i64 = fn16_inc(b);
+    var d: i64 = fn16_inc(c);
+    var e: i64 = fn16_inc(d);
+    if e != 5 { return 1; }
+    return 0;
+}
+fn test_fn_017() i64 { if fn17_collatz_steps(6) != 8 { return 1; } return 0; }
+fn test_fn_018() i64 { if fn18_is_prime(17) != 1 { return 1; } return 0; }
+fn test_fn_019() i64 { if fn19_count_primes(20) != 8 { return 1; } return 0; }
+fn test_fn_020() i64 { if fn20_fib(10) != 55 { return 1; } return 0; }
+fn test_fn_021() i64 { if fn21_triangle(10) != 55 { return 1; } return 0; }
+fn test_fn_022() i64 { if fn22_apply_twice(5) != 20 { return 1; } return 0; }
+fn test_fn_023() i64 { if fn23_compose(10) != 30 { return 1; } return 0; }
+fn test_fn_024() i64 { if fn24_ack(2, 3) != 9 { return 1; } return 0; }
+fn test_fn_025() i64 { if fn25_sum_range(5, 10) != 45 { return 1; } return 0; }
+fn test_fn_026() i64 { if fn26_identity(42) != 42 { return 1; } return 0; }
+fn test_fn_027() i64 { if fn27_swap_sub(3, 10) != 7 { return 1; } return 0; }
+fn test_fn_028() i64 { if fn28_ignore_second(42, 999) != 42 { return 1; } return 0; }
+fn test_fn_029() i64 { if fn29_use_all(10, 3, 4, 5) != 33 { return 1; } return 0; }
+fn test_fn_030() i64 { if fn30_f5(0) != 5 { return 1; } return 0; }
+fn test_fn_031() i64 { if fn31_a(0) != 5 { return 1; } return 0; }
+fn test_fn_032() i64 { if fn32_sum9(1, 2, 3, 4, 5, 6, 7, 8, 9) != 45 { return 1; } return 0; }
+fn test_fn_033() i64 { if fn33_countdown(100) != 0 { return 1; } return 0; }
+fn test_fn_034() i64 { if fn34_sum_rec(10) != 55 { return 1; } return 0; }
+fn test_fn_035() i64 { if fn35_mult_rec(7, 6) != 42 { return 1; } return 0; }
+// 036: skipped (extern/ptr)
+// 037: skipped (extern/ptr)
+fn test_fn_038() i64 { if fn38_nested3(0) != 3 { return 1; } return 0; }
+fn test_fn_039() i64 { if fn39_call_in_binop(3, 4) != 14 { return 1; } return 0; }
+fn test_fn_040() i64 { if fn40_call_in_call(5) != 25 { return 1; } return 0; }
+fn test_fn_041() i64 { if fn41_both_args(5, 10) != 17 { return 1; } return 0; }
+fn test_fn_042() i64 { if fn42_rec_sum(5, 3, 0) != 15 { return 1; } return 0; }
+fn test_fn_043() i64 { if fn43_ping(10) != 10 { return 1; } return 0; }
+fn test_fn_044() i64 { if fn05_sum6(1, 2, 3, 4, 5, 6) != 21 { return 1; } return 0; }
+fn test_fn_045() i64 { if fn07_sum8(1, 2, 3, 4, 5, 6, 7, 8) != 36 { return 1; } return 0; }
+fn test_fn_046() i64 {
+    if fn46_quadruple(fn46_triple(fn46_double(5))) != 120 { return 1; }
+    return 0;
+}
+fn test_fn_047() i64 {
+    if fn47_add(fn47_mul(2, 3), fn47_mul(4, 5)) != 26 { return 1; }
+    return 0;
+}
+fn test_fn_048() i64 {
+    if fn48_is_even(4) != 1 { return 1; }
+    if fn48_is_even(7) != 0 { return 1; }
+    return 0;
+}
+fn test_fn_049() i64 {
+    var sum: i64 = 0;
+    var i: i64 = 1;
+    while i <= 5 { sum = sum + fn49_square(i); i = i + 1; }
+    if sum != 55 { return 1; }
+    return 0;
+}
+// 050: skipped (extern/ptr)
+// 051: skipped (extern/ptr)
+// 052: skipped (extern/ptr)
+fn test_fn_053() i64 { if fn53_add(fn53_add(fn53_add(1, 2), 3), 4) != 10 { return 1; } return 0; }
+fn test_fn_054() i64 {
+    var b: i64 = 100;
+    if fn54_adder(b, 1) != 101 { return 1; }
+    if fn54_adder(b, 2) != 102 { return 1; }
+    if fn54_adder(b, 3) != 103 { return 1; }
+    return 0;
+}
+fn test_fn_055() i64 { if fn55_double(5) + fn55_double(10) != 30 { return 1; } return 0; }
+fn test_fn_056() i64 {
+    if fn56_square(3) >= fn56_square(4) { return 1; }
+    return 0;
+}
+fn test_fn_057() i64 { if fn57_fib_iter(10) != 55 { return 1; } return 0; }
+fn test_fn_058() i64 { if fn58_fact_iter(6) != 720 { return 1; } return 0; }
+fn test_fn_059() i64 { if fn59_power(2, 10) != 1024 { return 1; } return 0; }
+fn test_fn_060() i64 {
+    if fn60_is_prime(2) != 1 { return 1; }
+    if fn60_is_prime(17) != 1 { return 1; }
+    if fn60_is_prime(18) != 0 { return 1; }
+    if fn60_is_prime(97) != 1 { return 1; }
+    return 0;
+}
+fn test_fn_061() i64 { if fn61_collatz_steps(27) != 111 { return 1; } return 0; }
+fn test_fn_062() i64 { if fn62_digit_sum(12345) != 15 { return 1; } return 0; }
+fn test_fn_063() i64 { if fn63_reverse_num(12345) != 54321 { return 1; } return 0; }
+fn test_fn_064() i64 {
+    if fn64_count_digits(0) != 1 { return 1; }
+    if fn64_count_digits(12345) != 5 { return 1; }
+    if fn64_count_digits(1000000) != 7 { return 1; }
+    return 0;
+}
+fn test_fn_065() i64 {
+    if fn65_min(5, 10) != 5 { return 1; }
+    if fn65_max(5, 10) != 10 { return 1; }
+    return 0;
+}
+fn test_fn_066() i64 {
+    if fn66_clamp(5, 0, 10) != 5 { return 1; }
+    if fn66_clamp(0 - 5, 0, 10) != 0 { return 1; }
+    if fn66_clamp(15, 0, 10) != 10 { return 1; }
+    return 0;
+}
+fn test_fn_067() i64 {
+    if fn67_abs(5) != 5 { return 1; }
+    if fn67_abs(0 - 5) != 5 { return 1; }
+    if fn67_abs(0) != 0 { return 1; }
+    return 0;
+}
+fn test_fn_068() i64 {
+    if fn68_sign(42) != 1 { return 1; }
+    if fn68_sign(0 - 42) != 0 - 1 { return 1; }
+    if fn68_sign(0) != 0 { return 1; }
+    return 0;
+}
+fn test_fn_069() i64 { if fn69_gcd(48, 18) != 6 { return 1; } return 0; }
+fn test_fn_070() i64 { if fn70_lcm(12, 18) != 36 { return 1; } return 0; }
+fn test_fn_071() i64 { if fn71_sum_of_squares(10) != 385 { return 1; } return 0; }
+fn test_fn_072() i64 { if fn72_sum_of_cubes(10) != 3025 { return 1; } return 0; }
+fn test_fn_073() i64 { if fn73_nth_prime(10) != 29 { return 1; } return 0; }
+fn test_fn_074() i64 { if fn74_triangular(100) != 5050 { return 1; } return 0; }
+fn test_fn_075() i64 {
+    if fn75_is_perfect_square(16) != 1 { return 1; }
+    if fn75_is_perfect_square(17) != 0 { return 1; }
+    if fn75_is_perfect_square(100) != 1 { return 1; }
+    return 0;
+}
+fn test_fn_076() i64 { if fn76_isqrt(100) != 10 { return 1; } return 0; }
+fn test_fn_077() i64 { if fn77_count_divisors(12) != 6 { return 1; } return 0; }
+fn test_fn_078() i64 { if fn78_sum_divisors(12) != 28 { return 1; } return 0; }
+fn test_fn_079() i64 { if fn79_fast_pow(2, 10) != 1024 { return 1; } return 0; }
+fn test_fn_080() i64 { if fn80_mod_pow(2, 10, 1000) != 24 { return 1; } return 0; }
+fn test_fn_081() i64 {
+    if fn69_gcd(252, 105) != 21 { return 1; }
+    if fn69_gcd(1071, 462) != 21 { return 1; }
+    return 0;
+}
+// 082: skipped (extern/ptr)
+fn test_fn_083() i64 { if fn83_count_down(100) != 100 { return 1; } return 0; }
+fn test_fn_084() i64 { if fn84_sum_to(10) != 55 { return 1; } return 0; }
+fn test_fn_085() i64 { if fn85_factorial(10) != 3628800 { return 1; } return 0; }
+fn test_fn_086() i64 {
+    if fn86_is_even(10) != 1 { return 1; }
+    if fn86_is_odd(7) != 1 { return 1; }
+    return 0;
+}
+fn test_fn_087() i64 { if fn87_collatz_rec(6) != 8 { return 1; } return 0; }
+fn test_fn_088() i64 { if fn88_digit_sum(12345) != 15 { return 1; } return 0; }
+fn test_fn_089() i64 {
+    if fn89_count_digits(12345) != 5 { return 1; }
+    if fn89_count_digits(7) != 1 { return 1; }
+    return 0;
+}
+fn test_fn_090() i64 { if fn90_reverse_helper(12345, 0) != 54321 { return 1; } return 0; }
+fn test_fn_091() i64 {
+    if fn91_is_palindrome(12321) != 1 { return 1; }
+    if fn91_is_palindrome(12345) != 0 { return 1; }
+    return 0;
+}
+fn test_fn_092() i64 {
+    if fn92_is_power_of_two(16) != 1 { return 1; }
+    if fn92_is_power_of_two(15) != 0 { return 1; }
+    return 0;
+}
+fn test_fn_093() i64 {
+    if fn93_log2_floor(16) != 4 { return 1; }
+    if fn93_log2_floor(15) != 3 { return 1; }
+    return 0;
+}
+fn test_fn_094() i64 { if fn94_sum_to_n(10) != 55 { return 1; } return 0; }
+fn test_fn_095() i64 { if fn95_sum_squares(5) != 55 { return 1; } return 0; }
+fn test_fn_096() i64 { if fn96_power(2, 10) != 1024 { return 1; } return 0; }
+fn test_fn_097() i64 { if fn97_power_iter(3, 5) != 243 { return 1; } return 0; }
+fn test_fn_098() i64 { if fn98_factorial_iter(6) != 720 { return 1; } return 0; }
+fn test_fn_099() i64 { if fn99_triangle(10) != 55 { return 1; } return 0; }
+fn test_fn_100() i64 { if fn100_square(12) != 144 { return 1; } return 0; }
+fn test_fn_101() i64 { if fn101_cube(5) != 125 { return 1; } return 0; }
+fn test_fn_102() i64 { if fn102_sum_cubes(4) != 100 { return 1; } return 0; }
+fn test_fn_103() i64 { if fn103_double(21) != 42 { return 1; } return 0; }
+fn test_fn_104() i64 { if fn104_half(84) != 42 { return 1; } return 0; }
+fn test_fn_105() i64 { if fn105_negate(42) != 0 - 42 { return 1; } return 0; }
+fn test_fn_106() i64 { if fn106_inc(41) != 42 { return 1; } return 0; }
+fn test_fn_107() i64 { if fn107_dec(43) != 42 { return 1; } return 0; }
+fn test_fn_108() i64 {
+    if fn108_is_zero(0) != 1 { return 1; }
+    if fn108_is_zero(5) != 0 { return 1; }
+    return 0;
+}
+fn test_fn_109() i64 {
+    if fn109_is_positive(5) != 1 { return 1; }
+    if fn109_is_positive(0 - 5) != 0 { return 1; }
+    return 0;
+}
+fn test_fn_110() i64 {
+    if fn110_is_negative(0 - 5) != 1 { return 1; }
+    if fn110_is_negative(5) != 0 { return 1; }
+    return 0;
+}
+fn test_fn_111() i64 {
+    if fn111_clamp(5, 0, 10) != 5 { return 1; }
+    if fn111_clamp(0 - 5, 0, 10) != 0 { return 1; }
+    if fn111_clamp(15, 0, 10) != 10 { return 1; }
+    return 0;
+}
+fn test_fn_112() i64 { if fn112_lerp(0, 100, 50) != 50 { return 1; } return 0; }
+fn test_fn_113() i64 { if fn113_avg(40, 44) != 42 { return 1; } return 0; }
+fn test_fn_114() i64 { if fn114_distance(10, 52) != 42 { return 1; } return 0; }
+fn test_fn_115() i64 {
+    var x: i64 = fn115_inc(3);
+    x = fn115_double(x);
+    x = fn115_square(x);
+    if x != 64 { return 1; }
+    return 0;
+}
+
+// === Main: run all tests, return failure count ===
+
+fn main() i64 {
+    var fails: i64 = 0;
+    fails = fails + test_fn_001();
+    fails = fails + test_fn_002();
+    fails = fails + test_fn_003();
+    fails = fails + test_fn_004();
+    fails = fails + test_fn_005();
+    fails = fails + test_fn_006();
+    fails = fails + test_fn_007();
+    fails = fails + test_fn_008();
+    fails = fails + test_fn_009();
+    fails = fails + test_fn_010();
+    fails = fails + test_fn_013();
+    fails = fails + test_fn_014();
+    fails = fails + test_fn_015();
+    fails = fails + test_fn_016();
+    fails = fails + test_fn_017();
+    fails = fails + test_fn_018();
+    fails = fails + test_fn_019();
+    fails = fails + test_fn_020();
+    fails = fails + test_fn_021();
+    fails = fails + test_fn_022();
+    fails = fails + test_fn_023();
+    fails = fails + test_fn_024();
+    fails = fails + test_fn_025();
+    fails = fails + test_fn_026();
+    fails = fails + test_fn_027();
+    fails = fails + test_fn_028();
+    fails = fails + test_fn_029();
+    fails = fails + test_fn_030();
+    fails = fails + test_fn_031();
+    fails = fails + test_fn_032();
+    fails = fails + test_fn_033();
+    fails = fails + test_fn_034();
+    fails = fails + test_fn_035();
+    fails = fails + test_fn_038();
+    fails = fails + test_fn_039();
+    fails = fails + test_fn_040();
+    fails = fails + test_fn_041();
+    fails = fails + test_fn_042();
+    fails = fails + test_fn_043();
+    fails = fails + test_fn_044();
+    fails = fails + test_fn_045();
+    fails = fails + test_fn_046();
+    fails = fails + test_fn_047();
+    fails = fails + test_fn_048();
+    fails = fails + test_fn_049();
+    fails = fails + test_fn_053();
+    fails = fails + test_fn_054();
+    fails = fails + test_fn_055();
+    fails = fails + test_fn_056();
+    fails = fails + test_fn_057();
+    fails = fails + test_fn_058();
+    fails = fails + test_fn_059();
+    fails = fails + test_fn_060();
+    fails = fails + test_fn_061();
+    fails = fails + test_fn_062();
+    fails = fails + test_fn_063();
+    fails = fails + test_fn_064();
+    fails = fails + test_fn_065();
+    fails = fails + test_fn_066();
+    fails = fails + test_fn_067();
+    fails = fails + test_fn_068();
+    fails = fails + test_fn_069();
+    fails = fails + test_fn_070();
+    fails = fails + test_fn_071();
+    fails = fails + test_fn_072();
+    fails = fails + test_fn_073();
+    fails = fails + test_fn_074();
+    fails = fails + test_fn_075();
+    fails = fails + test_fn_076();
+    fails = fails + test_fn_077();
+    fails = fails + test_fn_078();
+    fails = fails + test_fn_079();
+    fails = fails + test_fn_080();
+    fails = fails + test_fn_081();
+    fails = fails + test_fn_083();
+    fails = fails + test_fn_084();
+    fails = fails + test_fn_085();
+    fails = fails + test_fn_086();
+    fails = fails + test_fn_087();
+    fails = fails + test_fn_088();
+    fails = fails + test_fn_089();
+    fails = fails + test_fn_090();
+    fails = fails + test_fn_091();
+    fails = fails + test_fn_092();
+    fails = fails + test_fn_093();
+    fails = fails + test_fn_094();
+    fails = fails + test_fn_095();
+    fails = fails + test_fn_096();
+    fails = fails + test_fn_097();
+    fails = fails + test_fn_098();
+    fails = fails + test_fn_099();
+    fails = fails + test_fn_100();
+    fails = fails + test_fn_101();
+    fails = fails + test_fn_102();
+    fails = fails + test_fn_103();
+    fails = fails + test_fn_104();
+    fails = fails + test_fn_105();
+    fails = fails + test_fn_106();
+    fails = fails + test_fn_107();
+    fails = fails + test_fn_108();
+    fails = fails + test_fn_109();
+    fails = fails + test_fn_110();
+    fails = fails + test_fn_111();
+    fails = fails + test_fn_112();
+    fails = fails + test_fn_113();
+    fails = fails + test_fn_114();
+    fails = fails + test_fn_115();
+    return fails;
+}

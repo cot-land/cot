@@ -20,6 +20,8 @@ const moves_mod = @import("moves.zig");
 const output_mod = @import("output.zig");
 const env_mod = @import("env.zig");
 const func_mod = @import("func.zig");
+const indexset_mod = @import("indexset.zig");
+const IndexSet = indexset_mod.IndexSet;
 
 const Block = index.Block;
 const Inst = index.Inst;
@@ -268,6 +270,36 @@ const PrevBuffer = struct {
 };
 
 //=============================================================================
+// Inter-block move helper types
+// Ported from regalloc2 moves.rs lines 222-265
+//=============================================================================
+
+/// Destination for an inter-block move (non-blockparam).
+const InterBlockDest = struct {
+    to: Block,
+    from: Block,
+    alloc: Allocation,
+
+    fn key(self: InterBlockDest) u64 {
+        return u64Key(self.from.rawU32(), self.to.rawU32());
+    }
+};
+
+/// Destination for a blockparam move.
+const BlockparamDest = struct {
+    from_block: Block,
+    to_block: Block,
+    to_vreg: VRegIndex,
+    alloc: Allocation,
+};
+
+/// Create a source key for blockparam move matching.
+/// Key = u64_key(from_block, to_vreg) — matches Cranelift's BlockparamSourceKey.
+fn blockparamSourceKey(from_block: Block, to_vreg: VRegIndex) u64 {
+    return u64Key(from_block.rawU32(), to_vreg.rawU32());
+}
+
+//=============================================================================
 // MoveContext - Context for move insertion
 //=============================================================================
 
@@ -304,6 +336,9 @@ pub fn MoveContext(comptime Func: type) type {
         blockparam_ins: []const BlockparamIn,
         blockparam_outs: []const BlockparamOut,
 
+        // === Liveness data (for inter-block moves) ===
+        liveins: []const IndexSet,
+
         // === Fixed-reg fixups ===
         multi_fixed_reg_fixups: *std.ArrayListUnmanaged(MultiFixedRegFixup),
 
@@ -329,6 +364,7 @@ pub fn MoveContext(comptime Func: type) type {
             output: *Output,
             blockparam_ins: []const BlockparamIn,
             blockparam_outs: []const BlockparamOut,
+            liveins: []const IndexSet,
             multi_fixed_reg_fixups: *std.ArrayListUnmanaged(MultiFixedRegFixup),
             extra_spillslots_by_class: *[3]std.ArrayListUnmanaged(Allocation),
             preferred_victim_by_class: [3]PReg,
@@ -347,6 +383,7 @@ pub fn MoveContext(comptime Func: type) type {
                 .output = output,
                 .blockparam_ins = blockparam_ins,
                 .blockparam_outs = blockparam_outs,
+                .liveins = liveins,
                 .multi_fixed_reg_fixups = multi_fixed_reg_fixups,
                 .extra_spillslots_by_class = extra_spillslots_by_class,
                 .preferred_victim_by_class = preferred_victim_by_class,
@@ -411,22 +448,14 @@ pub fn MoveContext(comptime Func: type) type {
     //=========================================================================
 
     /// Determine where to insert moves on a block edge.
-    /// Returns (position, priority).
-    fn chooseMoveLocation(
-        _: *const Self,
-        _: Block,
-        to: Block,
-        _: usize,
-        func_entry_block: Block,
-        from_last_insn: Inst,
-        to_first_insn: Inst,
-        from_is_ret: bool,
-        from_succs_len: usize,
-        to_preds_len: usize,
-    ) struct { pos: ProgPoint, prio: InsertMovePrio } {
-        const to_is_entry = func_entry_block.idx() == to.idx();
-        const from_outs = from_succs_len + @as(usize, if (from_is_ret) 1 else 0);
-        const to_ins = to_preds_len + @as(usize, if (to_is_entry) 1 else 0);
+    /// Ported from regalloc2's `choose_move_location` in moves.rs:172-219.
+    fn chooseMoveLocation(self: *const Self, from: Block, to: Block) struct { pos: ProgPoint, prio: InsertMovePrio } {
+        const from_last_insn = self.func.blockInsns(from).last();
+        const to_first_insn = self.func.blockInsns(to).first();
+        const from_is_ret = self.func.isRet(from_last_insn);
+        const to_is_entry = self.func.entryBlock().idx() == to.idx();
+        const from_outs = self.func.blockSuccs(from).len + @as(usize, if (from_is_ret) 1 else 0);
+        const to_ins = self.func.blockPreds(to).len + @as(usize, if (to_is_entry) 1 else 0);
 
         if (to_ins > 1 and from_outs <= 1) {
             // Multiple in-edges to `to`, so moves go at tail of `from`
@@ -444,6 +473,13 @@ pub fn MoveContext(comptime Func: type) type {
             // Critical edge - should not happen with proper edge splitting
             @panic("Critical edge: can't insert moves");
         }
+    }
+
+    /// Check if a vreg is live-in at a block.
+    /// Ported from regalloc2's is_live_in.
+    fn isLiveIn(self: *const Self, block: Block, vreg: VRegIndex) bool {
+        if (block.idx() >= self.liveins.len) return false;
+        return self.liveins[block.idx()].get(vreg.index());
     }
 
     //=========================================================================
@@ -467,16 +503,18 @@ pub fn MoveContext(comptime Func: type) type {
 
     /// Main entry point: apply allocations to uses and insert moves.
     ///
-    /// This is a simplified version of the Rust implementation that handles
-    /// the core cases:
+    /// Ported from regalloc2's `apply_allocations_and_insert_moves` in moves.rs:76-686.
+    /// Handles all cases:
     /// - Sort vreg range lists by start point
     /// - Apply allocations to all uses
     /// - Insert intra-block moves between adjacent live ranges
-    /// - Insert inter-block moves at block edges
+    /// - Insert inter-block source/dest half-moves at block edges
+    /// - Insert blockparam source/dest moves
     /// - Handle multi-fixed-reg constraints
-    /// - Handle reuse-input constraints
     pub fn applyAllocationsAndInsertMoves(self: *Self) !InsertedMoves {
         var inserted_moves = InsertedMoves.init();
+
+        const num_blocks = self.func.numBlocks();
 
         // Sort vreg range lists by start point
         for (self.vregs.items) |*vreg| {
@@ -490,12 +528,31 @@ pub fn MoveContext(comptime Func: type) type {
             }.lessThan);
         }
 
+        // Inter-block move tracking (per-vreg, cleared each iteration)
+        var inter_block_sources = std.AutoHashMapUnmanaged(u32, Allocation){};
+        defer inter_block_sources.deinit(self.allocator);
+        var inter_block_dests = std.ArrayListUnmanaged(InterBlockDest){};
+        defer inter_block_dests.deinit(self.allocator);
+
+        // Blockparam move tracking (accumulated across all vregs)
+        var block_param_sources = std.AutoHashMapUnmanaged(u64, Allocation){};
+        defer block_param_sources.deinit(self.allocator);
+        var block_param_dests = std.ArrayListUnmanaged(BlockparamDest){};
+        defer block_param_dests.deinit(self.allocator);
+
+        var blockparam_in_idx: usize = 0;
+        var blockparam_out_idx: usize = 0;
+
         // Process each vreg
         for (self.vregs.items, 0..) |*vreg_data, vreg_idx| {
+            const vreg = VRegIndex.new(vreg_idx);
+
             // Skip unused vregs
             if (vreg_data.ranges.items.len == 0) continue;
 
-            var prev = PrevBuffer.init(0);
+            inter_block_sources.clearRetainingCapacity();
+
+            var prev = PrevBuffer.init(blockparam_in_idx);
 
             for (vreg_data.ranges.items) |entry| {
                 const alloc = self.getAllocForRange(entry.index);
@@ -503,17 +560,16 @@ pub fn MoveContext(comptime Func: type) type {
 
                 prev.advance(entry);
 
-                // Intra-block moves: if prev range abuts in same block
+                // === Phase 1: Intra-block moves ===
+                // If prev range abuts in same block, insert move
                 if (prev.isValid()) |prev_entry| {
                     const prev_alloc = self.getAllocForRange(prev_entry.index);
 
-                    // Check if ranges abut and we're not at a block boundary
                     if (prev_entry.range.to.bits >= range.from.bits and
                         (prev_entry.range.to.bits > range.from.bits or
                         !self.isStartOfBlock(range.from)) and
                         !self.ranges.items[entry.index.index()].hasFlag(.starts_at_def))
                     {
-                        // Insert move from prev_alloc to alloc
                         const v = VReg.new(vreg_idx, vreg_data.class orelse .int);
                         try inserted_moves.push(
                             self.allocator,
@@ -526,10 +582,148 @@ pub fn MoveContext(comptime Func: type) type {
                     }
                 }
 
+                // === Phase 2A: Inter-block source half-moves + blockparam_outs ===
+                // Scan blocks whose exits are covered by this range.
+                {
+                    var block = self.cfginfo.insn_block.items[range.from.inst().idx()];
+                    while (block.isValid() and block.idx() < num_blocks) {
+                        // Break if range doesn't cover the block exit
+                        if (range.to.bits < self.cfginfo.block_exit.items[block.idx()].nextPoint().bits) {
+                            break;
+                        }
+
+                        // Record source alloc for this block (prefer reg)
+                        const gop = try inter_block_sources.getOrPut(self.allocator, block.rawU32());
+                        if (!gop.found_existing) {
+                            gop.value_ptr.* = alloc;
+                        } else if (!gop.value_ptr.isReg()) {
+                            gop.value_ptr.* = alloc;
+                        }
+
+                        // Scan blockparam_outs for matching (from_vreg, from_block)
+                        while (blockparam_out_idx < self.blockparam_outs.len) {
+                            const bpo = self.blockparam_outs[blockparam_out_idx];
+                            // Tuple comparison: (from_vreg, from_block) > (vreg, block)
+                            if (bpo.from_vreg.index() > vreg.index() or
+                                (bpo.from_vreg.index() == vreg.index() and bpo.from_block.idx() > block.idx()))
+                            {
+                                break;
+                            }
+                            if (bpo.from_vreg.index() == vreg.index() and bpo.from_block.idx() == block.idx()) {
+                                // Record blockparam source: key = (from_block, to_vreg)
+                                const bp_key = blockparamSourceKey(bpo.from_block, bpo.to_vreg);
+                                const bp_gop = try block_param_sources.getOrPut(self.allocator, bp_key);
+                                if (!bp_gop.found_existing) {
+                                    bp_gop.value_ptr.* = alloc;
+                                } else if (!bp_gop.value_ptr.isReg()) {
+                                    bp_gop.value_ptr.* = alloc;
+                                }
+                            }
+                            blockparam_out_idx += 1;
+                        }
+
+                        block = block.next();
+                    }
+                }
+
+                // === Phase 2B: Inter-block dest half-moves + blockparam_ins ===
+                // Scan blocks whose entries are covered by this range.
+                {
+                    var block = self.cfginfo.insn_block.items[range.from.inst().idx()];
+                    // If block entry is before range start, skip to next block
+                    if (self.cfginfo.block_entry.items[block.idx()].bits < range.from.bits) {
+                        block = block.next();
+                    }
+                    while (block.isValid() and block.idx() < num_blocks) {
+                        if (self.cfginfo.block_entry.items[block.idx()].bits >= range.to.bits) {
+                            break;
+                        }
+
+                        // Scan blockparam_ins for matching (to_vreg, to_block)
+                        var bp_idx = prev.blockparamInsIdx();
+                        while (bp_idx < self.blockparam_ins.len) {
+                            const bpi = self.blockparam_ins[bp_idx];
+                            // Tuple comparison: (to_vreg, to_block) > (vreg, block)
+                            if (bpi.to_vreg.index() > vreg.index() or
+                                (bpi.to_vreg.index() == vreg.index() and bpi.to_block.idx() > block.idx()))
+                            {
+                                break;
+                            }
+                            if (bpi.to_vreg.index() == vreg.index() and bpi.to_block.idx() == block.idx()) {
+                                try block_param_dests.append(self.allocator, .{
+                                    .from_block = bpi.from_block,
+                                    .to_block = bpi.to_block,
+                                    .to_vreg = bpi.to_vreg,
+                                    .alloc = alloc,
+                                });
+                            }
+                            bp_idx += 1;
+                        }
+                        prev.updateBlockparamInsIdx(bp_idx);
+
+                        // Check if vreg is live-in to this block
+                        if (!self.isLiveIn(block, vreg)) {
+                            block = block.next();
+                            continue;
+                        }
+
+                        // For each predecessor whose exit is NOT in same range,
+                        // add inter-block dest half-move
+                        for (self.func.blockPreds(block)) |pred| {
+                            if (range.containsPoint(self.cfginfo.block_exit.items[pred.idx()])) {
+                                continue;
+                            }
+                            try inter_block_dests.append(self.allocator, .{
+                                .from = pred,
+                                .to = block,
+                                .alloc = alloc,
+                            });
+                        }
+
+                        block = block.next();
+                    }
+                }
+
                 // Apply allocations to all uses in this range
                 for (self.ranges.items[entry.index.index()].uses.items) |usedata| {
                     self.setAlloc(usedata.pos.inst(), usedata.slot, alloc);
                 }
+            }
+
+            // === Phase 3: Process inter-block dests for this vreg ===
+            if (inter_block_dests.items.len > 0) {
+                std.mem.sort(InterBlockDest, inter_block_dests.items, {}, struct {
+                    fn lessThan(_: void, a: InterBlockDest, b: InterBlockDest) bool {
+                        return a.key() < b.key();
+                    }
+                }.lessThan);
+
+                const v = VReg.new(vreg_idx, vreg_data.class orelse .int);
+                for (inter_block_dests.items) |dest| {
+                    const src = inter_block_sources.get(dest.from.rawU32()) orelse {
+                        // Source not found - this shouldn't happen in correct allocation
+                        continue;
+                    };
+                    const loc = self.chooseMoveLocation(dest.from, dest.to);
+                    try inserted_moves.push(self.allocator, loc.pos, loc.prio, src, dest.alloc, v);
+                }
+                inter_block_dests.clearRetainingCapacity();
+            }
+
+            blockparam_in_idx = prev.blockparamInsIdx();
+        }
+
+        // === Phase 4: Process blockparam dests (across all vregs) ===
+        if (block_param_dests.items.len > 0) {
+            for (block_param_dests.items) |dest| {
+                const src_key = blockparamSourceKey(dest.from_block, dest.to_vreg);
+                const src_alloc = block_param_sources.get(src_key) orelse {
+                    continue;
+                };
+                const loc = self.chooseMoveLocation(dest.from_block, dest.to_block);
+                const vreg_data = &self.vregs.items[dest.to_vreg.index()];
+                const v = VReg.new(dest.to_vreg.index(), vreg_data.class orelse .int);
+                try inserted_moves.push(self.allocator, loc.pos, loc.prio, src_alloc, dest.alloc, v);
             }
         }
 
@@ -909,6 +1103,7 @@ test "MoveContext block boundaries" {
         &vregs,
         &cfginfo,
         &output,
+        &.{},
         &.{},
         &.{},
         &fixups,

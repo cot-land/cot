@@ -221,6 +221,32 @@ pub const GenState = struct {
         }
     }
 
+    /// Emit phi moves before block terminators.
+    /// For each successor block that contains phi nodes, store the appropriate
+    /// phi argument (determined by predecessor index) to the phi's local.
+    /// This implements the "parallel copy" semantics of SSA phi nodes.
+    fn emitPhiMoves(self: *GenState, block: *const SsaBlock) !void {
+        for (block.succs) |edge| {
+            const succ = edge.b;
+            const pred_idx = edge.i; // our index in succ's preds list
+            for (succ.values.items) |v| {
+                if (v.op != .phi) continue;
+                if (pred_idx >= v.args.len) continue;
+                const arg = v.args[pred_idx];
+                // Get arg value on stack
+                try self.getValue64(arg);
+                // If arg produces i32 (cmp/bool), extend to i64 for the phi's i64 local
+                if (isCmp(arg)) {
+                    _ = try self.builder.append(.i64_extend_i32_u);
+                }
+                // Store to phi's local
+                if (self.value_to_local.get(v.id)) |local_idx| {
+                    _ = try self.builder.appendTo(.local_set, prog_mod.constAddr(local_idx));
+                }
+            }
+        }
+    }
+
     // ========================================================================
     // Value access helpers
     // Go reference: cmd/compile/internal/wasm/ssa.go lines 474-533
@@ -698,6 +724,13 @@ pub const GenState = struct {
                 try self.getValue64(v.args[0]);
             },
 
+            // Phi - load from local (populated by emitPhiMoves in predecessor blocks)
+            .phi => {
+                if (self.value_to_local.get(v.id)) |local_idx| {
+                    _ = try self.builder.appendFrom(.local_get, prog_mod.constAddr(local_idx));
+                }
+            },
+
             // Conditional select (ternary)
             // Go reference: cmd/compile/internal/wasm/ssa.go line 359-363
             // Stack order: then_val, else_val, condition -> result
@@ -908,6 +941,9 @@ pub const GenState = struct {
                 try self.bstart.put(self.allocator, block.id, last);
             }
 
+            // Emit phi moves: store phi args to phi locals before branches
+            try self.emitPhiMoves(block);
+
             // Generate block control flow
             try self.ssaGenBlock(block, next);
         }
@@ -937,6 +973,10 @@ pub const GenState = struct {
         // Skip comparisons - they're generated on-demand by ssaGenBlock
         // Go: these have OnWasmStack = true and are handled inline
         if (isCmp(v)) return;
+
+        // Skip phi values - their locals are populated by emitPhiMoves in predecessor blocks
+        // Go: "case ssa.OpPhi: // nothing to do"
+        if (v.op == .phi) return;
 
         // Generate value and store to local
         try self.ssaGenValueOnStack(v);

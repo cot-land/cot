@@ -1,0 +1,550 @@
+// Parity tests: Variables
+// Ported from bootstrap-0.2/test/parity/variables/ (47 tests)
+// Skipped: 007,009 (anonymous block scopes), 028,029,030 (extern/malloc),
+//          031,032 (variable shadowing with block scopes)
+// Each test function returns 0 on pass, 1 on fail.
+// main() returns total number of failures (0 = all pass).
+
+fn test_var_001() i64 {
+    let x: i64 = 42;
+    if x != 42 { return 1; }
+    return 0;
+}
+
+fn test_var_002() i64 {
+    let x: i64 = 10;
+    x = 20;
+    x = 30;
+    if x != 30 { return 1; }
+    return 0;
+}
+
+fn test_var_003() i64 {
+    let a: i64 = 1;
+    let b: i64 = 2;
+    let c: i64 = 3;
+    let d: i64 = 4;
+    let e: i64 = 5;
+    let f: i64 = 6;
+    let g: i64 = 7;
+    let h: i64 = 8;
+    let sum: i64 = a + b + c + d + e + f + g + h;
+    if sum != 36 { return 1; }
+    return 0;
+}
+
+fn test_var_004() i64 {
+    let v1: i64 = 1;
+    let v2: i64 = 2;
+    let v3: i64 = 3;
+    let v4: i64 = 4;
+    let v5: i64 = 5;
+    let v6: i64 = 6;
+    let v7: i64 = 7;
+    let v8: i64 = 8;
+    let v9: i64 = 9;
+    let v10: i64 = 10;
+    let v11: i64 = 11;
+    let v12: i64 = 12;
+    let sum: i64 = v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8 + v9 + v10 + v11 + v12;
+    if sum != 78 { return 1; }
+    return 0;
+}
+
+fn test_var_005() i64 {
+    let v1: i64 = 1;
+    let v2: i64 = 2;
+    let v3: i64 = 3;
+    let v4: i64 = 4;
+    let v5: i64 = 5;
+    let v6: i64 = 6;
+    let v7: i64 = 7;
+    let v8: i64 = 8;
+    let v9: i64 = 9;
+    let v10: i64 = 10;
+    let v11: i64 = 11;
+    let v12: i64 = 12;
+    let v13: i64 = 13;
+    let v14: i64 = 14;
+    let v15: i64 = 15;
+    let v16: i64 = 16;
+    let sum: i64 = v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8;
+    sum = sum + v9 + v10 + v11 + v12 + v13 + v14 + v15 + v16;
+    if sum != 136 { return 1; }
+    return 0;
+}
+
+fn test_var_006() i64 {
+    let v1: i64 = 1;
+    let v2: i64 = 2;
+    let v3: i64 = 3;
+    let v4: i64 = 4;
+    let v5: i64 = 5;
+    let v6: i64 = 6;
+    let v7: i64 = 7;
+    let v8: i64 = 8;
+    let v9: i64 = 9;
+    let v10: i64 = 10;
+    let v11: i64 = 11;
+    let v12: i64 = 12;
+    let v13: i64 = 13;
+    let v14: i64 = 14;
+    let v15: i64 = 15;
+    let v16: i64 = 16;
+    let v17: i64 = 17;
+    let v18: i64 = 18;
+    let v19: i64 = 19;
+    let v20: i64 = 20;
+    let sum: i64 = v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8 + v9 + v10;
+    sum = sum + v11 + v12 + v13 + v14 + v15 + v16 + v17 + v18 + v19 + v20;
+    if sum != 210 { return 1; }
+    return 0;
+}
+
+fn test_var_008() i64 {
+    let sum: i64 = 0;
+    let i: i64 = 0;
+    while i < 5 {
+        let term: i64 = i * 2;
+        sum = sum + term;
+        i = i + 1;
+    }
+    if sum != 20 { return 1; }
+    return 0;
+}
+
+fn test_var_010() i64 {
+    let a: i64 = 5;
+    let b: i64 = a;
+    let c: i64 = b;
+    let d: i64 = c;
+    if d != 5 { return 1; }
+    return 0;
+}
+
+fn test_var_011() i64 {
+    let a: i64 = 10;
+    let b: i64 = 20;
+    let tmp: i64 = a;
+    a = b;
+    b = tmp;
+    if a != 20 { return 1; }
+    if b != 10 { return 1; }
+    return 0;
+}
+
+fn test_var_012() i64 {
+    let sum: i64 = 0;
+    sum = sum + 10;
+    sum = sum + 20;
+    sum = sum + 30;
+    sum = sum + 40;
+    if sum != 100 { return 1; }
+    return 0;
+}
+
+fn test_var_013() i64 {
+    let prod: i64 = 1;
+    prod = prod * 2;
+    prod = prod * 3;
+    prod = prod * 4;
+    prod = prod * 5;
+    if prod != 120 { return 1; }
+    return 0;
+}
+
+fn test_var_014() i64 {
+    let x: i64 = 0 - 42;
+    let y: i64 = 0 - x;
+    if y != 42 { return 1; }
+    return 0;
+}
+
+fn test_var_015() i64 {
+    let a: i64 = 10;
+    let b: i64 = 5;
+    let c: i64 = a + b;
+    let d: i64 = a - b;
+    let e: i64 = a * b;
+    let f: i64 = a / b;
+    if c != 15 { return 1; }
+    if d != 5 { return 1; }
+    if e != 50 { return 1; }
+    if f != 2 { return 1; }
+    return 0;
+}
+
+fn test_var_016() i64 {
+    let a: i64 = 1;
+    let b: i64 = a + 1;
+    let c: i64 = b + 1;
+    let d: i64 = c + 1;
+    let e: i64 = d + 1;
+    let f: i64 = e + 1;
+    let g: i64 = f + 1;
+    let h: i64 = g + 1;
+    let i: i64 = h + 1;
+    let j: i64 = i + 1;
+    if j != 10 { return 1; }
+    return 0;
+}
+
+fn test_var_017() i64 {
+    let a: i64 = 1;
+    let b: i64 = a * 2;
+    let c: i64 = b * 2;
+    let d: i64 = c * 2;
+    let e: i64 = d * 2;
+    let f: i64 = e * 2;
+    let g: i64 = f * 2;
+    let h: i64 = g * 2;
+    if h != 128 { return 1; }
+    return 0;
+}
+
+fn test_var_018() i64 {
+    let x: i64 = 1;
+    x = x + x;
+    x = x + x;
+    x = x + x;
+    x = x + x;
+    if x != 16 { return 1; }
+    return 0;
+}
+
+fn test_var_019() i64 {
+    let a: i64 = 15;
+    let b: i64 = 5;
+    let c: i64 = 4;
+    let result: i64 = (a + b) * c / (a + b - c);
+    if result != 5 { return 1; }
+    return 0;
+}
+
+fn test_var_020() i64 {
+    let a: i64 = 100;
+    let b: i64 = 7;
+    let q: i64 = a / b;
+    let r: i64 = a % b;
+    let check: i64 = q * b + r;
+    if check != a { return 1; }
+    return 0;
+}
+
+fn test_var_021() i64 {
+    let x: i64 = 10;
+    x = x + 5;
+    x = x * 2;
+    x = x - 10;
+    if x != 20 { return 1; }
+    return 0;
+}
+
+fn test_var_022() i64 {
+    let a: i64 = 1;
+    let b: i64 = 2;
+    let c: i64 = 3;
+    let t: i64 = a;
+    a = b;
+    b = c;
+    c = t;
+    if a != 2 { return 1; }
+    if b != 3 { return 1; }
+    if c != 1 { return 1; }
+    return 0;
+}
+
+fn test_var_023() i64 {
+    let x: i64 = 0;
+    x = x + 1;
+    x = x + 1;
+    x = x + 1;
+    x = x + 1;
+    x = x + 1;
+    if x != 5 { return 1; }
+    return 0;
+}
+
+fn test_var_024() i64 {
+    let x: i64 = 10;
+    x = x - 1;
+    x = x - 1;
+    x = x - 1;
+    if x != 7 { return 1; }
+    return 0;
+}
+
+fn test_var_025() i64 {
+    let x: i64 = 2;
+    x = x * x;
+    x = x * x;
+    if x != 16 { return 1; }
+    return 0;
+}
+
+fn test_var_026() i64 {
+    let a: i64 = 1;
+    let b: i64 = 2;
+    let c: i64 = 3;
+    let ta: i64 = a;
+    let tb: i64 = b;
+    let tc: i64 = c;
+    a = tc;
+    b = ta;
+    c = tb;
+    if a != 3 { return 1; }
+    if b != 1 { return 1; }
+    if c != 2 { return 1; }
+    return 0;
+}
+
+fn test_var_027() i64 {
+    let acc: i64 = 0;
+    let i: i64 = 1;
+    while i <= 10 {
+        acc = acc + i * i;
+        i = i + 1;
+    }
+    if acc != 385 { return 1; }
+    return 0;
+}
+
+fn test_var_033() i64 {
+    let sum: i64 = 0;
+    let i: i64 = 1;
+    while i <= 10 {
+        sum = sum + i;
+        i = i + 1;
+    }
+    if sum != 55 { return 1; }
+    return 0;
+}
+
+fn test_var_034() i64 {
+    let flag: i64 = 0;
+    let i: i64 = 0;
+    while i < 5 {
+        if flag == 0 {
+            flag = 1;
+        } else {
+            flag = 0;
+        }
+        i = i + 1;
+    }
+    if flag != 1 { return 1; }
+    return 0;
+}
+
+fn test_var_035() i64 {
+    let a: i64 = 10;
+    let b: i64 = 20;
+    let t: i64 = a;
+    a = b;
+    b = t;
+    if a != 20 { return 1; }
+    if b != 10 { return 1; }
+    return 0;
+}
+
+fn test_var_036() i64 {
+    let a: i64 = 0;
+    let b: i64 = 1;
+    let i: i64 = 0;
+    while i < 10 {
+        let t: i64 = a + b;
+        a = b;
+        b = t;
+        i = i + 1;
+    }
+    if a != 55 { return 1; }
+    return 0;
+}
+
+fn test_var_037() i64 {
+    let product: i64 = 1;
+    let i: i64 = 1;
+    while i <= 5 {
+        product = product * i;
+        i = i + 1;
+    }
+    if product != 120 { return 1; }
+    return 0;
+}
+
+fn test_var_038() i64 {
+    let a: i64 = 48;
+    let b: i64 = 18;
+    while b != 0 {
+        let t: i64 = b;
+        b = a % b;
+        a = t;
+    }
+    if a != 6 { return 1; }
+    return 0;
+}
+
+fn test_var_039() i64 {
+    let target: i64 = 37;
+    let lo: i64 = 0;
+    let hi: i64 = 100;
+    while lo < hi {
+        let mid: i64 = (lo + hi) / 2;
+        if mid < target {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    if lo != 37 { return 1; }
+    return 0;
+}
+
+fn test_var_040() i64 {
+    let n: i64 = 27;
+    let steps: i64 = 0;
+    while n != 1 {
+        if n % 2 == 0 {
+            n = n / 2;
+        } else {
+            n = 3 * n + 1;
+        }
+        steps = steps + 1;
+    }
+    if steps != 111 { return 1; }
+    return 0;
+}
+
+fn test_var_041() i64 {
+    let n: i64 = 255;
+    let count: i64 = 0;
+    while n > 0 {
+        count = count + (n & 1);
+        n = n >> 1;
+    }
+    if count != 8 { return 1; }
+    return 0;
+}
+
+fn test_var_042() i64 {
+    let n: i64 = 12;
+    let rev: i64 = 0;
+    let bits: i64 = 4;
+    let i: i64 = 0;
+    while i < bits {
+        rev = rev << 1;
+        rev = rev | (n & 1);
+        n = n >> 1;
+        i = i + 1;
+    }
+    if rev != 3 { return 1; }
+    return 0;
+}
+
+fn test_var_043() i64 {
+    let n: i64 = 17;
+    let is_prime: i64 = 1;
+    let i: i64 = 2;
+    while i < n {
+        if n % i == 0 {
+            is_prime = 0;
+        }
+        i = i + 1;
+    }
+    if is_prime != 1 { return 1; }
+    return 0;
+}
+
+fn test_var_044() i64 {
+    let n: i64 = 6;
+    let sum: i64 = 0;
+    let i: i64 = 1;
+    while i < n {
+        if n % i == 0 {
+            sum = sum + i;
+        }
+        i = i + 1;
+    }
+    if sum != n { return 1; }
+    return 0;
+}
+
+fn test_var_045() i64 {
+    let n: i64 = 123;
+    let rev: i64 = 0;
+    while n > 0 {
+        rev = rev * 10 + n % 10;
+        n = n / 10;
+    }
+    if rev != 321 { return 1; }
+    return 0;
+}
+
+fn test_var_046() i64 {
+    let acc: i64 = 0;
+    acc = acc + 10;
+    acc = acc + 20;
+    acc = acc + 30;
+    if acc != 60 { return 1; }
+    return 0;
+}
+
+fn test_var_047() i64 {
+    let mul: i64 = 1;
+    mul = mul * 2;
+    mul = mul * 3;
+    mul = mul * 7;
+    if mul != 42 { return 1; }
+    return 0;
+}
+
+fn main() i64 {
+    let fails: i64 = 0;
+    fails = fails + test_var_001();
+    fails = fails + test_var_002();
+    fails = fails + test_var_003();
+    fails = fails + test_var_004();
+    fails = fails + test_var_005();
+    fails = fails + test_var_006();
+    // test_var_007 skipped (anonymous block scopes)
+    fails = fails + test_var_008();
+    // test_var_009 skipped (anonymous block scopes)
+    fails = fails + test_var_010();
+    fails = fails + test_var_011();
+    fails = fails + test_var_012();
+    fails = fails + test_var_013();
+    fails = fails + test_var_014();
+    fails = fails + test_var_015();
+    fails = fails + test_var_016();
+    fails = fails + test_var_017();
+    fails = fails + test_var_018();
+    fails = fails + test_var_019();
+    fails = fails + test_var_020();
+    fails = fails + test_var_021();
+    fails = fails + test_var_022();
+    fails = fails + test_var_023();
+    fails = fails + test_var_024();
+    fails = fails + test_var_025();
+    fails = fails + test_var_026();
+    fails = fails + test_var_027();
+    // test_var_028 skipped (extern/malloc)
+    // test_var_029 skipped (extern/malloc)
+    // test_var_030 skipped (extern/malloc)
+    // test_var_031 skipped (block scopes/shadowing)
+    // test_var_032 skipped (block scopes)
+    fails = fails + test_var_033();
+    fails = fails + test_var_034();
+    fails = fails + test_var_035();
+    fails = fails + test_var_036();
+    fails = fails + test_var_037();
+    fails = fails + test_var_038();
+    fails = fails + test_var_039();
+    fails = fails + test_var_040();
+    fails = fails + test_var_041();
+    fails = fails + test_var_042();
+    fails = fails + test_var_043();
+    fails = fails + test_var_044();
+    fails = fails + test_var_045();
+    fails = fails + test_var_046();
+    fails = fails + test_var_047();
+    return fails;
+}

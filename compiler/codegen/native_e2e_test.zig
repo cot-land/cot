@@ -622,3 +622,43 @@ test "native: closure passed to function" {
     ;
     try expectExitCode(std.testing.allocator, code, 105, "closure_passed");
 }
+
+// ============================================================================
+// Parity tests: ported from bootstrap-0.2 (compound test files)
+// ============================================================================
+
+test "parity: expressions (160 tests)" {
+    const code = @constCast(@as([]const u8, std.fs.cwd().readFileAlloc(std.testing.allocator, "test/parity/expressions.cot", 1024 * 1024) catch |e| {
+        std.debug.print("Failed to read test file: {any}\n", .{e});
+        return error.FileNotFound;
+    }));
+    defer std.testing.allocator.free(code);
+    try expectExitCode(std.testing.allocator, code, 0, "parity_expressions");
+}
+
+test "parity: functions (110 tests)" {
+    const code = @constCast(@as([]const u8, std.fs.cwd().readFileAlloc(std.testing.allocator, "test/parity/functions.cot", 1024 * 1024) catch |e| {
+        std.debug.print("Failed to read test file: {any}\n", .{e});
+        return error.FileNotFound;
+    }));
+    defer std.testing.allocator.free(code);
+    try expectExitCode(std.testing.allocator, code, 0, "parity_functions");
+}
+
+test "parity: control_flow (80 tests)" {
+    const code = @constCast(@as([]const u8, std.fs.cwd().readFileAlloc(std.testing.allocator, "test/parity/control_flow.cot", 1024 * 1024) catch |e| {
+        std.debug.print("Failed to read test file: {any}\n", .{e});
+        return error.FileNotFound;
+    }));
+    defer std.testing.allocator.free(code);
+    try expectExitCode(std.testing.allocator, code, 0, "parity_control_flow");
+}
+
+test "parity: variables (40 tests)" {
+    const code = @constCast(@as([]const u8, std.fs.cwd().readFileAlloc(std.testing.allocator, "test/parity/variables.cot", 1024 * 1024) catch |e| {
+        std.debug.print("Failed to read test file: {any}\n", .{e});
+        return error.FileNotFound;
+    }));
+    defer std.testing.allocator.free(code);
+    try expectExitCode(std.testing.allocator, code, 0, "parity_variables");
+}

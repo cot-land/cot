@@ -28,6 +28,7 @@ const ion_moves = @import("ion_moves.zig");
 const func_mod = @import("func.zig");
 const liveness_mod = @import("liveness.zig");
 const merge_mod = @import("merge.zig");
+const indexset_mod = @import("indexset.zig");
 
 const Block = index.Block;
 const Inst = index.Inst;
@@ -66,6 +67,7 @@ const SpillContext = spill_mod.SpillContext;
 const Function = func_mod.Function;
 const LivenessContext = liveness_mod.LivenessContext;
 const MergeContext = merge_mod.MergeContext;
+const IndexSet = indexset_mod.IndexSet;
 
 //=============================================================================
 // Ctx - Reusable allocator context
@@ -99,6 +101,9 @@ pub const Ctx = struct {
     // === Block parameters ===
     blockparam_ins: std.ArrayListUnmanaged(BlockparamIn),
     blockparam_outs: std.ArrayListUnmanaged(BlockparamOut),
+
+    // === Liveness data (for inter-block moves) ===
+    liveins: std.ArrayListUnmanaged(IndexSet),
 
     // === Fixed-reg fixups ===
     multi_fixed_reg_fixups: std.ArrayListUnmanaged(MultiFixedRegFixup),
@@ -138,6 +143,7 @@ pub const Ctx = struct {
             .spilled_bundles = .{},
             .blockparam_ins = .{},
             .blockparam_outs = .{},
+            .liveins = .{},
             .multi_fixed_reg_fixups = .{},
             .extra_spillslots_by_class = .{ .{}, .{}, .{} },
             .scratch_spillset_pool = .{},
@@ -186,6 +192,10 @@ pub const Ctx = struct {
         self.spilled_bundles.deinit(self.allocator);
         self.blockparam_ins.deinit(self.allocator);
         self.blockparam_outs.deinit(self.allocator);
+        for (self.liveins.items) |*set| {
+            set.deinit();
+        }
+        self.liveins.deinit(self.allocator);
         self.multi_fixed_reg_fixups.deinit(self.allocator);
 
         for (&self.extra_spillslots_by_class) |*e| {
@@ -242,6 +252,10 @@ pub const Ctx = struct {
         self.spilled_bundles.clearRetainingCapacity();
         self.blockparam_ins.clearRetainingCapacity();
         self.blockparam_outs.clearRetainingCapacity();
+        for (self.liveins.items) |*set| {
+            set.deinit();
+        }
+        self.liveins.clearRetainingCapacity();
         self.multi_fixed_reg_fixups.clearRetainingCapacity();
 
         for (&self.extra_spillslots_by_class) |*e| {
@@ -371,6 +385,13 @@ pub fn runWithCtx(
     ctx.blockparam_outs = liveness_ctx.blockparam_outs;
     liveness_ctx.blockparam_outs = .{};
 
+    for (ctx.liveins.items) |*set| {
+        set.deinit();
+    }
+    ctx.liveins.deinit(allocator);
+    ctx.liveins = liveness_ctx.liveins;
+    liveness_ctx.liveins = .{};
+
     ctx.multi_fixed_reg_fixups.deinit(allocator);
     ctx.multi_fixed_reg_fixups = liveness_ctx.multi_fixed_reg_fixups;
     liveness_ctx.multi_fixed_reg_fixups = .{};
@@ -460,6 +481,7 @@ pub fn runWithCtx(
         &ctx.output,
         ctx.blockparam_ins.items,
         ctx.blockparam_outs.items,
+        ctx.liveins.items,
         &ctx.multi_fixed_reg_fixups,
         &ctx.extra_spillslots_by_class,
         .{ PReg.invalid(), PReg.invalid(), PReg.invalid() },
