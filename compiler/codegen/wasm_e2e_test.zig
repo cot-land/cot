@@ -1252,3 +1252,476 @@ test "wasm e2e: deinit alloc reuse after release" {
     try std.testing.expect(result.wasm_bytes.len > 0);
     try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
 }
+
+// ============================================================================
+// Generic building blocks tests (Phase 1 for List(T))
+// ============================================================================
+
+test "wasm e2e: generic function with generic struct param" {
+    const code =
+        \\struct Box(T) { value: T }
+        \\fn Box_getValue(T)(self: *Box(T)) T {
+        \\    return self.value
+        \\}
+        \\fn main() i64 {
+        \\    var b: Box(i64) = undefined
+        \\    b.value = 42
+        \\    return Box_getValue(i64)(&b)
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: sizeOf in generic context" {
+    const code =
+        \\fn getSize(T)() i64 {
+        \\    return @sizeOf(T)
+        \\}
+        \\fn main() i64 {
+        \\    return getSize(i64)()
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: alloc intToPtr in generic context" {
+    const code =
+        \\fn allocOne(T)(value: T) *T {
+        \\    let ptr = @intToPtr(*T, @alloc(@sizeOf(T)))
+        \\    ptr.* = value
+        \\    return ptr
+        \\}
+        \\fn main() i64 {
+        \\    let p = allocOne(i64)(42)
+        \\    let result = p.*
+        \\    @dealloc(@ptrToInt(p))
+        \\    return result
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: field mutation on generic struct via pointer" {
+    const code =
+        \\struct Counter(T) { value: T, count: i64 }
+        \\fn Counter_increment(T)(self: *Counter(T)) void {
+        \\    self.count = self.count + 1
+        \\}
+        \\fn main() i64 {
+        \\    var c: Counter(i64) = undefined
+        \\    c.value = 10
+        \\    c.count = 0
+        \\    Counter_increment(i64)(&c)
+        \\    Counter_increment(i64)(&c)
+        \\    return c.count
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+// ============================================================================
+// List(T) stdlib tests
+// ============================================================================
+
+test "wasm e2e: list basic" {
+    const code =
+        \\struct List(T) {
+        \\    items: i64,
+        \\    count: i64,
+        \\    capacity: i64,
+        \\}
+        \\fn List_ensureCapacity(T)(self: *List(T), needed: i64) void {
+        \\    if self.capacity >= needed { return }
+        \\    var new_cap: i64 = 8
+        \\    if self.capacity > 0 { new_cap = self.capacity * 2 }
+        \\    let bytes = new_cap * @sizeOf(T)
+        \\    if self.capacity == 0 {
+        \\        self.items = @alloc(bytes)
+        \\    } else {
+        \\        self.items = @realloc(self.items, bytes)
+        \\    }
+        \\    self.capacity = new_cap
+        \\}
+        \\fn List_append(T)(self: *List(T), value: T) void {
+        \\    List_ensureCapacity(T)(self, self.count + 1)
+        \\    let ptr = @intToPtr(*T, self.items + self.count * @sizeOf(T))
+        \\    ptr.* = value
+        \\    self.count = self.count + 1
+        \\}
+        \\fn List_get(T)(self: *List(T), index: i64) T {
+        \\    let ptr = @intToPtr(*T, self.items + index * @sizeOf(T))
+        \\    return ptr.*
+        \\}
+        \\fn main() i64 {
+        \\    var list: List(i64) = undefined
+        \\    list.items = 0
+        \\    list.count = 0
+        \\    list.capacity = 0
+        \\    List_append(i64)(&list, 10)
+        \\    List_append(i64)(&list, 20)
+        \\    List_append(i64)(&list, 30)
+        \\    let a = List_get(i64)(&list, 0)
+        \\    let b = List_get(i64)(&list, 1)
+        \\    let c = List_get(i64)(&list, 2)
+        \\    return a + b + c
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: list growth" {
+    const code =
+        \\struct List(T) {
+        \\    items: i64,
+        \\    count: i64,
+        \\    capacity: i64,
+        \\}
+        \\fn List_ensureCapacity(T)(self: *List(T), needed: i64) void {
+        \\    if self.capacity >= needed { return }
+        \\    var new_cap: i64 = 8
+        \\    if self.capacity > 0 { new_cap = self.capacity * 2 }
+        \\    let bytes = new_cap * @sizeOf(T)
+        \\    if self.capacity == 0 {
+        \\        self.items = @alloc(bytes)
+        \\    } else {
+        \\        self.items = @realloc(self.items, bytes)
+        \\    }
+        \\    self.capacity = new_cap
+        \\}
+        \\fn List_append(T)(self: *List(T), value: T) void {
+        \\    List_ensureCapacity(T)(self, self.count + 1)
+        \\    let ptr = @intToPtr(*T, self.items + self.count * @sizeOf(T))
+        \\    ptr.* = value
+        \\    self.count = self.count + 1
+        \\}
+        \\fn List_get(T)(self: *List(T), index: i64) T {
+        \\    let ptr = @intToPtr(*T, self.items + index * @sizeOf(T))
+        \\    return ptr.*
+        \\}
+        \\fn main() i64 {
+        \\    var list: List(i64) = undefined
+        \\    list.items = 0
+        \\    list.count = 0
+        \\    list.capacity = 0
+        \\    var i: i64 = 0
+        \\    while i < 20 {
+        \\        List_append(i64)(&list, i)
+        \\        i = i + 1
+        \\    }
+        \\    let first = List_get(i64)(&list, 0)
+        \\    let last = List_get(i64)(&list, 19)
+        \\    return first + last + list.count
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: list pop" {
+    const code =
+        \\struct List(T) {
+        \\    items: i64,
+        \\    count: i64,
+        \\    capacity: i64,
+        \\}
+        \\fn List_ensureCapacity(T)(self: *List(T), needed: i64) void {
+        \\    if self.capacity >= needed { return }
+        \\    var new_cap: i64 = 8
+        \\    if self.capacity > 0 { new_cap = self.capacity * 2 }
+        \\    let bytes = new_cap * @sizeOf(T)
+        \\    if self.capacity == 0 {
+        \\        self.items = @alloc(bytes)
+        \\    } else {
+        \\        self.items = @realloc(self.items, bytes)
+        \\    }
+        \\    self.capacity = new_cap
+        \\}
+        \\fn List_append(T)(self: *List(T), value: T) void {
+        \\    List_ensureCapacity(T)(self, self.count + 1)
+        \\    let ptr = @intToPtr(*T, self.items + self.count * @sizeOf(T))
+        \\    ptr.* = value
+        \\    self.count = self.count + 1
+        \\}
+        \\fn List_get(T)(self: *List(T), index: i64) T {
+        \\    let ptr = @intToPtr(*T, self.items + index * @sizeOf(T))
+        \\    return ptr.*
+        \\}
+        \\fn List_pop(T)(self: *List(T)) T {
+        \\    self.count = self.count - 1
+        \\    let ptr = @intToPtr(*T, self.items + self.count * @sizeOf(T))
+        \\    return ptr.*
+        \\}
+        \\fn main() i64 {
+        \\    var list: List(i64) = undefined
+        \\    list.items = 0
+        \\    list.count = 0
+        \\    list.capacity = 0
+        \\    List_append(i64)(&list, 10)
+        \\    List_append(i64)(&list, 20)
+        \\    List_append(i64)(&list, 30)
+        \\    let popped = List_pop(i64)(&list)
+        \\    return popped + list.count
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: list set" {
+    const code =
+        \\struct List(T) {
+        \\    items: i64,
+        \\    count: i64,
+        \\    capacity: i64,
+        \\}
+        \\fn List_ensureCapacity(T)(self: *List(T), needed: i64) void {
+        \\    if self.capacity >= needed { return }
+        \\    var new_cap: i64 = 8
+        \\    if self.capacity > 0 { new_cap = self.capacity * 2 }
+        \\    let bytes = new_cap * @sizeOf(T)
+        \\    if self.capacity == 0 {
+        \\        self.items = @alloc(bytes)
+        \\    } else {
+        \\        self.items = @realloc(self.items, bytes)
+        \\    }
+        \\    self.capacity = new_cap
+        \\}
+        \\fn List_append(T)(self: *List(T), value: T) void {
+        \\    List_ensureCapacity(T)(self, self.count + 1)
+        \\    let ptr = @intToPtr(*T, self.items + self.count * @sizeOf(T))
+        \\    ptr.* = value
+        \\    self.count = self.count + 1
+        \\}
+        \\fn List_get(T)(self: *List(T), index: i64) T {
+        \\    let ptr = @intToPtr(*T, self.items + index * @sizeOf(T))
+        \\    return ptr.*
+        \\}
+        \\fn List_set(T)(self: *List(T), index: i64, value: T) void {
+        \\    let ptr = @intToPtr(*T, self.items + index * @sizeOf(T))
+        \\    ptr.* = value
+        \\}
+        \\fn main() i64 {
+        \\    var list: List(i64) = undefined
+        \\    list.items = 0
+        \\    list.count = 0
+        \\    list.capacity = 0
+        \\    List_append(i64)(&list, 10)
+        \\    List_append(i64)(&list, 20)
+        \\    List_append(i64)(&list, 30)
+        \\    List_set(i64)(&list, 1, 50)
+        \\    return List_get(i64)(&list, 0) + List_get(i64)(&list, 1) + List_get(i64)(&list, 2)
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: list multi type" {
+    const code =
+        \\struct List(T) {
+        \\    items: i64,
+        \\    count: i64,
+        \\    capacity: i64,
+        \\}
+        \\fn List_ensureCapacity(T)(self: *List(T), needed: i64) void {
+        \\    if self.capacity >= needed { return }
+        \\    var new_cap: i64 = 8
+        \\    if self.capacity > 0 { new_cap = self.capacity * 2 }
+        \\    let bytes = new_cap * @sizeOf(T)
+        \\    if self.capacity == 0 {
+        \\        self.items = @alloc(bytes)
+        \\    } else {
+        \\        self.items = @realloc(self.items, bytes)
+        \\    }
+        \\    self.capacity = new_cap
+        \\}
+        \\fn List_append(T)(self: *List(T), value: T) void {
+        \\    List_ensureCapacity(T)(self, self.count + 1)
+        \\    let ptr = @intToPtr(*T, self.items + self.count * @sizeOf(T))
+        \\    ptr.* = value
+        \\    self.count = self.count + 1
+        \\}
+        \\fn List_get(T)(self: *List(T), index: i64) T {
+        \\    let ptr = @intToPtr(*T, self.items + index * @sizeOf(T))
+        \\    return ptr.*
+        \\}
+        \\fn main() i64 {
+        \\    var a: List(i64) = undefined
+        \\    a.items = 0
+        \\    a.count = 0
+        \\    a.capacity = 0
+        \\    var b: List(i32) = undefined
+        \\    b.items = 0
+        \\    b.count = 0
+        \\    b.capacity = 0
+        \\    List_append(i64)(&a, 100)
+        \\    List_append(i32)(&b, 5)
+        \\    let x = List_get(i64)(&a, 0)
+        \\    let y: i64 = List_get(i32)(&b, 0)
+        \\    return x + y
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+// ============================================================================
+// Generic impl blocks
+// ============================================================================
+
+test "wasm e2e: generic impl basic" {
+    const code =
+        \\struct Counter(T) { value: T }
+        \\impl Counter(T) {
+        \\    fn get(self: *Counter(T)) T {
+        \\        return self.value
+        \\    }
+        \\}
+        \\fn main() i64 {
+        \\    var c: Counter(i64) = undefined
+        \\    c.value = 42
+        \\    return c.get()
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: generic impl self call" {
+    const code =
+        \\struct Box(T) { value: T, count: i64 }
+        \\impl Box(T) {
+        \\    fn getCount(self: *Box(T)) i64 {
+        \\        return self.count
+        \\    }
+        \\    fn increment(self: *Box(T)) void {
+        \\        self.count = self.getCount() + 1
+        \\    }
+        \\}
+        \\fn main() i64 {
+        \\    var b: Box(i64) = undefined
+        \\    b.value = 10
+        \\    b.count = 0
+        \\    b.increment()
+        \\    b.increment()
+        \\    b.increment()
+        \\    return b.count + b.value
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: generic impl multiple instantiations" {
+    const code =
+        \\struct Box(T) { value: T }
+        \\impl Box(T) {
+        \\    fn get(self: *Box(T)) T {
+        \\        return self.value
+        \\    }
+        \\}
+        \\fn main() i64 {
+        \\    var a: Box(i64) = undefined
+        \\    a.value = 30
+        \\    var b: Box(i32) = undefined
+        \\    b.value = 12
+        \\    let x: i64 = a.get()
+        \\    let y: i64 = b.get()
+        \\    return x + y
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: generic impl forward ref" {
+    // Tests that methods can call sibling methods defined LATER in the impl block.
+    // This catches the single-pass bug where registration and checking happen in one loop.
+    const code =
+        \\struct Box(T) { value: T, count: i64 }
+        \\impl Box(T) {
+        \\    fn increment(self: *Box(T)) void {
+        \\        self.count = self.getCount() + 1
+        \\    }
+        \\    fn getCount(self: *Box(T)) i64 {
+        \\        return self.count
+        \\    }
+        \\}
+        \\fn main() i64 {
+        \\    var b: Box(i64) = undefined
+        \\    b.value = 10
+        \\    b.count = 0
+        \\    b.increment()
+        \\    b.increment()
+        \\    return b.count + b.value
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: generic impl two type params" {
+    const code =
+        \\struct Pair(T, U) { first: T, second: U }
+        \\impl Pair(T, U) {
+        \\    fn sum(self: *Pair(T, U)) i64 {
+        \\        return self.first + self.second
+        \\    }
+        \\}
+        \\fn main() i64 {
+        \\    var p: Pair(i64, i64) = undefined
+        \\    p.first = 30
+        \\    p.second = 12
+        \\    return p.sum()
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}

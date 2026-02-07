@@ -102,6 +102,16 @@ pub const Lowerer = struct {
 
     pub fn lowerToBuilder(self: *Lowerer) !void {
         for (self.tree.getRootDecls()) |decl_idx| try self.lowerDecl(decl_idx);
+        // Queue all generic impl block method instances for lowering.
+        // Unlike regular generic functions (queued at call site via ensureGenericFnQueued),
+        // impl block methods are registered by the checker during struct instantiation and
+        // need to be pre-queued here so lowerQueuedGenericFunctions picks them up.
+        var inst_it = self.chk.generic_inst_by_name.valueIterator();
+        while (inst_it.next()) |inst_info| {
+            if (inst_info.type_param_names.len > 0) {
+                try self.lowered_generics.put(inst_info.concrete_name, {});
+            }
+        }
         // Zig pattern: process queued generic instantiations as top-level functions
         // (deferred, not inline — avoids corrupting builder state during nested lowering)
         try self.lowerQueuedGenericFunctions();
@@ -201,6 +211,8 @@ pub const Lowerer = struct {
     }
 
     fn lowerImplBlock(self: *Lowerer, impl_block: ast.ImplBlock) !void {
+        // Generic impl blocks: methods lowered via lowerQueuedGenericFunctions
+        if (impl_block.type_params.len > 0) return;
         for (impl_block.methods) |method_idx| {
             const node = self.tree.getNode(method_idx) orelse continue;
             const decl = node.asDecl() orelse continue;
@@ -2310,7 +2322,71 @@ pub const Lowerer = struct {
         // Generic function call: max(i64)(3, 5) — callee is a call expr (the inner call)
         if (callee_expr == .call) {
             const inner_call = callee_expr.call;
-            if (self.chk.generic_instantiations.get(inner_call.callee)) |inst_info| {
+            // When inside a monomorphized generic body (type_substitution active),
+            // re-resolve type args through substitution. The generic_instantiations map
+            // is keyed by AST node index which is shared across instantiations, so the
+            // last-checked instantiation overwrites earlier ones. We must construct the
+            // correct GenericInstInfo for the current type substitution context.
+            // Go pattern: each monomorphized body has concrete types fully resolved.
+            const resolved_inst_info = blk: {
+                if (self.type_substitution) |sub| {
+                    // Get the generic function name from the callee ident
+                    const inner_callee_node = self.tree.getNode(inner_call.callee) orelse break :blk self.chk.generic_instantiations.get(inner_call.callee);
+                    const inner_callee_expr = inner_callee_node.asExpr() orelse break :blk self.chk.generic_instantiations.get(inner_call.callee);
+                    if (inner_callee_expr != .ident) break :blk self.chk.generic_instantiations.get(inner_call.callee);
+                    const gen_name = inner_callee_expr.ident.name;
+
+                    // Look up generic function info to get the generic_node
+                    const gen_info = self.chk.generic_functions.get(gen_name) orelse {
+                        break :blk self.chk.generic_instantiations.get(inner_call.callee);
+                    };
+
+                    // Resolve type args through current substitution
+                    var resolved_type_args = std.ArrayListUnmanaged(TypeIndex){};
+                    defer resolved_type_args.deinit(self.allocator);
+                    for (inner_call.args) |arg_node_idx| {
+                        const resolved = self.resolveTypeNode(arg_node_idx);
+                        if (resolved != TypeRegistry.VOID) {
+                            try resolved_type_args.append(self.allocator, resolved);
+                        } else {
+                            // Try as ident (type parameter name resolved through substitution)
+                            const anode = self.tree.getNode(arg_node_idx) orelse continue;
+                            const aexpr = anode.asExpr() orelse continue;
+                            if (aexpr == .ident) {
+                                if (sub.get(aexpr.ident.name)) |sub_type| {
+                                    try resolved_type_args.append(self.allocator, sub_type);
+                                }
+                            }
+                        }
+                    }
+
+                    // Build the concrete cache key: "funcName(typeIdx1;typeIdx2)"
+                    var key_buf = std.ArrayListUnmanaged(u8){};
+                    defer key_buf.deinit(self.allocator);
+                    const kw = key_buf.writer(self.allocator);
+                    kw.writeAll(gen_name) catch break :blk self.chk.generic_instantiations.get(inner_call.callee);
+                    kw.writeByte('(') catch break :blk self.chk.generic_instantiations.get(inner_call.callee);
+                    for (resolved_type_args.items, 0..) |arg, i| {
+                        if (i > 0) kw.writeByte(';') catch break :blk self.chk.generic_instantiations.get(inner_call.callee);
+                        std.fmt.format(kw, "{d}", .{arg}) catch break :blk self.chk.generic_instantiations.get(inner_call.callee);
+                    }
+                    kw.writeByte(')') catch break :blk self.chk.generic_instantiations.get(inner_call.callee);
+                    const concrete_name = self.allocator.dupe(u8, key_buf.items) catch break :blk self.chk.generic_instantiations.get(inner_call.callee);
+
+                    // Construct GenericInstInfo directly — the generic_instantiations map
+                    // (keyed by AST node) may have been overwritten by a later instantiation.
+                    // Go pattern: mangled symbol name is the canonical identifier (noder/reader.go:863).
+                    // Zig pattern: InternPool keys by (generic_owner, comptime_args) not call site.
+                    break :blk @as(?checker.GenericInstInfo, .{
+                        .concrete_name = concrete_name,
+                        .generic_node = gen_info.node_idx,
+                        .type_args = try self.allocator.dupe(TypeIndex, resolved_type_args.items),
+                    });
+                } else {
+                    break :blk self.chk.generic_instantiations.get(inner_call.callee);
+                }
+            };
+            if (resolved_inst_info) |inst_info| {
                 try self.ensureGenericFnQueued(inst_info);
                 // Lower value arguments
                 var gen_args = std.ArrayListUnmanaged(ir.NodeIndex){};
@@ -2435,10 +2511,26 @@ pub const Lowerer = struct {
     /// Zig pattern: ensureFuncBodyAnalysisQueued (Zcu.zig:3522) queues analysis jobs.
     /// We process all queued generic instantiations as top-level functions.
     fn lowerQueuedGenericFunctions(self: *Lowerer) !void {
-        var it = self.chk.generic_instantiations.valueIterator();
-        while (it.next()) |inst_info| {
-            if (!self.lowered_generics.contains(inst_info.concrete_name)) continue;
-            try self.lowerGenericFnInstance(inst_info.*);
+        // Use generic_inst_by_name which has ALL instantiations (never overwritten).
+        // The generic_instantiations map is keyed by AST node index, so the second
+        // instantiation of the same generic function overwrites the first.
+        // generic_inst_by_name is keyed by concrete name, so all are preserved.
+        //
+        // We must loop until no new instantiations are queued, because lowering one
+        // generic body may queue new ones (e.g., List_append calls List_ensureCapacity).
+        var emitted = std.StringHashMap(void).init(self.allocator);
+        defer emitted.deinit();
+        var made_progress = true;
+        while (made_progress) {
+            made_progress = false;
+            var it = self.chk.generic_inst_by_name.valueIterator();
+            while (it.next()) |inst_info| {
+                if (!self.lowered_generics.contains(inst_info.concrete_name)) continue;
+                if (emitted.contains(inst_info.concrete_name)) continue;
+                try emitted.put(inst_info.concrete_name, {});
+                try self.lowerGenericFnInstance(inst_info.*);
+                made_progress = true;
+            }
         }
     }
 
@@ -2450,9 +2542,12 @@ pub const Lowerer = struct {
         const f = fn_decl_node.fn_decl;
 
         // Build type substitution map: T -> i64, U -> f64, etc.
+        // For impl block methods, type_params come from the impl block (type_param_names),
+        // not from the fn_decl (which has no type_params for impl methods).
         var sub_map = std.StringHashMap(TypeIndex).init(self.allocator);
         defer sub_map.deinit();
-        for (f.type_params, 0..) |param_name, i| {
+        const param_names = if (inst_info.type_param_names.len > 0) inst_info.type_param_names else f.type_params;
+        for (param_names, 0..) |param_name, i| {
             if (i < inst_info.type_args.len) {
                 try sub_map.put(param_name, inst_info.type_args[i]);
             }

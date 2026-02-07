@@ -791,6 +791,21 @@ pub const SSABuilder = struct {
         return .load;
     }
 
+    /// Choose the correct store operation based on type size.
+    /// Follows Go's storeOp pattern from wasm/ssa.go.
+    fn getStoreOp(self: *SSABuilder, type_idx: TypeIndex) Op {
+        const type_info = self.type_registry.get(type_idx);
+        if (type_info == .basic) {
+            return switch (type_info.basic) {
+                .i8_type, .u8_type => .store8,
+                .i16_type, .u16_type => .store16,
+                .i32_type, .u32_type, .f32_type => .store32,
+                else => .store,
+            };
+        }
+        return .store;
+    }
+
     fn convertStoreIndexLocal(self: *SSABuilder, s: ir.StoreIndexLocal, cur: *Block) !*Value {
         const addr = try self.emitLocalAddr(s.local_idx, TypeRegistry.VOID, cur);
         const index = try self.convertNode(s.index) orelse return error.MissingValue;
@@ -900,7 +915,8 @@ pub const SSABuilder = struct {
 
     fn convertPtrLoadValue(self: *SSABuilder, ptr_idx: ir.NodeIndex, type_idx: TypeIndex, cur: *Block) !*Value {
         const ptr_val = try self.convertNode(ptr_idx) orelse return error.MissingValue;
-        const load_val = try self.func.newValue(.load, type_idx, cur, self.cur_pos);
+        const load_op = self.getLoadOp(type_idx);
+        const load_val = try self.func.newValue(load_op, type_idx, cur, self.cur_pos);
         load_val.addArg(ptr_val);
         try cur.addValue(self.allocator, load_val);
         return load_val;

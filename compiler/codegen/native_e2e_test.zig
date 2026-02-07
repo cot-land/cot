@@ -829,3 +829,411 @@ test "native: deinit alloc reuse after release" {
         \\}
     ), 30, "deinit_alloc_reuse");
 }
+
+// ============================================================================
+// Generic building blocks tests (Phase 1 for List(T))
+// ============================================================================
+
+test "native: generic function with generic struct param" {
+    try expectExitCode(std.testing.allocator, @constCast(
+        \\struct Box(T) { value: T }
+        \\fn Box_getValue(T)(self: *Box(T)) T {
+        \\    return self.value
+        \\}
+        \\fn main() i64 {
+        \\    var b: Box(i64) = undefined
+        \\    b.value = 42
+        \\    return Box_getValue(i64)(&b)
+        \\}
+    ), 42, "generic_struct_param");
+}
+
+test "native: sizeOf in generic context" {
+    try expectExitCode(std.testing.allocator, @constCast(
+        \\fn getSize(T)() i64 {
+        \\    return @sizeOf(T)
+        \\}
+        \\fn main() i64 {
+        \\    return getSize(i64)()
+        \\}
+    ), 8, "sizeof_generic");
+}
+
+test "native: alloc intToPtr in generic context" {
+    try expectExitCode(std.testing.allocator, @constCast(
+        \\fn allocOne(T)(value: T) *T {
+        \\    let ptr = @intToPtr(*T, @alloc(@sizeOf(T)))
+        \\    ptr.* = value
+        \\    return ptr
+        \\}
+        \\fn main() i64 {
+        \\    let p = allocOne(i64)(42)
+        \\    let result = p.*
+        \\    @dealloc(@ptrToInt(p))
+        \\    return result
+        \\}
+    ), 42, "alloc_inttoptr_generic");
+}
+
+test "native: field mutation on generic struct via pointer" {
+    try expectExitCode(std.testing.allocator, @constCast(
+        \\struct Counter(T) { value: T, count: i64 }
+        \\fn Counter_increment(T)(self: *Counter(T)) void {
+        \\    self.count = self.count + 1
+        \\}
+        \\fn main() i64 {
+        \\    var c: Counter(i64) = undefined
+        \\    c.value = 10
+        \\    c.count = 0
+        \\    Counter_increment(i64)(&c)
+        \\    Counter_increment(i64)(&c)
+        \\    return c.count
+        \\}
+    ), 2, "generic_field_mutation");
+}
+
+// ============================================================================
+// List(T) stdlib tests
+// ============================================================================
+
+test "native: list basic" {
+    try expectExitCode(std.testing.allocator, @constCast(
+        \\struct List(T) {
+        \\    items: i64,
+        \\    count: i64,
+        \\    capacity: i64,
+        \\}
+        \\fn List_ensureCapacity(T)(self: *List(T), needed: i64) void {
+        \\    if self.capacity >= needed { return }
+        \\    var new_cap: i64 = 8
+        \\    if self.capacity > 0 { new_cap = self.capacity * 2 }
+        \\    let bytes = new_cap * @sizeOf(T)
+        \\    if self.capacity == 0 {
+        \\        self.items = @alloc(bytes)
+        \\    } else {
+        \\        self.items = @realloc(self.items, bytes)
+        \\    }
+        \\    self.capacity = new_cap
+        \\}
+        \\fn List_append(T)(self: *List(T), value: T) void {
+        \\    List_ensureCapacity(T)(self, self.count + 1)
+        \\    let ptr = @intToPtr(*T, self.items + self.count * @sizeOf(T))
+        \\    ptr.* = value
+        \\    self.count = self.count + 1
+        \\}
+        \\fn List_get(T)(self: *List(T), index: i64) T {
+        \\    let ptr = @intToPtr(*T, self.items + index * @sizeOf(T))
+        \\    return ptr.*
+        \\}
+        \\fn main() i64 {
+        \\    var list: List(i64) = undefined
+        \\    list.items = 0
+        \\    list.count = 0
+        \\    list.capacity = 0
+        \\    List_append(i64)(&list, 10)
+        \\    List_append(i64)(&list, 20)
+        \\    List_append(i64)(&list, 30)
+        \\    let a = List_get(i64)(&list, 0)
+        \\    let b = List_get(i64)(&list, 1)
+        \\    let c = List_get(i64)(&list, 2)
+        \\    return a + b + c
+        \\}
+    ), 60, "list_basic");
+}
+
+test "native: list growth" {
+    // Appends 20 items (triggers growth past initial 8 to 16, then 16 to 32)
+    // Expected: first(0) + last(19) + count(20) = 39
+    try expectExitCode(std.testing.allocator, @constCast(
+        \\struct List(T) {
+        \\    items: i64,
+        \\    count: i64,
+        \\    capacity: i64,
+        \\}
+        \\fn List_ensureCapacity(T)(self: *List(T), needed: i64) void {
+        \\    if self.capacity >= needed { return }
+        \\    var new_cap: i64 = 8
+        \\    if self.capacity > 0 { new_cap = self.capacity * 2 }
+        \\    let bytes = new_cap * @sizeOf(T)
+        \\    if self.capacity == 0 {
+        \\        self.items = @alloc(bytes)
+        \\    } else {
+        \\        self.items = @realloc(self.items, bytes)
+        \\    }
+        \\    self.capacity = new_cap
+        \\}
+        \\fn List_append(T)(self: *List(T), value: T) void {
+        \\    List_ensureCapacity(T)(self, self.count + 1)
+        \\    let ptr = @intToPtr(*T, self.items + self.count * @sizeOf(T))
+        \\    ptr.* = value
+        \\    self.count = self.count + 1
+        \\}
+        \\fn List_get(T)(self: *List(T), index: i64) T {
+        \\    let ptr = @intToPtr(*T, self.items + index * @sizeOf(T))
+        \\    return ptr.*
+        \\}
+        \\fn main() i64 {
+        \\    var list: List(i64) = undefined
+        \\    list.items = 0
+        \\    list.count = 0
+        \\    list.capacity = 0
+        \\    var i: i64 = 0
+        \\    while i < 20 {
+        \\        List_append(i64)(&list, i)
+        \\        i = i + 1
+        \\    }
+        \\    let first = List_get(i64)(&list, 0)
+        \\    let last = List_get(i64)(&list, 19)
+        \\    return first + last + list.count
+        \\}
+    ), 39, "list_growth");
+}
+
+test "native: list pop" {
+    // Append 3, pop last, verify: popped(30) + remaining count(2) = 32
+    try expectExitCode(std.testing.allocator, @constCast(
+        \\struct List(T) {
+        \\    items: i64,
+        \\    count: i64,
+        \\    capacity: i64,
+        \\}
+        \\fn List_ensureCapacity(T)(self: *List(T), needed: i64) void {
+        \\    if self.capacity >= needed { return }
+        \\    var new_cap: i64 = 8
+        \\    if self.capacity > 0 { new_cap = self.capacity * 2 }
+        \\    let bytes = new_cap * @sizeOf(T)
+        \\    if self.capacity == 0 {
+        \\        self.items = @alloc(bytes)
+        \\    } else {
+        \\        self.items = @realloc(self.items, bytes)
+        \\    }
+        \\    self.capacity = new_cap
+        \\}
+        \\fn List_append(T)(self: *List(T), value: T) void {
+        \\    List_ensureCapacity(T)(self, self.count + 1)
+        \\    let ptr = @intToPtr(*T, self.items + self.count * @sizeOf(T))
+        \\    ptr.* = value
+        \\    self.count = self.count + 1
+        \\}
+        \\fn List_get(T)(self: *List(T), index: i64) T {
+        \\    let ptr = @intToPtr(*T, self.items + index * @sizeOf(T))
+        \\    return ptr.*
+        \\}
+        \\fn List_pop(T)(self: *List(T)) T {
+        \\    self.count = self.count - 1
+        \\    let ptr = @intToPtr(*T, self.items + self.count * @sizeOf(T))
+        \\    return ptr.*
+        \\}
+        \\fn main() i64 {
+        \\    var list: List(i64) = undefined
+        \\    list.items = 0
+        \\    list.count = 0
+        \\    list.capacity = 0
+        \\    List_append(i64)(&list, 10)
+        \\    List_append(i64)(&list, 20)
+        \\    List_append(i64)(&list, 30)
+        \\    let popped = List_pop(i64)(&list)
+        \\    return popped + list.count
+        \\}
+    ), 32, "list_pop");
+}
+
+test "native: list set" {
+    // Append 3, modify middle, verify: 10 + 50 + 30 = 90
+    try expectExitCode(std.testing.allocator, @constCast(
+        \\struct List(T) {
+        \\    items: i64,
+        \\    count: i64,
+        \\    capacity: i64,
+        \\}
+        \\fn List_ensureCapacity(T)(self: *List(T), needed: i64) void {
+        \\    if self.capacity >= needed { return }
+        \\    var new_cap: i64 = 8
+        \\    if self.capacity > 0 { new_cap = self.capacity * 2 }
+        \\    let bytes = new_cap * @sizeOf(T)
+        \\    if self.capacity == 0 {
+        \\        self.items = @alloc(bytes)
+        \\    } else {
+        \\        self.items = @realloc(self.items, bytes)
+        \\    }
+        \\    self.capacity = new_cap
+        \\}
+        \\fn List_append(T)(self: *List(T), value: T) void {
+        \\    List_ensureCapacity(T)(self, self.count + 1)
+        \\    let ptr = @intToPtr(*T, self.items + self.count * @sizeOf(T))
+        \\    ptr.* = value
+        \\    self.count = self.count + 1
+        \\}
+        \\fn List_get(T)(self: *List(T), index: i64) T {
+        \\    let ptr = @intToPtr(*T, self.items + index * @sizeOf(T))
+        \\    return ptr.*
+        \\}
+        \\fn List_set(T)(self: *List(T), index: i64, value: T) void {
+        \\    let ptr = @intToPtr(*T, self.items + index * @sizeOf(T))
+        \\    ptr.* = value
+        \\}
+        \\fn main() i64 {
+        \\    var list: List(i64) = undefined
+        \\    list.items = 0
+        \\    list.count = 0
+        \\    list.capacity = 0
+        \\    List_append(i64)(&list, 10)
+        \\    List_append(i64)(&list, 20)
+        \\    List_append(i64)(&list, 30)
+        \\    List_set(i64)(&list, 1, 50)
+        \\    return List_get(i64)(&list, 0) + List_get(i64)(&list, 1) + List_get(i64)(&list, 2)
+        \\}
+    ), 90, "list_set");
+}
+
+test "native: list multi type" {
+    // Two lists with different element types: List(i64) and List(i32)
+    // Expected: 100 + 5 = 105
+    try expectExitCode(std.testing.allocator, @constCast(
+        \\struct List(T) {
+        \\    items: i64,
+        \\    count: i64,
+        \\    capacity: i64,
+        \\}
+        \\fn List_ensureCapacity(T)(self: *List(T), needed: i64) void {
+        \\    if self.capacity >= needed { return }
+        \\    var new_cap: i64 = 8
+        \\    if self.capacity > 0 { new_cap = self.capacity * 2 }
+        \\    let bytes = new_cap * @sizeOf(T)
+        \\    if self.capacity == 0 {
+        \\        self.items = @alloc(bytes)
+        \\    } else {
+        \\        self.items = @realloc(self.items, bytes)
+        \\    }
+        \\    self.capacity = new_cap
+        \\}
+        \\fn List_append(T)(self: *List(T), value: T) void {
+        \\    List_ensureCapacity(T)(self, self.count + 1)
+        \\    let ptr = @intToPtr(*T, self.items + self.count * @sizeOf(T))
+        \\    ptr.* = value
+        \\    self.count = self.count + 1
+        \\}
+        \\fn List_get(T)(self: *List(T), index: i64) T {
+        \\    let ptr = @intToPtr(*T, self.items + index * @sizeOf(T))
+        \\    return ptr.*
+        \\}
+        \\fn main() i64 {
+        \\    var a: List(i64) = undefined
+        \\    a.items = 0
+        \\    a.count = 0
+        \\    a.capacity = 0
+        \\    var b: List(i32) = undefined
+        \\    b.items = 0
+        \\    b.count = 0
+        \\    b.capacity = 0
+        \\    List_append(i64)(&a, 100)
+        \\    List_append(i32)(&b, 5)
+        \\    let x = List_get(i64)(&a, 0)
+        \\    let y: i64 = List_get(i32)(&b, 0)
+        \\    return x + y
+        \\}
+    ), 105, "list_multi_type");
+}
+
+// ============================================================================
+// Generic impl blocks
+// ============================================================================
+
+test "native: generic impl basic" {
+    try expectExitCode(std.testing.allocator, @constCast(
+        \\struct Counter(T) { value: T }
+        \\impl Counter(T) {
+        \\    fn get(self: *Counter(T)) T {
+        \\        return self.value
+        \\    }
+        \\}
+        \\fn main() i64 {
+        \\    var c: Counter(i64) = undefined
+        \\    c.value = 42
+        \\    return c.get()
+        \\}
+    ), 42, "generic_impl_basic");
+}
+
+test "native: generic impl self call" {
+    try expectExitCode(std.testing.allocator, @constCast(
+        \\struct Box(T) { value: T, count: i64 }
+        \\impl Box(T) {
+        \\    fn getCount(self: *Box(T)) i64 {
+        \\        return self.count
+        \\    }
+        \\    fn increment(self: *Box(T)) void {
+        \\        self.count = self.getCount() + 1
+        \\    }
+        \\}
+        \\fn main() i64 {
+        \\    var b: Box(i64) = undefined
+        \\    b.value = 10
+        \\    b.count = 0
+        \\    b.increment()
+        \\    b.increment()
+        \\    b.increment()
+        \\    return b.count + b.value
+        \\}
+    ), 13, "generic_impl_self_call");
+}
+
+test "native: generic impl multiple instantiations" {
+    try expectExitCode(std.testing.allocator, @constCast(
+        \\struct Box(T) { value: T }
+        \\impl Box(T) {
+        \\    fn get(self: *Box(T)) T {
+        \\        return self.value
+        \\    }
+        \\}
+        \\fn main() i64 {
+        \\    var a: Box(i64) = undefined
+        \\    a.value = 30
+        \\    var b: Box(i32) = undefined
+        \\    b.value = 12
+        \\    let x: i64 = a.get()
+        \\    let y: i64 = b.get()
+        \\    return x + y
+        \\}
+    ), 42, "generic_impl_multi_inst");
+}
+
+test "native: generic impl forward ref" {
+    // Tests that methods can call sibling methods defined LATER in the impl block.
+    try expectExitCode(std.testing.allocator, @constCast(
+        \\struct Box(T) { value: T, count: i64 }
+        \\impl Box(T) {
+        \\    fn increment(self: *Box(T)) void {
+        \\        self.count = self.getCount() + 1
+        \\    }
+        \\    fn getCount(self: *Box(T)) i64 {
+        \\        return self.count
+        \\    }
+        \\}
+        \\fn main() i64 {
+        \\    var b: Box(i64) = undefined
+        \\    b.value = 10
+        \\    b.count = 0
+        \\    b.increment()
+        \\    b.increment()
+        \\    return b.count + b.value
+        \\}
+    ), 12, "generic_impl_forward_ref");
+}
+
+test "native: generic impl two type params" {
+    try expectExitCode(std.testing.allocator, @constCast(
+        \\struct Pair(T, U) { first: T, second: U }
+        \\impl Pair(T, U) {
+        \\    fn sum(self: *Pair(T, U)) i64 {
+        \\        return self.first + self.second
+        \\    }
+        \\}
+        \\fn main() i64 {
+        \\    var p: Pair(i64, i64) = undefined
+        \\    p.first = 30
+        \\    p.second = 12
+        \\    return p.sum()
+        \\}
+    ), 42, "generic_impl_two_params");
+}

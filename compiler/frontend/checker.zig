@@ -83,6 +83,13 @@ pub const GenericInstInfo = struct {
     concrete_name: []const u8,
     generic_node: NodeIndex,
     type_args: []const TypeIndex,
+    type_param_names: []const []const u8 = &.{}, // For impl block methods (type params come from impl, not fn)
+};
+
+/// Info about a generic impl block definition.
+pub const GenericImplInfo = struct {
+    type_params: []const []const u8,
+    methods: []const NodeIndex,
 };
 
 pub const Checker = struct {
@@ -99,6 +106,10 @@ pub const Checker = struct {
     generic_functions: std.StringHashMap(GenericInfo) = undefined,
     instantiation_cache: std.StringHashMap(TypeIndex) = undefined,
     generic_instantiations: std.AutoHashMap(NodeIndex, GenericInstInfo) = undefined,
+    /// All generic instantiations by concrete name (never overwritten, unlike generic_instantiations).
+    generic_inst_by_name: std.StringHashMap(GenericInstInfo) = undefined,
+    /// Generic impl blocks keyed by base struct name (e.g., "List" -> impl List(T) { ... })
+    generic_impl_blocks: std.StringHashMap(std.ArrayListUnmanaged(GenericImplInfo)) = undefined,
     /// Type substitution map, active during generic instantiation
     type_substitution: ?std.StringHashMap(TypeIndex) = null,
 
@@ -114,6 +125,8 @@ pub const Checker = struct {
             .generic_functions = std.StringHashMap(GenericInfo).init(allocator),
             .instantiation_cache = std.StringHashMap(TypeIndex).init(allocator),
             .generic_instantiations = std.AutoHashMap(NodeIndex, GenericInstInfo).init(allocator),
+            .generic_inst_by_name = std.StringHashMap(GenericInstInfo).init(allocator),
+            .generic_impl_blocks = std.StringHashMap(std.ArrayListUnmanaged(GenericImplInfo)).init(allocator),
         };
     }
 
@@ -123,6 +136,10 @@ pub const Checker = struct {
         self.generic_functions.deinit();
         self.instantiation_cache.deinit();
         self.generic_instantiations.deinit();
+        self.generic_inst_by_name.deinit();
+        var gib_it = self.generic_impl_blocks.valueIterator();
+        while (gib_it.next()) |list| list.deinit(self.allocator);
+        self.generic_impl_blocks.deinit();
     }
     pub fn getExprType(self: *const Checker, node: NodeIndex) TypeIndex { return self.expr_types.get(node) orelse invalid_type; }
 
@@ -212,6 +229,13 @@ pub const Checker = struct {
                 try self.types.registerNamed(t.name, target_type);
             },
             .impl_block => |impl_b| {
+                // Generic impl blocks: store definition, instantiate when struct is instantiated
+                if (impl_b.type_params.len > 0) {
+                    const gop = try self.generic_impl_blocks.getOrPut(impl_b.type_name);
+                    if (!gop.found_existing) gop.value_ptr.* = .{};
+                    try gop.value_ptr.append(self.allocator, .{ .type_params = impl_b.type_params, .methods = impl_b.methods });
+                    return;
+                }
                 for (impl_b.methods) |method_idx| {
                     const method_decl = (self.tree.getNode(method_idx) orelse continue).asDecl() orelse continue;
                     if (method_decl == .fn_decl) {
@@ -260,6 +284,8 @@ pub const Checker = struct {
             },
             .var_decl => |v| try self.checkVarDecl(v, idx),
             .impl_block => |impl_b| {
+                // Generic impl blocks: bodies checked at instantiation time
+                if (impl_b.type_params.len > 0) return;
                 for (impl_b.methods) |method_idx| {
                     const method_decl = (self.tree.getNode(method_idx) orelse continue).asDecl() orelse continue;
                     if (method_decl == .fn_decl) {
@@ -1158,7 +1184,82 @@ pub const Checker = struct {
         try self.types.registerNamed(cache_key, concrete_type);
         try self.instantiation_cache.put(cache_key, concrete_type);
 
+        // Instantiate generic impl block methods for this concrete struct
+        try self.instantiateGenericImplMethods(gi.name, cache_key, resolved_args.items);
+
         return concrete_type;
+    }
+
+    /// Instantiate all methods from generic impl blocks for a concrete struct type.
+    /// Called from resolveGenericInstance after creating concrete struct "List(5)".
+    /// Go 1.18 pattern: methods on Stack[T] are monomorphized per concrete type.
+    ///
+    /// Two-pass approach (matches non-generic impl flow: collectDecl then checkDecl):
+    ///   Pass 1: Register all method signatures in scope + method registry
+    ///   Pass 2: Check all method bodies (sibling methods already visible)
+    /// Go reference: named.go expandMethod() uses lazy expansion which naturally
+    /// handles forward references; our eager approach needs explicit two-pass.
+    fn instantiateGenericImplMethods(
+        self: *Checker,
+        base_name: []const u8,
+        concrete_name: []const u8,
+        resolved_args: []const TypeIndex,
+    ) CheckError!void {
+        const impl_list = self.generic_impl_blocks.get(base_name) orelse return;
+        for (impl_list.items) |impl_info| {
+            // Validate type param count matches (Go: named.go:489 checks RecvTypeParams.Len == targs.Len)
+            if (impl_info.type_params.len != resolved_args.len) continue;
+
+            // Build type substitution map: T -> concrete type
+            var sub_map = std.StringHashMap(TypeIndex).init(self.allocator);
+            defer sub_map.deinit();
+            for (impl_info.type_params, 0..) |param_name, i| {
+                try sub_map.put(param_name, resolved_args[i]);
+            }
+
+            const old_sub = self.type_substitution;
+            self.type_substitution = sub_map;
+            defer self.type_substitution = old_sub;
+
+            // Pass 1: Register all method signatures (like collectDecl for non-generic impl)
+            for (impl_info.methods) |method_idx| {
+                const method_decl = (self.tree.getNode(method_idx) orelse continue).asDecl() orelse continue;
+                if (method_decl != .fn_decl) continue;
+                const f = method_decl.fn_decl;
+
+                const synth_name = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ concrete_name, f.name });
+                const func_type = try self.buildFuncType(f.params, f.return_type);
+
+                if (!self.scope.isDefined(synth_name)) {
+                    try self.scope.define(Symbol.init(synth_name, .function, func_type, method_idx, false));
+                }
+                try self.types.registerMethod(concrete_name, types.MethodInfo{
+                    .name = f.name,
+                    .func_name = synth_name,
+                    .func_type = func_type,
+                    .receiver_is_ptr = true,
+                });
+
+                // Add to generic_inst_by_name so the lowerer can find and lower it
+                const inst = GenericInstInfo{
+                    .concrete_name = synth_name,
+                    .generic_node = method_idx,
+                    .type_args = try self.allocator.dupe(TypeIndex, resolved_args),
+                    .type_param_names = impl_info.type_params,
+                };
+                try self.generic_inst_by_name.put(synth_name, inst);
+            }
+
+            // Pass 2: Check all method bodies (all sibling methods now visible in scope)
+            for (impl_info.methods) |method_idx| {
+                const method_decl = (self.tree.getNode(method_idx) orelse continue).asDecl() orelse continue;
+                if (method_decl != .fn_decl) continue;
+                const f = method_decl.fn_decl;
+
+                const synth_name = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ concrete_name, f.name });
+                try self.checkFnDeclWithName(f, method_idx, synth_name);
+            }
+        }
     }
 
     /// Go pattern: types2/instantiate.go:87-125 — instance() creates concrete func,
@@ -1221,11 +1322,14 @@ pub const Checker = struct {
         self.type_substitution = old_sub;
 
         // Record for the lowerer: this call node is a generic instantiation
-        try self.generic_instantiations.put(c.callee, .{
+        const inst = GenericInstInfo{
             .concrete_name = cache_key,
             .generic_node = gen_info.node_idx,
             .type_args = try self.allocator.dupe(TypeIndex, resolved_args.items),
-        });
+        };
+        try self.generic_instantiations.put(c.callee, inst);
+        // Also store by concrete name (never overwritten, for nested generic calls)
+        try self.generic_inst_by_name.put(cache_key, inst);
 
         return func_type;
     }

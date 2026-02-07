@@ -41,7 +41,7 @@ pub const Decl = union(enum) {
 pub const FnDecl = struct { name: []const u8, type_params: []const []const u8 = &.{}, params: []const Field, return_type: NodeIndex, body: NodeIndex, is_extern: bool, span: Span };
 pub const VarDecl = struct { name: []const u8, type_expr: NodeIndex, value: NodeIndex, is_const: bool, span: Span };
 pub const StructDecl = struct { name: []const u8, type_params: []const []const u8 = &.{}, fields: []const Field, span: Span };
-pub const ImplBlock = struct { type_name: []const u8, methods: []const NodeIndex, span: Span };
+pub const ImplBlock = struct { type_name: []const u8, type_params: []const []const u8 = &.{}, methods: []const NodeIndex, span: Span };
 pub const TestDecl = struct { name: []const u8, body: NodeIndex, span: Span };
 pub const EnumDecl = struct { name: []const u8, backing_type: NodeIndex, variants: []const EnumVariant, span: Span };
 pub const UnionDecl = struct { name: []const u8, variants: []const UnionVariant, span: Span };
@@ -244,6 +244,9 @@ pub const Ast = struct {
                     .enum_decl => |e| if (e.variants.len > 0) self.allocator.free(e.variants),
                     .union_decl => |u| if (u.variants.len > 0) self.allocator.free(u.variants),
                     .error_set_decl => |e| if (e.variants.len > 0) self.allocator.free(e.variants),
+                    .impl_block => |ib| {
+                        if (ib.type_params.len > 0) self.allocator.free(ib.type_params);
+                    },
                     else => {},
                 },
                 .expr => |expr| switch (expr) {

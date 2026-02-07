@@ -267,6 +267,23 @@ pub const Parser = struct {
         if (!self.check(.ident)) { self.err.errorWithCode(self.pos(), .e203, "expected type name after 'impl'"); return null; }
         const type_name = self.tok.text;
         self.advance();
+
+        // Parse optional type parameters: impl List(T) { ... }
+        var type_params: []const []const u8 = &.{};
+        if (self.check(.lparen)) {
+            self.advance();
+            var tp = std.ArrayListUnmanaged([]const u8){};
+            defer tp.deinit(self.allocator);
+            while (!self.check(.rparen) and !self.check(.eof)) {
+                if (!self.check(.ident)) { self.syntaxError("expected type parameter name"); return null; }
+                try tp.append(self.allocator, self.tok.text);
+                self.advance();
+                if (!self.match(.comma)) break;
+            }
+            if (!self.expect(.rparen)) return null;
+            type_params = try self.allocator.dupe([]const u8, tp.items);
+        }
+
         if (!self.expect(.lbrace)) return null;
 
         var methods = std.ArrayListUnmanaged(NodeIndex){};
@@ -277,7 +294,7 @@ pub const Parser = struct {
             } else { self.syntaxError("expected 'fn' in impl block"); self.advance(); }
         }
         if (!self.expect(.rbrace)) return null;
-        return try self.tree.addDecl(.{ .impl_block = .{ .type_name = type_name, .methods = try self.allocator.dupe(NodeIndex, methods.items), .span = Span.init(start, self.pos()) } });
+        return try self.tree.addDecl(.{ .impl_block = .{ .type_name = type_name, .type_params = type_params, .methods = try self.allocator.dupe(NodeIndex, methods.items), .span = Span.init(start, self.pos()) } });
     }
 
     fn parseEnumDecl(self: *Parser) ParseError!?NodeIndex {
