@@ -1492,3 +1492,58 @@ test "native: generic impl two type params" {
         \\}
     ), 42, "generic_impl_two_params");
 }
+
+test "native: generic struct literal" {
+    try expectExitCode(std.testing.allocator, @constCast(
+        \\struct Pair(T, U) { first: T, second: U }
+        \\fn main() i64 {
+        \\    var p = Pair(i64, i64) { .first = 10, .second = 32 }
+        \\    return p.first + p.second
+        \\}
+    ), 42, "generic_struct_literal");
+}
+
+test "native: generic struct literal with methods" {
+    try expectExitCode(std.testing.allocator, @constCast(
+        \\struct Pair(T, U) { first: T, second: U }
+        \\impl Pair(T, U) {
+        \\    fn sum(self: *Pair(T, U)) i64 {
+        \\        return self.first + self.second
+        \\    }
+        \\}
+        \\fn main() i64 {
+        \\    var p = Pair(i64, i64) { .first = 30, .second = 12 }
+        \\    return p.sum()
+        \\}
+    ), 42, "generic_struct_literal_methods");
+}
+
+test "native: zero init basic" {
+    try expectExitCode(std.testing.allocator, @constCast(
+        \\struct Point { x: i64, y: i64 }
+        \\fn main() i64 {
+        \\    var p: Point = .{}
+        \\    return p.x + p.y
+        \\}
+    ), 0, "zero_init_basic");
+}
+
+test "native: zero init generic" {
+    try expectExitCode(std.testing.allocator, @constCast(
+        \\struct Pair(T, U) { first: T, second: U }
+        \\fn main() i64 {
+        \\    var p: Pair(i64, i64) = .{}
+        \\    return p.first + p.second
+        \\}
+    ), 0, "zero_init_generic");
+}
+
+test "native: new generic" {
+    try expectExitCode(std.testing.allocator, @constCast(
+        \\struct Pair(T, U) { first: T, second: U }
+        \\fn main() i64 {
+        \\    let p = new Pair(i64, i64) { first: 30, second: 12 }
+        \\    return p.first + p.second
+        \\}
+    ), 42, "new_generic");
+}

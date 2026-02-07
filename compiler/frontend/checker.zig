@@ -351,6 +351,11 @@ pub const Checker = struct {
         return expr == .literal and expr.literal.kind == .undefined_lit;
     }
 
+    fn isZeroInitLit(self: *Checker, idx: NodeIndex) bool {
+        const expr = (self.tree.getNode(idx) orelse return false).asExpr() orelse return false;
+        return expr == .zero_init;
+    }
+
     fn evalConstExpr(self: *Checker, idx: NodeIndex) ?i64 {
         const expr = (self.tree.getNode(idx) orelse return null).asExpr() orelse return null;
         return switch (expr) {
@@ -420,6 +425,7 @@ pub const Checker = struct {
             .closure_expr => |ce| self.checkClosureExpr(ce),
             .addr_of => |ao| self.checkAddrOf(ao),
             .deref => |d| self.checkDeref(d),
+            .zero_init => TypeRegistry.VOID, // Type inferred from var decl context
             .type_expr, .bad_expr => invalid_type,
         };
     }
@@ -769,7 +775,13 @@ pub const Checker = struct {
     }
 
     fn checkStructInit(self: *Checker, si: ast.StructInit) CheckError!TypeIndex {
-        const struct_type_idx = self.types.lookupByName(si.type_name) orelse { self.err.errorWithCode(si.span.start, .e301, "undefined type"); return invalid_type; };
+        const struct_type_idx = if (si.type_args.len > 0)
+            try self.resolveGenericInstance(.{ .name = si.type_name, .type_args = si.type_args }, si.span)
+        else
+            self.types.lookupByName(si.type_name) orelse {
+                self.err.errorWithCode(si.span.start, .e301, "undefined type");
+                return invalid_type;
+            };
         const struct_type = self.types.get(struct_type_idx);
         if (struct_type != .struct_type) { self.err.errorWithCode(si.span.start, .e300, "not a struct type"); return invalid_type; }
         for (si.fields) |fi| {
@@ -789,10 +801,13 @@ pub const Checker = struct {
     /// Returns a pointer type to the struct.
     /// Reference: Go's walkNew (walk/builtin.go:601-616)
     fn checkNewExpr(self: *Checker, ne: ast.NewExpr) CheckError!TypeIndex {
-        const struct_type_idx = self.types.lookupByName(ne.type_name) orelse {
-            self.err.errorWithCode(ne.span.start, .e301, "undefined type");
-            return invalid_type;
-        };
+        const struct_type_idx = if (ne.type_args.len > 0)
+            try self.resolveGenericInstance(.{ .name = ne.type_name, .type_args = ne.type_args }, ne.span)
+        else
+            self.types.lookupByName(ne.type_name) orelse {
+                self.err.errorWithCode(ne.span.start, .e301, "undefined type");
+                return invalid_type;
+            };
         const struct_type = self.types.get(struct_type_idx);
         if (struct_type != .struct_type) {
             self.err.errorWithCode(ne.span.start, .e300, "new requires a struct type");
@@ -992,10 +1007,13 @@ pub const Checker = struct {
     fn checkVarStmt(self: *Checker, vs: ast.VarStmt, idx: NodeIndex) CheckError!void {
         if (self.scope.isDefined(vs.name)) { self.err.errorWithCode(vs.span.start, .e302, "redefined identifier"); return; }
         var var_type: TypeIndex = if (vs.type_expr != null_node) try self.resolveTypeExpr(vs.type_expr) else invalid_type;
-        if (vs.value != null_node and !self.isUndefinedLit(vs.value)) {
+        if (vs.value != null_node and !self.isUndefinedLit(vs.value) and !self.isZeroInitLit(vs.value)) {
             const val_type = try self.checkExpr(vs.value);
             if (var_type == invalid_type) var_type = self.materializeType(val_type)
             else if (!self.types.isAssignable(val_type, var_type)) self.err.errorWithCode(vs.span.start, .e300, "type mismatch");
+        }
+        if (self.isZeroInitLit(vs.value) and var_type == invalid_type) {
+            self.err.errorWithCode(vs.span.start, .e300, "zero init requires type annotation");
         }
         try self.scope.define(Symbol.init(vs.name, if (vs.is_const) .constant else .variable, var_type, idx, !vs.is_const));
     }

@@ -94,8 +94,8 @@ The Go compiler is at `~/learning/go/src/cmd/`. Key files:
 
 ## Current State (February 2026)
 
-**867 tests pass (0 failures, 0 skipped)** across Wasm and native targets.
-**54 Wasm E2E tests, 39 native E2E tests, 26 test case files.**
+**880+ tests pass (0 failures, 0 skipped)** across Wasm and native targets.
+**63 Wasm E2E tests, 48 native E2E tests, 26 test case files.**
 
 ### What's Done
 
@@ -109,6 +109,7 @@ The Go compiler is at `~/learning/go/src/cmd/`. Key files:
 - **Global variables:** Complete on Wasm (read, write, multi-function).
 - **Slice syntax:** `arr[start:end]` with Go-style decomposition passes.
 - **Generics:** Pure monomorphization (Zig pattern). `fn max(T)(a: T, b: T) T`, `struct Pair(T, U)`, lazy deferred instantiation, deduplication.
+- **List(T) stdlib:** Generic dynamic list with append, get, set, pop. Free generic functions pattern (`fn List_append(T)`). Nested generic calls resolved correctly (Zig/Go instantiation key pattern).
 
 ### What's Missing
 
@@ -116,7 +117,7 @@ The Go compiler is at `~/learning/go/src/cmd/`. Key files:
 
 | Feature | Priority | Why |
 |---------|----------|-----|
-| Dynamic lists + maps | HIGH | List(T), Map(K,V) needed for real apps |
+| Map(K,V) | HIGH | Map needed for real apps (List(T) is DONE) |
 | String interpolation | MEDIUM | Developer experience |
 | Traits/Interfaces | MEDIUM | Polymorphism for std lib |
 | ~486 test cases | MEDIUM | Edge case coverage vs bootstrap-0.2 |
@@ -337,7 +338,7 @@ Every new feature must:
 | Wave | Features | Status |
 |------|----------|--------|
 | **A (Fundamentals)** | Floats, defer, union payloads, error unions, function pointers | ✅ COMPLETE |
-| **B (Expressiveness)** | Closures ✅, generics ✅, string interpolation, dynamic collections | IN PROGRESS |
+| **B (Expressiveness)** | Closures ✅, generics ✅, List(T) ✅, string interpolation, Map(K,V) | IN PROGRESS |
 | **C (Test Parity)** | Port ~486 test cases from bootstrap-0.2 | TODO |
 
 ### Reference Implementations

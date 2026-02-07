@@ -298,12 +298,12 @@ See **[WASM_BACKEND.md](WASM_BACKEND.md)** for implementation details.
 ├── ✅ Sized integers - i8-u64, full type system, @intCast
 ├── ✅ Slice syntax - arr[start:end], Go-style decomposition
 ├── ✅ Generics - fn(T), struct(T,U), pure monomorphization (Zig pattern)
-└── ✅ ARC runtime upgrade - freelist allocator, cot_dealloc/realloc, memory.grow, deinit/destructors
+├── ✅ ARC runtime upgrade - freelist allocator, cot_dealloc/realloc, memory.grow, deinit/destructors
+└── ✅ List(T) stdlib - append, get, set, pop, growth, multi-type (free generic functions pattern)
 ```
 
 **Phase 3 features TODO (blocking standard library):**
 ```
-├── Dynamic lists - List(T) with push/pop/get/set (generics ready)
 ├── Maps/dictionaries - Map(K,V) with set/get/has/delete (generics ready)
 ├── String interpolation - blocks developer experience
 ├── Traits/Interfaces - blocks polymorphism

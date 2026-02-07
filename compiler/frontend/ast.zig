@@ -79,6 +79,7 @@ pub const Expr = union(enum) {
     catch_expr: CatchExpr,
     error_literal: ErrorLiteral,
     closure_expr: ClosureExpr,
+    zero_init: ZeroInit,
     addr_of: AddrOf,
     deref: Deref,
     bad_expr: BadExpr,
@@ -103,12 +104,13 @@ pub const IfExpr = struct { condition: NodeIndex, then_branch: NodeIndex, else_b
 pub const SwitchExpr = struct { subject: NodeIndex, cases: []const SwitchCase, else_body: NodeIndex, span: Span };
 pub const SwitchCase = struct { patterns: []const NodeIndex, capture: []const u8, body: NodeIndex, span: Span };
 pub const BlockExpr = struct { stmts: []const NodeIndex, expr: NodeIndex, span: Span };
-pub const StructInit = struct { type_name: []const u8, fields: []const FieldInit, span: Span };
+pub const StructInit = struct { type_name: []const u8, type_args: []const NodeIndex = &.{}, fields: []const FieldInit, span: Span };
 pub const FieldInit = struct { name: []const u8, value: NodeIndex, span: Span };
 /// Heap allocation expression: new Type { field: value, ... }
 /// Reference: Go's walkNew (walk/builtin.go:601-616)
 pub const NewExpr = struct {
     type_name: []const u8,
+    type_args: []const NodeIndex = &.{},
     fields: []const FieldInit,
     span: Span,
 };
@@ -133,6 +135,7 @@ pub const TryExpr = struct { operand: NodeIndex, span: Span };
 pub const CatchExpr = struct { operand: NodeIndex, capture: []const u8, fallback: NodeIndex, span: Span };
 pub const ErrorLiteral = struct { error_name: []const u8, span: Span };
 pub const ClosureExpr = struct { params: []const Field, return_type: NodeIndex, body: NodeIndex, span: Span };
+pub const ZeroInit = struct { span: Span };
 pub const AddrOf = struct { operand: NodeIndex, span: Span };
 pub const Deref = struct { operand: NodeIndex, span: Span };
 pub const BadExpr = struct { span: Span };
@@ -262,6 +265,14 @@ pub const Ast = struct {
                     .switch_expr => |s| {
                         for (s.cases) |case| if (case.patterns.len > 0) self.allocator.free(case.patterns);
                         if (s.cases.len > 0) self.allocator.free(s.cases);
+                    },
+                    .struct_init => |si| {
+                        if (si.type_args.len > 0) self.allocator.free(si.type_args);
+                        if (si.fields.len > 0) self.allocator.free(si.fields);
+                    },
+                    .new_expr => |ne| {
+                        if (ne.type_args.len > 0) self.allocator.free(ne.type_args);
+                        if (ne.fields.len > 0) self.allocator.free(ne.fields);
                     },
                     else => {},
                 },

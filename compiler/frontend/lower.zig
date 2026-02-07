@@ -527,9 +527,10 @@ pub const Lowerer = struct {
             const value_node_ast = self.tree.getNode(var_stmt.value);
             const value_expr = if (value_node_ast) |n| n.asExpr() else null;
 
-            // Check for undefined literal - zero memory
+            // Check for undefined literal or .{} zero init - zero memory
             const is_undefined = if (value_expr) |e| (e == .literal and e.literal.kind == .undefined_lit) else false;
-            if (is_undefined) {
+            const is_zero_init = if (value_expr) |e| (e == .zero_init) else false;
+            if (is_undefined or is_zero_init) {
                 const ptr_type = self.type_reg.makePointer(TypeRegistry.U8) catch TypeRegistry.VOID;
                 const local_addr = try fb.emitAddrLocal(local_idx, ptr_type, var_stmt.span);
                 const size_node = try fb.emitConstInt(@intCast(size), TypeRegistry.I64, var_stmt.span);
@@ -674,7 +675,11 @@ pub const Lowerer = struct {
         const value_expr = value_node.asExpr() orelse return;
         if (value_expr != .struct_init) return;
         const struct_init = value_expr.struct_init;
-        const struct_type_idx = self.type_reg.lookupByName(struct_init.type_name) orelse return;
+        const struct_type_idx = if (struct_init.type_args.len > 0)
+            self.resolveGenericTypeName(struct_init.type_name, struct_init.type_args)
+        else
+            self.type_reg.lookupByName(struct_init.type_name) orelse return;
+        if (struct_type_idx == TypeRegistry.VOID) return;
         const type_info = self.type_reg.get(struct_type_idx);
         const struct_type = if (type_info == .struct_type) type_info.struct_type else return;
 
@@ -1780,7 +1785,11 @@ pub const Lowerer = struct {
 
     fn lowerStructInitExpr(self: *Lowerer, si: ast.StructInit) Error!ir.NodeIndex {
         const fb = self.current_func orelse return ir.null_node;
-        const struct_type_idx = self.type_reg.lookupByName(si.type_name) orelse return ir.null_node;
+        const struct_type_idx = if (si.type_args.len > 0)
+            self.resolveGenericTypeName(si.type_name, si.type_args)
+        else
+            self.type_reg.lookupByName(si.type_name) orelse return ir.null_node;
+        if (struct_type_idx == TypeRegistry.VOID) return ir.null_node;
         const type_info = self.type_reg.get(struct_type_idx);
         const struct_type = if (type_info == .struct_type) type_info.struct_type else return ir.null_node;
         const size = self.type_reg.sizeOf(struct_type_idx);
@@ -1816,8 +1825,12 @@ pub const Lowerer = struct {
     fn lowerNewExpr(self: *Lowerer, ne: ast.NewExpr) Error!ir.NodeIndex {
         const fb = self.current_func orelse return ir.null_node;
 
-        // Lookup the struct type
-        const struct_type_idx = self.type_reg.lookupByName(ne.type_name) orelse return ir.null_node;
+        // Lookup the struct type (generic or non-generic)
+        const struct_type_idx = if (ne.type_args.len > 0)
+            self.resolveGenericTypeName(ne.type_name, ne.type_args)
+        else
+            self.type_reg.lookupByName(ne.type_name) orelse return ir.null_node;
+        if (struct_type_idx == TypeRegistry.VOID) return ir.null_node;
         const type_info = self.type_reg.get(struct_type_idx);
         const struct_type = if (type_info == .struct_type) type_info.struct_type else return ir.null_node;
 
@@ -1830,7 +1843,9 @@ pub const Lowerer = struct {
         // Call cot_alloc(metadata_ptr, size) -> ptr to user data (after header)
         // Reference: Swift's swift_allocObject(metadata, size, align)
         // Pass type metadata - resolved to actual address during Wasm codegen
-        const metadata_node = try fb.emitTypeMetadata(ne.type_name, ne.span);
+        // For generic types, use the concrete type name from the struct type
+        const metadata_name = if (ne.type_args.len > 0) struct_type.name else ne.type_name;
+        const metadata_node = try fb.emitTypeMetadata(metadata_name, ne.span);
         const size_node = try fb.emitConstInt(@intCast(total_size), TypeRegistry.I64, ne.span);
         var alloc_args = [_]ir.NodeIndex{ metadata_node, size_node };
         const ptr_type = try self.type_reg.makePointer(struct_type_idx);
@@ -3035,6 +3050,52 @@ pub const Lowerer = struct {
             },
             else => return TypeRegistry.VOID,
         }
+    }
+
+    /// Resolve a generic type from base name + type_args NodeIndex array to a concrete TypeIndex.
+    /// Uses the same cache key format as resolveTypeNode's generic_instance handler: "Name(5;17)".
+    /// Handles both type_expr nodes (from parseType) and ident nodes (from parseExpr in call args).
+    fn resolveGenericTypeName(self: *Lowerer, base_name: []const u8, type_args: []const NodeIndex) TypeIndex {
+        var buf = std.ArrayListUnmanaged(u8){};
+        defer buf.deinit(self.allocator);
+        const writer = buf.writer(self.allocator);
+        writer.writeAll(base_name) catch return TypeRegistry.VOID;
+        writer.writeByte('(') catch return TypeRegistry.VOID;
+        for (type_args, 0..) |arg_node, i| {
+            if (i > 0) writer.writeByte(';') catch return TypeRegistry.VOID;
+            const arg_type = self.resolveTypeArgNode(arg_node);
+            std.fmt.format(writer, "{d}", .{arg_type}) catch return TypeRegistry.VOID;
+        }
+        writer.writeByte(')') catch return TypeRegistry.VOID;
+        return self.type_reg.lookupByName(buf.items) orelse TypeRegistry.VOID;
+    }
+
+    /// Resolve a type argument that may be either a type_expr node (from parseType)
+    /// or an ident node (from parseExpr, e.g., call args like `List(i64)`).
+    fn resolveTypeArgNode(self: *Lowerer, idx: NodeIndex) TypeIndex {
+        const node = self.tree.getNode(idx) orelse return TypeRegistry.VOID;
+        const expr = node.asExpr() orelse return TypeRegistry.VOID;
+        // Handle ident nodes (type keywords parsed as idents in expression context)
+        if (expr == .ident) {
+            const name = expr.ident.name;
+            if (std.mem.eql(u8, name, "void")) return TypeRegistry.VOID;
+            if (std.mem.eql(u8, name, "bool")) return TypeRegistry.BOOL;
+            if (std.mem.eql(u8, name, "i8")) return TypeRegistry.I8;
+            if (std.mem.eql(u8, name, "i16")) return TypeRegistry.I16;
+            if (std.mem.eql(u8, name, "i32")) return TypeRegistry.I32;
+            if (std.mem.eql(u8, name, "i64")) return TypeRegistry.I64;
+            if (std.mem.eql(u8, name, "int")) return TypeRegistry.INT;
+            if (std.mem.eql(u8, name, "u8")) return TypeRegistry.U8;
+            if (std.mem.eql(u8, name, "u16")) return TypeRegistry.U16;
+            if (std.mem.eql(u8, name, "u32")) return TypeRegistry.U32;
+            if (std.mem.eql(u8, name, "u64")) return TypeRegistry.U64;
+            if (std.mem.eql(u8, name, "f32")) return TypeRegistry.F32;
+            if (std.mem.eql(u8, name, "f64")) return TypeRegistry.F64;
+            if (std.mem.eql(u8, name, "string")) return TypeRegistry.STRING;
+            return self.type_reg.lookupByName(name) orelse TypeRegistry.VOID;
+        }
+        // Fall through to standard type_expr resolution
+        return self.resolveTypeNode(idx);
     }
 
     /// Lower error.X literal — constructs an error union value with tag=1 and error index as payload.

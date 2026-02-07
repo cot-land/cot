@@ -4,9 +4,9 @@
 
 **Bootstrap-0.2** was a working compiler with **619 test cases** covering expressions, control flow, functions, types, arrays, memory, and variables. It compiled to native (AMD64/ARM64) directly.
 
-**Current Cot** is a Wasm-first rewrite with **120 test case files**, **45 Wasm E2E tests**, **30 native E2E tests**, and **842 total tests** (including unit tests). It has surpassed bootstrap-0.2 in language features and architecture quality, but still has a test coverage gap.
+**Current Cot** is a Wasm-first rewrite with **120 test case files**, **63 Wasm E2E tests**, **48 native E2E tests**, and **880+ total tests** (including unit tests). It has surpassed bootstrap-0.2 in language features and architecture quality, but still has a test coverage gap.
 
-**The gap: ~480 missing test cases. All core language features are complete, including generics.**
+**The gap: ~480 missing test cases. All core language features are complete, including generics and List(T).**
 
 ---
 
@@ -27,7 +27,7 @@
 | Integration | 1 | Full pipeline test |
 | Golden | 2 | Reference SSA/codegen output |
 
-### Current Cot: 120 test files + 75 E2E tests
+### Current Cot: 120 test files + 111 E2E tests
 
 | Category | Files | E2E | What It Covers |
 |----------|-------|-----|----------------|
@@ -57,6 +57,8 @@
 | Function ptrs | - | 3+3 | basic, param, reassign (Wasm+native E2E) |
 | Closures | - | 4+4 | no_capture, capture, multi_capture, passed (Wasm+native E2E) |
 | Generics | - | 3+3 | fn basic, struct basic, multi instantiation (Wasm+native E2E) |
+| Generic building blocks | - | 4+4 | struct param, sizeof(T), alloc/intToPtr generic, field mutation (Wasm+native E2E) |
+| List(T) stdlib | - | 5+5 | basic, growth, pop, set, multi_type (Wasm+native E2E) |
 | Global vars | - | 3 | read, write, multi-function (Wasm E2E) |
 | Native baseline | - | 1+1 | baseline + phase3_all + func_call (native E2E) |
 | Parity | - | 4 | expressions, functions, control_flow, variables (native E2E) |
@@ -91,7 +93,8 @@
 | **Closures** | ✅ COMPLETE | 4W+4N | Captures, higher-order functions, uniform repr |
 | **Defer** | ✅ COMPLETE | 3W+3N | `defer expr`, `defer { block }`, unified cleanup stack |
 | **ARC coverage** | ✅ COMPLETE | 4W+4N | call→+1, copy retain, reassignment, field assign |
-| **Generics** | ✅ COMPLETE | 3W+3N | `fn max(T)(a: T, b: T) T`, `struct Pair(T, U)`, monomorphization |
+| **Generics** | ✅ COMPLETE | 7W+7N | `fn max(T)(a: T, b: T) T`, `struct Pair(T, U)`, monomorphization, nested generic calls |
+| **List(T) stdlib** | ✅ COMPLETE | 5W+5N | init, append, get, set, pop, growth, multi-type |
 | **Global variables** | ✅ Wasm only | 3W | read, write, multi-function. Native stubs exist |
 | **Sized integers** | ✅ COMPLETE | - | i8-u64 in type system, @intCast works |
 | **Slice syntax** | ✅ COMPLETE | - | `arr[start:end]`, decomposition passes (Go port) |
@@ -114,19 +117,17 @@
 
 ### Next: Standard Library (written in Cot)
 
-Generics are complete. The next unlock is a **Cot-written standard library**, starting with `List(T)`.
+Generics and List(T) are complete. The next step is expanding the standard library.
 
-Bootstrap-0.2 already had `list.cot` and `strmap.cot` written in Cot using extern allocators. The current compiler can do the same with generics.
-
-| Feature | Description | Priority | Blocks |
+| Feature | Description | Priority | Status |
 |---------|-------------|----------|--------|
-| **`List(T)`** | Generic dynamic list (Cot source) | HIGH | Real applications, self-hosting |
-| **`Map(K,V)`** | Generic hash map (Cot source) | HIGH | Real applications, self-hosting |
-| **String interpolation** | `"Hello, {name}"` | MEDIUM | Developer experience |
-| **Traits/Interfaces** | Abstract type contracts | MEDIUM | Polymorphism |
-| **Test runner** | `test "name" {}` blocks parsed, no runner | MEDIUM | Testing framework |
-| **Globals on native** | Driver stubs native globals (`_ = globals`) | LOW | Full native parity |
-| **Imports on native** | Work on Wasm only | LOW | Full native parity |
+| **`List(T)`** | Generic dynamic list (Cot source) | HIGH | ✅ COMPLETE (5W+5N E2E tests) |
+| **`Map(K,V)`** | Generic hash map (Cot source) | HIGH | TODO |
+| **String interpolation** | `"Hello, {name}"` | MEDIUM | TODO |
+| **Traits/Interfaces** | Abstract type contracts | MEDIUM | TODO |
+| **Test runner** | `test "name" {}` blocks parsed, no runner | MEDIUM | TODO |
+| **Globals on native** | Driver stubs native globals (`_ = globals`) | LOW | TODO |
+| **Imports on native** | Work on Wasm only | LOW | TODO |
 
 ### Partially Implemented
 
@@ -152,6 +153,7 @@ Bootstrap-0.2 already had `list.cot` and `strmap.cot` written in Cot using exter
 | **Union payloads** | Payload capture in switch |
 | **Float types** | f32/f64 on both Wasm and native |
 | **Generics** | `fn max(T)(a: T, b: T) T`, `struct Pair(T, U)`, monomorphization |
+| **List(T)** | Generic dynamic list with append, get, set, pop, growth |
 | **For-range loops** | `for x in arr`, `for i in 0..n`, `for i, x in arr` |
 | **File imports** | `import "other.cot"` with cycle detection |
 | **Browser imports** | Wasm import section for JS interop |
@@ -173,10 +175,10 @@ With generics complete, the path to self-hosting requires a **Cot-written standa
 
 | # | Feature | Effort | Why Now |
 |---|---------|--------|---------|
-| 1 | **`List(T)` in Cot** | Medium | First stdlib module; validates generics end-to-end |
-| 2 | **`Map(K,V)` in Cot** | Medium | Second stdlib module; needed for compiler data structures |
-| 3 | **String interpolation** | Small | Developer experience |
-| 4 | **Traits/Interfaces** | Medium | Polymorphism for stdlib APIs |
+| ~~1~~ | ~~**`List(T)` in Cot**~~ | ~~Medium~~ | ✅ COMPLETE — first stdlib module, validated generics end-to-end |
+| 1 | **`Map(K,V)` in Cot** | Medium | Second stdlib module; needed for compiler data structures |
+| 2 | **String interpolation** | Small | Developer experience |
+| 3 | **Traits/Interfaces** | Medium | Polymorphism for stdlib APIs |
 | 5 | **Test runner** | Small | Enable `test "name" {}` execution |
 
 ### Test Parity

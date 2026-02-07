@@ -1997,3 +1997,83 @@ test "wasm e2e: generic impl two type params" {
     try std.testing.expect(result.wasm_bytes.len > 0);
     try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
 }
+
+test "wasm e2e: generic struct literal" {
+    const code =
+        \\struct Pair(T, U) { first: T, second: U }
+        \\fn main() i64 {
+        \\    var p = Pair(i64, i64) { .first = 10, .second = 32 }
+        \\    return p.first + p.second
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: generic struct literal with methods" {
+    const code =
+        \\struct Pair(T, U) { first: T, second: U }
+        \\impl Pair(T, U) {
+        \\    fn sum(self: *Pair(T, U)) i64 {
+        \\        return self.first + self.second
+        \\    }
+        \\}
+        \\fn main() i64 {
+        \\    var p = Pair(i64, i64) { .first = 30, .second = 12 }
+        \\    return p.sum()
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: zero init basic" {
+    const code =
+        \\struct Point { x: i64, y: i64 }
+        \\fn main() i64 {
+        \\    var p: Point = .{}
+        \\    return p.x + p.y
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: zero init generic" {
+    const code =
+        \\struct Pair(T, U) { first: T, second: U }
+        \\fn main() i64 {
+        \\    var p: Pair(i64, i64) = .{}
+        \\    return p.first + p.second
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: new generic" {
+    const code =
+        \\struct Pair(T, U) { first: T, second: U }
+        \\fn main() i64 {
+        \\    let p = new Pair(i64, i64) { first: 30, second: 12 }
+        \\    return p.first + p.second
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}

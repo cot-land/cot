@@ -575,6 +575,43 @@ pub const Parser = struct {
             } else if (self.check(.lbrace)) {
                 if (self.tree.getNode(expr)) |n| {
                     if (n.asExpr()) |e| {
+                        // Generic struct literal: List(i64) { .items = 0, ... }
+                        // Detected when expr is call(UppercaseIdent, args) followed by { .
+                        if (e == .call and self.peekNextIsPeriod()) {
+                            const call_node = e.call;
+                            if (self.tree.getNode(call_node.callee)) |callee_node| {
+                                if (callee_node.asExpr()) |callee_expr| {
+                                    if (callee_expr == .ident) {
+                                        const callee_name = callee_expr.ident.name;
+                                        if (callee_name.len > 0 and std.ascii.isUpper(callee_name[0])) {
+                                            const s = self.tree.getNode(expr).?.span();
+                                            self.advance(); // consume {
+                                            var fields = std.ArrayListUnmanaged(ast.FieldInit){};
+                                            defer fields.deinit(self.allocator);
+                                            while (!self.check(.rbrace) and !self.check(.eof)) {
+                                                if (!self.expect(.period)) return null;
+                                                if (!self.check(.ident)) { self.syntaxError("expected field name"); return null; }
+                                                const fname = self.tok.text;
+                                                const fstart = self.pos();
+                                                self.advance();
+                                                if (!self.expect(.assign)) return null;
+                                                const val = try self.parseExpr() orelse return null;
+                                                try fields.append(self.allocator, .{ .name = fname, .value = val, .span = Span.init(fstart, self.pos()) });
+                                                if (!self.match(.comma)) break;
+                                            }
+                                            if (!self.expect(.rbrace)) return null;
+                                            expr = try self.tree.addExpr(.{ .struct_init = .{
+                                                .type_name = callee_name,
+                                                .type_args = call_node.args,
+                                                .fields = try self.allocator.dupe(ast.FieldInit, fields.items),
+                                                .span = Span.init(s.start, self.pos()),
+                                            } });
+                                            continue;
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         if (e == .ident) {
                             const type_name = e.ident.name;
                             if (type_name.len > 0 and std.ascii.isUpper(type_name[0]) and self.peekNextIsPeriod()) {
@@ -641,6 +678,7 @@ pub const Parser = struct {
             .kw_switch => return self.parseSwitchExpr(),
             .kw_new => {
                 // new Type { field: value, ... }
+                // new List(i64) { field: value, ... } (generic)
                 // Reference: Go's walkNew (walk/builtin.go:601-616)
                 self.advance();
                 if (!self.check(.ident)) {
@@ -649,6 +687,20 @@ pub const Parser = struct {
                 }
                 const type_name = self.tok.text;
                 self.advance();
+                // Parse optional generic type args: new List(i64) { ... }
+                var type_args: []const NodeIndex = &.{};
+                if (self.check(.lparen)) {
+                    self.advance();
+                    var ta = std.ArrayListUnmanaged(NodeIndex){};
+                    defer ta.deinit(self.allocator);
+                    while (!self.check(.rparen) and !self.check(.eof)) {
+                        const arg = try self.parseType() orelse break;
+                        try ta.append(self.allocator, arg);
+                        if (!self.match(.comma)) break;
+                    }
+                    if (!self.expect(.rparen)) return null;
+                    type_args = try self.allocator.dupe(NodeIndex, ta.items);
+                }
                 if (!self.expect(.lbrace)) return null;
                 var fields = std.ArrayListUnmanaged(ast.FieldInit){};
                 while (!self.check(.rbrace) and !self.check(.eof)) {
@@ -667,6 +719,7 @@ pub const Parser = struct {
                 if (!self.expect(.rbrace)) return null;
                 return try self.tree.addExpr(.{ .new_expr = .{
                     .type_name = type_name,
+                    .type_args = type_args,
                     .fields = try self.allocator.dupe(ast.FieldInit, fields.items),
                     .span = Span.init(start, self.pos()),
                 } });
@@ -698,6 +751,13 @@ pub const Parser = struct {
                 return try self.tree.addExpr(.{ .error_literal = .{ .error_name = error_name, .span = Span.init(start, self.pos()) } });
             },
             .period => {
+                // Check for .{} zero init
+                if (self.peekToken().tok == .lbrace) {
+                    self.advance(); // consume .
+                    self.advance(); // consume {
+                    if (!self.expect(.rbrace)) return null;
+                    return try self.tree.addExpr(.{ .zero_init = .{ .span = Span.init(start, self.pos()) } });
+                }
                 self.advance();
                 if (!self.check(.ident)) { self.syntaxError("expected variant name after '.'"); return null; }
                 const n = self.tok.text;
