@@ -232,6 +232,19 @@ fn subTestName(exit_code: u32) []const u8 {
         "test_list_clone",                  // 92
         "test_list_last",                   // 93
         "test_memcpy_overlap",              // 94
+        "test_list_contains",               // 95
+        "test_list_index_of",               // 96
+        "test_list_equal",                  // 97
+        "test_list_first",                  // 98
+        "test_list_resize",                 // 99
+        "test_list_append_n_times",         // 100
+        "test_list_insert_slice",           // 101
+        "test_list_replace_range",          // 102
+        "test_list_shrink_and_free",        // 103
+        "test_list_delete_range",           // 104
+        "test_list_ensure_unused",          // 105
+        "test_list_is_empty",              // 106
+        "test_list_compact",                // 107
     };
     if (exit_code < names.len) return names[exit_code];
     return "unknown (exit code out of range)";
@@ -241,7 +254,7 @@ fn subTestName(exit_code: u32) []const u8 {
 // Combined native E2E test: all 70 sub-tests in one program
 // ============================================================================
 
-test "native: all e2e tests (94 sub-tests)" {
+test "native: all e2e tests (107 sub-tests)" {
     const code = @constCast(@as([]const u8, std.fs.cwd().readFileAlloc(std.testing.allocator, "test/native/e2e_all.cot", 1024 * 1024) catch |e| {
         std.debug.print("Failed to read test file: {any}\n", .{e});
         return error.FileNotFound;

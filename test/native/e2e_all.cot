@@ -337,6 +337,189 @@ impl List(T) {
         }
         return new_list
     }
+
+    // --- Tier 1: Search / comparison ---
+
+    // Go: slices.Index — linear scan, return first matching index or -1
+    fn indexOf(self: *List(T), value: T) i64 {
+        var i: i64 = 0
+        while i < self.count {
+            let ptr = @intToPtr(*T, self.items + i * @sizeOf(T))
+            if ptr.* == value { return i }
+            i = i + 1
+        }
+        return 0 - 1
+    }
+
+    // Go: slices.Contains — linear scan (inlined, not delegating to indexOf)
+    fn contains(self: *List(T), value: T) i64 {
+        var i: i64 = 0
+        while i < self.count {
+            let ptr = @intToPtr(*T, self.items + i * @sizeOf(T))
+            if ptr.* == value { return 1 }
+            i = i + 1
+        }
+        return 0
+    }
+
+    // Go: slices.Equal — element-wise comparison
+    fn equal(self: *List(T), other: *List(T)) i64 {
+        if self.count != other.count { return 0 }
+        var i: i64 = 0
+        while i < self.count {
+            let pa = @intToPtr(*T, self.items + i * @sizeOf(T))
+            let pb = @intToPtr(*T, other.items + i * @sizeOf(T))
+            if pa.* != pb.* { return 0 }
+            i = i + 1
+        }
+        return 1
+    }
+
+    // Go: s[0] — get first element, trap if empty
+    fn first(self: *List(T)) T {
+        if self.count == 0 { @trap() }
+        let ptr = @intToPtr(*T, self.items)
+        return ptr.*
+    }
+
+    // --- Tier 1: Resize / capacity ---
+
+    // Zig: resize — set length, ensure capacity if growing. New elements are undefined.
+    fn resize(self: *List(T), new_len: i64) void {
+        if new_len < 0 { @trap() }
+        if new_len > self.count {
+            self.ensureCapacity(new_len)
+        }
+        self.count = new_len
+    }
+
+    // Zig: shrinkAndFree — reduce length and realloc to release excess memory
+    fn shrinkAndFree(self: *List(T), new_len: i64) void {
+        if new_len < 0 { @trap() }
+        if new_len > self.count { @trap() }
+        self.count = new_len
+        if new_len == 0 {
+            self.free()
+        } else {
+            let bytes = new_len * @sizeOf(T)
+            self.items = @realloc(self.items, bytes)
+            self.capacity = new_len
+        }
+    }
+
+    // Zig: ensureUnusedCapacity — ensure N more elements fit
+    fn ensureUnusedCapacity(self: *List(T), n: i64) void {
+        self.ensureCapacity(self.count + n)
+    }
+
+    // --- Tier 1: Bulk write ---
+
+    // Zig: appendNTimes — append value n times
+    fn appendNTimes(self: *List(T), value: T, n: i64) void {
+        self.ensureCapacity(self.count + n)
+        var i: i64 = 0
+        while i < n {
+            let ptr = @intToPtr(*T, self.items + self.count * @sizeOf(T))
+            ptr.* = value
+            self.count = self.count + 1
+            i = i + 1
+        }
+    }
+
+    // Zig: insertSlice — shift right then copy block in
+    fn insertSlice(self: *List(T), index: i64, source: i64, num: i64) void {
+        if index < 0 { @trap() }
+        if index > self.count { @trap() }
+        if num <= 0 { return }
+        self.ensureCapacity(self.count + num)
+        if index < self.count {
+            let src = self.items + index * @sizeOf(T)
+            let dst = src + num * @sizeOf(T)
+            let bytes = (self.count - index) * @sizeOf(T)
+            @memcpy(dst, src, bytes)
+        }
+        let dst = self.items + index * @sizeOf(T)
+        @memcpy(dst, source, num * @sizeOf(T))
+        self.count = self.count + num
+    }
+
+    // Zig: replaceRange — replace [start..start+range_len) with num elements from source
+    // Go: slices.Replace(s, i, j, v...) — same concept with i=start, j=start+range_len
+    fn replaceRange(self: *List(T), start: i64, range_len: i64, source: i64, num: i64) void {
+        if start < 0 { @trap() }
+        if range_len < 0 { @trap() }
+        if start + range_len > self.count { @trap() }
+        let tail_start = start + range_len
+        let tail_len = self.count - tail_start
+        let new_count = self.count - range_len + num
+        if num > range_len {
+            // Growing: need more space, shift tail right
+            self.ensureCapacity(new_count)
+            if tail_len > 0 {
+                let src = self.items + tail_start * @sizeOf(T)
+                let dst = self.items + (start + num) * @sizeOf(T)
+                let bytes = tail_len * @sizeOf(T)
+                @memcpy(dst, src, bytes)
+            }
+        } else if num < range_len {
+            // Shrinking: shift tail left
+            if tail_len > 0 {
+                let src = self.items + tail_start * @sizeOf(T)
+                let dst = self.items + (start + num) * @sizeOf(T)
+                let bytes = tail_len * @sizeOf(T)
+                @memcpy(dst, src, bytes)
+            }
+        }
+        // Copy new elements into place
+        if num > 0 {
+            let dst = self.items + start * @sizeOf(T)
+            @memcpy(dst, source, num * @sizeOf(T))
+        }
+        self.count = new_count
+    }
+
+    // --- Tier 2 ---
+
+    // Go: slices.Delete(s, i, j) — remove range [start, end), preserve order
+    fn deleteRange(self: *List(T), start: i64, end: i64) void {
+        if start < 0 { @trap() }
+        if end > self.count { @trap() }
+        if start > end { @trap() }
+        let removed = end - start
+        if removed == 0 { return }
+        if end < self.count {
+            let src = self.items + end * @sizeOf(T)
+            let dst = self.items + start * @sizeOf(T)
+            let bytes = (self.count - end) * @sizeOf(T)
+            @memcpy(dst, src, bytes)
+        }
+        self.count = self.count - removed
+    }
+
+    fn isEmpty(self: *List(T)) i64 {
+        if self.count == 0 { return 1 }
+        return 0
+    }
+
+    // Go: slices.Compact — remove consecutive duplicate elements in-place
+    fn compact(self: *List(T)) void {
+        if self.count < 2 { return }
+        var write: i64 = 1
+        var read: i64 = 1
+        while read < self.count {
+            let curr = @intToPtr(*T, self.items + read * @sizeOf(T))
+            let prev = @intToPtr(*T, self.items + (write - 1) * @sizeOf(T))
+            if curr.* != prev.* {
+                if write != read {
+                    let dst = @intToPtr(*T, self.items + write * @sizeOf(T))
+                    dst.* = curr.*
+                }
+                write = write + 1
+            }
+            read = read + 1
+        }
+        self.count = write
+    }
 }
 
 // ============================================================================
@@ -1602,6 +1785,269 @@ fn test_memcpy_overlap() i64 {
 }
 
 // ============================================================================
+// Test functions: List(T) Tier 1+2 — search, resize, bulk ops, compact
+// ============================================================================
+
+fn test_list_contains() i64 {
+    // Go: slices.Contains — linear scan
+    var list: List(i64) = .{}
+    list.append(10)
+    list.append(20)
+    list.append(30)
+    if list.contains(20) != 1 { return 1 }
+    if list.contains(99) != 0 { return 2 }
+    if list.contains(10) != 1 { return 3 }
+    if list.contains(30) != 1 { return 4 }
+    list.free()
+    return 0
+}
+
+fn test_list_index_of() i64 {
+    // Go: slices.Index — return index or -1
+    var list: List(i64) = .{}
+    list.append(10)
+    list.append(20)
+    list.append(30)
+    list.append(20)
+    if list.indexOf(10) != 0 { return 1 }
+    if list.indexOf(20) != 1 { return 2 }
+    if list.indexOf(30) != 2 { return 3 }
+    if list.indexOf(99) != 0 - 1 { return 4 }
+    list.free()
+    return 0
+}
+
+fn test_list_equal() i64 {
+    // Go: slices.Equal — element-wise comparison
+    var a: List(i64) = .{}
+    a.append(1)
+    a.append(2)
+    a.append(3)
+    var b: List(i64) = .{}
+    b.append(1)
+    b.append(2)
+    b.append(3)
+    if a.equal(&b) != 1 { return 1 }
+    // Different length
+    b.append(4)
+    if a.equal(&b) != 0 { return 2 }
+    // Same length, different content
+    var c: List(i64) = .{}
+    c.append(1)
+    c.append(99)
+    c.append(3)
+    if a.equal(&c) != 0 { return 3 }
+    a.free()
+    b.free()
+    c.free()
+    return 0
+}
+
+fn test_list_first() i64 {
+    var list: List(i64) = .{}
+    list.append(42)
+    list.append(99)
+    if list.first() != 42 { return 1 }
+    list.insert(0, 7)
+    if list.first() != 7 { return 2 }
+    list.free()
+    return 0
+}
+
+fn test_list_resize() i64 {
+    // Zig: resize — grow (undefined elements) or shrink
+    var list: List(i64) = .{}
+    list.append(10)
+    list.append(20)
+    list.append(30)
+    // Shrink
+    list.resize(2)
+    if list.len() != 2 { return 1 }
+    if list.get(0) != 10 { return 2 }
+    if list.get(1) != 20 { return 3 }
+    // Grow (new elements undefined, but count changes)
+    list.resize(5)
+    if list.len() != 5 { return 4 }
+    // Original elements preserved
+    if list.get(0) != 10 { return 5 }
+    if list.get(1) != 20 { return 6 }
+    // Can write to new slots
+    list.set(2, 30)
+    list.set(3, 40)
+    list.set(4, 50)
+    if list.get(4) != 50 { return 7 }
+    list.free()
+    return 0
+}
+
+fn test_list_append_n_times() i64 {
+    // Zig: appendNTimes — fill with value
+    var list: List(i64) = .{}
+    list.appendNTimes(42, 5)
+    if list.len() != 5 { return 1 }
+    if list.get(0) != 42 { return 2 }
+    if list.get(4) != 42 { return 3 }
+    // Append more
+    list.appendNTimes(0, 3)
+    if list.len() != 8 { return 4 }
+    if list.get(5) != 0 { return 5 }
+    if list.get(7) != 0 { return 6 }
+    list.free()
+    return 0
+}
+
+fn test_list_insert_slice() i64 {
+    // Zig: insertSlice — bulk insert at position
+    var list: List(i64) = .{}
+    list.append(1)
+    list.append(5)
+    // Prepare source buffer [2, 3, 4]
+    let src = @alloc(24)
+    @intToPtr(*i64, src).* = 2
+    @intToPtr(*i64, src + 8).* = 3
+    @intToPtr(*i64, src + 16).* = 4
+    // Insert at index 1: [1, 2, 3, 4, 5]
+    list.insertSlice(1, src, 3)
+    @dealloc(src)
+    if list.len() != 5 { return 1 }
+    if list.get(0) != 1 { return 2 }
+    if list.get(1) != 2 { return 3 }
+    if list.get(2) != 3 { return 4 }
+    if list.get(3) != 4 { return 5 }
+    if list.get(4) != 5 { return 6 }
+    list.free()
+    return 0
+}
+
+fn test_list_replace_range() i64 {
+    // Zig: replaceRange / Go: slices.Replace
+    var list: List(i64) = .{}
+    list.append(1)
+    list.append(2)
+    list.append(3)
+    list.append(4)
+    list.append(5)
+    // Replace [1..3) (elements 2,3) with [20, 30, 40] — growing
+    let src1 = @alloc(24)
+    @intToPtr(*i64, src1).* = 20
+    @intToPtr(*i64, src1 + 8).* = 30
+    @intToPtr(*i64, src1 + 16).* = 40
+    list.replaceRange(1, 2, src1, 3)
+    @dealloc(src1)
+    // Expected: [1, 20, 30, 40, 4, 5]
+    if list.len() != 6 { return 1 }
+    if list.get(0) != 1 { return 2 }
+    if list.get(1) != 20 { return 3 }
+    if list.get(2) != 30 { return 4 }
+    if list.get(3) != 40 { return 5 }
+    if list.get(4) != 4 { return 6 }
+    if list.get(5) != 5 { return 7 }
+    // Replace [1..4) (elements 20,30,40) with [99] — shrinking
+    let src2 = @alloc(8)
+    @intToPtr(*i64, src2).* = 99
+    list.replaceRange(1, 3, src2, 1)
+    @dealloc(src2)
+    // Expected: [1, 99, 4, 5]
+    if list.len() != 4 { return 8 }
+    if list.get(0) != 1 { return 9 }
+    if list.get(1) != 99 { return 10 }
+    if list.get(2) != 4 { return 11 }
+    if list.get(3) != 5 { return 12 }
+    list.free()
+    return 0
+}
+
+fn test_list_shrink_and_free() i64 {
+    // Zig: shrinkAndFree — reduce length and realloc
+    var list: List(i64) = .{}
+    list.append(10)
+    list.append(20)
+    list.append(30)
+    list.append(40)
+    list.append(50)
+    let old_cap = list.cap()
+    list.shrinkAndFree(3)
+    if list.len() != 3 { return 1 }
+    if list.cap() != 3 { return 2 }
+    if list.get(0) != 10 { return 3 }
+    if list.get(1) != 20 { return 4 }
+    if list.get(2) != 30 { return 5 }
+    // Shrink to 0 frees everything
+    list.shrinkAndFree(0)
+    if list.count != 0 { return 6 }
+    if list.capacity != 0 { return 7 }
+    return 0
+}
+
+fn test_list_delete_range() i64 {
+    // Go: slices.Delete(s, i, j) — remove [start, end)
+    var list: List(i64) = .{}
+    list.append(1)
+    list.append(2)
+    list.append(3)
+    list.append(4)
+    list.append(5)
+    // Delete [1, 3) — remove elements 2, 3
+    list.deleteRange(1, 3)
+    // Expected: [1, 4, 5]
+    if list.len() != 3 { return 1 }
+    if list.get(0) != 1 { return 2 }
+    if list.get(1) != 4 { return 3 }
+    if list.get(2) != 5 { return 4 }
+    // Delete [0, 1) — remove first element
+    list.deleteRange(0, 1)
+    // Expected: [4, 5]
+    if list.len() != 2 { return 5 }
+    if list.get(0) != 4 { return 6 }
+    list.free()
+    return 0
+}
+
+fn test_list_ensure_unused() i64 {
+    // Zig: ensureUnusedCapacity
+    var list: List(i64) = .{}
+    list.append(1)
+    list.ensureUnusedCapacity(100)
+    if list.cap() < 101 { return 1 }
+    if list.len() != 1 { return 2 }
+    if list.get(0) != 1 { return 3 }
+    list.free()
+    return 0
+}
+
+fn test_list_is_empty() i64 {
+    var list: List(i64) = .{}
+    if list.isEmpty() != 1 { return 1 }
+    list.append(42)
+    if list.isEmpty() != 0 { return 2 }
+    list.pop()
+    if list.isEmpty() != 1 { return 3 }
+    return 0
+}
+
+fn test_list_compact() i64 {
+    // Go: slices.Compact — remove consecutive duplicates
+    var list: List(i64) = .{}
+    list.append(1)
+    list.append(1)
+    list.append(2)
+    list.append(2)
+    list.append(2)
+    list.append(3)
+    list.append(1)
+    list.append(1)
+    list.compact()
+    // Expected: [1, 2, 3, 1]
+    if list.len() != 4 { return 1 }
+    if list.get(0) != 1 { return 2 }
+    if list.get(1) != 2 { return 3 }
+    if list.get(2) != 3 { return 4 }
+    if list.get(3) != 1 { return 5 }
+    list.free()
+    return 0
+}
+
+// ============================================================================
 // main() dispatcher
 // ============================================================================
 
@@ -1749,6 +2195,21 @@ fn main() i64 {
     if test_list_clone() != 0 { return 92 }
     if test_list_last() != 0 { return 93 }
     if test_memcpy_overlap() != 0 { return 94 }
+
+    // List(T) Tier 1+2: search, resize, bulk ops, compact
+    if test_list_contains() != 0 { return 95 }
+    if test_list_index_of() != 0 { return 96 }
+    if test_list_equal() != 0 { return 97 }
+    if test_list_first() != 0 { return 98 }
+    if test_list_resize() != 0 { return 99 }
+    if test_list_append_n_times() != 0 { return 100 }
+    if test_list_insert_slice() != 0 { return 101 }
+    if test_list_replace_range() != 0 { return 102 }
+    if test_list_shrink_and_free() != 0 { return 103 }
+    if test_list_delete_range() != 0 { return 104 }
+    if test_list_ensure_unused() != 0 { return 105 }
+    if test_list_is_empty() != 0 { return 106 }
+    if test_list_compact() != 0 { return 107 }
 
     return 0
 }
