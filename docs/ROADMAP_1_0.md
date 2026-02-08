@@ -4,18 +4,24 @@
 
 The compiler handles a real programming language — generics, closures, ARC, error unions, defer, traits, all working on both Wasm and native AOT. The architecture is proven: Cot source compiles to Wasm bytecode, which either runs in a browser or gets AOT-compiled to ARM64/x64 native executables through a Cranelift-port pipeline.
 
-### What 0.3 Lacks for Real Use
+### What 0.3 Has Achieved
 
-A developer downloading Cot today would immediately hit:
+- **Working I/O** — `print`, `println`, `eprint`, `eprintln` with native syscalls
+- **Standard library** — `List(T)` with ~20 methods via `import "std/list"`
+- **Cross-file generics** — `SharedGenericContext` enables multi-file programs with generics
+- **CLI** — `cot build`, `cot run`, `cot test`, `cot version`, `cot help`
+- **Test framework** — inline `test "name" { }` blocks with `@assert`/`@assert_eq`, summary output
+- **Basic LSP** — diagnostics, hover, goto definition, document symbols
 
-1. **No I/O** — can't read files, make HTTP requests, or print formatted output
-2. **No standard library** — no collections beyond List(T), no JSON, no string formatting
-3. **No package manager** — can't install libraries
-4. **No string interpolation** — `"Hello, " + name` works but `"Hello, {name}"` doesn't
+### What 0.3 Still Lacks for Real Use
+
+1. **No collections beyond List(T)** — no Map(K,V), no Set(T)
+2. **No string interpolation** — `"Hello, " + name` works but `"Hello, {name}"` doesn't
+3. **No file I/O** — can't read files, make HTTP requests
+4. **No package manager** — can't install libraries
 5. **No async** — can't write a web server that handles concurrent connections
-6. **No editor support** — no LSP, no syntax highlighting
-7. **No framework** — the full-stack client/server story doesn't exist yet
-8. **No documentation** — no language guide, no API docs, no tutorials
+6. **No framework** — the full-stack client/server story doesn't exist yet
+7. **No documentation** — no language guide, no API docs, no tutorials
 
 ---
 
@@ -182,25 +188,25 @@ Zig is 10+ years of development and still on 0.15. Each version represents a mea
 
 ## Feature Roadmap
 
-### 0.3: Make the Language Real
+### 0.3: Make the Language Real (Largely Complete)
 
-All language features, standard library, and I/O land here.
+**Done:**
+- `print` / `println` / `eprint` / `eprintln` — output to stdout/stderr
+- `import "std/list"` — cross-file generics, stdlib discovery
+- `cot build` / `cot run` / `cot test` / `cot version` — CLI subcommands
+- Inline test framework with `@assert` / `@assert_eq`, summary output
+- Trait bounds on generics — `where T: Trait` syntax, monomorphized dispatch
+- Basic LSP server (diagnostics, hover, goto definition, document symbols)
 
-**Collections and Strings:**
+**Remaining:**
 - Map(K,V) — hash map with set/get/has/delete/keys/values
 - Set(T) — built on Map(K,V)
 - String interpolation — `"Hello, {name}"`
 - StringBuilder — efficient append-based string building
-- `@print` / `@println` — output to stdout
-
-**Type System:**
-- Trait bounds on generics — `fn sort(T: Comparable)(list: *List(T))`
 - `for key, value in map` — iterator protocol
 - `match` expressions — full pattern matching
 - Multiple return values — `fn divmod(a, b: i64) (i64, i64)`
 - `weak` references — ARC cycle breaker
-
-**I/O and Standard Library:**
 - `std/fs` — file I/O (open, read, write, readFile, writeFile)
 - `std/os` — process args, env vars, exit
 - `std/fmt` — string formatting
@@ -217,9 +223,8 @@ All language features, standard library, and I/O land here.
 ### 0.4: Make It Pleasant to Use
 
 - Error messages with source locations, underlines, suggestions
-- LSP server (autocomplete, go-to-definition, hover types)
+- LSP server enhancements (autocomplete, rename, references)
 - `cot fmt` — auto-formatter
-- `cot test` — test runner with `test "name" { ... }` blocks
 - Syntax highlighting (VS Code, tree-sitter)
 - Build system with project manifest (cot.toml)
 
