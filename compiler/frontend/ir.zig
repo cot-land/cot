@@ -124,12 +124,13 @@ pub const Node = struct {
         type_metadata: TypeMetadata,
         wasm_global_read: WasmGlobalRead,
         nop: void,
+        trap: void,
     };
 
     pub fn init(data: Data, type_idx: TypeIndex, span: Span) Node { return .{ .type_idx = type_idx, .span = span, .block = null_block, .data = data }; }
     pub fn withBlock(self: Node, block: BlockIndex) Node { var n = self; n.block = block; return n; }
-    pub fn isTerminator(self: *const Node) bool { return switch (self.data) { .ret, .jump, .branch => true, else => false }; }
-    pub fn hasSideEffects(self: *const Node) bool { return switch (self.data) { .store_local, .ptr_store, .ptr_store_value, .ptr_field_store, .store_local_field, .call, .call_indirect, .closure_call, .ret, .jump, .branch, .list_new, .list_push, .list_set, .list_free, .map_new, .map_set, .map_free => true, else => false }; }
+    pub fn isTerminator(self: *const Node) bool { return switch (self.data) { .ret, .jump, .branch, .trap => true, else => false }; }
+    pub fn hasSideEffects(self: *const Node) bool { return switch (self.data) { .store_local, .ptr_store, .ptr_store_value, .ptr_field_store, .store_local_field, .call, .call_indirect, .closure_call, .ret, .jump, .branch, .trap, .list_new, .list_push, .list_set, .list_free, .map_new, .map_set, .map_free => true, else => false }; }
     pub fn isConstant(self: *const Node) bool { return switch (self.data) { .const_int, .const_float, .const_bool, .const_null, .const_slice => true, else => false }; }
 };
 
@@ -331,6 +332,7 @@ pub const FuncBuilder = struct {
     pub fn emitSelect(self: *FuncBuilder, condition: NodeIndex, then_value: NodeIndex, else_value: NodeIndex, type_idx: TypeIndex, span: Span) !NodeIndex { return self.emit(Node.init(.{ .select = .{ .condition = condition, .then_value = then_value, .else_value = else_value } }, type_idx, span)); }
     pub fn emitConvert(self: *FuncBuilder, operand: NodeIndex, from_type: TypeIndex, to_type: TypeIndex, span: Span) !NodeIndex { return self.emit(Node.init(.{ .convert = .{ .operand = operand, .from_type = from_type, .to_type = to_type } }, to_type, span)); }
     pub fn emitNop(self: *FuncBuilder, span: Span) !NodeIndex { return self.emit(Node.init(.{ .nop = {} }, TypeRegistry.VOID, span)); }
+    pub fn emitTrap(self: *FuncBuilder, span: Span) !NodeIndex { return self.emit(Node.init(.{ .trap = {} }, TypeRegistry.VOID, span)); }
 
     // Aliases and additional helpers
     pub fn emitIndirectCall(self: *FuncBuilder, callee: NodeIndex, args: []const NodeIndex, type_idx: TypeIndex, span: Span) !NodeIndex { return self.emitCallIndirect(callee, args, type_idx, span); }

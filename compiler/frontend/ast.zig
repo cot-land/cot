@@ -114,7 +114,7 @@ pub const NewExpr = struct {
     fields: []const FieldInit,
     span: Span,
 };
-pub const BuiltinCall = struct { name: []const u8, type_arg: NodeIndex, args: [2]NodeIndex, span: Span };
+pub const BuiltinCall = struct { name: []const u8, type_arg: NodeIndex, args: [3]NodeIndex, span: Span };
 pub const StringSegment = union(enum) { text: []const u8, expr: NodeIndex };
 pub const StringInterp = struct { segments: []const StringSegment, span: Span };
 pub const TypeExpr = struct { kind: TypeKind, span: Span };

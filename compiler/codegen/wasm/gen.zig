@@ -967,6 +967,13 @@ pub const GenState = struct {
         // Skip values with no uses (dead code) unless they have side effects
         if (v.uses == 0 and !v.hasSideEffects()) return;
 
+        // Go pattern: compound type ops (SliceMake, StringMake) are conceptual groupings
+        // that generate no Wasm code. By the time codegen runs, all extraction ops
+        // (slice_ptr, slice_len, etc.) have been decomposed by rewritedec.
+        // Skip these entirely — they must never call setReg (empty stack).
+        // Reference: Go's wasm/ssa.go has no case for OpSliceMake/OpStringMake.
+        if (v.op == .slice_make or v.op == .string_make) return;
+
         // Skip rematerializable values (generate on demand)
         if (isRematerializable(v)) return;
 
@@ -1012,6 +1019,8 @@ pub const GenState = struct {
                 if (v.uses == 0 and !v.hasSideEffects()) continue;
                 if (isRematerializable(v)) continue;
                 if (isCmp(v)) continue;
+                // Go: SliceMake/StringMake are conceptual — no Wasm local needed
+                if (v.op == .slice_make or v.op == .string_make) continue;
                 if (isFloatType(v.type_idx)) continue; // Skip floats for pass 2
 
                 const local_idx = self.next_local;

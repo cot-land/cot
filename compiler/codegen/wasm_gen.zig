@@ -624,6 +624,13 @@ pub const FuncGen = struct {
             // Args just register their local mapping (already done in allocateLocals)
             .arg => {},
 
+            // @trap() → Wasm unreachable instruction (opcode 0x00)
+            // Zig: unreachable → trap. Go: no equivalent.
+            // Wasm spec: immediately traps the instance, no continuation.
+            .wasm_unreachable => {
+                try self.code.emitUnreachable();
+            },
+
             // Memory ops, control flow - handled elsewhere
             .phi, .init_mem, .fwd_ref => {},
 

@@ -889,6 +889,82 @@ fn test_new_generic() i64 {
 }
 
 // ============================================================================
+// @memcpy builtin — Go's memmove / Zig's @memcpy pattern
+// ============================================================================
+
+fn test_memcpy_basic() i64 {
+    let src = @alloc(24)
+    let dst = @alloc(24)
+    let p0 = @intToPtr(*i64, src)
+    p0.* = 10
+    let p1 = @intToPtr(*i64, src + 8)
+    p1.* = 20
+    let p2 = @intToPtr(*i64, src + 16)
+    p2.* = 30
+    @memcpy(dst, src, 24)
+    let d0 = @intToPtr(*i64, dst)
+    let d1 = @intToPtr(*i64, dst + 8)
+    let d2 = @intToPtr(*i64, dst + 16)
+    if d0.* != 10 { return 1 }
+    if d1.* != 20 { return 2 }
+    if d2.* != 30 { return 3 }
+    @dealloc(src)
+    @dealloc(dst)
+    return 0
+}
+
+fn test_memcpy_zero_length() i64 {
+    let buf = @alloc(8)
+    @intToPtr(*i64, buf).* = 42
+    @memcpy(buf, buf, 0)
+    if @intToPtr(*i64, buf).* != 42 { return 1 }
+    @dealloc(buf)
+    return 0
+}
+
+// ============================================================================
+// @trap builtin — Wasm unreachable / ARM64 brk #1 / Zig unreachable pattern
+// ============================================================================
+
+fn test_trap_not_reached() i64 {
+    let x: i64 = 42
+    if x == 0 { @trap() }
+    return 0
+}
+
+// ============================================================================
+// Slice parameter passing — Go rewritedec pattern (SliceMake 3-arg)
+// ============================================================================
+
+fn get_slice_len(items: []i64) i64 {
+    return items.len
+}
+
+fn slice_sum(items: []i64) i64 {
+    var total: i64 = 0
+    var i: i64 = 0
+    while i < items.len {
+        total = total + items[i]
+        i = i + 1
+    }
+    return total
+}
+
+fn test_slice_param_basic() i64 {
+    var arr = [10, 20, 30]
+    let s = arr[0:3]
+    if get_slice_len(s) != 3 { return 1 }
+    return 0
+}
+
+fn test_slice_param_iteration() i64 {
+    var arr = [10, 20, 30, 40, 50]
+    let s = arr[1:4]
+    if slice_sum(s) != 90 { return 1 }
+    return 0
+}
+
+// ============================================================================
 // main() dispatcher
 // ============================================================================
 
@@ -982,6 +1058,17 @@ fn main() i64 {
     if test_zero_init_basic() != 0 { return 58 }
     if test_zero_init_generic() != 0 { return 59 }
     if test_new_generic() != 0 { return 60 }
+
+    // @memcpy builtin
+    if test_memcpy_basic() != 0 { return 61 }
+    if test_memcpy_zero_length() != 0 { return 62 }
+
+    // @trap builtin (only test the not-reached path; reaching @trap kills the process)
+    if test_trap_not_reached() != 0 { return 63 }
+
+    // Slice parameter passing
+    if test_slice_param_basic() != 0 { return 64 }
+    if test_slice_param_iteration() != 0 { return 65 }
 
     return 0
 }

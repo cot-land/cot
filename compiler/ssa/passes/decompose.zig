@@ -72,44 +72,52 @@ fn decomposeBuiltinPhi(allocator: std.mem.Allocator, f: *Func, block: *Block, v:
 /// Before: phi<slice>(s1, s2)
 /// After:  ptr_phi = phi(slice_ptr(s1), slice_ptr(s2))
 ///         len_phi = phi(slice_len(s1), slice_len(s2))
-///         result = slice_make(ptr_phi, len_phi)
+///         cap_phi = phi(slice_cap(s1), slice_cap(s2))
+///         result = slice_make(ptr_phi, len_phi, cap_phi)
+/// Go reference: decompose.go always creates 3-component SliceMake
 fn decomposeSlicePhi(allocator: std.mem.Allocator, f: *Func, block: *Block, v: *Value) !bool {
     if (v.args.len == 0) return false;
 
     debug.log(.codegen, "  v{d}: decomposing slice phi with {d} args", .{ v.id, v.args.len });
 
     // Create ptr_phi = phi<ptr>()
-    // Go: lines 164
     const ptr_phi = try f.newValue(.phi, TypeRegistry.I64, block, v.pos);
     try block.addValue(allocator, ptr_phi);
 
     // Create len_phi = phi<i64>()
-    // Go: lines 165
     const len_phi = try f.newValue(.phi, TypeRegistry.I64, block, v.pos);
     try block.addValue(allocator, len_phi);
 
-    // For each arg of the original phi, extract ptr and len
-    // Go: lines 167-171
-    for (v.args) |a| {
-        const arg_block = a.block orelse block; // Use phi's block if arg has no block
+    // Create cap_phi = phi<i64>()
+    const cap_phi = try f.newValue(.phi, TypeRegistry.I64, block, v.pos);
+    try block.addValue(allocator, cap_phi);
 
-        // Create slice_ptr(a) and add to ptr_phi
+    // For each arg of the original phi, extract ptr, len, and cap
+    for (v.args) |a| {
+        const arg_block = a.block orelse block;
+
         const ptr_extract = try f.newValue(.slice_ptr, TypeRegistry.I64, arg_block, v.pos);
         ptr_extract.addArg(a);
         try arg_block.addValue(allocator, ptr_extract);
         try ptr_phi.addArgAlloc(ptr_extract, allocator);
 
-        // Create slice_len(a) and add to len_phi
         const len_extract = try f.newValue(.slice_len, TypeRegistry.I64, arg_block, v.pos);
         len_extract.addArg(a);
         try arg_block.addValue(allocator, len_extract);
         try len_phi.addArgAlloc(len_extract, allocator);
+
+        const cap_extract = try f.newValue(.slice_cap, TypeRegistry.I64, arg_block, v.pos);
+        cap_extract.addArg(a);
+        try arg_block.addValue(allocator, cap_extract);
+        try cap_phi.addArgAlloc(cap_extract, allocator);
     }
 
-    // Create result = slice_make(ptr_phi, len_phi)
-    // Go: lines 172-175
+    // Create result = slice_make(ptr_phi, len_phi, cap_phi)
+    // Go: SliceMake always has 3 args
     const result = try f.newValue(.slice_make, v.type_idx, block, v.pos);
-    result.addArg2(ptr_phi, len_phi);
+    result.addArg(ptr_phi);
+    result.addArg(len_phi);
+    try result.addArgAlloc(cap_phi, allocator);
     try block.addValue(allocator, result);
 
     // Replace v with result (make v a copy of result)
@@ -230,8 +238,11 @@ test "decomposeSlicePhi basic" {
     len1.aux_int = 10;
     try block1.addValue(allocator, len1);
 
+    // Go: SliceMake always 3 args (ptr, len, cap)
     const slice1 = try f.newValue(.slice_make, SLICE_TYPE, block1, .{});
-    slice1.addArg2(ptr1, len1);
+    slice1.addArg(ptr1);
+    slice1.addArg(len1);
+    try slice1.addArgAlloc(len1, allocator); // cap = len
     try block1.addValue(allocator, slice1);
 
     const ptr2 = try f.newValue(.const_64, TypeRegistry.I64, block2, .{});
@@ -243,7 +254,9 @@ test "decomposeSlicePhi basic" {
     try block2.addValue(allocator, len2);
 
     const slice2 = try f.newValue(.slice_make, SLICE_TYPE, block2, .{});
-    slice2.addArg2(ptr2, len2);
+    slice2.addArg(ptr2);
+    slice2.addArg(len2);
+    try slice2.addArgAlloc(len2, allocator); // cap = len
     try block2.addValue(allocator, slice2);
 
     // Create merge block with phi

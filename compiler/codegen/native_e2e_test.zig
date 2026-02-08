@@ -3,7 +3,7 @@
 //! Tests the full pipeline: Cot source -> Wasm -> CLIF -> Machine Code -> Executable -> Run
 //!
 //! The main test compiles a single combined program (test/native/e2e_all.cot) containing
-//! all 60 sub-tests. One compile + one link = ~500ms total (vs ~30s with individual tests).
+//! all 65 sub-tests. One compile + one link = ~500ms total (vs ~30s with individual tests).
 //! Returns 0 on success or a unique error code identifying which sub-test failed.
 //!
 //! Parity tests (expressions, functions, control_flow, variables) remain as separate entries.
@@ -198,16 +198,21 @@ fn subTestName(exit_code: u32) []const u8 {
         "test_zero_init_basic",             // 58
         "test_zero_init_generic",           // 59
         "test_new_generic",                 // 60
+        "test_memcpy_basic",                // 61
+        "test_memcpy_zero_length",          // 62
+        "test_trap_not_reached",            // 63
+        "test_slice_param_basic",           // 64
+        "test_slice_param_iteration",       // 65
     };
     if (exit_code < names.len) return names[exit_code];
     return "unknown (exit code out of range)";
 }
 
 // ============================================================================
-// Combined native E2E test: all 60 sub-tests in one program
+// Combined native E2E test: all 65 sub-tests in one program
 // ============================================================================
 
-test "native: all e2e tests (60 sub-tests)" {
+test "native: all e2e tests (63 sub-tests)" {
     const code = @constCast(@as([]const u8, std.fs.cwd().readFileAlloc(std.testing.allocator, "test/native/e2e_all.cot", 1024 * 1024) catch |e| {
         std.debug.print("Failed to read test file: {any}\n", .{e});
         return error.FileNotFound;

@@ -2465,15 +2465,19 @@ pub const Lowerer = struct {
             const ast_expr = ast_node.asExpr() orelse continue;
             var arg_node: ir.NodeIndex = ir.null_node;
 
+            // Determine parameter type for ABI decomposition
+            var param_is_pointer = false;
+            var param_is_compound = false; // slice or string — passed as (ptr, len)
+            if (param_types) |params| {
+                if (arg_i < params.len) {
+                    const param_type = self.type_reg.get(params[arg_i].type_idx);
+                    param_is_pointer = (param_type == .pointer);
+                    param_is_compound = (param_type == .slice) or (params[arg_i].type_idx == TypeRegistry.STRING);
+                }
+            }
+
             // Check if string literal passed to pointer param
             if (ast_expr == .literal and ast_expr.literal.kind == .string) {
-                var param_is_pointer = false;
-                if (param_types) |params| {
-                    if (arg_i < params.len) {
-                        const param_type = self.type_reg.get(params[arg_i].type_idx);
-                        param_is_pointer = (param_type == .pointer);
-                    }
-                }
                 if (param_is_pointer) {
                     const str_node = try self.lowerLiteral(ast_expr.literal);
                     arg_node = try fb.emitSlicePtr(str_node, TypeRegistry.I64, call.span);
@@ -2484,7 +2488,18 @@ pub const Lowerer = struct {
                 arg_node = try self.lowerExprNode(arg_idx);
             }
             if (arg_node == ir.null_node) continue;
-            try args.append(self.allocator, arg_node);
+
+            // Go pattern: decompose compound types (slice/string) into (ptr, len)
+            // at call sites. The callee SSA builder reconstructs via slice_make.
+            // Reference: Go's OSPTR()/OLEN() in walk/builtin.go
+            if (param_is_compound) {
+                const ptr_val = try fb.emitSlicePtr(arg_node, TypeRegistry.I64, call.span);
+                const len_val = try fb.emitSliceLen(arg_node, call.span);
+                try args.append(self.allocator, ptr_val);
+                try args.append(self.allocator, len_val);
+            } else {
+                try args.append(self.allocator, arg_node);
+            }
         }
 
         const return_type = if (func_type_info == .func) func_type_info.func.return_type else TypeRegistry.VOID;
@@ -2957,6 +2972,28 @@ pub const Lowerer = struct {
             const new_size = try self.lowerExprNode(bc.args[1]);
             var realloc_args = [_]ir.NodeIndex{ ptr, new_size };
             return try fb.emitCall("cot_realloc", &realloc_args, false, TypeRegistry.I64, bc.span);
+        }
+        // @memcpy(dst, src, num_bytes) — Go's memmove / Zig's @memcpy pattern
+        // Lowerer already calls memcpy internally (e.g. struct copies at line 567).
+        // This exposes it to user code.
+        if (std.mem.eql(u8, bc.name, "memcpy")) {
+            const dst = try self.lowerExprNode(bc.args[0]);
+            const src = try self.lowerExprNode(bc.args[1]);
+            const len = try self.lowerExprNode(bc.args[2]);
+            var memcpy_args = [_]ir.NodeIndex{ dst, src, len };
+            _ = try fb.emitCall("memcpy", &memcpy_args, false, TypeRegistry.VOID, bc.span);
+            return ir.null_node;
+        }
+        // @trap() — Wasm unreachable instruction / ARM64 brk #1 / x64 ud2
+        // Zig: unreachable → trap instruction. Go: no equivalent (uses panic).
+        // Wasm: opcode 0x00 (unreachable). Terminates the block.
+        // After trap, switch to a dead block so the lowerer can continue emitting
+        // subsequent code (which is unreachable but may exist syntactically).
+        if (std.mem.eql(u8, bc.name, "trap")) {
+            _ = try fb.emitTrap(bc.span);
+            const dead_block = try fb.newBlock("trap.dead");
+            fb.setBlock(dead_block);
+            return ir.null_node;
         }
         return ir.null_node;
     }

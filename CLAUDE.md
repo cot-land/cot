@@ -226,6 +226,52 @@ echo $?  # Shows return value
 
 ---
 
+## Builtin Pipeline — How @builtins Flow Through the Compiler
+
+**READ THIS before adding or debugging any @builtin.**
+
+### Two categories of builtins
+
+| Category | Examples | Wasm Implementation | Registered in |
+|----------|----------|---------------------|---------------|
+| **Compiler intrinsics** | `@intCast`, `@sizeOf`, `@intToPtr`, `@assert` | Inline Wasm ops (no function call) | Lowered directly in `lower.zig` |
+| **Runtime functions** | `@alloc`, `@dealloc`, `@realloc`, `@memcpy` | Wasm module functions with bytecode bodies | `arc.zig` → `driver.zig` func_indices |
+
+### Pipeline for runtime function builtins (e.g., @memcpy)
+
+```
+parser.zig        → Parse @memcpy(dst, src, len) into BuiltinCall AST node
+checker.zig       → Type-check arguments (all i64), return void
+lower.zig         → Emit IR call to "memcpy" function name
+ssa_builder.zig   → Convert to SSA call instruction
+wasm_gen.zig      → Look up "memcpy" in func_indices → emit call N
+arc.zig           → generateMemcpyBody() creates Wasm bytecode, addToLinker adds it
+driver.zig        → Registers memcpy_idx in func_indices map
+```
+
+### CRITICAL: Runtime builtins are Wasm MODULE functions, NOT host imports
+
+`cot_alloc`, `cot_retain`, `cot_release`, `cot_dealloc`, `cot_realloc`, `memset_zero`, `memcpy` — all are Wasm functions with bytecode bodies generated in `arc.zig` and added via `linker.addFunc()`. They are **NOT** libc/host imports.
+
+The compiler currently has **ZERO** host imports. All runtime functions are self-contained Wasm bytecode.
+
+**Why this matters:** If a function name is missing from `func_indices`, `wasm_gen.zig` silently falls back to calling function index 0 (cot_alloc). This is a silent bug — the call succeeds but does the wrong thing.
+
+### Adding a new runtime builtin
+
+1. `parser.zig` — Add parse case in builtin_call handler
+2. `checker.zig` — Add type-check case
+3. `lower.zig` — Add `emitCall("function_name", ...)` case
+4. `arc.zig` — Add `generate*Body()` function + add to `RuntimeFunctions` struct + add to `addToLinker()`
+5. `driver.zig` — Register in `func_indices`: `try func_indices.put(allocator, NAME, arc_funcs.*_idx)`
+6. `arc.zig` test — Update `addToLinker` test expected function count
+
+### Native AOT: translateElse no_else fix
+
+When a Wasm if/else structure exists inside a runtime function's bytecode body, the native CLIF translator must handle the case where `translateIf` created a `no_else` placeholder (destination = placeholder), but an `else` instruction is later encountered. In this case, `translateElse` must create a NEW else block and redirect the brif via `changeJumpDestination`, not reuse the destination as the else block (which would seal it prematurely).
+
+---
+
 ## Zig 0.15 API Changes
 
 **ArrayList requires allocator for each operation:**

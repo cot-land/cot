@@ -1050,6 +1050,7 @@ pub const Driver = struct {
         try func_indices.put(self.allocator, arc.REALLOC_NAME, arc_funcs.realloc_idx);
         try func_indices.put(self.allocator, arc.STRING_CONCAT_NAME, arc_funcs.string_concat_idx);
         try func_indices.put(self.allocator, arc.MEMSET_ZERO_NAME, arc_funcs.memset_zero_idx);
+        try func_indices.put(self.allocator, arc.MEMCPY_NAME, arc_funcs.memcpy_idx);
 
         // Add slice function names to index map (Go)
         try func_indices.put(self.allocator, slice_runtime.GROWSLICE_NAME, slice_funcs.growslice_idx);
@@ -1197,10 +1198,30 @@ pub const Driver = struct {
                 }
             }
             var params: [16]wasm.ValType = undefined;
-            for (ir_func.params, 0..) |param, i| {
-                const is_float = param.type_idx == types_mod.TypeRegistry.F64 or
-                    param.type_idx == types_mod.TypeRegistry.F32;
-                params[i] = if (is_float) .f64 else .i64;
+            {
+                // Build Wasm param types, decomposing compound types (slice, string)
+                // into 2 separate i64 entries (ptr, len). This must match the SSA
+                // builder's arg decomposition in ssa_builder.zig.
+                var wasm_param_idx: usize = 0;
+                for (ir_func.params) |param| {
+                    const param_type = type_reg.get(param.type_idx);
+                    const is_string_or_slice = param.type_idx == types_mod.TypeRegistry.STRING or param_type == .slice;
+                    const type_size = type_reg.sizeOf(param.type_idx);
+                    const is_large_struct = param_type == .struct_type and type_size > 8 and type_size <= 16;
+
+                    if (is_string_or_slice or is_large_struct) {
+                        // Compound type: 2 i64 params (ptr+len or lo+hi)
+                        params[wasm_param_idx] = .i64;
+                        wasm_param_idx += 1;
+                        params[wasm_param_idx] = .i64;
+                        wasm_param_idx += 1;
+                    } else {
+                        const is_float = param.type_idx == types_mod.TypeRegistry.F64 or
+                            param.type_idx == types_mod.TypeRegistry.F32;
+                        params[wasm_param_idx] = if (is_float) .f64 else .i64;
+                        wasm_param_idx += 1;
+                    }
+                }
             }
             const has_return = ir_func.return_type != types_mod.TypeRegistry.VOID;
             const ret_is_float = ir_func.return_type == types_mod.TypeRegistry.F64 or

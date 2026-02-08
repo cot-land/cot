@@ -246,11 +246,19 @@ fn rewriteSliceCap(allocator: std.mem.Allocator, f: *Func, block: *Block, v: *Va
     const v_0 = followCopy(v.args[0]);
 
     // Pattern 1: SliceCap(SliceMake _ _ cap) → cap
-    // Go: lines 464-473
+    // Go: lines 464-473 — SliceMake always has 3 args
     if (v_0.op == .slice_make and v_0.args.len >= 3) {
         const cap = v_0.args[2];
         debug.log(.codegen, "  v{d}: slice_cap(slice_make) -> copy v{d}", .{ v.id, cap.id });
         copyOf(v, cap);
+        return true;
+    }
+
+    // Robustness: 2-arg slice_make (legacy) — cap defaults to len
+    if (v_0.op == .slice_make and v_0.args.len == 2) {
+        const len = v_0.args[1];
+        debug.log(.codegen, "  v{d}: slice_cap(slice_make[2-arg]) -> copy v{d} (cap=len)", .{ v.id, len.id });
+        copyOf(v, len);
         return true;
     }
 
@@ -535,9 +543,11 @@ test "rewriteSliceLen from slice_make" {
     len_val.aux_int = 42;
     try block.addValue(allocator, len_val);
 
-    // Create slice_make(ptr, len)
+    // Create slice_make(ptr, len, cap) — Go: always 3 args
     const slice_make = try f.newValue(.slice_make, TypeRegistry.I64, block, .{});
-    slice_make.addArg2(ptr_val, len_val);
+    slice_make.addArg(ptr_val);
+    slice_make.addArg(len_val);
+    try slice_make.addArgAlloc(len_val, allocator); // cap = len
     try block.addValue(allocator, slice_make);
 
     // Create slice_len(slice_make)

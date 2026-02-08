@@ -2077,3 +2077,110 @@ test "wasm e2e: new generic" {
     try std.testing.expect(result.wasm_bytes.len > 0);
     try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
 }
+
+// @memcpy builtin — Go's memmove / Zig's @memcpy pattern
+test "wasm e2e: memcpy basic" {
+    const code =
+        \\fn main() i64 {
+        \\    let src = @alloc(24)
+        \\    let dst = @alloc(24)
+        \\    let p0 = @intToPtr(*i64, src)
+        \\    p0.* = 10
+        \\    let p1 = @intToPtr(*i64, src + 8)
+        \\    p1.* = 20
+        \\    let p2 = @intToPtr(*i64, src + 16)
+        \\    p2.* = 30
+        \\    @memcpy(dst, src, 24)
+        \\    let d0 = @intToPtr(*i64, dst)
+        \\    let d1 = @intToPtr(*i64, dst + 8)
+        \\    let d2 = @intToPtr(*i64, dst + 16)
+        \\    if d0.* != 10 { return 1 }
+        \\    if d1.* != 20 { return 2 }
+        \\    if d2.* != 30 { return 3 }
+        \\    @dealloc(src)
+        \\    @dealloc(dst)
+        \\    return 0
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: memcpy zero length" {
+    const code =
+        \\fn main() i64 {
+        \\    let buf = @alloc(8)
+        \\    @intToPtr(*i64, buf).* = 42
+        \\    @memcpy(buf, buf, 0)
+        \\    if @intToPtr(*i64, buf).* != 42 { return 1 }
+        \\    @dealloc(buf)
+        \\    return 0
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+// @trap builtin — Wasm unreachable / Zig unreachable pattern
+test "wasm e2e: slice param basic" {
+    const code =
+        \\fn get_len(items: []i64) i64 {
+        \\    return items.len
+        \\}
+        \\fn main() i64 {
+        \\    var arr = [10, 20, 30]
+        \\    let s = arr[0:3]
+        \\    return get_len(s)
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: slice param iteration" {
+    const code =
+        \\fn sum(items: []i64) i64 {
+        \\    var total: i64 = 0
+        \\    var i: i64 = 0
+        \\    while i < items.len {
+        \\        total = total + items[i]
+        \\        i = i + 1
+        \\    }
+        \\    return total
+        \\}
+        \\fn main() i64 {
+        \\    var arr = [10, 20, 30, 40, 50]
+        \\    let s = arr[1:4]
+        \\    return sum(s)
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: trap conditional" {
+    const code =
+        \\fn main() i64 {
+        \\    let x: i64 = 42
+        \\    if x == 0 { @trap() }
+        \\    return 0
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}

@@ -107,6 +107,9 @@ pub const RuntimeFunctions = struct {
     /// cot_memset_zero index
     memset_zero_idx: u32,
 
+    /// memcpy index (Go's memmove / Zig's @memcpy)
+    memcpy_idx: u32,
+
     /// heap_ptr global index
     heap_ptr_global: u32,
 
@@ -147,6 +150,7 @@ pub const DEALLOC_NAME = "cot_dealloc";
 pub const REALLOC_NAME = "cot_realloc";
 pub const STRING_CONCAT_NAME = "cot_string_concat";
 pub const MEMSET_ZERO_NAME = "cot_memset_zero";
+pub const MEMCPY_NAME = "memcpy";
 
 // =============================================================================
 // Code Generation for Runtime Functions (for new Linker API)
@@ -262,6 +266,23 @@ pub fn addToLinker(allocator: std.mem.Allocator, linker: *wasm_link.Linker) !Run
         .exported = false,
     });
 
+    // Generate memcpy function: (dst: i64, src: i64, num_bytes: i64) -> void
+    // Go's memmove semantics: handles overlapping regions safely.
+    // Reference: Go runtime/memmove_*.s, C memmove(3)
+    const memcpy_type = memset_zero_type; // Reuse type if same, else create new
+    _ = memcpy_type;
+    const memcpy_fn_type = try linker.addType(
+        &[_]ValType{ .i64, .i64, .i64 },
+        &[_]ValType{},
+    );
+    const memcpy_body = try generateMemcpyBody(allocator);
+    const memcpy_idx = try linker.addFunc(.{
+        .name = MEMCPY_NAME,
+        .type_idx = memcpy_fn_type,
+        .code = memcpy_body,
+        .exported = false,
+    });
+
     return RuntimeFunctions{
         .alloc_idx = alloc_idx,
         .retain_idx = retain_idx,
@@ -270,6 +291,7 @@ pub fn addToLinker(allocator: std.mem.Allocator, linker: *wasm_link.Linker) !Run
         .realloc_idx = realloc_idx,
         .string_concat_idx = string_concat_idx,
         .memset_zero_idx = memset_zero_idx,
+        .memcpy_idx = memcpy_idx,
         .heap_ptr_global = heap_ptr_global,
         .freelist_head_global = freelist_head_global,
         .destructor_type = destructor_type,
@@ -332,6 +354,112 @@ fn generateMemsetZeroBody(allocator: std.mem.Allocator) ![]const u8 {
     try code.emitBr(0);
     try code.emitEnd();
     try code.emitEnd();
+
+    return code.finish();
+}
+
+/// Generates bytecode for memcpy(dst: i64, src: i64, num_bytes: i64) -> void
+/// Copies `num_bytes` bytes from `src` to `dst`.
+/// Handles overlapping regions safely (memmove semantics).
+/// Reference: Go runtime/memmove_*.s — forward copy if dst <= src, backward if dst > src
+/// Uses i64 load8_u/store8 ops matching the memset_zero pattern.
+fn generateMemcpyBody(allocator: std.mem.Allocator) ![]const u8 {
+    var code = wasm.CodeBuilder.init(allocator);
+    defer code.deinit();
+
+    // Parameters: dst (local 0, i64), src (local 1, i64), num_bytes (local 2, i64)
+    // Local 3: dst_i32 (i32)
+    // Local 4: src_i32 (i32)
+    // Local 5: len_i32 (i32)
+    // Local 6: counter (i32)
+    _ = try code.declareLocals(&[_]wasm.ValType{ .i32, .i32, .i32, .i32 });
+
+    // Convert i64 params to i32 for Wasm memory ops
+    try code.emitLocalGet(0);
+    try code.emitI32WrapI64();
+    try code.emitLocalSet(3); // dst_i32
+    try code.emitLocalGet(1);
+    try code.emitI32WrapI64();
+    try code.emitLocalSet(4); // src_i32
+    try code.emitLocalGet(2);
+    try code.emitI32WrapI64();
+    try code.emitLocalSet(5); // len_i32
+
+    // if (len == 0) return
+    try code.emitLocalGet(5);
+    try code.emitI32Eqz();
+    try code.emitIf(BLOCK_VOID);
+    try code.emitReturn();
+    try code.emitEnd();
+
+    // Go memmove: if dst > src && overlap possible, copy backward
+    try code.emitLocalGet(3);
+    try code.emitLocalGet(4);
+    try code.emitI32GtU();
+    try code.emitIf(BLOCK_VOID);
+
+    // --- Backward copy: counter = len-1; while(counter >= 0) { dst[c] = src[c]; c-- } ---
+    try code.emitLocalGet(5);
+    try code.emitI32Const(1);
+    try code.emitI32Sub();
+    try code.emitLocalSet(6); // counter = len - 1
+    try code.emitBlock(BLOCK_VOID);
+    try code.emitLoop(BLOCK_VOID);
+    // if counter < 0, break (i32.lt_s for signed comparison)
+    try code.emitLocalGet(6);
+    try code.emitI32Const(0);
+    try code.buf.append(allocator, wasm_op.Op.i32_lt_s);
+    try code.emitBrIf(1);
+    // mem[dst+counter] = mem[src+counter]  (byte copy via i64.load8_u / i64.store8)
+    // i64.store8 stack: [addr:i32, value:i64] → []
+    try code.emitLocalGet(3);  // dst_i32
+    try code.emitLocalGet(6);  // counter
+    try code.emitI32Add();     // dst + counter (i32 addr for store)
+    try code.emitLocalGet(4);  // src_i32
+    try code.emitLocalGet(6);  // counter
+    try code.emitI32Add();     // src + counter (i32 addr for load)
+    try code.emitI64Load8U(0); // load byte → i64
+    try code.emitI64Store8(0); // store byte ← i64
+    // counter--
+    try code.emitLocalGet(6);
+    try code.emitI32Const(1);
+    try code.emitI32Sub();
+    try code.emitLocalSet(6);
+    try code.emitBr(0);
+    try code.emitEnd(); // end loop
+    try code.emitEnd(); // end block
+
+    try code.emitElse();
+
+    // --- Forward copy: counter = 0; while(counter < len) { dst[c] = src[c]; c++ } ---
+    try code.emitI32Const(0);
+    try code.emitLocalSet(6); // counter = 0
+    try code.emitBlock(BLOCK_VOID);
+    try code.emitLoop(BLOCK_VOID);
+    // if counter >= len, break
+    try code.emitLocalGet(6);
+    try code.emitLocalGet(5);
+    try code.emitI32GeU();
+    try code.emitBrIf(1);
+    // mem[dst+counter] = mem[src+counter]
+    try code.emitLocalGet(3);  // dst_i32
+    try code.emitLocalGet(6);  // counter
+    try code.emitI32Add();     // dst + counter
+    try code.emitLocalGet(4);  // src_i32
+    try code.emitLocalGet(6);  // counter
+    try code.emitI32Add();     // src + counter
+    try code.emitI64Load8U(0); // load byte
+    try code.emitI64Store8(0); // store byte
+    // counter++
+    try code.emitLocalGet(6);
+    try code.emitI32Const(1);
+    try code.emitI32Add();
+    try code.emitLocalSet(6);
+    try code.emitBr(0);
+    try code.emitEnd(); // end loop
+    try code.emitEnd(); // end block
+
+    try code.emitEnd(); // end if/else
 
     return code.finish();
 }
@@ -1227,8 +1355,8 @@ test "addToLinker creates functions" {
     try std.testing.expect(funcs.dealloc_idx != funcs.alloc_idx);
     try std.testing.expect(funcs.realloc_idx != funcs.alloc_idx);
 
-    // Verify functions were added (alloc, retain, dealloc, release, realloc, string_concat, memset_zero = 7)
-    try std.testing.expectEqual(@as(usize, 7), linker.funcs.items.len);
+    // Verify functions were added (alloc, retain, dealloc, release, realloc, string_concat, memset_zero, memcpy = 8)
+    try std.testing.expectEqual(@as(usize, 8), linker.funcs.items.len);
 
     // Verify globals were added (heap_ptr, freelist_head)
     try std.testing.expectEqual(@as(usize, 2), linker.globals.items.len);

@@ -71,8 +71,12 @@ pub const SSABuilder = struct {
                 try entry.addValue(allocator, len_val);
                 phys_reg_idx += 1;
 
+                // Go: SliceMake always has 3 args (ptr, len, cap)
+                // For params, cap = len (Go convention: ssagen/ssa.go newValue3)
                 const slice_val = try func.newValue(.slice_make, param.type_idx, entry, .{});
-                slice_val.addArg2(ptr_val, len_val);
+                slice_val.addArg(ptr_val);
+                slice_val.addArg(len_val);
+                try slice_val.addArgAlloc(len_val, allocator); // cap = len
                 try entry.addValue(allocator, slice_val);
                 try vars.put(@intCast(i), slice_val);
 
@@ -383,6 +387,14 @@ pub const SSABuilder = struct {
             .convert => |c| try self.convertConvert(c, node.type_idx, cur),
             .phi => null, // Handled by insertPhis
             .nop => null,
+            .trap => blk: {
+                // Zig: unreachable → trap instruction. Wasm: opcode 0x00 (unreachable).
+                // The lowerer places a dead block after trap, so this block continues
+                // normally — the trap value is emitted as a side-effect-only SSA op.
+                const val = try self.func.newValue(.wasm_unreachable, node.type_idx, cur, self.cur_pos);
+                try cur.addValue(self.allocator, val);
+                break :blk null;
+            },
 
             .str_concat => |s| try self.convertStrConcat(s, node.type_idx, cur),
             .string_header => |s| try self.convertStringHeader(s, node.type_idx, cur),
@@ -425,7 +437,8 @@ pub const SSABuilder = struct {
         const load_type = self.type_registry.get(type_idx);
 
         if (load_type == .slice) {
-            // Slice: load ptr and len separately, combine with slice_make
+            // Slice: load ptr, len, cap separately, combine with slice_make
+            // Go: SliceMake always has 3 args (ptr, len, cap)
             const ptr_load = try self.func.newValue(.load, TypeRegistry.I64, cur, self.cur_pos);
             ptr_load.addArg(addr_val);
             try cur.addValue(self.allocator, ptr_load);
@@ -439,8 +452,19 @@ pub const SSABuilder = struct {
             len_load.addArg(len_addr);
             try cur.addValue(self.allocator, len_load);
 
+            const cap_addr = try self.func.newValue(.off_ptr, TypeRegistry.VOID, cur, self.cur_pos);
+            cap_addr.aux_int = 16;
+            cap_addr.addArg(addr_val);
+            try cur.addValue(self.allocator, cap_addr);
+
+            const cap_load = try self.func.newValue(.load, TypeRegistry.I64, cur, self.cur_pos);
+            cap_load.addArg(cap_addr);
+            try cur.addValue(self.allocator, cap_load);
+
             const slice_val = try self.func.newValue(.slice_make, type_idx, cur, self.cur_pos);
-            slice_val.addArg2(ptr_load, len_load);
+            slice_val.addArg(ptr_load);
+            slice_val.addArg(len_load);
+            try slice_val.addArgAlloc(cap_load, self.allocator); // cap
             try cur.addValue(self.allocator, slice_val);
             return slice_val;
         }
@@ -457,9 +481,11 @@ pub const SSABuilder = struct {
         const is_slice_value = (value.op == .slice_make or value.op == .string_make) and value.args.len >= 2;
 
         if (is_slice_value) {
-            // Decompose slice into ptr and len stores
+            // Go slice layout: { ptr@0, len@8, cap@16 }
+            // Decompose into separate stores for each component
             const ptr_val = value.args[0];
             const len_val = value.args[1];
+            const cap_val = if (value.args.len >= 3) value.args[2] else len_val; // cap defaults to len
 
             const addr_val = try self.emitLocalAddr(local_idx, TypeRegistry.VOID, cur);
             const ptr_store = try self.func.newValue(.store, TypeRegistry.VOID, cur, self.cur_pos);
@@ -474,6 +500,18 @@ pub const SSABuilder = struct {
             const len_store = try self.func.newValue(.store, TypeRegistry.VOID, cur, self.cur_pos);
             len_store.addArg2(len_addr, len_val);
             try cur.addValue(self.allocator, len_store);
+
+            // Store cap at offset 16 (Go slice layout)
+            if (value.op == .slice_make) {
+                const cap_addr = try self.func.newValue(.off_ptr, TypeRegistry.VOID, cur, self.cur_pos);
+                cap_addr.aux_int = 16;
+                cap_addr.addArg(addr_val);
+                try cur.addValue(self.allocator, cap_addr);
+
+                const cap_store = try self.func.newValue(.store, TypeRegistry.VOID, cur, self.cur_pos);
+                cap_store.addArg2(cap_addr, cap_val);
+                try cur.addValue(self.allocator, cap_store);
+            }
 
             self.assign(local_idx, value);
             return value;
@@ -509,6 +547,7 @@ pub const SSABuilder = struct {
 
         const load_type = self.type_registry.get(type_idx);
         if (load_type == .slice) {
+            // Go: SliceMake always has 3 args (ptr, len, cap)
             const ptr_load = try self.func.newValue(.load, TypeRegistry.I64, cur, self.cur_pos);
             ptr_load.addArg(addr_val);
             try cur.addValue(self.allocator, ptr_load);
@@ -522,8 +561,19 @@ pub const SSABuilder = struct {
             len_load.addArg(len_addr);
             try cur.addValue(self.allocator, len_load);
 
+            const cap_addr = try self.func.newValue(.off_ptr, TypeRegistry.VOID, cur, self.cur_pos);
+            cap_addr.aux_int = 16;
+            cap_addr.addArg(addr_val);
+            try cur.addValue(self.allocator, cap_addr);
+
+            const cap_load = try self.func.newValue(.load, TypeRegistry.I64, cur, self.cur_pos);
+            cap_load.addArg(cap_addr);
+            try cur.addValue(self.allocator, cap_load);
+
             const slice_val = try self.func.newValue(.slice_make, type_idx, cur, self.cur_pos);
-            slice_val.addArg2(ptr_load, len_load);
+            slice_val.addArg(ptr_load);
+            slice_val.addArg(len_load);
+            try slice_val.addArgAlloc(cap_load, self.allocator);
             try cur.addValue(self.allocator, slice_val);
             return slice_val;
         }
@@ -879,8 +929,12 @@ pub const SSABuilder = struct {
         } else end;
 
         if (new_len) |len| {
+            // Go: SliceMake always has 3 args (ptr, len, cap)
+            // For arr[start:end], cap = len (Go convention: ssagen/ssa.go)
             const slice_val = try self.func.newValue(.slice_make, type_idx, cur, self.cur_pos);
-            slice_val.addArg2(new_ptr, len);
+            slice_val.addArg(new_ptr);
+            slice_val.addArg(len);
+            try slice_val.addArgAlloc(len, self.allocator); // cap = len
             try cur.addValue(self.allocator, slice_val);
             return slice_val;
         }

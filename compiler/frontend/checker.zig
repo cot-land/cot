@@ -650,6 +650,15 @@ pub const Checker = struct {
             _ = try self.checkExpr(bc.args[0]); // ptr: i64
             _ = try self.checkExpr(bc.args[1]); // new_size: i64
             return TypeRegistry.I64; // new pointer as i64
+        } else if (std.mem.eql(u8, bc.name, "memcpy")) {
+            // @memcpy(dst, src, num_bytes) — Go's memmove / Wasm memory.copy pattern
+            _ = try self.checkExpr(bc.args[0]); // dst: i64 (raw pointer)
+            _ = try self.checkExpr(bc.args[1]); // src: i64 (raw pointer)
+            _ = try self.checkExpr(bc.args[2]); // num_bytes: i64
+            return TypeRegistry.VOID;
+        } else if (std.mem.eql(u8, bc.name, "trap")) {
+            // @trap() — Wasm unreachable / ARM64 brk #1 / x64 ud2
+            return TypeRegistry.VOID;
         }
         self.err.errorWithCode(bc.span.start, .e300, "unknown builtin");
         return invalid_type;

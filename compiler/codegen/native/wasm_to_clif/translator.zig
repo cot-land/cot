@@ -508,8 +508,21 @@ pub const FuncTranslator = struct {
                 }
 
                 // Get else block
+                // Cranelift: code_translator.rs translate_else()
+                // When else_data is no_else, we didn't expect an else but got one.
+                // Must create a new else block and redirect the brif's false branch
+                // away from the destination (placeholder). Without this, the
+                // destination gets sealed here but translateEnd still needs to
+                // add a predecessor to it → assertion failure.
                 const else_block = switch (f.else_data) {
-                    .no_else => |ne| ne.placeholder,
+                    .no_else => |ne| blk: {
+                        const new_else = try self.builder.createBlock();
+                        for (0..f.num_param_values) |_| {
+                            _ = try self.builder.appendBlockParam(new_else, Type.I32);
+                        }
+                        try self.builder.changeJumpDestination(ne.branch_inst, ne.placeholder, new_else);
+                        break :blk new_else;
+                    },
                     .with_else => |we| we.else_block,
                 };
 

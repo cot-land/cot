@@ -790,27 +790,40 @@ pub const Parser = struct {
             if (!self.expect(.comma)) return null;
             const len = try self.parseExpr() orelse return null;
             if (!self.expect(.rparen)) return null;
-            return try self.tree.addExpr(.{ .builtin_call = .{ .name = name, .type_arg = null_node, .args = .{ ptr, len }, .span = Span.init(start, self.pos()) } });
+            return try self.tree.addExpr(.{ .builtin_call = .{ .name = name, .type_arg = null_node, .args = .{ ptr, len, null_node }, .span = Span.init(start, self.pos()) } });
         } else if (std.mem.eql(u8, name, "intCast") or std.mem.eql(u8, name, "ptrCast") or std.mem.eql(u8, name, "intToPtr")) {
             const t = try self.parseType() orelse return null;
             if (!self.expect(.comma)) return null;
             const v = try self.parseExpr() orelse return null;
             if (!self.expect(.rparen)) return null;
-            return try self.tree.addExpr(.{ .builtin_call = .{ .name = name, .type_arg = t, .args = .{ v, null_node }, .span = Span.init(start, self.pos()) } });
+            return try self.tree.addExpr(.{ .builtin_call = .{ .name = name, .type_arg = t, .args = .{ v, null_node, null_node }, .span = Span.init(start, self.pos()) } });
+        } else if (std.mem.eql(u8, name, "trap")) {
+            // @trap() — 0 args, Wasm unreachable / ARM64 brk #1
+            if (!self.expect(.rparen)) return null;
+            return try self.tree.addExpr(.{ .builtin_call = .{ .name = name, .type_arg = null_node, .args = .{ null_node, null_node, null_node }, .span = Span.init(start, self.pos()) } });
         } else if (std.mem.eql(u8, name, "ptrToInt") or std.mem.eql(u8, name, "assert") or std.mem.eql(u8, name, "alloc") or std.mem.eql(u8, name, "dealloc")) {
             const arg = try self.parseExpr() orelse return null;
             if (!self.expect(.rparen)) return null;
-            return try self.tree.addExpr(.{ .builtin_call = .{ .name = name, .type_arg = null_node, .args = .{ arg, null_node }, .span = Span.init(start, self.pos()) } });
+            return try self.tree.addExpr(.{ .builtin_call = .{ .name = name, .type_arg = null_node, .args = .{ arg, null_node, null_node }, .span = Span.init(start, self.pos()) } });
         } else if (std.mem.eql(u8, name, "realloc")) {
             const ptr_arg = try self.parseExpr() orelse return null;
             if (!self.expect(.comma)) return null;
             const size_arg = try self.parseExpr() orelse return null;
             if (!self.expect(.rparen)) return null;
-            return try self.tree.addExpr(.{ .builtin_call = .{ .name = name, .type_arg = null_node, .args = .{ ptr_arg, size_arg }, .span = Span.init(start, self.pos()) } });
+            return try self.tree.addExpr(.{ .builtin_call = .{ .name = name, .type_arg = null_node, .args = .{ ptr_arg, size_arg, null_node }, .span = Span.init(start, self.pos()) } });
+        } else if (std.mem.eql(u8, name, "memcpy")) {
+            // @memcpy(dst, src, num_bytes) — 3 args, memmove semantics (Go copy / Wasm memory.copy)
+            const dst_arg = try self.parseExpr() orelse return null;
+            if (!self.expect(.comma)) return null;
+            const src_arg = try self.parseExpr() orelse return null;
+            if (!self.expect(.comma)) return null;
+            const len_arg = try self.parseExpr() orelse return null;
+            if (!self.expect(.rparen)) return null;
+            return try self.tree.addExpr(.{ .builtin_call = .{ .name = name, .type_arg = null_node, .args = .{ dst_arg, src_arg, len_arg }, .span = Span.init(start, self.pos()) } });
         } else {
             const t = try self.parseType() orelse return null;
             if (!self.expect(.rparen)) return null;
-            return try self.tree.addExpr(.{ .builtin_call = .{ .name = name, .type_arg = t, .args = .{ null_node, null_node }, .span = Span.init(start, self.pos()) } });
+            return try self.tree.addExpr(.{ .builtin_call = .{ .name = name, .type_arg = t, .args = .{ null_node, null_node, null_node }, .span = Span.init(start, self.pos()) } });
         }
     }
 
