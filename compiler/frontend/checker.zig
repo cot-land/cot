@@ -654,9 +654,20 @@ pub const Checker = struct {
         };
 
         const callee_type = try self.checkExpr(c.callee);
-        const callee = self.types.get(callee_type);
-        const is_method = self.isMethodCall(c.callee);
+        var callee = self.types.get(callee_type);
+        const method_info = self.resolveMethodCall(c.callee);
+        const is_method = method_info != null;
 
+        // When a struct field shadows a method name, prefer the method in call position.
+        // e.g. struct has field "keys: i64" AND impl has method "keys()" — m.keys() calls the method.
+        if (callee != .func) {
+            if (method_info) |mi| {
+                callee = self.types.get(mi.func_type);
+            } else {
+                self.err.errorWithCode(c.span.start, .e300, "cannot call non-function");
+                return invalid_type;
+            }
+        }
         if (callee != .func) { self.err.errorWithCode(c.span.start, .e300, "cannot call non-function"); return invalid_type; }
         const ft = callee.func;
         const expected_args = if (is_method and ft.params.len > 0) ft.params.len - 1 else ft.params.len;
@@ -670,19 +681,19 @@ pub const Checker = struct {
         return ft.return_type;
     }
 
-    fn isMethodCall(self: *Checker, callee_idx: NodeIndex) bool {
-        const ce = (self.tree.getNode(callee_idx) orelse return false).asExpr() orelse return false;
-        if (ce != .field_access) return false;
+    fn resolveMethodCall(self: *Checker, callee_idx: NodeIndex) ?types.MethodInfo {
+        const ce = (self.tree.getNode(callee_idx) orelse return null).asExpr() orelse return null;
+        if (ce != .field_access) return null;
         const fa = ce.field_access;
-        const base_type_idx = self.expr_types.get(fa.base) orelse return false;
+        const base_type_idx = self.expr_types.get(fa.base) orelse return null;
         const base_type = self.types.get(base_type_idx);
         const struct_name = switch (base_type) {
             .struct_type => |st| st.name,
-            .pointer => |ptr| if (self.types.get(ptr.elem) == .struct_type) self.types.get(ptr.elem).struct_type.name else return false,
+            .pointer => |ptr| if (self.types.get(ptr.elem) == .struct_type) self.types.get(ptr.elem).struct_type.name else return null,
             .basic => |bk| bk.name(),
-            else => return false,
+            else => return null,
         };
-        return self.lookupMethod(struct_name, fa.field) != null;
+        return self.lookupMethod(struct_name, fa.field);
     }
 
     fn checkBuiltinLen(self: *Checker, c: ast.Call) CheckError!TypeIndex {

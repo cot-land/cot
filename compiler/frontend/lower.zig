@@ -428,6 +428,7 @@ pub const Lowerer = struct {
                     .type_idx = TypeRegistry.VOID,
                     .state = .active,
                     .local_idx = null,
+                    .func_name = null,
                 };
                 _ = try self.cleanup_stack.push(cleanup);
                 return false;
@@ -550,12 +551,34 @@ pub const Lowerer = struct {
         _ = try fb.emitRet(value_node, ret.span);
     }
 
-    /// Check if there are any active defer cleanups on the stack.
+    /// Check if there are any active defer or scope_destroy cleanups on the stack.
     fn hasDeferCleanups(self: *const Lowerer) bool {
         for (self.cleanup_stack.items.items) |cleanup| {
-            if (cleanup.isActive() and cleanup.kind == .defer_expr) return true;
+            if (cleanup.isActive() and (cleanup.kind == .defer_expr or cleanup.kind == .scope_destroy)) return true;
         }
         return false;
+    }
+
+    /// Register a scope_destroy cleanup if the struct type has a free() method.
+    /// Called at variable declaration for .{} zero-init and struct literal init.
+    /// Rust parallel: schedule_drop(place, DropKind::Value) in scope.rs — registers
+    /// a drop obligation when a value is bound to a variable.
+    /// Swift parallel: pushCleanup(DestroyValueCleanup) on owned value init.
+    /// Zig parallel: implicit defer insertion (AstGen.zig Scope.Defer).
+    fn maybeRegisterScopeDestroy(self: *Lowerer, local_idx: ir.LocalIdx, type_idx: TypeIndex) !void {
+        const type_info = self.type_reg.get(type_idx);
+        if (type_info != .struct_type) return;
+        const struct_name = type_info.struct_type.name;
+
+        // Check if this struct has a free() method
+        if (self.chk.lookupMethod(struct_name, "free")) |method_info| {
+            // Queue the generic function for lowering (same as lowerMethodCall does)
+            if (self.chk.generics.generic_inst_by_name.get(method_info.func_name)) |inst_info| {
+                try self.ensureGenericFnQueued(inst_info);
+            }
+            const cleanup = arc.Cleanup.initScopeDestroy(local_idx, type_idx, method_info.func_name);
+            _ = try self.cleanup_stack.push(cleanup);
+        }
     }
 
     /// Check if an expression's root local has an active ARC cleanup.
@@ -612,6 +635,19 @@ pub const Lowerer = struct {
                     .defer_expr => {
                         try self.lowerDeferredNode(@intCast(cleanup.value));
                     },
+                    .scope_destroy => {
+                        // Emit free() call on struct at scope exit.
+                        // Rust parallel: drop_in_place<T> shim (compiler/rustc_mir_transform/src/elaborate_drops.rs).
+                        // Swift parallel: destroy_value SIL instruction emitted by endScope (Scope.cpp).
+                        if (cleanup.local_idx) |lidx| {
+                            if (cleanup.func_name) |fname| {
+                                const ptr_type = self.type_reg.makePointer(cleanup.type_idx) catch TypeRegistry.I64;
+                                const self_addr = try fb.emitAddrLocal(lidx, ptr_type, Span.zero);
+                                var call_args = [_]ir.NodeIndex{self_addr};
+                                _ = try fb.emitCall(fname, &call_args, false, TypeRegistry.VOID, Span.zero);
+                            }
+                        }
+                    },
                     .end_borrow => {},
                 }
             }
@@ -646,6 +682,16 @@ pub const Lowerer = struct {
                     .defer_expr => {
                         try self.lowerDeferredNode(@intCast(cleanup.value));
                     },
+                    .scope_destroy => {
+                        if (cleanup.local_idx) |lidx| {
+                            if (cleanup.func_name) |fname| {
+                                const ptr_type = self.type_reg.makePointer(cleanup.type_idx) catch TypeRegistry.I64;
+                                const self_addr = try fb.emitAddrLocal(lidx, ptr_type, Span.zero);
+                                var call_args = [_]ir.NodeIndex{self_addr};
+                                _ = try fb.emitCall(fname, &call_args, false, TypeRegistry.VOID, Span.zero);
+                            }
+                        }
+                    },
                     .end_borrow => {},
                 }
             }
@@ -677,6 +723,11 @@ pub const Lowerer = struct {
                 const size_node = try fb.emitConstInt(@intCast(size), TypeRegistry.I64, var_stmt.span);
                 var args = [_]ir.NodeIndex{ local_addr, size_node };
                 _ = try fb.emitCall("cot_memset_zero", &args, false, TypeRegistry.VOID, var_stmt.span);
+
+                // Register scope_destroy for .{} (zero_init), not for undefined
+                if (is_zero_init) {
+                    try self.maybeRegisterScopeDestroy(local_idx, type_idx);
+                }
                 return;
             }
 
@@ -693,6 +744,8 @@ pub const Lowerer = struct {
                 try self.lowerArrayInit(local_idx, var_stmt.value, var_stmt.span);
             } else if (is_struct_literal) {
                 try self.lowerStructInit(local_idx, var_stmt.value, var_stmt.span);
+                // Register scope_destroy for struct literals with free()
+                try self.maybeRegisterScopeDestroy(local_idx, type_idx);
             } else if (is_tuple_literal) {
                 try self.lowerTupleInit(local_idx, var_stmt.value, var_stmt.span);
             } else if (self.type_reg.get(type_idx) == .union_type) {

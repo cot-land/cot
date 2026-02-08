@@ -1,0 +1,338 @@
+// Map(K, V) — Production-quality generic hash map.
+//
+// Design: Open addressing with linear probing, power-of-2 capacity, 75% load factor.
+// Deletion uses tombstones for probe chain correctness.
+//
+// References:
+//   Zig:  std/hash_map.zig (open addressing, probing, rehash)
+//   Go:   runtime/maps/ (growth, tombstones)
+//   Hash: splitmix64 mixer (Sebastiano Vigna, xorshift.di.unimi.it/splitmix64.c)
+//
+// Known limitations (acceptable for V1, same tradeoffs as Zig):
+//   - States use i64 per slot (8 bytes vs Zig's 1 byte). Optimize to u8 when available.
+//   - No fingerprinting (Zig stores 7-bit hash fingerprint per slot for faster probing).
+//   - Three separate allocations (keys, values, states) vs Zig's single allocation.
+//   - Tombstone accumulation under heavy delete workloads degrades probe performance.
+//     Long-lived maps with churn should periodically free() and rebuild.
+
+import "std/list"
+
+trait Hashable {
+    fn hash(self: *Self) i64
+}
+
+// splitmix64 mixer: two rounds of xor-shift-multiply, final xor-shift.
+// Constants from Sebastiano Vigna's splitmix64.c:
+//   0xbf58476d1ce4e5b9 = -4658895280553007687 (signed i64)
+//   0x94d049bb133111eb = -7723592293110705685 (signed i64)
+// Shifts: 30, 27, 31 (standard splitmix64 values for 64-bit mixing).
+// Cot's >> compiles to wasm i64.shr_u (logical shift), same as C's >> on uint64_t.
+impl Hashable for i64 {
+    fn hash(self: *i64) i64 {
+        var h: i64 = self.*
+        h = (h ^ (h >> 30)) * (0 - 4658895280553007687)
+        h = (h ^ (h >> 27)) * (0 - 7723592293110705685)
+        h = h ^ (h >> 31)
+        return h
+    }
+}
+
+struct Map(K, V) {
+    keys: i64,
+    values: i64,
+    states: i64,
+    count: i64,
+    capacity: i64,
+}
+
+impl Map(K, V) {
+    // ===== Internal =====
+
+    fn ensureCapacity(self: *Map(K, V), needed: i64) void {
+        // Check if we need to grow: count * 4 >= capacity * 3 (75% load factor)
+        if self.capacity > 0 {
+            if needed * 4 < self.capacity * 3 {
+                return
+            }
+        }
+        var new_cap = self.capacity
+        if new_cap == 0 { new_cap = 8 }
+        while needed * 4 >= new_cap * 3 {
+            new_cap = new_cap * 2
+        }
+        self.rehash(new_cap)
+    }
+
+    fn rehash(self: *Map(K, V), new_cap: i64) void {
+        let old_keys = self.keys
+        let old_values = self.values
+        let old_states = self.states
+        let old_capacity = self.capacity
+
+        // Allocate new arrays
+        self.keys = @alloc(new_cap * @sizeOf(K))
+        self.values = @alloc(new_cap * @sizeOf(V))
+        self.states = @alloc(new_cap * @sizeOf(i64))
+        self.capacity = new_cap
+        self.count = 0
+
+        // Initialize all states to 0 (empty)
+        var si: i64 = 0
+        while si < new_cap {
+            let sp = @intToPtr(*i64, self.states + si * @sizeOf(i64))
+            sp.* = 0
+            si = si + 1
+        }
+
+        // Reinsert all occupied entries from old table.
+        // Fresh table has no tombstones, so only check for empty (state=0).
+        var oi: i64 = 0
+        while oi < old_capacity {
+            let os = @intToPtr(*i64, old_states + oi * @sizeOf(i64))
+            if os.* == 1 {
+                let ok = @intToPtr(*K, old_keys + oi * @sizeOf(K))
+                let ov = @intToPtr(*V, old_values + oi * @sizeOf(V))
+                // Inline set logic to avoid sibling method call issue
+                var key = ok.*
+                var h = key.hash()
+                var idx = h & (new_cap - 1)
+                var loop_i: i64 = 0
+                while loop_i < new_cap {
+                    let st = @intToPtr(*i64, self.states + idx * @sizeOf(i64))
+                    if st.* == 0 {
+                        let kp = @intToPtr(*K, self.keys + idx * @sizeOf(K))
+                        let vp = @intToPtr(*V, self.values + idx * @sizeOf(V))
+                        kp.* = ok.*
+                        vp.* = ov.*
+                        st.* = 1
+                        self.count = self.count + 1
+                        loop_i = new_cap
+                    } else {
+                        idx = (idx + 1) & (new_cap - 1)
+                        loop_i = loop_i + 1
+                    }
+                }
+            }
+            oi = oi + 1
+        }
+
+        // Free old arrays
+        if old_capacity > 0 {
+            @dealloc(old_keys)
+            @dealloc(old_values)
+            @dealloc(old_states)
+        }
+    }
+
+    // ===== Core =====
+
+    fn set(self: *Map(K, V), key: K, value: V) void {
+        // Ensure we have capacity (75% load factor)
+        if self.capacity == 0 {
+            self.rehash(8)
+        } else {
+            if (self.count + 1) * 4 >= self.capacity * 3 {
+                self.rehash(self.capacity * 2)
+            }
+        }
+
+        var k = key
+        var h = k.hash()
+        var idx = h & (self.capacity - 1)
+        var first_tombstone: i64 = 0 - 1
+
+        var i: i64 = 0
+        while i < self.capacity {
+            let st = @intToPtr(*i64, self.states + idx * @sizeOf(i64))
+            if st.* == 0 {
+                // Empty slot — use tombstone slot if we found one, else this slot
+                var target = idx
+                if first_tombstone >= 0 { target = first_tombstone }
+                let kp = @intToPtr(*K, self.keys + target * @sizeOf(K))
+                let vp = @intToPtr(*V, self.values + target * @sizeOf(V))
+                let tp = @intToPtr(*i64, self.states + target * @sizeOf(i64))
+                kp.* = key
+                vp.* = value
+                tp.* = 1
+                self.count = self.count + 1
+                return
+            }
+            if st.* == 1 {
+                let kp = @intToPtr(*K, self.keys + idx * @sizeOf(K))
+                if kp.* == key {
+                    // Key exists — update value
+                    let vp = @intToPtr(*V, self.values + idx * @sizeOf(V))
+                    vp.* = value
+                    return
+                }
+            }
+            if st.* == 2 {
+                if first_tombstone < 0 {
+                    first_tombstone = idx
+                }
+            }
+            idx = (idx + 1) & (self.capacity - 1)
+            i = i + 1
+        }
+        // Unreachable: 75% load factor guarantees an empty slot exists.
+        @trap()
+    }
+
+    fn get(self: *Map(K, V), key: K) V {
+        if self.capacity == 0 { @trap() }
+        var k = key
+        var h = k.hash()
+        var idx = h & (self.capacity - 1)
+
+        var i: i64 = 0
+        while i < self.capacity {
+            let st = @intToPtr(*i64, self.states + idx * @sizeOf(i64))
+            if st.* == 0 { @trap() }
+            if st.* == 1 {
+                let kp = @intToPtr(*K, self.keys + idx * @sizeOf(K))
+                if kp.* == key {
+                    let vp = @intToPtr(*V, self.values + idx * @sizeOf(V))
+                    return vp.*
+                }
+            }
+            idx = (idx + 1) & (self.capacity - 1)
+            i = i + 1
+        }
+        @trap()
+        return @intToPtr(*V, 0).*
+    }
+
+    fn getOrDefault(self: *Map(K, V), key: K, default: V) V {
+        if self.capacity == 0 { return default }
+        var k = key
+        var h = k.hash()
+        var idx = h & (self.capacity - 1)
+
+        var i: i64 = 0
+        while i < self.capacity {
+            let st = @intToPtr(*i64, self.states + idx * @sizeOf(i64))
+            if st.* == 0 { return default }
+            if st.* == 1 {
+                let kp = @intToPtr(*K, self.keys + idx * @sizeOf(K))
+                if kp.* == key {
+                    let vp = @intToPtr(*V, self.values + idx * @sizeOf(V))
+                    return vp.*
+                }
+            }
+            idx = (idx + 1) & (self.capacity - 1)
+            i = i + 1
+        }
+        return default
+    }
+
+    fn has(self: *Map(K, V), key: K) i64 {
+        if self.capacity == 0 { return 0 }
+        var k = key
+        var h = k.hash()
+        var idx = h & (self.capacity - 1)
+
+        var i: i64 = 0
+        while i < self.capacity {
+            let st = @intToPtr(*i64, self.states + idx * @sizeOf(i64))
+            if st.* == 0 { return 0 }
+            if st.* == 1 {
+                let kp = @intToPtr(*K, self.keys + idx * @sizeOf(K))
+                if kp.* == key { return 1 }
+            }
+            idx = (idx + 1) & (self.capacity - 1)
+            i = i + 1
+        }
+        return 0
+    }
+
+    fn delete(self: *Map(K, V), key: K) void {
+        if self.capacity == 0 { return }
+        var k = key
+        var h = k.hash()
+        var idx = h & (self.capacity - 1)
+
+        var i: i64 = 0
+        while i < self.capacity {
+            let st = @intToPtr(*i64, self.states + idx * @sizeOf(i64))
+            if st.* == 0 { return }
+            if st.* == 1 {
+                let kp = @intToPtr(*K, self.keys + idx * @sizeOf(K))
+                if kp.* == key {
+                    st.* = 2
+                    self.count = self.count - 1
+                    return
+                }
+            }
+            idx = (idx + 1) & (self.capacity - 1)
+            i = i + 1
+        }
+    }
+
+    // ===== Info =====
+
+    fn len(self: *Map(K, V)) i64 { return self.count }
+
+    fn isEmpty(self: *Map(K, V)) i64 {
+        if self.count == 0 { return 1 }
+        return 0
+    }
+
+    // ===== Lifecycle =====
+
+    fn free(self: *Map(K, V)) void {
+        if self.capacity > 0 {
+            @dealloc(self.keys)
+            @dealloc(self.values)
+            @dealloc(self.states)
+        }
+        self.keys = 0
+        self.values = 0
+        self.states = 0
+        self.count = 0
+        self.capacity = 0
+    }
+
+    fn clear(self: *Map(K, V)) void {
+        var i: i64 = 0
+        while i < self.capacity {
+            let sp = @intToPtr(*i64, self.states + i * @sizeOf(i64))
+            sp.* = 0
+            i = i + 1
+        }
+        self.count = 0
+    }
+
+    fn clearAndFree(self: *Map(K, V)) void {
+        self.free()
+    }
+
+    // ===== Bulk =====
+
+    fn keys(self: *Map(K, V)) List(K) {
+        var result: List(K) = .{}
+        var i: i64 = 0
+        while i < self.capacity {
+            let st = @intToPtr(*i64, self.states + i * @sizeOf(i64))
+            if st.* == 1 {
+                let kp = @intToPtr(*K, self.keys + i * @sizeOf(K))
+                result.append(kp.*)
+            }
+            i = i + 1
+        }
+        return result
+    }
+
+    fn values(self: *Map(K, V)) List(V) {
+        var result: List(V) = .{}
+        var i: i64 = 0
+        while i < self.capacity {
+            let st = @intToPtr(*i64, self.states + i * @sizeOf(i64))
+            if st.* == 1 {
+                let vp = @intToPtr(*V, self.values + i * @sizeOf(V))
+                result.append(vp.*)
+            }
+            i = i + 1
+        }
+        return result
+    }
+}

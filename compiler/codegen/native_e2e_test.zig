@@ -395,6 +395,14 @@ test "e2e: stdlib imports (5 tests)" {
     try expectTestModeFile(std.testing.allocator, "test/e2e/stdlib.cot", 5, "import_list");
 }
 
+test "e2e: map (25 tests)" {
+    try expectTestModeFile(std.testing.allocator, "test/e2e/map.cot", 25, "e2e_map");
+}
+
+test "e2e: auto_free (5 tests)" {
+    try expectTestModeFile(std.testing.allocator, "test/e2e/auto_free.cot", 5, "e2e_auto_free");
+}
+
 // ============================================================================
 // Print tests: verify print/println produce correct stdout output
 // ============================================================================

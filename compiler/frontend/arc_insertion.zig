@@ -50,6 +50,12 @@ pub const CleanupKind = enum {
     /// Deferred expression to evaluate at scope exit.
     /// Port of Swift's DeferCleanup subclass on the unified cleanup stack.
     defer_expr,
+    /// Call free() on a struct at scope exit (auto-detected by free() method).
+    /// Equivalent to Rust's schedule_drop (rustc_mir_build/build/scope.rs) for "Static"
+    /// drops — value is always initialized, so cleanup always runs.
+    /// Swift parallel: destroy_value in CleanupManager::endScope (lib/SILGen/Scope.cpp).
+    /// Zig parallel: automatic defer insertion (src/AstGen.zig Scope.Defer).
+    scope_destroy,
 };
 
 /// A single cleanup entry.
@@ -62,6 +68,8 @@ pub const Cleanup = struct {
     /// Optional local variable index that owns this value.
     /// Used to identify cleanup when forwarding ownership on return.
     local_idx: ?ir.LocalIdx,
+    /// Mangled function name for scope_destroy (e.g., "Map(i64,_i64)_free").
+    func_name: ?[]const u8,
 
     pub fn init(kind: CleanupKind, value: NodeIndex, type_idx: TypeIndex) Cleanup {
         return .{
@@ -70,6 +78,7 @@ pub const Cleanup = struct {
             .type_idx = type_idx,
             .state = .active,
             .local_idx = null,
+            .func_name = null,
         };
     }
 
@@ -81,6 +90,21 @@ pub const Cleanup = struct {
             .type_idx = type_idx,
             .state = .active,
             .local_idx = local_idx,
+            .func_name = null,
+        };
+    }
+
+    /// Create a scope_destroy cleanup for a struct with a free() method.
+    /// Rust equivalent: schedule_drop(place, DropKind::Value) in scope.rs.
+    /// Swift equivalent: pushCleanup(DestroyValueCleanup) in SILGenProlog.cpp.
+    pub fn initScopeDestroy(local_idx: ir.LocalIdx, type_idx: TypeIndex, func_name: []const u8) Cleanup {
+        return .{
+            .kind = .scope_destroy,
+            .value = 0,
+            .type_idx = type_idx,
+            .state = .active,
+            .local_idx = local_idx,
+            .func_name = func_name,
         };
     }
 
