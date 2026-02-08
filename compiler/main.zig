@@ -36,6 +36,7 @@ pub const ssa_layout = @import("ssa/passes/layout.zig");
 // Debug and pipeline
 pub const pipeline_debug = @import("pipeline_debug.zig");
 pub const driver = @import("driver.zig");
+pub const cli = @import("cli.zig");
 
 // Native codegen (AOT compiler path)
 // Cranelift-style pipeline: Wasm → CLIF IR → MachInst → ARM64/x64
@@ -91,98 +92,214 @@ pub fn main() !void {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var args = std.process.args();
-    _ = args.skip();
-
-    var input_file: ?[]const u8 = null;
-    var output_name: []const u8 = "a.out";
-    var compile_target = Target.native();
-    var test_mode = false;
-
-    while (args.next()) |arg| {
-        if (std.mem.eql(u8, arg, "-o")) {
-            output_name = args.next() orelse {
-                std.debug.print("Error: -o requires an argument\n", .{});
-                return;
-            };
-        } else if (std.mem.eql(u8, arg, "-test") or std.mem.eql(u8, arg, "--test")) {
-            test_mode = true;
-        } else if (std.mem.startsWith(u8, arg, "--target=")) {
-            compile_target = Target.parse(arg[9..]) orelse {
-                std.debug.print("Error: Unknown target. Use: wasm32, arm64-macos, amd64-linux\n", .{});
-                return;
-            };
-        } else if (std.mem.eql(u8, arg, "--target")) {
-            compile_target = Target.parse(args.next() orelse {
-                std.debug.print("Error: --target requires an argument\n", .{});
-                return;
-            }) orelse {
-                std.debug.print("Error: Unknown target. Use: wasm32, arm64-macos, amd64-linux\n", .{});
-                return;
-            };
-        } else if (!std.mem.startsWith(u8, arg, "-")) {
-            input_file = arg;
-        } else {
-            std.debug.print("Error: Unknown option '{s}'\n", .{arg});
-            return;
-        }
-    }
-
-    const actual_input = input_file orelse {
-        std.debug.print("Usage: cot [--target=<t>] [-test] <input.cot> [-o <output>]\n", .{});
-        return;
+    const command = cli.parseArgs(allocator) orelse {
+        std.process.exit(1);
     };
 
-    std.debug.print("Cot 0.3 Bootstrap Compiler\n", .{});
-    std.debug.print("Input: {s}, Target: {s}\n", .{ actual_input, compile_target.name() });
+    switch (command) {
+        .build => |opts| buildCommand(allocator, opts),
+        .run => |opts| runCommand(allocator, opts),
+        .@"test" => |opts| testCommand(allocator, opts),
+        .version => cli.printVersion(),
+        .help => |opts| cli.printHelp(opts.subcommand),
+    }
+}
 
+fn buildCommand(allocator: std.mem.Allocator, opts: cli.BuildOptions) void {
+    const compile_target = opts.target;
+    const output_name = opts.output_name orelse (cli.deriveOutputName(allocator, opts.input_file, compile_target) catch {
+        std.debug.print("Error: Failed to derive output name\n", .{});
+        std.process.exit(1);
+    });
+
+    compileAndLink(allocator, opts.input_file, output_name, compile_target, false, false);
+}
+
+fn runCommand(allocator: std.mem.Allocator, opts: cli.RunOptions) void {
+    if (opts.target.isWasm()) {
+        std.debug.print("Error: 'cot run' does not support --target=wasm32\nUse 'cot build --target=wasm32' to produce a .wasm file\n", .{});
+        std.process.exit(1);
+    }
+
+    // Compile to temp directory
+    const tmp_dir = "/tmp/cot-run";
+    std.fs.cwd().makePath(tmp_dir) catch {
+        std.debug.print("Error: Failed to create temp directory {s}\n", .{tmp_dir});
+        std.process.exit(1);
+    };
+
+    const stem = blk: {
+        const basename = std.fs.path.basename(opts.input_file);
+        break :blk if (std.mem.endsWith(u8, basename, ".cot"))
+            basename[0 .. basename.len - 4]
+        else
+            basename;
+    };
+    const tmp_output = std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_dir, stem }) catch {
+        std.debug.print("Error: Allocation failed\n", .{});
+        std.process.exit(1);
+    };
+
+    compileAndLink(allocator, opts.input_file, tmp_output, opts.target, false, true);
+
+    // Run the compiled executable
+    var run_args = std.ArrayListUnmanaged([]const u8){};
+    run_args.append(allocator, tmp_output) catch {
+        std.debug.print("Error: Allocation failed\n", .{});
+        std.process.exit(1);
+    };
+    for (opts.program_args) |parg| {
+        run_args.append(allocator, parg) catch {
+            std.debug.print("Error: Allocation failed\n", .{});
+            std.process.exit(1);
+        };
+    }
+
+    var child = std.process.Child.init(run_args.items, allocator);
+    // stdin/stdout/stderr default to .Inherit
+    const result = child.spawnAndWait() catch |e| {
+        std.debug.print("Error: Failed to run program: {any}\n", .{e});
+        cleanup(tmp_dir);
+        std.process.exit(1);
+    };
+
+    // Clean up temp
+    cleanup(tmp_dir);
+
+    // Forward exit code
+    switch (result) {
+        .Exited => |code| std.process.exit(code),
+        .Signal => |sig| {
+            std.debug.print("Program killed by signal: {d}\n", .{sig});
+            std.process.exit(1);
+        },
+        else => std.process.exit(1),
+    }
+}
+
+fn testCommand(allocator: std.mem.Allocator, opts: cli.TestOptions) void {
+    if (opts.target.isWasm()) {
+        std.debug.print("Error: 'cot test' does not support --target=wasm32\n", .{});
+        std.process.exit(1);
+    }
+
+    // Compile to temp directory
+    const tmp_dir = "/tmp/cot-run";
+    std.fs.cwd().makePath(tmp_dir) catch {
+        std.debug.print("Error: Failed to create temp directory {s}\n", .{tmp_dir});
+        std.process.exit(1);
+    };
+
+    const stem = blk: {
+        const basename = std.fs.path.basename(opts.input_file);
+        break :blk if (std.mem.endsWith(u8, basename, ".cot"))
+            basename[0 .. basename.len - 4]
+        else
+            basename;
+    };
+    const tmp_output = std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_dir, stem }) catch {
+        std.debug.print("Error: Allocation failed\n", .{});
+        std.process.exit(1);
+    };
+
+    compileAndLink(allocator, opts.input_file, tmp_output, opts.target, true, true);
+
+    // Run the test executable
+    var child = std.process.Child.init(&.{tmp_output}, allocator);
+    // stdin/stdout/stderr default to .Inherit
+    const result = child.spawnAndWait() catch |e| {
+        std.debug.print("Error: Failed to run tests: {any}\n", .{e});
+        cleanup(tmp_dir);
+        std.process.exit(1);
+    };
+
+    cleanup(tmp_dir);
+
+    switch (result) {
+        .Exited => |code| {
+            if (code == 0) {
+                std.debug.print("Tests passed\n", .{});
+            }
+            std.process.exit(code);
+        },
+        .Signal => |sig| {
+            std.debug.print("Test program killed by signal: {d}\n", .{sig});
+            std.process.exit(1);
+        },
+        else => std.process.exit(1),
+    }
+}
+
+fn cleanup(dir: []const u8) void {
+    std.fs.cwd().deleteTree(dir) catch {};
+}
+
+/// Core compile + link logic shared by build, run, and test commands.
+fn compileAndLink(
+    allocator: std.mem.Allocator,
+    input_file: []const u8,
+    output_name: []const u8,
+    compile_target: Target,
+    test_mode: bool,
+    quiet: bool,
+) void {
     var compile_driver = Driver.init(allocator);
     compile_driver.setTarget(compile_target);
     if (test_mode) compile_driver.setTestMode(true);
 
-    const code = compile_driver.compileFile(actual_input) catch |e| {
+    const code = compile_driver.compileFile(input_file) catch |e| {
         std.debug.print("Compilation failed: {any}\n", .{e});
-        return;
+        std.process.exit(1);
     };
     defer allocator.free(code);
 
     // For Wasm target, output .wasm directly (no linking needed)
     if (compile_target.isWasm()) {
         const wasm_path = if (std.mem.endsWith(u8, output_name, ".wasm"))
-            try allocator.dupe(u8, output_name)
+            allocator.dupe(u8, output_name) catch {
+                std.debug.print("Error: Allocation failed\n", .{});
+                std.process.exit(1);
+            }
         else
-            try std.fmt.allocPrint(allocator, "{s}.wasm", .{output_name});
-        defer allocator.free(wasm_path);
+            std.fmt.allocPrint(allocator, "{s}.wasm", .{output_name}) catch {
+                std.debug.print("Error: Allocation failed\n", .{});
+                std.process.exit(1);
+            };
 
         std.fs.cwd().writeFile(.{ .sub_path = wasm_path, .data = code }) catch |e| {
             std.debug.print("Failed to write Wasm file: {any}\n", .{e});
-            return;
+            std.process.exit(1);
         };
-        std.debug.print("Success: {s} ({d} bytes)\n", .{ wasm_path, code.len });
+        if (!quiet) std.debug.print("Success: {s} ({d} bytes)\n", .{ wasm_path, code.len });
         return;
     }
 
     // Native target: write object file and link
     const obj_path = if (std.mem.endsWith(u8, output_name, ".o"))
-        try allocator.dupe(u8, output_name)
+        allocator.dupe(u8, output_name) catch {
+            std.debug.print("Error: Allocation failed\n", .{});
+            std.process.exit(1);
+        }
     else
-        try std.fmt.allocPrint(allocator, "{s}.o", .{output_name});
-    defer allocator.free(obj_path);
+        std.fmt.allocPrint(allocator, "{s}.o", .{output_name}) catch {
+            std.debug.print("Error: Allocation failed\n", .{});
+            std.process.exit(1);
+        };
 
     std.fs.cwd().writeFile(.{ .sub_path = obj_path, .data = code }) catch |e| {
         std.debug.print("Failed to write object file: {any}\n", .{e});
-        return;
+        std.process.exit(1);
     };
-    std.debug.print("Wrote: {s}\n", .{obj_path});
 
-    if (std.mem.endsWith(u8, output_name, ".o")) return;
+    if (std.mem.endsWith(u8, output_name, ".o")) {
+        if (!quiet) std.debug.print("Success: {s}\n", .{output_name});
+        return;
+    }
 
     // Link with zig cc
     const runtime_path = findRuntimePath(allocator, compile_target) catch null;
-    defer if (runtime_path) |p| allocator.free(p);
 
     var link_args = std.ArrayListUnmanaged([]const u8){};
-    defer link_args.deinit(allocator);
 
     if (compile_target.arch != Target.native().arch or compile_target.os != Target.native().os) {
         const triple: []const u8 = switch (compile_target.os) {
@@ -190,22 +307,37 @@ pub fn main() !void {
             .macos => if (compile_target.arch == .arm64) "aarch64-macos" else "x86_64-macos",
             .freestanding => unreachable, // Handled above with isWasm()
         };
-        try link_args.appendSlice(allocator, &.{ "zig", "cc", "-target", triple, "-o", output_name, obj_path });
+        link_args.appendSlice(allocator, &.{ "zig", "cc", "-target", triple, "-o", output_name, obj_path }) catch {
+            std.debug.print("Error: Allocation failed\n", .{});
+            std.process.exit(1);
+        };
     } else {
-        try link_args.appendSlice(allocator, &.{ "zig", "cc", "-o", output_name, obj_path });
+        link_args.appendSlice(allocator, &.{ "zig", "cc", "-o", output_name, obj_path }) catch {
+            std.debug.print("Error: Allocation failed\n", .{});
+            std.process.exit(1);
+        };
     }
 
-    if (runtime_path) |rp| try link_args.append(allocator, rp);
+    if (runtime_path) |rp| link_args.append(allocator, rp) catch {
+        std.debug.print("Error: Allocation failed\n", .{});
+        std.process.exit(1);
+    };
     if (compile_target.os == .macos) {
-        try link_args.appendSlice(allocator, &.{ "-Wl,-stack_size,0x10000000", "-lSystem" });
+        link_args.appendSlice(allocator, &.{ "-Wl,-stack_size,0x10000000", "-lSystem" }) catch {
+            std.debug.print("Error: Allocation failed\n", .{});
+            std.process.exit(1);
+        };
     } else if (compile_target.os == .linux) {
-        try link_args.append(allocator, "-lc");
+        link_args.append(allocator, "-lc") catch {
+            std.debug.print("Error: Allocation failed\n", .{});
+            std.process.exit(1);
+        };
     }
 
     var child = std.process.Child.init(link_args.items, allocator);
     const result = child.spawnAndWait() catch |e| {
         std.debug.print("Linker failed: {any}\n", .{e});
-        return;
+        std.process.exit(1);
     };
 
     if (result.Exited == 0) {
@@ -213,9 +345,10 @@ pub fn main() !void {
             defer f.close();
             f.chmod(0o755) catch {};
         } else |_| {}
-        std.debug.print("Success: {s}\n", .{output_name});
+        if (!quiet) std.debug.print("Success: {s}\n", .{output_name});
     } else {
         std.debug.print("Link failed with code: {d}\n", .{result.Exited});
+        std.process.exit(1);
     }
 }
 
