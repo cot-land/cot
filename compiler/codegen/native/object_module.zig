@@ -10,7 +10,7 @@
 //!   3. Converts relocations to object file format
 //!   4. Writes the final object file
 //!
-//! Reference: ~/learning/wasmtime/cranelift/object/src/backend.rs
+//! Reference: references/wasmtime/cranelift/object/src/backend.rs
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

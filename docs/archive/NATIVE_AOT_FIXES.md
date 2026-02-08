@@ -51,13 +51,13 @@ Every fix in this document MUST follow the process in `TROUBLESHOOTING.md`. The 
 
 | Our Code | Reference Code |
 |----------|----------------|
-| `compiler/codegen/native/wasm_to_clif/` | `~/learning/wasmtime/crates/cranelift/src/translate/` |
-| `compiler/codegen/native/wasm_to_clif/translator.zig` | `~/learning/wasmtime/crates/cranelift/src/translate/code_translator.rs` |
-| `compiler/codegen/native/wasm_to_clif/func_translator.zig` | `~/learning/wasmtime/crates/cranelift/src/translate/func_translator.rs` |
-| `compiler/codegen/native/wasm_to_clif/stack.zig` | `~/learning/wasmtime/crates/cranelift/src/translate/state.rs` |
-| `compiler/ir/clif/` | `~/learning/wasmtime/cranelift/codegen/src/ir/` |
-| `compiler/codegen/native/machinst/` | `~/learning/wasmtime/cranelift/codegen/src/machinst/` |
-| `compiler/codegen/native/isa/aarch64/` | `~/learning/wasmtime/cranelift/codegen/src/isa/aarch64/` |
+| `compiler/codegen/native/wasm_to_clif/` | `references/wasmtime/crates/cranelift/src/translate/` |
+| `compiler/codegen/native/wasm_to_clif/translator.zig` | `references/wasmtime/crates/cranelift/src/translate/code_translator.rs` |
+| `compiler/codegen/native/wasm_to_clif/func_translator.zig` | `references/wasmtime/crates/cranelift/src/translate/func_translator.rs` |
+| `compiler/codegen/native/wasm_to_clif/stack.zig` | `references/wasmtime/crates/cranelift/src/translate/state.rs` |
+| `compiler/ir/clif/` | `references/wasmtime/cranelift/codegen/src/ir/` |
+| `compiler/codegen/native/machinst/` | `references/wasmtime/cranelift/codegen/src/machinst/` |
+| `compiler/codegen/native/isa/aarch64/` | `references/wasmtime/cranelift/codegen/src/isa/aarch64/` |
 
 ---
 
@@ -88,7 +88,7 @@ test_while_sum        -> expect 55 (sum 1 to 10)
 ```
 
 **DO NOT invent the test harness design.** Look at how Cranelift's filetest infrastructure works:
-- Reference: `~/learning/wasmtime/cranelift/filetests/`
+- Reference: `references/wasmtime/cranelift/filetests/`
 
 ---
 
@@ -254,7 +254,7 @@ for (old_values) |v| {  // CRASH: old_values is stale pointer
 
 ### Fix Applied (Following TROUBLESHOOTING.md methodology)
 
-1. **Found reference:** `~/learning/wasmtime/cranelift/entity/src/list.rs` (EntityList implementation)
+1. **Found reference:** `references/wasmtime/cranelift/entity/src/list.rs` (EntityList implementation)
 2. **Identified difference:** Cranelift modifies lists in-place and handles reallocation carefully
 3. **Applied fix:** Use indices instead of pointers to safely copy old values:
 
@@ -299,8 +299,8 @@ fn main() int {
 - `compiler/codegen/native/isa/aarch64/lower.zig` (branch lowering)
 
 **Reference files:**
-- `~/learning/wasmtime/crates/cranelift/src/translate/code_translator.rs`
-- `~/learning/wasmtime/cranelift/codegen/src/isa/aarch64/lower.isle`
+- `references/wasmtime/crates/cranelift/src/translate/code_translator.rs`
+- `references/wasmtime/cranelift/codegen/src/isa/aarch64/lower.isle`
 
 ### Investigation Steps (Follow TROUBLESHOOTING.md)
 
@@ -383,7 +383,7 @@ fn main() int {
 ```
 
 **Reference for struct handling:**
-- `~/learning/wasmtime/crates/cranelift/src/translate/code_translator.rs` (memory operations)
+- `references/wasmtime/crates/cranelift/src/translate/code_translator.rs` (memory operations)
 
 ---
 
@@ -479,10 +479,10 @@ The issue was that vmctx (which provides access to Wasm linear memory, including
 ### Fix Applied (Following TROUBLESHOOTING.md methodology)
 
 **Reference files found:**
-1. `~/learning/wasmtime/cranelift/codegen/src/isa/aarch64/inst/regs.rs:19` - `PINNED_REG = 21`
-2. `~/learning/wasmtime/cranelift/codegen/src/isa/aarch64/lower.rs:130-131` - `maybe_pinned_reg()`
-3. `~/learning/wasmtime/cranelift/codegen/src/isa/aarch64/abi.rs:1538-1634` - `create_reg_env()`
-4. `~/learning/wasmtime/cranelift/codegen/src/isa/aarch64/lower.isle:2788-2792` - `get_pinned_reg`, `set_pinned_reg`
+1. `references/wasmtime/cranelift/codegen/src/isa/aarch64/inst/regs.rs:19` - `PINNED_REG = 21`
+2. `references/wasmtime/cranelift/codegen/src/isa/aarch64/lower.rs:130-131` - `maybe_pinned_reg()`
+3. `references/wasmtime/cranelift/codegen/src/isa/aarch64/abi.rs:1538-1634` - `create_reg_env()`
+4. `references/wasmtime/cranelift/codegen/src/isa/aarch64/lower.isle:2788-2792` - `get_pinned_reg`, `set_pinned_reg`
 
 **Cranelift's solution:**
 1. Reserve x21 as the "pinned register" for vmctx
@@ -595,10 +595,10 @@ factorial(3) returns 4 instead of 6
 ### Root Cause Analysis (Following TROUBLESHOOTING.md)
 
 **Reference files:**
-1. `~/learning/wasmtime/cranelift/codegen/src/machinst/vcode.rs:687-745` - `compute_clobbers_and_function_calls()`
-2. `~/learning/wasmtime/cranelift/codegen/src/isa/aarch64/abi.rs:717-944` - `gen_clobber_save()`
-3. `~/learning/wasmtime/cranelift/codegen/src/isa/aarch64/abi.rs:946-1032` - `gen_clobber_restore()`
-4. `~/learning/wasmtime/cranelift/codegen/src/isa/aarch64/abi.rs:1277-1322` - `is_reg_saved_in_prologue()`
+1. `references/wasmtime/cranelift/codegen/src/machinst/vcode.rs:687-745` - `compute_clobbers_and_function_calls()`
+2. `references/wasmtime/cranelift/codegen/src/isa/aarch64/abi.rs:717-944` - `gen_clobber_save()`
+3. `references/wasmtime/cranelift/codegen/src/isa/aarch64/abi.rs:946-1032` - `gen_clobber_restore()`
+4. `references/wasmtime/cranelift/codegen/src/isa/aarch64/abi.rs:1277-1322` - `is_reg_saved_in_prologue()`
 
 **The problem:**
 

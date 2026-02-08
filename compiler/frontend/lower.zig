@@ -45,7 +45,7 @@ pub const Lowerer = struct {
 
     /// Zig SRET pattern: functions returning structs/tuples > 8 bytes use a hidden
     /// first parameter for the return value. Caller allocates space, passes pointer.
-    /// Reference: ~/learning/zig/src/codegen/wasm/CodeGen.zig:1354 firstParamSRet()
+    /// Reference: references/zig/src/codegen/wasm/CodeGen.zig:1354 firstParamSRet()
     fn needsSret(self: *const Lowerer, type_idx: TypeIndex) bool {
         const info = self.type_reg.get(type_idx);
         return (info == .struct_type or info == .tuple) and self.type_reg.sizeOf(type_idx) > 8;
@@ -984,7 +984,7 @@ pub const Lowerer = struct {
         const slice_node = try self.lowerExprNode(value_idx);
         if (slice_node == ir.null_node) return;
         // Go slice layout: { array unsafe.Pointer; len int; cap int } = 24 bytes
-        // Reference: ~/learning/go/src/runtime/slice.go lines 16-20
+        // Reference: references/go/src/runtime/slice.go lines 16-20
         const slice_info = self.type_reg.get(slice_type);
         const elem_type = if (slice_info == .slice) slice_info.slice.elem else TypeRegistry.U8;
         const ptr_type = self.type_reg.makePointer(elem_type) catch TypeRegistry.VOID;

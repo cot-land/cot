@@ -1,0 +1,20 @@
+[submodule "references/go"]
+	path = references/go
+	url = https://github.com/golang/go.git
+	shallow = true
+[submodule "references/wasmtime"]
+	path = references/wasmtime
+	url = https://github.com/bytecodealliance/wasmtime.git
+	shallow = true
+[submodule "references/regalloc2"]
+	path = references/regalloc2
+	url = https://github.com/bytecodealliance/regalloc2.git
+	shallow = true
+[submodule "references/swift"]
+	path = references/swift
+	url = https://github.com/swiftlang/swift.git
+	shallow = true
+[submodule "references/zig"]
+	path = references/zig
+	url = https://github.com/ziglang/zig.git
+	shallow = true

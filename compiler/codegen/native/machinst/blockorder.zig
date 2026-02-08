@@ -53,7 +53,7 @@
 //! (never actually materialized, just defined by a "successors" function), and
 //! compute the reverse postorder.
 //!
-//! Reference: ~/learning/wasmtime/cranelift/codegen/src/machinst/blockorder.rs
+//! Reference: references/wasmtime/cranelift/codegen/src/machinst/blockorder.rs
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

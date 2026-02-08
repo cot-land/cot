@@ -11,7 +11,7 @@
 //! - Island/veneer emission for out-of-range jumps
 //! - Constant pool management
 //!
-//! Reference: ~/learning/wasmtime/cranelift/codegen/src/machinst/buffer.rs
+//! Reference: references/wasmtime/cranelift/codegen/src/machinst/buffer.rs
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

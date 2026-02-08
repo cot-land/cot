@@ -786,7 +786,7 @@ After Task 4.10 integration is working, you MUST come back and complete every it
 **For Linux Claude**: This section provides step-by-step instructions for porting the AMD64 backend, following the established ARM64 pattern.
 
 #### Prerequisites
-- Cranelift source at `~/learning/wasmtime/cranelift/codegen/src/isa/x64/`
+- Cranelift source at `references/wasmtime/cranelift/codegen/src/isa/x64/`
 - ARM64 reference at `compiler/codegen/native/isa/aarch64/inst/`
 
 #### File Structure (mirror ARM64)

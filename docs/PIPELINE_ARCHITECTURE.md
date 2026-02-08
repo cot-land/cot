@@ -92,9 +92,9 @@ This document maps **every stage of the Cot compilation pipeline** to its refere
 - Builds SSA form (Go's SSA construction patterns)
 
 **Key files in Go reference:**
-- `~/learning/go/src/cmd/compile/internal/ssa/` — SSA value, block, function types
-- `~/learning/go/src/cmd/compile/internal/ssa/rewritegeneric.go` — algebraic rewrites
-- `~/learning/go/src/cmd/compile/internal/ssa/rewritedec.go` — compound type decomposition
+- `references/go/src/cmd/compile/internal/ssa/` — SSA value, block, function types
+- `references/go/src/cmd/compile/internal/ssa/rewritegeneric.go` — algebraic rewrites
+- `references/go/src/cmd/compile/internal/ssa/rewritedec.go` — compound type decomposition
 
 ### Stage 2: Wasm Codegen (SSA → Wasm bytecode)
 
@@ -115,9 +115,9 @@ This document maps **every stage of the Cot compilation pipeline** to its refere
 - This stage runs for BOTH targets (Wasm and native use this output)
 
 **Key files in Go reference:**
-- `~/learning/go/src/cmd/compile/internal/wasm/ssa.go` — SSA op → Wasm instruction mapping
-- `~/learning/go/src/cmd/internal/obj/wasm/wasmobj.go` — Wasm binary format encoding
-- `~/learning/go/src/cmd/link/internal/wasm/asm.go` — Wasm section layout, import handling
+- `references/go/src/cmd/compile/internal/wasm/ssa.go` — SSA op → Wasm instruction mapping
+- `references/go/src/cmd/internal/obj/wasm/wasmobj.go` — Wasm binary format encoding
+- `references/go/src/cmd/link/internal/wasm/asm.go` — Wasm section layout, import handling
 
 **ARC runtime functions** (`cot_alloc`, `cot_retain`, `cot_release`) are generated as Wasm bytecode at this stage by `arc.zig`. They become regular Wasm functions in the module. The ARC pattern is ported from **Swift** (`HeapObject.cpp`), but the implementation is Wasm bytecode using Go's codegen patterns.
 
@@ -164,9 +164,9 @@ This document maps **every stage of the Cot compilation pipeline** to its refere
 - Manages the VMContext (heap base pointer, globals)
 
 **Key Cranelift files:**
-- `~/learning/wasmtime/crates/cranelift/src/translate/` — Wasm → CLIF translation
-- `~/learning/wasmtime/cranelift/codegen/src/ir/` — CLIF IR types
-- `~/learning/wasmtime/cranelift/frontend/src/frontend.rs` — SSA construction with block params
+- `references/wasmtime/crates/cranelift/src/translate/` — Wasm → CLIF translation
+- `references/wasmtime/cranelift/codegen/src/ir/` — CLIF IR types
+- `references/wasmtime/cranelift/frontend/src/frontend.rs` — SSA construction with block params
 
 ### Stage 5: Machine Instruction Lowering (native path only)
 
@@ -296,7 +296,7 @@ Host provides at instantiation:
 
 **Go reference for import section generation:**
 ```go
-// ~/learning/go/src/cmd/link/internal/wasm/asm.go:154-181
+// references/go/src/cmd/link/internal/wasm/asm.go:154-181
 for _, fn := range ctxt.Textp {
     relocs := ldr.Relocs(fn)
     for ri := 0; ri < relocs.Count(); ri++ {
@@ -307,7 +307,7 @@ for _, fn := range ctxt.Textp {
     }
 }
 
-// ~/learning/go/src/cmd/link/internal/wasm/asm.go:316-334
+// references/go/src/cmd/link/internal/wasm/asm.go:316-334
 func writeImportSec(ctxt *ld.Link, hostImports []*wasmFunc) {
     writeUleb128(ctxt.Out, uint64(len(hostImports)))
     for _, fn := range hostImports {
@@ -348,7 +348,7 @@ Linker resolves "_write" against libc → linked into executable
 **Approach A: Full VMContext (what Cranelift/Wasmtime does)**
 - Imported functions are called indirectly via function pointers stored in VMContext
 - Runtime populates VMContext with function addresses at module instantiation
-- Reference: `~/learning/wasmtime/crates/cranelift/src/translate/func_environ.rs`
+- Reference: `references/wasmtime/crates/cranelift/src/translate/func_environ.rs`
 - This is for JIT/runtime scenarios — overkill for AOT
 
 **Approach B: Undefined symbols (what AOT compilers do)**
@@ -642,18 +642,18 @@ These patterns have confused Claude repeatedly. Read before debugging.
 
 | When working on... | Port from... | Reference location |
 |--------------------|-------------|-------------------|
-| Frontend (parser, checker) | Zig language spec | `~/learning/zig/` |
-| SSA construction | Go compiler | `~/learning/go/src/cmd/compile/internal/ssa/` |
-| Wasm codegen | Go Wasm backend | `~/learning/go/src/cmd/compile/internal/wasm/` |
-| Wasm linking | Go Wasm linker | `~/learning/go/src/cmd/link/internal/wasm/` |
-| Wasm import handling | Go Wasm linker | `~/learning/go/src/cmd/link/internal/wasm/asm.go:154-334` |
+| Frontend (parser, checker) | Zig language spec | `references/zig/` |
+| SSA construction | Go compiler | `references/go/src/cmd/compile/internal/ssa/` |
+| Wasm codegen | Go Wasm backend | `references/go/src/cmd/compile/internal/wasm/` |
+| Wasm linking | Go Wasm linker | `references/go/src/cmd/link/internal/wasm/` |
+| Wasm import handling | Go Wasm linker | `references/go/src/cmd/link/internal/wasm/asm.go:154-334` |
 | ARC runtime | Swift | Swift `stdlib/public/runtime/HeapObject.cpp` |
-| Wasm → CLIF translation | Cranelift | `~/learning/wasmtime/crates/cranelift/src/translate/` |
-| CLIF IR types | Cranelift | `~/learning/wasmtime/cranelift/codegen/src/ir/` |
-| Machine lowering | Cranelift | `~/learning/wasmtime/cranelift/codegen/src/isa/aarch64/` |
-| Register allocation | regalloc2 | `~/learning/regalloc2/src/` |
-| Code emission | Cranelift | `~/learning/wasmtime/cranelift/codegen/src/isa/aarch64/inst/emit.rs` |
-| Object file generation | cranelift-object | `~/learning/wasmtime/cranelift/object/src/backend.rs` |
+| Wasm → CLIF translation | Cranelift | `references/wasmtime/crates/cranelift/src/translate/` |
+| CLIF IR types | Cranelift | `references/wasmtime/cranelift/codegen/src/ir/` |
+| Machine lowering | Cranelift | `references/wasmtime/cranelift/codegen/src/isa/aarch64/` |
+| Register allocation | regalloc2 | `references/regalloc2/src/` |
+| Code emission | Cranelift | `references/wasmtime/cranelift/codegen/src/isa/aarch64/inst/emit.rs` |
+| Object file generation | cranelift-object | `references/wasmtime/cranelift/object/src/backend.rs` |
 | Memory allocator | Go + Zig | Go `runtime/mem_wasm.go`, Zig `lib/std/heap/WasmAllocator.zig` |
-| Extern fn (native) | Cranelift-object | `~/learning/wasmtime/cranelift/object/src/backend.rs` |
-| Extern fn (Wasm) | Go linker | `~/learning/go/src/cmd/link/internal/wasm/asm.go` |
+| Extern fn (native) | Cranelift-object | `references/wasmtime/cranelift/object/src/backend.rs` |
+| Extern fn (Wasm) | Go linker | `references/go/src/cmd/link/internal/wasm/asm.go` |

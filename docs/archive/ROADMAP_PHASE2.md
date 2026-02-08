@@ -5,7 +5,7 @@
 **CRITICAL: Copy Go/Swift code exactly. Do NOT invent logic.**
 
 This document provides extensive reference material from Go and Swift compilers. Each task includes:
-1. Exact file paths and line numbers in `~/learning/go/` and `~/learning/swift/`
+1. Exact file paths and line numbers in `references/go/` and `references/swift/`
 2. Code snippets to copy
 3. Test cases to write first (TDD)
 4. Implementation checklist
@@ -23,9 +23,9 @@ This document provides extensive reference material from Go and Swift compilers.
 Swift inserts ARC calls during **SIL generation**, not as a separate pass. The key abstraction is `ManagedValue` which pairs a value with a cleanup handle.
 
 **Files to study:**
-- `/Users/johnc/learning/swift/lib/SILGen/ManagedValue.h` (lines 40-456)
-- `/Users/johnc/learning/swift/lib/SILGen/Cleanup.h` (lines 85-317)
-- `/Users/johnc/learning/swift/lib/SILGen/SILGenExpr.cpp` (lines 70-109)
+- `references/swift/lib/SILGen/ManagedValue.h` (lines 40-456)
+- `references/swift/lib/SILGen/Cleanup.h` (lines 85-317)
+- `references/swift/lib/SILGen/SILGenExpr.cpp` (lines 70-109)
 
 **Swift's ManagedValue (ManagedValue.h:59-95):**
 ```cpp
@@ -165,9 +165,9 @@ fn main() i64 {
 Go uses escape analysis to decide heap vs stack, then emits `newobject` calls.
 
 **Files to study:**
-- `/Users/johnc/learning/go/src/cmd/compile/internal/ssagen/ssa.go` (lines 864-889)
-- `/Users/johnc/learning/go/src/runtime/malloc.go` (lines 2208-2213)
-- `/Users/johnc/learning/go/src/cmd/compile/internal/walk/builtin.go` (lines 601-616)
+- `references/go/src/cmd/compile/internal/ssagen/ssa.go` (lines 864-889)
+- `references/go/src/runtime/malloc.go` (lines 2208-2213)
+- `references/go/src/cmd/compile/internal/walk/builtin.go` (lines 601-616)
 
 **Go's newObject (ssagen/ssa.go:864-877):**
 ```go
@@ -319,8 +319,8 @@ fn main() i64 {
 Swift stores destructor pointer in type metadata and calls it via indirect call.
 
 **Files to study:**
-- `/Users/johnc/learning/swift/stdlib/public/runtime/HeapObject.cpp` (lines 216-268)
-- `/Users/johnc/learning/swift/include/swift/Runtime/Metadata.h`
+- `references/swift/stdlib/public/runtime/HeapObject.cpp` (lines 216-268)
+- `references/swift/include/swift/Runtime/Metadata.h`
 
 **Swift's release path (HeapObject.cpp):**
 ```cpp
@@ -443,9 +443,9 @@ fn main() i64 {
 #### Reference: Go's Approach
 
 **Files to study:**
-- `/Users/johnc/learning/go/src/runtime/string.go` (lines 23-79)
-- `/Users/johnc/learning/go/src/cmd/compile/internal/walk/expr.go` (line 519)
-- `/Users/johnc/learning/go/src/internal/bytealg/compare_generic.go` (lines 55-76)
+- `references/go/src/runtime/string.go` (lines 23-79)
+- `references/go/src/cmd/compile/internal/walk/expr.go` (line 519)
+- `references/go/src/internal/bytealg/compare_generic.go` (lines 55-76)
 
 **Go's concatstrings (runtime/string.go:28-59):**
 ```go
@@ -615,8 +615,8 @@ fn main() i64 {
 #### Reference: Go's Approach
 
 **Files to study:**
-- `/Users/johnc/learning/go/src/runtime/slice.go` (lines 102-118, 178-287)
-- `/Users/johnc/learning/go/src/cmd/compile/internal/walk/builtin.go` (lines 44-128)
+- `references/go/src/runtime/slice.go` (lines 102-118, 178-287)
+- `references/go/src/cmd/compile/internal/walk/builtin.go` (lines 44-128)
 
 **Go's slice layout (runtime/slice.go:16-20):**
 ```go
@@ -790,7 +790,7 @@ fn main() i64 {
 #### Reference: Go's Approach
 
 **Files to study:**
-- `/Users/johnc/learning/go/src/cmd/compile/internal/walk/range.go` (lines 100-239)
+- `references/go/src/cmd/compile/internal/walk/range.go` (lines 100-239)
 
 **Go's range lowering (walk/range.go:162-208):**
 ```go
@@ -964,21 +964,21 @@ fn main() i64 {
 ### Go Compiler
 | Topic | Path |
 |-------|------|
-| Escape analysis | `~/learning/go/src/cmd/compile/internal/escape/escape.go` |
-| SSA generation | `~/learning/go/src/cmd/compile/internal/ssagen/ssa.go` |
-| Walk/lowering | `~/learning/go/src/cmd/compile/internal/walk/` |
-| Runtime malloc | `~/learning/go/src/runtime/malloc.go` |
-| Runtime strings | `~/learning/go/src/runtime/string.go` |
-| Runtime slices | `~/learning/go/src/runtime/slice.go` |
+| Escape analysis | `references/go/src/cmd/compile/internal/escape/escape.go` |
+| SSA generation | `references/go/src/cmd/compile/internal/ssagen/ssa.go` |
+| Walk/lowering | `references/go/src/cmd/compile/internal/walk/` |
+| Runtime malloc | `references/go/src/runtime/malloc.go` |
+| Runtime strings | `references/go/src/runtime/string.go` |
+| Runtime slices | `references/go/src/runtime/slice.go` |
 
 ### Swift Compiler
 | Topic | Path |
 |-------|------|
-| ManagedValue | `~/learning/swift/lib/SILGen/ManagedValue.h` |
-| Cleanup system | `~/learning/swift/lib/SILGen/Cleanup.h` |
-| ARC insertion | `~/learning/swift/lib/SILGen/SILGenExpr.cpp` |
-| ARC optimization | `~/learning/swift/lib/SILOptimizer/ARC/` |
-| Runtime | `~/learning/swift/stdlib/public/runtime/HeapObject.cpp` |
+| ManagedValue | `references/swift/lib/SILGen/ManagedValue.h` |
+| Cleanup system | `references/swift/lib/SILGen/Cleanup.h` |
+| ARC insertion | `references/swift/lib/SILGen/SILGenExpr.cpp` |
+| ARC optimization | `references/swift/lib/SILOptimizer/ARC/` |
+| Runtime | `references/swift/stdlib/public/runtime/HeapObject.cpp` |
 
 ---
 

@@ -93,16 +93,16 @@ Cot Source → Scanner → Parser → Checker → IR → SSA
 | `compiler/codegen/native/machinst/` | CLIF → MachInst lowering | Cranelift `machinst/` |
 | `compiler/codegen/native/isa/aarch64/` | ARM64 backend | Cranelift `isa/aarch64/` |
 | `compiler/codegen/native/isa/x64/` | x64 backend | Cranelift `isa/x64/` |
-| `compiler/codegen/native/regalloc/` | Register allocator (regalloc2 port) | `~/learning/regalloc2/src/` |
+| `compiler/codegen/native/regalloc/` | Register allocator (regalloc2 port) | `references/regalloc2/src/` |
 | `compiler/driver.zig` | Pipeline orchestrator | — |
 | `compiler/lsp/` | Language server (LSP over stdio) | ZLS (Zig Language Server) |
 
 **Reference implementations (copy, don't invent):**
 | Component | Reference Location |
 |-----------|-------------------|
-| Cot → Wasm | `~/learning/go/src/cmd/compile/internal/wasm/` |
-| Wasm → CLIF | `~/learning/wasmtime/crates/cranelift/src/translate/` |
-| CLIF → ARM64 | `~/learning/wasmtime/cranelift/codegen/src/isa/aarch64/` |
+| Cot → Wasm | `references/go/src/cmd/compile/internal/wasm/` |
+| Wasm → CLIF | `references/wasmtime/crates/cranelift/src/translate/` |
+| CLIF → ARM64 | `references/wasmtime/cranelift/codegen/src/isa/aarch64/` |
 | Language semantics | Zig (error unions, defer, comptime) |
 
 ---

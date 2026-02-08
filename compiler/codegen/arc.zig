@@ -3,7 +3,7 @@
 //! Provides reference counting runtime functions following Swift's ARC patterns.
 //! See docs/ARC_DESIGN.md for design rationale.
 //!
-//! Reference: ~/learning/swift/stdlib/public/runtime/HeapObject.cpp
+//! Reference: references/swift/stdlib/public/runtime/HeapObject.cpp
 
 const std = @import("std");
 const wasm = @import("wasm.zig");

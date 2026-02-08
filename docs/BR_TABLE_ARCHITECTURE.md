@@ -81,7 +81,7 @@ if (entryPointLoopBranches.items.len > 0 or numResumePoints > 0) {
 
 ### 1. Go Compiler (Cot → Wasm source)
 
-**File**: `~/learning/go/src/cmd/internal/obj/wasm/wasmobj.go` lines 690-724
+**File**: `references/go/src/cmd/internal/obj/wasm/wasmobj.go` lines 690-724
 
 ```go
 // Go's dispatch loop pattern (lines 704-711):
@@ -100,7 +100,7 @@ if numResumePoints > 0 {
 
 ### 2. Cranelift (Wasm → CLIF source)
 
-**File**: `~/learning/wasmtime/crates/cranelift/src/translate/code_translator.rs` lines 485-569
+**File**: `references/wasmtime/crates/cranelift/src/translate/code_translator.rs` lines 485-569
 
 ```rust
 Operator::BrTable { targets } => {
@@ -114,7 +114,7 @@ Operator::BrTable { targets } => {
 
 ### 3. Cranelift ARM64 Backend (CLIF → Native source)
 
-**File**: `~/learning/wasmtime/cranelift/codegen/src/isa/aarch64/lower.rs`
+**File**: `references/wasmtime/cranelift/codegen/src/isa/aarch64/lower.rs`
 
 **Cot's copy**: `compiler/codegen/native/isa/aarch64/lower.zig` lines 282-369
 

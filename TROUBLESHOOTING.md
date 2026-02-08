@@ -27,18 +27,18 @@ Every line of Cot is ported from somewhere. There are NO exceptions.
 | Pipeline Stage | Our Code | Reference Code | Reference Location |
 |----------------|----------|----------------|-------------------|
 | Cot Source → AST | `compiler/frontend/` | - | Original (syntax is ours) |
-| AST → SSA IR | `compiler/frontend/ssa_builder.zig` | Go SSA | `~/learning/go/src/cmd/compile/internal/ssa/` |
-| SSA Passes | `compiler/ssa/passes/` | Go SSA passes | `~/learning/go/src/cmd/compile/internal/ssa/rewrite*.go` |
-| SSA → Wasm Ops | `compiler/ssa/passes/lower_wasm.zig` | Go Wasm backend | `~/learning/go/src/cmd/compile/internal/wasm/ssa.go` |
-| Wasm Ops → Binary | `compiler/codegen/wasm/` | Go Wasm asm | `~/learning/go/src/cmd/internal/obj/wasm/wasmobj.go` |
-| Wasm Binary → CLIF | `compiler/codegen/native/wasm_to_clif/` | Cranelift Wasm | `~/learning/wasmtime/crates/cranelift/src/translate/` |
-| CLIF IR Types | `compiler/ir/clif/` | Cranelift IR | `~/learning/wasmtime/cranelift/codegen/src/ir/` |
-| CLIF → MachInst | `compiler/codegen/native/machinst/` | Cranelift machinst | `~/learning/wasmtime/cranelift/codegen/src/machinst/` |
-| MachInst ARM64 | `compiler/codegen/native/isa/aarch64/` | Cranelift ARM64 | `~/learning/wasmtime/cranelift/codegen/src/isa/aarch64/` |
-| MachInst x64 | `compiler/codegen/native/isa/x64/` | Cranelift x64 | `~/learning/wasmtime/cranelift/codegen/src/isa/x86/` |
-| Register Alloc | `compiler/codegen/native/regalloc/` | regalloc2 | `~/learning/wasmtime/cranelift/codegen/src/machinst/reg.rs` + regalloc2 crate |
-| **ARC Insertion** | `compiler/frontend/arc_insertion.zig` | **Swift SILGen** | `~/learning/swift/lib/SILGen/` (ManagedValue.h, Cleanup.h, SILGenExpr.cpp) |
-| ARC Runtime | `compiler/codegen/wasm/arc.zig` | Swift ARC | `~/learning/swift/stdlib/public/runtime/HeapObject.cpp` |
+| AST → SSA IR | `compiler/frontend/ssa_builder.zig` | Go SSA | `references/go/src/cmd/compile/internal/ssa/` |
+| SSA Passes | `compiler/ssa/passes/` | Go SSA passes | `references/go/src/cmd/compile/internal/ssa/rewrite*.go` |
+| SSA → Wasm Ops | `compiler/ssa/passes/lower_wasm.zig` | Go Wasm backend | `references/go/src/cmd/compile/internal/wasm/ssa.go` |
+| Wasm Ops → Binary | `compiler/codegen/wasm/` | Go Wasm asm | `references/go/src/cmd/internal/obj/wasm/wasmobj.go` |
+| Wasm Binary → CLIF | `compiler/codegen/native/wasm_to_clif/` | Cranelift Wasm | `references/wasmtime/crates/cranelift/src/translate/` |
+| CLIF IR Types | `compiler/ir/clif/` | Cranelift IR | `references/wasmtime/cranelift/codegen/src/ir/` |
+| CLIF → MachInst | `compiler/codegen/native/machinst/` | Cranelift machinst | `references/wasmtime/cranelift/codegen/src/machinst/` |
+| MachInst ARM64 | `compiler/codegen/native/isa/aarch64/` | Cranelift ARM64 | `references/wasmtime/cranelift/codegen/src/isa/aarch64/` |
+| MachInst x64 | `compiler/codegen/native/isa/x64/` | Cranelift x64 | `references/wasmtime/cranelift/codegen/src/isa/x86/` |
+| Register Alloc | `compiler/codegen/native/regalloc/` | regalloc2 | `references/wasmtime/cranelift/codegen/src/machinst/reg.rs` + regalloc2 crate |
+| **ARC Insertion** | `compiler/frontend/arc_insertion.zig` | **Swift SILGen** | `references/swift/lib/SILGen/` (ManagedValue.h, Cleanup.h, SILGenExpr.cpp) |
+| ARC Runtime | `compiler/codegen/wasm/arc.zig` | Swift ARC | `references/swift/stdlib/public/runtime/HeapObject.cpp` |
 
 ### ARC Implementation: MUST Copy Swift
 
@@ -48,10 +48,10 @@ For M17-M19 (ARC features), the reference is Swift's SILGen layer:
 
 | Feature | Our File | Swift Reference |
 |---------|----------|-----------------|
-| ManagedValue (owned values) | `arc_insertion.zig` | `~/learning/swift/lib/SILGen/ManagedValue.h:40-456` |
-| Cleanup stack (deferred release) | `arc_insertion.zig` | `~/learning/swift/lib/SILGen/Cleanup.h:85-317` |
-| Emit copy/retain | `arc_insertion.zig` | `~/learning/swift/lib/SILGen/SILGenExpr.cpp:70-109` |
-| Destructor dispatch | `arc.zig` | `~/learning/swift/stdlib/public/runtime/HeapObject.cpp:216-268` |
+| ManagedValue (owned values) | `arc_insertion.zig` | `references/swift/lib/SILGen/ManagedValue.h:40-456` |
+| Cleanup stack (deferred release) | `arc_insertion.zig` | `references/swift/lib/SILGen/Cleanup.h:85-317` |
+| Emit copy/retain | `arc_insertion.zig` | `references/swift/lib/SILGen/SILGenExpr.cpp:70-109` |
+| Destructor dispatch | `arc.zig` | `references/swift/stdlib/public/runtime/HeapObject.cpp:216-268` |
 
 **DO NOT invent ARC logic.** Swift's approach:
 1. `ManagedValue` pairs each value with an optional cleanup handle
@@ -100,7 +100,7 @@ Once you know the stage, find the EXACT file in the reference:
 **Example: "branch args must match block params" error**
 - This is a CLIF-level error (mentions blocks and params)
 - Our code: `compiler/codegen/native/wasm_to_clif/translator.zig`
-- Reference: `~/learning/wasmtime/crates/cranelift/src/translate/code_translator.rs`
+- Reference: `references/wasmtime/crates/cranelift/src/translate/code_translator.rs`
 
 ### Step 3: Find the Exact Function
 
@@ -111,7 +111,7 @@ Search for the equivalent function:
 grep -n "translateEnd" compiler/codegen/native/wasm_to_clif/translator.zig
 
 # Reference function
-grep -n "Operator::End" ~/learning/wasmtime/crates/cranelift/src/translate/code_translator.rs
+grep -n "Operator::End" references/wasmtime/crates/cranelift/src/translate/code_translator.rs
 ```
 
 ### Step 4: Line-by-Line Comparison

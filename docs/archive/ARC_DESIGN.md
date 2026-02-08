@@ -25,12 +25,12 @@
 
 | File | Purpose |
 |------|---------|
-| `~/learning/swift/stdlib/public/SwiftShims/swift/shims/HeapObject.h` | HeapObject struct: metadata + InlineRefCounts = 16 bytes |
-| `~/learning/swift/stdlib/public/SwiftShims/swift/shims/RefCount.h` | RefCount bit layout: strong(30), unowned(31), flags, side table |
-| `~/learning/swift/stdlib/public/runtime/HeapObject.cpp` | `swift_allocObject` (247-276), `swift_retain` (474-545), `swift_release` (548-596), `_swift_release_dealloc` (835-837), `swift_deallocObject` (967-1070) |
-| `~/learning/swift/stdlib/public/runtime/Heap.cpp` | `swift_slowAlloc` (85-96), `swift_slowDealloc` (151-161) |
-| `~/learning/swift/include/swift/Runtime/RuntimeFunctions.def` | Runtime function declarations |
-| `~/learning/swift/include/swift/SIL/SILNodes.def` | SIL instructions: strong_retain, strong_release, copy_value, destroy_value |
+| `references/swift/stdlib/public/SwiftShims/swift/shims/HeapObject.h` | HeapObject struct: metadata + InlineRefCounts = 16 bytes |
+| `references/swift/stdlib/public/SwiftShims/swift/shims/RefCount.h` | RefCount bit layout: strong(30), unowned(31), flags, side table |
+| `references/swift/stdlib/public/runtime/HeapObject.cpp` | `swift_allocObject` (247-276), `swift_retain` (474-545), `swift_release` (548-596), `_swift_release_dealloc` (835-837), `swift_deallocObject` (967-1070) |
+| `references/swift/stdlib/public/runtime/Heap.cpp` | `swift_slowAlloc` (85-96), `swift_slowDealloc` (151-161) |
+| `references/swift/include/swift/Runtime/RuntimeFunctions.def` | Runtime function declarations |
+| `references/swift/include/swift/SIL/SILNodes.def` | SIL instructions: strong_retain, strong_release, copy_value, destroy_value |
 
 ---
 

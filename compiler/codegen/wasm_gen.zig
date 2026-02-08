@@ -1,6 +1,6 @@
 //! Wasm Code Generator - Emit bytecode for Wasm SSA ops.
 //!
-//! Go reference: ~/learning/go/src/cmd/compile/internal/wasm/ssa.go
+//! Go reference: references/go/src/cmd/compile/internal/wasm/ssa.go
 //!
 //! This module is a direct port of Go's Wasm SSA code generator.
 //! Key functions (matching Go's names):
@@ -394,7 +394,7 @@ pub const FuncGen = struct {
 
     // ========================================================================
     // Go's ssaGenBlock - control flow generation
-    // Reference: ~/learning/go/src/cmd/compile/internal/wasm/ssa.go:169
+    // Reference: references/go/src/cmd/compile/internal/wasm/ssa.go:169
     // ========================================================================
 
     fn ssaGenBlock(self: *FuncGen, b: *const SsaBlock, next: ?*const SsaBlock) GenError!void {
@@ -507,7 +507,7 @@ pub const FuncGen = struct {
 
     // ========================================================================
     // Go's ssaGenValue - value generation
-    // Reference: ~/learning/go/src/cmd/compile/internal/wasm/ssa.go:217
+    // Reference: references/go/src/cmd/compile/internal/wasm/ssa.go:217
     // ========================================================================
 
     fn ssaGenValue(self: *FuncGen, v: *const SsaValue) GenError!void {
@@ -680,7 +680,7 @@ pub const FuncGen = struct {
 
     // ========================================================================
     // Go's ssaGenValueOnStack - generate value directly on wasm stack
-    // Reference: ~/learning/go/src/cmd/compile/internal/wasm/ssa.go:313
+    // Reference: references/go/src/cmd/compile/internal/wasm/ssa.go:313
     // ========================================================================
 
     fn ssaGenValueOnStack(self: *FuncGen, v: *const SsaValue) GenError!void {
@@ -1054,7 +1054,7 @@ pub const FuncGen = struct {
 
     // ========================================================================
     // Go's getValue32 and getValue64
-    // Reference: ~/learning/go/src/cmd/compile/internal/wasm/ssa.go:474-503
+    // Reference: references/go/src/cmd/compile/internal/wasm/ssa.go:474-503
     // ========================================================================
 
     /// Get value onto stack as i32.
@@ -1114,7 +1114,7 @@ pub const FuncGen = struct {
 
     // ========================================================================
     // Go's setReg - store top of stack to local
-    // Reference: ~/learning/go/src/cmd/compile/internal/wasm/ssa.go:530
+    // Reference: references/go/src/cmd/compile/internal/wasm/ssa.go:530
     // ========================================================================
 
     fn setReg(self: *FuncGen, v: *const SsaValue) GenError!void {

@@ -10,7 +10,7 @@
 //!   3. regalloc::run() - allocate physical registers
 //!   4. VCode::emit() - emit machine code bytes
 //!
-//! Reference: ~/learning/wasmtime/cranelift/codegen/src/machinst/compile.rs
+//! Reference: references/wasmtime/cranelift/codegen/src/machinst/compile.rs
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

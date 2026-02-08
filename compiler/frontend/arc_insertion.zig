@@ -5,9 +5,9 @@
 //! - Cleanup.h: LIFO cleanup stack for scope-based memory management
 //!
 //! Reference files:
-//! - ~/learning/swift/lib/SILGen/ManagedValue.h
-//! - ~/learning/swift/lib/SILGen/Cleanup.h
-//! - ~/learning/swift/lib/SILGen/SILGenExpr.cpp
+//! - references/swift/lib/SILGen/ManagedValue.h
+//! - references/swift/lib/SILGen/Cleanup.h
+//! - references/swift/lib/SILGen/SILGenExpr.cpp
 
 const std = @import("std");
 const ir = @import("ir.zig");

@@ -48,16 +48,16 @@ Every feature in this document MUST be implemented by copying from reference imp
 
 | Pipeline Stage | Reference | Location |
 |----------------|-----------|----------|
-| Scanner/Parser | Go | `~/learning/go/src/cmd/compile/internal/syntax/` |
-| Type Checker | Go | `~/learning/go/src/cmd/compile/internal/types2/` |
-| AST → IR | Go | `~/learning/go/src/cmd/compile/internal/ir/` |
-| IR → SSA | Go | `~/learning/go/src/cmd/compile/internal/ssagen/` |
-| SSA → Wasm | Go | `~/learning/go/src/cmd/compile/internal/wasm/` |
-| ARC Insertion | Swift | `~/learning/swift/lib/SILGen/` |
-| ARC Runtime | Swift | `~/learning/swift/stdlib/public/runtime/` |
-| Wasm → CLIF | Cranelift | `~/learning/wasmtime/crates/cranelift/src/translate/` |
-| CLIF → Native | Cranelift | `~/learning/wasmtime/cranelift/codegen/src/` |
-| Register Alloc | regalloc2 | `~/learning/regalloc2/src/` |
+| Scanner/Parser | Go | `references/go/src/cmd/compile/internal/syntax/` |
+| Type Checker | Go | `references/go/src/cmd/compile/internal/types2/` |
+| AST → IR | Go | `references/go/src/cmd/compile/internal/ir/` |
+| IR → SSA | Go | `references/go/src/cmd/compile/internal/ssagen/` |
+| SSA → Wasm | Go | `references/go/src/cmd/compile/internal/wasm/` |
+| ARC Insertion | Swift | `references/swift/lib/SILGen/` |
+| ARC Runtime | Swift | `references/swift/stdlib/public/runtime/` |
+| Wasm → CLIF | Cranelift | `references/wasmtime/crates/cranelift/src/translate/` |
+| CLIF → Native | Cranelift | `references/wasmtime/cranelift/codegen/src/` |
+| Register Alloc | regalloc2 | `references/regalloc2/src/` |
 
 ---
 
@@ -152,12 +152,12 @@ let d = p.distance()  // Method call syntax
 **Reference Implementation:**
 
 Go doesn't have impl blocks, but Swift does. For method dispatch:
-- Swift SIL: `~/learning/swift/lib/SIL/`
-- Swift method lowering: `~/learning/swift/lib/SILGen/SILGenApply.cpp`
+- Swift SIL: `references/swift/lib/SIL/`
+- Swift method lowering: `references/swift/lib/SILGen/SILGenApply.cpp`
 
 For struct methods in Go (receiver syntax):
-- `~/learning/go/src/cmd/compile/internal/syntax/parser.go` - function parsing
-- `~/learning/go/src/cmd/compile/internal/types2/signature.go` - method signatures
+- `references/go/src/cmd/compile/internal/syntax/parser.go` - function parsing
+- `references/go/src/cmd/compile/internal/types2/signature.go` - method signatures
 
 **Pipeline Changes:**
 
@@ -241,12 +241,12 @@ let c: Color = Color.Red
 **Reference Implementation:**
 
 Go enums (iota pattern):
-- `~/learning/go/src/cmd/compile/internal/syntax/parser.go` - const decl
-- `~/learning/go/src/cmd/compile/internal/types2/const.go` - iota handling
+- `references/go/src/cmd/compile/internal/syntax/parser.go` - const decl
+- `references/go/src/cmd/compile/internal/types2/const.go` - iota handling
 
 Swift enums:
-- `~/learning/swift/lib/AST/Decl.cpp` - EnumDecl
-- `~/learning/swift/lib/SILGen/SILGenEnum.cpp` - enum lowering
+- `references/swift/lib/AST/Decl.cpp` - EnumDecl
+- `references/swift/lib/SILGen/SILGenEnum.cpp` - enum lowering
 
 **Pipeline Changes:**
 
@@ -328,8 +328,8 @@ let o: Option = Option.none
 **Reference Implementation:**
 
 Swift enums with associated values:
-- `~/learning/swift/lib/SILGen/SILGenEnum.cpp`
-- `~/learning/swift/lib/IRGen/GenEnum.cpp`
+- `references/swift/lib/SILGen/SILGenEnum.cpp`
+- `references/swift/lib/IRGen/GenEnum.cpp`
 
 Go doesn't have tagged unions, use Swift as primary reference.
 
@@ -423,9 +423,9 @@ let msg = switch result {
 **Reference Implementation:**
 
 Go switch:
-- `~/learning/go/src/cmd/compile/internal/syntax/parser.go` - switchStmt
-- `~/learning/go/src/cmd/compile/internal/ssagen/ssa.go` - switch codegen
-- `~/learning/go/src/cmd/compile/internal/walk/switch.go` - switch lowering
+- `references/go/src/cmd/compile/internal/syntax/parser.go` - switchStmt
+- `references/go/src/cmd/compile/internal/ssagen/ssa.go` - switch codegen
+- `references/go/src/cmd/compile/internal/walk/switch.go` - switch lowering
 
 **Pipeline Changes:**
 
@@ -500,8 +500,8 @@ type StringList = []string
 **Reference Implementation:**
 
 Go type aliases:
-- `~/learning/go/src/cmd/compile/internal/syntax/parser.go` - typeDecl
-- `~/learning/go/src/cmd/compile/internal/types2/decl.go` - type alias handling
+- `references/go/src/cmd/compile/internal/syntax/parser.go` - typeDecl
+- `references/go/src/cmd/compile/internal/types2/decl.go` - type alias handling
 
 **Pipeline Changes:**
 
@@ -574,8 +574,8 @@ fn main() i64 {
 **Reference Implementation:**
 
 Go imports:
-- `~/learning/go/src/cmd/compile/internal/noder/import.go`
-- `~/learning/go/src/cmd/compile/internal/types2/resolver.go`
+- `references/go/src/cmd/compile/internal/noder/import.go`
+- `references/go/src/cmd/compile/internal/types2/resolver.go`
 
 **Pipeline Changes:**
 
@@ -658,8 +658,8 @@ extern fn free(ptr: *u8)
 **Reference Implementation:**
 
 Go external functions:
-- `~/learning/go/src/cmd/compile/internal/ir/func.go` - external func handling
-- `~/learning/go/src/cmd/link/internal/loader/loader.go` - symbol resolution
+- `references/go/src/cmd/compile/internal/ir/func.go` - external func handling
+- `references/go/src/cmd/link/internal/loader/loader.go` - symbol resolution
 
 **Pipeline Changes:**
 
@@ -757,8 +757,8 @@ let f = x >> 2     // Right shift
 **Reference Implementation:**
 
 Go bitwise:
-- `~/learning/go/src/cmd/compile/internal/ssagen/ssa.go` - binary ops
-- `~/learning/go/src/cmd/compile/internal/wasm/ssa.go:401` - wasm codegen
+- `references/go/src/cmd/compile/internal/ssagen/ssa.go` - binary ops
+- `references/go/src/cmd/compile/internal/wasm/ssa.go:401` - wasm codegen
 
 **Implementation Status:** ✅ COMPLETE (Wave 1)
 
@@ -831,8 +831,8 @@ x |= flag // x = x | flag
 **Reference Implementation:**
 
 Go compound assignment:
-- `~/learning/go/src/cmd/compile/internal/syntax/parser.go:2164-2168` - parse AssignOp
-- `~/learning/go/src/cmd/compile/internal/walk/assign.go:50-52` - rewrite to x = x op y
+- `references/go/src/cmd/compile/internal/syntax/parser.go:2164-2168` - parse AssignOp
+- `references/go/src/cmd/compile/internal/walk/assign.go:50-52` - rewrite to x = x op y
 
 **Implementation Status:** ✅ COMPLETE (Wave 1)
 
@@ -912,11 +912,11 @@ let safe = maybe ?? 0  // Null coalesce
 **Reference Implementation:**
 
 Swift optionals (for layout/semantics):
-- `~/learning/swift/lib/SILGen/SILGenExpr.cpp` - optional handling
-- `~/learning/swift/lib/IRGen/GenOpaqueLayout.cpp` - optional layout
+- `references/swift/lib/SILGen/SILGenExpr.cpp` - optional handling
+- `references/swift/lib/IRGen/GenOpaqueLayout.cpp` - optional layout
 
 Go (for Wasm codegen):
-- `~/learning/go/src/cmd/compile/internal/wasm/ssa.go:359-363` - select instruction
+- `references/go/src/cmd/compile/internal/wasm/ssa.go:359-363` - select instruction
 
 **Implementation Status:** ✅ COMPLETE (Wave 2)
 
@@ -1114,7 +1114,7 @@ let quote = '\''
 **Reference Implementation:**
 
 Go character literals:
-- `~/learning/go/src/cmd/compile/internal/syntax/scanner.go` - rune literal
+- `references/go/src/cmd/compile/internal/syntax/scanner.go` - rune literal
 
 **Pipeline Changes:**
 
@@ -1190,8 +1190,8 @@ let narrow = @intCast(u8, big_value)  // Runtime conversion
 **Reference Implementation:**
 
 Go builtins:
-- `~/learning/go/src/cmd/compile/internal/typecheck/builtin.go`
-- `~/learning/go/src/cmd/compile/internal/walk/builtin.go`
+- `references/go/src/cmd/compile/internal/typecheck/builtin.go`
+- `references/go/src/cmd/compile/internal/walk/builtin.go`
 
 **Pipeline Changes:**
 
