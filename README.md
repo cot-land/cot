@@ -45,7 +45,7 @@ fn distance_sq(a: *Point, b: *Point) i64 {
 fn main() i64 {
     var a = Point { .x = 0, .y = 0 };
     var b = Point { .x = 3, .y = 4 };
-    @println(distance_sq(&a, &b));  // Prints 25
+    println(distance_sq(&a, &b));  // Prints 25
 
     var scores: List(i64) = .{};
     scores.append(100);
@@ -76,7 +76,7 @@ Cot Source → Scanner → Parser → Checker → IR → SSA
 - Error handling: error unions (`E!T`), `try`, `catch`
 - Memory: ARC (automatic reference counting), `defer`, `new`/`@alloc`/`@dealloc`
 - Traits: `trait`/`impl Trait for Type` (monomorphized, no vtables)
-- I/O: `@print`, `@println`, `@eprint`, `@eprintln` (native syscalls)
+- I/O: `print`, `println`, `eprint`, `eprintln` (native syscalls)
 - Imports: `import "std/list"` with cross-file generic instantiation
 - Stdlib: `List(T)` with ~20 methods (append, get, remove, indexOf, clone, etc.)
 - CLI: `cot build`, `cot run`, `cot test`, `cot version`
