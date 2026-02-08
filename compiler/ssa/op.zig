@@ -601,7 +601,7 @@ const op_info_table = blk: {
 
     // Lowered operations
     table[@intFromEnum(Op.wasm_lowered_move)] = .{ .name = "WasmLoweredMove", .generic = false, .arg_len = 1, .writes_memory = true, .has_side_effects = true };
-    table[@intFromEnum(Op.wasm_lowered_zero)] = .{ .name = "WasmLoweredZero", .generic = false, .aux_type = .int64, .has_side_effects = true };
+    table[@intFromEnum(Op.wasm_lowered_zero)] = .{ .name = "WasmLoweredZero", .generic = false, .aux_type = .int64, .writes_memory = true, .has_side_effects = true };
     table[@intFromEnum(Op.wasm_lowered_nil_check)] = .{ .name = "WasmLoweredNilCheck", .generic = false, .arg_len = 1, .nil_check = true, .has_side_effects = true };
     table[@intFromEnum(Op.wasm_lowered_static_call)] = .{ .name = "WasmLoweredStaticCall", .generic = false, .arg_len = -1, .aux_type = .call, .call = true, .has_side_effects = true };
     table[@intFromEnum(Op.wasm_lowered_closure_call)] = .{ .name = "WasmLoweredClosureCall", .generic = false, .arg_len = -1, .aux_type = .call, .call = true, .has_side_effects = true };

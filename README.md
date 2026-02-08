@@ -6,109 +6,107 @@ A Wasm-first language for full-stack web development.
 
 See **[VISION.md](VISION.md)** for the complete language vision and strategy.
 
-## Project Status (February 2026)
-
-**This is the Cot compiler, written in Zig.** Like Deno (Rust) compiling TypeScript, this compiler is a permanent tool, not a bootstrap.
-
-| Component | Status | Description |
-|-----------|--------|-------------|
-| Frontend | ✅ Done | Scanner, parser, type checker, IR lowering |
-| SSA Infrastructure | ✅ Done | Values, blocks, functions, passes |
-| Wasm Backend | ✅ M1-M16 Done | Constants, arithmetic, control flow, loops, calls, memory, pointers, structs, slices, strings, ARC |
-| Native AOT | 🔄 Partial | Infrastructure done, but only trivial programs work (see [NATIVE_AOT_FIXES.md](NATIVE_AOT_FIXES.md)) |
-
-**Wasm Tests: All passing** | **Native Tests: Basic only**
-
 ## Quick Start
 
-### Compile to Wasm (Primary Target)
 ```bash
 # Build the compiler
 zig build
 
-# Compile to WebAssembly
-./zig-out/bin/cot hello.cot -o hello.wasm
-
-# Run with wasmtime
-wasmtime hello.wasm
-```
-
-### Compile to Native (AOT)
-```bash
-# Compile to native executable (default target)
+# Compile to native executable (default)
 ./zig-out/bin/cot hello.cot -o hello
 ./hello
-echo $?  # Shows return value
-```
 
-### Run Tests
-```bash
-# All tests
+# Compile to WebAssembly
+./zig-out/bin/cot --target=wasm32 hello.cot -o hello.wasm
+
+# Run tests
 zig build test
-
-# With debug output
-COT_DEBUG=parse,codegen zig build test
-```
-
-## Architecture
-
-```
-                      ┌─────────────────────────────────────┐
-                      │         Cot Source Code             │
-                      └─────────────────────────────────────┘
-                                       │
-                                       ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              FRONTEND                                        │
-│  Scanner → Parser → Type Checker → IR Lowerer → SSA Builder                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                       │
-                    ┌──────────────────┴──────────────────┐
-                    │                                      │
-                    ▼                                      ▼
-┌─────────────────────────────────┐    ┌─────────────────────────────────────┐
-│      WASM BACKEND (Primary)     │    │       NATIVE AOT (Performance)      │
-│                                 │    │                                     │
-│  SSA → lower_wasm → wasm_gen    │    │  Wasm → wasm_parser → wasm_to_ssa   │
-│            │                    │    │           │                         │
-│            ▼                    │    │           ▼                         │
-│      .wasm binary               │    │  SSA → regalloc → ARM64/AMD64       │
-│                                 │    │           │                         │
-│  Runs in: Browser, Node,        │    │           ▼                         │
-│           Deno, wasmtime        │    │  Mach-O / ELF executable            │
-└─────────────────────────────────┘    └─────────────────────────────────────┘
 ```
 
 ## Example
 
 ```cot
-// hello.cot
-fn main() int {
-    let x: int = 10;
-    let y: int = 5;
-    return x + y * 2;  // Returns 20
+struct Point { x: i64, y: i64 }
+
+fn distance_sq(a: *Point, b: *Point) i64 {
+    let dx = b.x - a.x;
+    let dy = b.y - a.y;
+    return dx * dx + dy * dy;
+}
+
+fn main() i64 {
+    var a = Point { .x = 0, .y = 0 };
+    var b = Point { .x = 3, .y = 4 };
+    return distance_sq(&a, &b);  // Returns 25
 }
 ```
 
-```bash
-# Wasm target (default)
-$ ./zig-out/bin/cot hello.cot -o hello.wasm
-$ wasmtime hello.wasm
-$ echo $?
-20
+## Architecture
+
+All code goes through Wasm first. Native output is AOT-compiled from Wasm via a Cranelift-style backend.
+
+```
+Cot Source → Scanner → Parser → Checker → IR → SSA
+  → lower_wasm (SSA → Wasm ops) → wasm/ (Wasm bytecode)
+      ├── --target=wasm32 → .wasm file
+      └── --target=native (default)
+          → wasm_parser → wasm_to_clif/ → CLIF IR
+          → machinst/lower → isa/{aarch64,x64}/ → emit → .o → linker → executable
 ```
 
-## Key Documents
+## Language Features
+
+- Types: `i8`–`u64`, `f32`, `f64`, `bool`, `[]u8` (strings)
+- Control flow: `if`/`else`, `while`, `for`-range, `break`, `continue`
+- Data: structs, arrays, slices, enums, unions (with payloads), tuples
+- Functions: closures, function pointers, generics (monomorphized)
+- Error handling: error unions (`E!T`), `try`, `catch`
+- Memory: ARC (automatic reference counting), `defer`, `new`/`@alloc`/`@dealloc`
+- Traits: `trait`/`impl Trait for Type` (monomorphized, no vtables)
+- Stdlib: `List(T)` with generic impl blocks
+- Targets: Wasm32, ARM64 (macOS), x64 (Linux)
+
+## Project Status
+
+**Compiler written in Zig. Both Wasm and native AOT targets working.**
+
+All tests passing across Wasm E2E, native E2E, and unit tests.
+
+| Component | Status |
+|-----------|--------|
+| Frontend (scanner, parser, checker, lowerer) | Complete |
+| SSA infrastructure + passes | Complete |
+| Wasm backend (bytecode gen + linking) | Complete |
+| Native AOT (Cranelift-port: CLIF IR → regalloc2 → ARM64/x64) | Complete |
+| ARC runtime (retain/release, heap, destructors) | Complete |
+
+**Next:** Map(K,V), trait bounds, string interpolation, I/O, test parity. See [docs/ROADMAP_1_0.md](docs/ROADMAP_1_0.md).
+
+## Design Decisions
+
+### Why Wasm-First
+1. Stack machine eliminates register allocation complexity in the primary path
+2. Same binary runs in browser, server, and edge
+3. AOT compilation from Wasm provides native performance when needed
+4. Previous direct native codegen attempts failed 5 times — Wasm-first succeeded
+
+### Why ARC
+- Predictable performance (no GC pauses)
+- Simpler than borrow checking
+- Same semantics for Wasm and native targets
+
+## Documents
 
 | Document | Purpose |
 |----------|---------|
-| [VISION.md](VISION.md) | Language vision and strategy |
-| [WASM_BACKEND.md](WASM_BACKEND.md) | Wasm backend milestones (M1-M16) |
-| [CRANELIFT_PORT_MASTER_PLAN.md](CRANELIFT_PORT_MASTER_PLAN.md) | Native AOT compilation (Cranelift port) |
-| [NATIVE_AOT_FIXES.md](NATIVE_AOT_FIXES.md) | **Current work: Native AOT bug fixes needed** |
-| [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Debugging methodology (MUST READ before fixing bugs) |
-| [TESTING.md](TESTING.md) | Testing strategy and test organization |
+| [VISION.md](VISION.md) | Language vision, design principles |
 | [CLAUDE.md](CLAUDE.md) | AI session instructions |
+| [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Debugging methodology |
+| [docs/ROADMAP_1_0.md](docs/ROADMAP_1_0.md) | Road to 1.0 |
+| [docs/PIPELINE_ARCHITECTURE.md](docs/PIPELINE_ARCHITECTURE.md) | Full pipeline reference map |
+| [docs/BR_TABLE_ARCHITECTURE.md](docs/BR_TABLE_ARCHITECTURE.md) | br_table dispatch pattern |
+| [docs/specs/WASM_3_0_REFERENCE.md](docs/specs/WASM_3_0_REFERENCE.md) | Wasm 3.0 features |
+| [docs/archive/](docs/archive/) | Historical milestones and postmortems |
 
 ## Repository Structure
 
@@ -117,78 +115,22 @@ cot/
 ├── compiler/
 │   ├── core/              # Types, errors, target config
 │   ├── frontend/          # Scanner, parser, checker, IR, lowerer
-│   ├── ssa/               # SSA infrastructure
-│   │   └── passes/        # schedule, layout, lower_wasm
+│   ├── ssa/               # SSA infrastructure + passes
 │   ├── codegen/
-│   │   ├── wasm*.zig      # Wasm backend
-│   │   └── native/        # ARM64/AMD64 backends (AOT)
-│   ├── driver.zig         # Compilation orchestration
+│   │   ├── wasm/          # Wasm backend (gen, link, preprocess)
+│   │   └── native/        # AOT backend (Cranelift-style)
+│   │       ├── wasm_to_clif/  # Wasm → CLIF translation
+│   │       ├── machinst/      # CLIF → MachInst lowering
+│   │       ├── isa/aarch64/   # ARM64 backend
+│   │       ├── isa/x64/       # x64 backend
+│   │       └── regalloc/      # Register allocator (regalloc2 port)
+│   ├── driver.zig         # Pipeline orchestrator
 │   └── main.zig           # CLI entry point
-│
-├── test/                  # Test cases and harnesses
-│   ├── cases/             # .cot test files
-│   └── browser/           # Browser test harness
-│
-├── audit/                 # 60+ module verification docs
-└── docs/                  # Documentation source
+├── runtime/               # Native runtime (.o files)
+├── test/cases/            # .cot test files
+└── docs/                  # Architecture docs, specs, roadmap
 ```
 
-## Compilation Targets
+## For AI Sessions
 
-| Target | Flag | Output | Status |
-|--------|------|--------|--------|
-| Native | (default) | executable | ✅ Working |
-| Wasm32 | `--target=wasm32` | `.wasm` | ✅ Working |
-
-## Design Decisions
-
-### Why Wasm as Primary Target
-
-1. **Simpler compiler**: Stack machine eliminates register allocation
-2. **Universal target**: Same binary runs in browser, server, edge
-3. **Self-hosting achievable**: Previous native codegen attempts failed due to complexity
-4. **AOT for performance**: Wasm → Native when needed
-
-### Why ARC Memory Management
-
-- Predictable (no GC pauses)
-- Simpler than borrow checking
-- Same semantics for Wasm and native targets
-
-## Current Capabilities
-
-### Working (Wasm target)
-- ✅ Functions (parameters, return values, recursion)
-- ✅ Variables (let, const)
-- ✅ Arithmetic (+, -, *, /, %)
-- ✅ Comparisons (==, !=, <, <=, >, >=)
-- ✅ Control flow (if/else, while, break, continue)
-- ✅ Structs (field access, nested)
-- ✅ Pointers (address-of, dereference)
-- ✅ Arrays and slices
-- ✅ Strings (literals, length)
-- ✅ ARC (retain/release)
-
-### In Progress
-- 🔄 Browser imports (console.log, fetch)
-
-### Planned
-- ⬜ Enums
-- ⬜ Defer
-- ⬜ Closures
-- ⬜ Generics
-
-## Reference Code
-
-**bootstrap-0.2** (`../bootstrap-0.2/`) - frozen reference:
-- `DESIGN.md` - Full architecture specification
-- `src/codegen/` - Working native codegen
-- `src/cot1/` - Self-hosted compiler in Cot
-
-**wasmtime** (`~/learning/wasmtime/`) - Wasm runtime reference:
-- `cranelift/` - Wasm → native code generation
-- Shows industry patterns for Wasm→SSA→Native
-
-## For Claude AI Sessions
-
-See [CLAUDE.md](CLAUDE.md) for detailed instructions.
+See [CLAUDE.md](CLAUDE.md) for compiler instructions and reference implementation locations.

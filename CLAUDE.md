@@ -1,471 +1,153 @@
 # Claude AI Instructions
 
-## 🚨 BEFORE DEBUGGING ANYTHING, READ: `TROUBLESHOOTING.md`
+## 🚨 CRITICAL RULES
 
-When you encounter ANY bug or error, **STOP** and follow `TROUBLESHOOTING.md`.
+### 1. Never Invent — Always Copy Reference Implementations
 
-**The #1 cause of project failure**: Claude tries to "figure out" fixes instead of copying the reference implementation. This document exists because this pattern has caused 5 rewrites.
+**The #1 cause of project failure**: Claude tries to "figure out" fixes instead of copying the reference. This has caused 5 rewrites.
 
-**The fix that works every time**:
+**The fix that works every time:**
 1. Find the reference implementation (Go or Cranelift)
 2. Do line-by-line comparison
-3. Copy exactly - don't invent, don't simplify, don't "improve"
+3. Copy exactly — don't invent, don't simplify, don't "improve"
 
-See `TROUBLESHOOTING.md` for the full methodology, reference map, and checklist.
+See `TROUBLESHOOTING.md` for full methodology.
 
-### ⚠️ Confused about br_table / dispatch loops?
+### 2. Check Wasm 3.0 Before Adding Features
 
-**READ: `docs/BR_TABLE_ARCHITECTURE.md`** - br_table is INTENTIONAL, copied from Go's dispatch loop pattern. Do NOT try to remove or "fix" it without reading this document first.
+**Read `docs/specs/WASM_3_0_REFERENCE.md`** before implementing anything touching Wasm codegen. Cot currently emits Wasm 1.0 but Wasm 3.0 (released Sep 2025) may offer better solutions:
+- Recursive functions → `return_call` (0x12) instead of `call` + `return`
+- Closures/function pointers → `call_ref` (0x14) instead of `call_indirect`
+- Error propagation → `try_table`/`throw` instead of manual checks
 
-### ⚠️ Adding a new feature? CHECK WASM 3.0 FIRST
+### 3. br_table is Intentional
 
-**READ: `docs/specs/WASM_3_0_REFERENCE.md`** before implementing any feature that touches the Wasm codegen pipeline.
-
-Cot currently emits Wasm 1.0. WebAssembly 3.0 was released September 2025 and adds tail calls (`return_call`), exception handling (`try_table`/`throw`), typed function references (`call_ref`), and more. These features may provide **better design options** than Wasm 1.0 workarounds.
-
-**Before designing a solution, ask:**
-1. Does Wasm 3.0 have an opcode or feature that handles this natively?
-2. Would using a 3.0 feature produce simpler or more efficient code than a 1.0 workaround?
-3. If yes, prefer the 3.0 approach — Cot targets modern runtimes.
-
-**Examples of where 3.0 matters:**
-- Recursive functions → use `return_call` (0x12) instead of `call` + `return`
-- Closure/function pointer calls → consider `call_ref` (0x14) instead of `call_indirect`
-- Error propagation across calls → consider `try_table`/`throw` instead of manual checks
-- The full spec text is at `docs/specs/wasm-3.0-full.txt` (25K lines) for deep reference
+Read `docs/BR_TABLE_ARCHITECTURE.md` if confused. br_table is copied from Go's dispatch loop pattern. Do NOT try to remove it.
 
 ---
 
-## CRITICAL WARNING - READ THIS FIRST
+## Project Overview
 
-### 1. Standard Approach: Copy Go Exactly
-
-**Every language feature follows the same pattern:**
-
-1. Find the equivalent Go code in `~/learning/go/src/cmd/`
-2. Understand how Go implements it
-3. Copy the pattern directly, translating Go syntax to Zig
-4. Do NOT invent new approaches or "figure out" how things should work
-
-**Case Study - M14 Strings (February 2026):**
-
-Claude initially tried to "figure out" string handling by adding hacky special-case code in gen.zig. This created 100+ lines of messy code that didn't work properly.
-
-When Claude stopped and copied Go's approach instead:
-- Audited Go's `rewritegeneric.go` and `rewritedec.go`
-- Created matching files: `rewritegeneric.zig` and `rewritedec.zig`
-- Copied Go's pass structure and transformation patterns exactly
-- Result: Clean code, all tests passing, completed in one session
-
-**The lesson:** Copying Go took less effort AND produced better code. Inventing takes MORE effort and produces worse code. There is no upside to inventing.
-
-**Example - Slice Decomposition:**
-- Go file: `compile/internal/ssa/rewritedec.go`
-- Go pattern: `SliceLen(SliceMake(ptr, len, cap))` → `len`
-- Cot copy: `slice_len(slice_make(ptr, len))` → `copy(len)`
-
-This is straightforward when you copy Go. It becomes complex when you try to invent.
-
-### 2. Understand the Pipeline
-
-**Cot compiles ALL code through Wasm first.** Native output (Mach-O, ELF) is AOT-compiled FROM Wasm.
-
-- `cot file.cot` → produces native executable (goes through Wasm internally)
-- `cot --target=wasm32 file.cot` → produces .wasm file directly
-
-**Do NOT be surprised by Mach-O/ELF output.** This is the expected default behavior.
-
-### 3. Key Go Reference Files
-
-The Go compiler is at `~/learning/go/src/cmd/`. Key files:
-
-| Feature | Go File | What to Copy |
-|---------|---------|--------------|
-| SSA → Wasm | `compile/internal/wasm/ssa.go` | Op handling patterns |
-| Slice/String decompose | `compile/internal/ssa/rewritedec.go` | Compound type rewrites |
-| Wasm assembly | `internal/obj/wasm/wasmobj.go` | Binary encoding |
-| Wasm linking | `link/internal/wasm/asm.go` | Section layout |
-| Generic rewrites | `compile/internal/ssa/rewritegeneric.go` | Algebraic simplification |
-
-**DO NOT:**
-- "Figure out" how something should work
-- Write comments reasoning about logic
-- Invent your own approach
-
-**DO:**
-- Find the equivalent Go code
-- Copy it directly
-- If you don't understand Go's code, read more of it until you do
+**Cot** is a Wasm-first compiled language for full-stack web development.
+**Pitch:** Write like TypeScript, run like Rust, deploy anywhere, never think about memory.
+**Compiler:** Written in Zig (permanent, like Deno's Rust dependency).
 
 ---
 
-## Project: Cot Programming Language
+## Architecture
 
-**Cot** is a Wasm-first programming language for full-stack web development.
-
-**The pitch:** Write like TypeScript, run like Rust, deploy anywhere, never think about memory.
-
-**This repository** contains the Cot compiler, written in Zig. Like Deno (Rust) for TypeScript, this is a permanent tool, not a temporary bootstrap.
-
----
-
-## Current State (February 2026)
-
-**890+ tests pass (0 failures, 0 skipped)** across Wasm and native targets.
-**66 Wasm E2E tests, 51 native E2E tests, 26 test case files.**
-
-### What's Done
-
-- **Wasm backend (M1-M16):** Complete. Arithmetic, control flow, functions, memory, structs, arrays, strings, ARC, browser imports.
-- **Native AOT (Phase 0-7):** Complete. Cranelift-style CLIF IR, regalloc2, ARM64/x64 backends, Mach-O/ELF output.
-- **ARC runtime (M17-M19):** Complete. Freelist allocator, cot_alloc/dealloc/realloc, retain/release, destructors (deinit), 16-byte headers, memory.grow, @alloc/@dealloc/@realloc builtins.
-- **Language features (M20-M23):** Complete. String ops, array append, for-range loops.
-- **Phase 3 Wave 1-4:** Methods, enums, unions, switch, type aliases, imports, extern, bitwise, compound assign, optionals, chars, builtins - all verified on both Wasm and native.
-- **Phase 3 Wave 5:** Floats (f32/f64), union payloads, error unions (`!T`, `try`, `catch`), function pointers, closures, defer, ARC coverage - all verified on both Wasm and native.
-- **Sized integers:** Full pipeline (i8-u64, f32-f64), type system, @intCast.
-- **Global variables:** Complete on Wasm (read, write, multi-function).
-- **Slice syntax:** `arr[start:end]` with Go-style decomposition passes.
-- **Generics:** Pure monomorphization (Zig pattern). `fn max(T)(a: T, b: T) T`, `struct Pair(T, U)`, lazy deferred instantiation, deduplication.
-- **List(T) stdlib:** Generic dynamic list with append, get, set, pop. Free generic functions pattern (`fn List_append(T)`). Nested generic calls resolved correctly (Zig/Go instantiation key pattern).
-
-### What's Missing
-
-**See [GAP_ANALYSIS.md](GAP_ANALYSIS.md) for the full gap analysis.**
-
-| Feature | Priority | Why |
-|---------|----------|-----|
-| Map(K,V) | HIGH | Map needed for real apps (List(T) is DONE) |
-| String interpolation | MEDIUM | Developer experience |
-| Traits/Interfaces | MEDIUM | Polymorphism for std lib |
-| ~486 test cases | MEDIUM | Edge case coverage vs bootstrap-0.2 |
-
----
-
-## Key Documents
-
-### Priority (read these first)
-
-| Document | Purpose |
-|----------|---------|
-| `GAP_ANALYSIS.md` | **PROJECT PRIORITY: Feature + test gap vs bootstrap-0.2, recommended path** |
-| `TROUBLESHOOTING.md` | **MUST READ: Debugging methodology - never invent, always copy reference** |
-| `docs/PIPELINE_ARCHITECTURE.md` | **MUST READ: Full pipeline, reference map for every stage, extern fn, allocator** |
-| `VISION.md` | Language vision, Phase 3 TODO list, execution roadmap |
-
-### Reference (read when needed)
-
-| Document | Purpose |
-|----------|---------|
-| `docs/specs/WASM_3_0_REFERENCE.md` | **Wasm 3.0 (Sep 2025): new opcodes, features, adoption plan for Cot** |
-| `docs/ROADMAP_1_0.md` | **Road to 1.0: versioning philosophy, feature waves, Wasm IR analysis** |
-| `docs/BR_TABLE_ARCHITECTURE.md` | br_table dispatch loop pattern - READ if confused about br_table |
-| `WASM_BACKEND.md` | Wasm milestones M1-M16, implementation details |
-| `ROADMAP_PHASE2.md` | M17-M24 milestones (ARC, heap, strings, arrays) - all complete |
-| `CRANELIFT_PORT_MASTER_PLAN.md` | Native AOT codegen architecture (✅ Complete) |
-| `NATIVE_AOT_FIXES.md` | Historical: Native AOT bug fixes |
-| `PHASE3_COMPLETE.md` | Historical: Phase 3 Wave 1-4 implementation details and Go parity evidence |
-| `../bootstrap-0.2/DESIGN.md` | Technical architecture specification |
-
----
-
-## Architecture - IMPORTANT: READ THIS
-
-**Cot is a Wasm-first compiler. ALL code paths go through Wasm.**
-
-**The native AOT path uses Cranelift's architecture (fully ported to Zig).**
+**ALL code goes through Wasm first.** Native is AOT-compiled FROM Wasm via Cranelift-port.
 
 ```
-                           Cot Source
-                               ↓
-                    Scanner → Parser → Checker → IR → SSA
-                               ↓
-                    lower_wasm.zig (SSA → Wasm SSA ops)
-                               ↓
-                    wasm/ package (Wasm bytecode)
-                               ↓
-              ┌────────────────┴────────────────┐
-              ↓                                 ↓
-        --target=wasm32                   --target=native (default)
-              ↓                                 ↓
-         .wasm file                    wasm_parser (parse Wasm binary)
-                                               ↓
-                                      wasm_to_clif/ (Wasm → CLIF IR)
-                                               ↓
-                                      ir/clif/ (CLIF IR representation)
-                                               ↓
-                                      machinst/lower.zig (CLIF → MachInst)
-                                               ↓
-                                      isa/aarch64/lower.zig (ARM64 patterns)
-                                      isa/x64/lower.zig (AMD64 patterns)
-                                               ↓
-                                      isa/*/inst/ (MachInst types)
-                                               ↓
-                                      isa/*/emit.zig (MachInst → bytes)
-                                               ↓
-                                      machinst/buffer.zig (code buffer)
-                                               ↓
-                                        .o file (Mach-O/ELF)
-                                               ↓
-                                         linker (clang)
-                                               ↓
-                                        executable
+Cot Source → Scanner → Parser → Checker → IR → SSA
+  → lower_wasm.zig (SSA → Wasm ops) → wasm/ (Wasm bytecode)
+      ├── --target=wasm32 → .wasm file
+      └── --target=native (default) → wasm_parser → wasm_to_clif/
+          → ir/clif/ → machinst/lower.zig → isa/{aarch64,x64}/
+          → emit.zig → .o → linker → executable
 ```
 
-**Cranelift Port Structure (see CRANELIFT_PORT_MASTER_PLAN.md):**
-- `compiler/ir/clif/` - CLIF IR types, DFG, layout, builder
-- `compiler/codegen/native/wasm_to_clif/` - Wasm → CLIF translation
-- `compiler/codegen/native/machinst/` - Machine instruction framework
-- `compiler/codegen/native/isa/aarch64/` - ARM64 backend
-- `compiler/codegen/native/isa/x64/` - AMD64 backend (TODO)
+**Key directories:**
+| Path | Purpose | Reference |
+|------|---------|-----------|
+| `compiler/frontend/` | Scanner, parser, checker, lowerer | — |
+| `compiler/ssa/passes/` | rewritegeneric, decompose, rewritedec, schedule, layout, lower_wasm | Go `ssa/*.go` |
+| `compiler/codegen/wasm/` | Wasm bytecode generation + linking | Go `wasm/ssa.go`, `wasmobj.go` |
+| `compiler/codegen/native/wasm_to_clif/` | Wasm → CLIF IR translation | Cranelift `cranelift/src/translate/` |
+| `compiler/codegen/native/machinst/` | CLIF → MachInst lowering | Cranelift `machinst/` |
+| `compiler/codegen/native/isa/aarch64/` | ARM64 backend | Cranelift `isa/aarch64/` |
+| `compiler/codegen/native/isa/x64/` | x64 backend | Cranelift `isa/x64/` |
+| `compiler/codegen/native/regalloc/` | Register allocator (regalloc2 port) | `~/learning/regalloc2/src/` |
+| `compiler/driver.zig` | Pipeline orchestrator | — |
 
-**Key points for Claude:**
-1. **Native output is Mach-O/ELF** - This is EXPECTED, not an error
-2. **Native goes through Wasm then CLIF IR** - Pipeline: Cot → Wasm → CLIF IR → MachInst → Native
-3. **To get .wasm output**: Use `--target=wasm32`
-4. **Default is native**: Running `cot file.cot` produces a native executable
-5. **Follow Cranelift exactly**: The port must match Cranelift's architecture 100%
-
-**Testing Wasm output:**
-```bash
-# Compile to wasm
-./zig-out/bin/cot --target=wasm32 test.cot -o test.wasm
-
-# Run with Node.js
-node -e 'const fs=require("fs"); const wasm=fs.readFileSync("test.wasm");
-WebAssembly.instantiate(wasm).then(r=>console.log(r.instance.exports.main()));'
-```
-
-**Testing native output:**
-```bash
-# Compile to native (default)
-./zig-out/bin/cot test.cot -o test
-./test
-echo $?  # Shows return value
-```
+**Reference implementations (copy, don't invent):**
+| Component | Reference Location |
+|-----------|-------------------|
+| Cot → Wasm | `~/learning/go/src/cmd/compile/internal/wasm/` |
+| Wasm → CLIF | `~/learning/wasmtime/crates/cranelift/src/translate/` |
+| CLIF → ARM64 | `~/learning/wasmtime/cranelift/codegen/src/isa/aarch64/` |
+| Language semantics | Zig (error unions, defer, comptime) |
 
 ---
 
-## Builtin Pipeline — How @builtins Flow Through the Compiler
+## Builtin Pipeline
 
-**READ THIS before adding or debugging any @builtin.**
+Two categories:
+| Category | Examples | Implementation |
+|----------|----------|----------------|
+| **Compiler intrinsics** | `@intCast`, `@sizeOf`, `@intToPtr` | Inline Wasm ops in `lower.zig` |
+| **Runtime functions** | `@alloc`, `@dealloc`, `@realloc`, `@memcpy` | Wasm module functions in `arc.zig` → `func_indices` in `driver.zig` |
 
-### Two categories of builtins
+**Runtime builtins are Wasm MODULE functions, NOT host imports.** The compiler has ZERO host imports. If a function name is missing from `func_indices`, `wasm_gen.zig` silently calls function index 0 (cot_alloc) — a silent bug.
 
-| Category | Examples | Wasm Implementation | Registered in |
-|----------|----------|---------------------|---------------|
-| **Compiler intrinsics** | `@intCast`, `@sizeOf`, `@intToPtr`, `@assert` | Inline Wasm ops (no function call) | Lowered directly in `lower.zig` |
-| **Runtime functions** | `@alloc`, `@dealloc`, `@realloc`, `@memcpy` | Wasm module functions with bytecode bodies | `arc.zig` → `driver.zig` func_indices |
-
-### Pipeline for runtime function builtins (e.g., @memcpy)
-
-```
-parser.zig        → Parse @memcpy(dst, src, len) into BuiltinCall AST node
-checker.zig       → Type-check arguments (all i64), return void
-lower.zig         → Emit IR call to "memcpy" function name
-ssa_builder.zig   → Convert to SSA call instruction
-wasm_gen.zig      → Look up "memcpy" in func_indices → emit call N
-arc.zig           → generateMemcpyBody() creates Wasm bytecode, addToLinker adds it
-driver.zig        → Registers memcpy_idx in func_indices map
-```
-
-### CRITICAL: Runtime builtins are Wasm MODULE functions, NOT host imports
-
-`cot_alloc`, `cot_retain`, `cot_release`, `cot_dealloc`, `cot_realloc`, `memset_zero`, `memcpy` — all are Wasm functions with bytecode bodies generated in `arc.zig` and added via `linker.addFunc()`. They are **NOT** libc/host imports.
-
-The compiler currently has **ZERO** host imports. All runtime functions are self-contained Wasm bytecode.
-
-**Why this matters:** If a function name is missing from `func_indices`, `wasm_gen.zig` silently falls back to calling function index 0 (cot_alloc). This is a silent bug — the call succeeds but does the wrong thing.
-
-### Adding a new runtime builtin
-
-1. `parser.zig` — Add parse case in builtin_call handler
-2. `checker.zig` — Add type-check case
-3. `lower.zig` — Add `emitCall("function_name", ...)` case
-4. `arc.zig` — Add `generate*Body()` function + add to `RuntimeFunctions` struct + add to `addToLinker()`
-5. `driver.zig` — Register in `func_indices`: `try func_indices.put(allocator, NAME, arc_funcs.*_idx)`
-6. `arc.zig` test — Update `addToLinker` test expected function count
-
-### Native AOT: translateElse no_else fix
-
-When a Wasm if/else structure exists inside a runtime function's bytecode body, the native CLIF translator must handle the case where `translateIf` created a `no_else` placeholder (destination = placeholder), but an `else` instruction is later encountered. In this case, `translateElse` must create a NEW else block and redirect the brif via `changeJumpDestination`, not reuse the destination as the else block (which would seal it prematurely).
-
----
-
-## Zig 0.15 API Changes
-
-**ArrayList requires allocator for each operation:**
-```zig
-// Use ArrayListUnmanaged
-var list: std.ArrayListUnmanaged(u8) = .{};
-defer list.deinit(allocator);
-try list.append(allocator, 42);
-const w = list.writer(allocator);
-```
-
----
-
-## Debugging
-
-**Use `compiler/pipeline_debug.zig`, NOT `std.debug.print`:**
-
-```zig
-const debug = @import("pipeline_debug.zig");
-debug.log(.codegen, "emitting {s}", .{op_name});
-```
-
-Run with debug output:
-```bash
-COT_DEBUG=parse,lower,codegen zig build test
-```
-
----
-
-## Behavioral Guidelines
-
-### DO
-
-- Run tests after every change: `zig build test`
-- Reference docs before implementing: check WASM_BACKEND.md or CRANELIFT_PORT_MASTER_PLAN.md
-- **Check `docs/specs/WASM_3_0_REFERENCE.md` when adding any feature that touches Wasm codegen** (see below)
-- Reference `bootstrap-0.2/` for working code examples
-- Make incremental changes, verify each one
-- Ask user for direction when uncertain
-
-### DO NOT
-
-- Modify bootstrap-0.2 (it's frozen)
-- Skip testing
-- Make large changes without verification
-- Autonomously change direction
-
-### When Stuck
-
-1. Check the relevant planning doc (WASM_BACKEND.md or CRANELIFT_PORT_MASTER_PLAN.md)
-2. Check if bootstrap-0.2 has working code for this
-3. **Study ~/learning/ reference implementations** (Go, Swift) to copy proven designs
-4. Reference DESIGN.md for intended architecture
-5. Report the issue clearly and ask user how to proceed
-
-### Persistence Requirements
-
-**NEVER give up on difficult code.** This project requires professional-grade implementation:
-
-- **DO NOT** comment out failing tests - fix them
-- **DO NOT** mark features as "needs work" and move on - complete them
-- **DO NOT** stash code or restore from git to avoid problems - solve them
-- **DO NOT** leave "TODO" comments for issues you encountered - resolve them now
-- **DO NOT** create "known issues" sections - there should be no known issues
-
-When code is difficult:
-1. Study the reference implementation in `~/learning/go/` or `~/learning/swift/`
-2. Understand WHY the reference design works
-3. Apply the same pattern to Cot
-4. Keep iterating until ALL tests pass
-5. Never move on until the feature is complete
-
-The project succeeds through persistence and copying proven designs, not shortcuts.
-
----
-
-## File Locations
-
-| Need | Location | Go Equivalent |
-|------|----------|---------------|
-| **Wasm codegen (core)** | `compiler/codegen/wasm/` | `wasm/ssa.go` |
-| ConstString rewrite | `compiler/ssa/passes/rewritegeneric.zig` | `rewritegeneric.go` |
-| Slice/String decompose | `compiler/ssa/passes/rewritedec.zig` | `rewritedec.go` |
-| Op lowering (generic→wasm) | `compiler/ssa/passes/lower_wasm.zig` | `lower.go` |
-| Native AOT codegen | `compiler/codegen/native/` | - |
-| Wasm→Native converter | `compiler/codegen/native/wasm_to_ssa.zig` | - |
-| SSA infrastructure | `compiler/ssa/` | `ssa/*.go` |
-| Frontend | `compiler/frontend/` | - |
-| Driver (orchestrates all) | `compiler/driver.zig` | `compile.go` |
-| CLI entry point | `compiler/main.zig` | - |
-
-| Documentation | Purpose |
-|---------------|---------|
-| `WASM_BACKEND.md` | Wasm implementation status and Go references |
-| `audit/SUMMARY.md` | Test results and component status |
-
----
-
-## Current Tasks
-
-**The project priority is closing the gap with bootstrap-0.2.** See [GAP_ANALYSIS.md](GAP_ANALYSIS.md).
-
-Every new feature must:
-1. **Work on Wasm** (`--target=wasm32`)
-2. **Work on native** (default target, AOT through CLIF)
-3. **Have test cases** (both `.cot` test files and unit tests)
-4. **Copy the reference implementation** (Go for Wasm path, Zig for language semantics, Cranelift for native path)
-
-### Priority: Close the Feature Gap
-
-| Wave | Features | Status |
-|------|----------|--------|
-| **A (Fundamentals)** | Floats, defer, union payloads, error unions, function pointers | ✅ COMPLETE |
-| **B (Expressiveness)** | Closures ✅, generics ✅, List(T) ✅, string interpolation, Map(K,V) | IN PROGRESS |
-| **C (Test Parity)** | Port ~486 test cases from bootstrap-0.2 | TODO |
-
-### Reference Implementations
-
-| Feature | Primary Reference | Location |
-|---------|------------------|----------|
-| Wasm codegen | Go compiler | `~/learning/go/src/cmd/compile/internal/wasm/` |
-| Language semantics | Zig compiler | `~/learning/zig/` (for error unions, comptime, defer) |
-| Native AOT | Cranelift | `~/learning/wasmtime/cranelift/` |
-| Register allocation | regalloc2 | `~/learning/regalloc2/src/` |
-
-**Cot follows Zig's language design** (error unions, defer, comptime) but uses **Go's compilation patterns** (SSA → Wasm) and **Cranelift's native codegen** (CLIF → MachInst → ARM64/x64).
-
----
-
-## Memory Management: ARC
-
-Cot uses Automatic Reference Counting:
-- Compiler inserts retain/release automatically
-- Same semantics for Wasm and native AOT targets
-- See `bootstrap-0.2/DESIGN.md` section "Memory Management: ARC"
+**To add a new runtime builtin:** parser.zig → checker.zig → lower.zig → arc.zig (body + addToLinker) → driver.zig (func_indices)
 
 ---
 
 ## Testing
 
 ```bash
-# All tests
-zig build test
+zig build test              # All tests
+COT_DEBUG=codegen zig build test  # With debug output
+```
 
-# Specific file
-zig test compiler/codegen/wasm_gen.zig
+**Every new feature must:**
+1. Work on Wasm (`--target=wasm32`)
+2. Work on native (default target)
+3. Have E2E test cases (both Wasm and native)
+4. Copy the reference implementation
 
-# With debug output
-COT_DEBUG=codegen zig test compiler/codegen/wasm_gen.zig
+---
+
+## Debugging
+
+Use `compiler/pipeline_debug.zig`, NOT `std.debug.print`:
+```zig
+const debug = @import("pipeline_debug.zig");
+debug.log(.codegen, "emitting {s}", .{op_name});
 ```
 
 ---
 
-## Language Design Summary
+## Zig 0.15 Note
 
-| Aspect | Choice |
-|--------|--------|
-| Syntax | Zig-inspired |
-| Memory | ARC (Automatic Reference Counting) |
-| Primary target | WebAssembly |
-| Secondary target | Native via AOT |
-| Niche | Full-stack apps (like Node.js, but compiled) |
-| Philosophy | Simple, type-safe, runs everywhere |
+```zig
+// Use ArrayListUnmanaged (allocator per operation)
+var list: std.ArrayListUnmanaged(u8) = .{};
+defer list.deinit(allocator);
+try list.append(allocator, 42);
+```
 
 ---
 
-## History
+## Behavioral Guidelines
 
-- **5 attempts** at self-hosting with native codegen all failed
-- **Root cause**: Native codegen complexity (register allocation, two ISAs, ABI edge cases)
-- **Solution**: Wasm-first architecture (stack machine, single calling convention)
-- **bootstrap-0.2**: Previous compiler with 619 test cases, direct native codegen (AMD64/ARM64)
-- **Current cot**: Wasm-first rewrite that has surpassed bootstrap-0.2 in features (114 test files, 832 total tests)
-- **Wasm backend** M1-M16 complete, **ARC** M17-M19 complete, **Language** M20-M23 complete
-- **Native AOT** complete via Cranelift port (CLIF IR, regalloc2, ARM64/x64) - 24 native E2E tests
-- **Phase 3 Wave 1-4** language features verified on both Wasm and native
-- **Phase 3 Wave 5** complete: floats, closures, function pointers, error unions, defer, ARC coverage, union payloads
-- **Next**: Generics → standard library → ecosystem (see GAP_ANALYSIS.md)
+**DO:**
+- Run `zig build test` after every change
+- Check `docs/specs/WASM_3_0_REFERENCE.md` when touching Wasm codegen
+- Check `docs/PIPELINE_ARCHITECTURE.md` for full pipeline reference map
+- Reference `bootstrap-0.2/` for working code examples
+- Make incremental changes, verify each one
+
+**DO NOT:**
+- Modify bootstrap-0.2 (frozen)
+- Skip testing
+- Invent approaches — copy reference implementations
+- Comment out failing tests, leave TODOs, or create "known issues"
+- Give up on difficult code — study the reference until you understand it
+
+**When stuck:** Read reference implementation → copy pattern → iterate until tests pass.
+
+---
+
+## Documents
+
+| Document | Purpose |
+|----------|---------|
+| `TROUBLESHOOTING.md` | **Debugging methodology — read before any debugging** |
+| `docs/PIPELINE_ARCHITECTURE.md` | **Full pipeline map, reference for every stage** |
+| `docs/BR_TABLE_ARCHITECTURE.md` | Why br_table appears in generated code |
+| `docs/specs/WASM_3_0_REFERENCE.md` | Wasm 3.0 opcodes and adoption plan |
+| `docs/ROADMAP_1_0.md` | Road to 1.0: versioning, feature waves, Wasm IR analysis |
+| `VISION.md` | Language vision, design principles, execution roadmap |
+| `docs/archive/` | Historical: completed milestones, past bug fixes, postmortems |
