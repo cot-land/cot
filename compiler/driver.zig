@@ -30,6 +30,7 @@ const wasm_gen = @import("codegen/wasm_gen.zig");
 const arc = @import("codegen/arc.zig"); // ARC runtime (Swift)
 const slice_runtime = @import("codegen/slice_runtime.zig"); // Slice runtime (Go)
 const print_runtime = @import("codegen/print_runtime.zig"); // Print runtime (Go)
+const test_runtime = @import("codegen/test_runtime.zig"); // Test runtime (Zig)
 
 // Native codegen modules (Cranelift-style AOT compiler)
 const native_compile = @import("codegen/native/compile.zig");
@@ -99,9 +100,17 @@ pub const Driver = struct {
         // Lower to IR
         var lowerer = lower_mod.Lowerer.init(self.allocator, &tree, &type_reg, &err_reporter, &chk);
         defer lowerer.deinit();
-        var ir_result = try lowerer.lower();
-        defer ir_result.deinit();
+        if (self.test_mode) lowerer.setTestMode(true);
+        try lowerer.lowerToBuilder();
         if (err_reporter.hasErrors()) return error.LowerError;
+
+        // Generate test runner if in test mode
+        if (self.test_mode and lowerer.test_names.items.len > 0) {
+            try lowerer.generateTestRunner();
+        }
+
+        var ir_result = try lowerer.builder.getIR();
+        defer ir_result.deinit();
 
         return self.generateCode(ir_result.funcs, ir_result.globals, &type_reg, "<input>", source_text);
     }
@@ -1100,6 +1109,12 @@ pub const Driver = struct {
         // ====================================================================
         const print_funcs = try print_runtime.addToLinker(self.allocator, &linker);
 
+        // ====================================================================
+        // Add test runtime functions (Zig test runner pattern)
+        // Reference: Zig test runner output format
+        // ====================================================================
+        const test_funcs = try test_runtime.addToLinker(self.allocator, &linker, print_funcs.write_idx, print_funcs.eprint_int_idx);
+
         // Get actual count from linker - never hardcode (Go: len(hostImports))
         const runtime_func_count = linker.funcCount();
 
@@ -1130,6 +1145,12 @@ pub const Driver = struct {
         try func_indices.put(self.allocator, print_runtime.WRITE_NAME, print_funcs.write_idx);
         try func_indices.put(self.allocator, print_runtime.PRINT_INT_NAME, print_funcs.print_int_idx);
         try func_indices.put(self.allocator, print_runtime.EPRINT_INT_NAME, print_funcs.eprint_int_idx);
+
+        // Add test function names to index map (Zig)
+        try func_indices.put(self.allocator, test_runtime.TEST_PRINT_NAME_NAME, test_funcs.test_print_name_idx);
+        try func_indices.put(self.allocator, test_runtime.TEST_PASS_NAME, test_funcs.test_pass_idx);
+        try func_indices.put(self.allocator, test_runtime.TEST_FAIL_NAME, test_funcs.test_fail_idx);
+        try func_indices.put(self.allocator, test_runtime.TEST_SUMMARY_NAME, test_funcs.test_summary_idx);
 
         // Add user function names (offset by ARC function count)
         for (funcs, 0..) |*ir_func, i| {

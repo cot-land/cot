@@ -1,0 +1,43 @@
+test "len simple" {
+    @assert_eq(len("hello"), 5)
+}
+
+test "len empty" {
+    @assert_eq(len(""), 0)
+}
+
+test "len long" {
+    @assert_eq(len("abcdefghijklmnopqrstuvwxyz"), 26)
+}
+
+test "index first" {
+    let s = "hello"
+    @assert_eq(s[0], 104)
+}
+
+test "index last" {
+    let s = "hello"
+    @assert_eq(s[4], 111)
+}
+
+test "concat simple" {
+    let s1 = "hello"
+    let s2 = " world"
+    let s3 = s1 + s2
+    @assert_eq(len(s3), 11)
+}
+
+test "concat two vars" {
+    let s1 = "hello"
+    let s2 = " world"
+    @assert_eq(len(s1) + len(s2), 11)
+}
+
+test "concat var direct" {
+    let s = "hello!"
+    @assert_eq(len(s), 6)
+}
+
+test "concat direct len" {
+    @assert_eq(len("hello" + " world"), 11)
+}

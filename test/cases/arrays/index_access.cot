@@ -1,5 +1,0 @@
-// EXPECT: exit_code=30
-fn main() i64 {
-    var arr = [10, 20, 30, 40, 50]
-    return arr[2]
-}

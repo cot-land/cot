@@ -1,7 +1,0 @@
-// EXPECT: exit_code=1
-fn main() int {
-    if (10 <= 10) {
-        return 1;
-    }
-    return 0;
-}

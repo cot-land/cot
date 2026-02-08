@@ -1485,11 +1485,15 @@ pub const AArch64LowerBackend = struct {
             },
         }) catch return null;
 
-        // TODO: Get actual condition from instruction
+        // Get the float condition code from instruction data (Cranelift pattern)
+        const inst_data = ctx.data(ir_inst);
+        const floatcc = inst_data.getFloatCC() orelse return null;
+        const cond = condFromFloatCC(floatcc);
+
         ctx.emit(Inst{
             .cset = .{
                 .rd = dst_reg,
-                .cond = .eq,
+                .cond = cond,
             },
         }) catch return null;
 
@@ -2593,17 +2597,23 @@ pub fn condFromIntCC(cc: IntCC) Cond {
 
 /// Convert FloatCC to AArch64 condition code.
 /// Note: Some FP comparisons require additional handling for NaN.
+/// Ported from Cranelift: cranelift/codegen/src/isa/aarch64/lower.rs lower_fp_condcode
+/// After ARM64 `fcmp`, NZCV flags have FP-specific meanings:
+///   N=1 (mi) → less than (ordered)
+///   Z=1 (eq) → equal
+///   C=0 (cc) → unordered or less than
+///   V=1 (vs) → unordered (NaN)
 pub fn condFromFloatCC(cc: FloatCC) Cond {
     return switch (cc) {
-        .eq => .eq,
-        .ne => .ne,
-        .lt => .lt,
-        .le => .le,
-        .gt => .gt,
-        .ge => .ge,
-        .ord => .vc, // no overflow (no NaN)
-        .uno => .vs, // overflow (NaN)
-        else => .eq, // TODO: Handle other cases
+        .eq => .eq, // Equal (Z=1)
+        .ne => .ne, // Not equal (Z=0)
+        .lt => .mi, // Less than, ordered (N=1)
+        .le => .ls, // Less or equal, ordered (C=0 or Z=1)
+        .gt => .gt, // Greater than (Z=0 and N=V)
+        .ge => .ge, // Greater or equal (N=V)
+        .ord => .vc, // Ordered, no NaN (V=0)
+        .uno => .vs, // Unordered, NaN (V=1)
+        else => .eq,
     };
 }
 

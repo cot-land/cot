@@ -1,8 +1,0 @@
-// Compound or-assign: x |= 15
-// EXPECT: exit_code=255
-
-fn main() i64 {
-    var x = 240
-    x |= 15
-    return x
-}

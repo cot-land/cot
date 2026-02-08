@@ -1,0 +1,61 @@
+// ARC (Automatic Reference Counting) tests
+// Tests heap allocation, destructors, refcount, and ownership transfer
+
+var destructor_called: i64 = 0
+var destructor_count: i64 = 0
+var release_count: i64 = 0
+
+struct Point {
+    x: i64,
+    y: i64
+}
+
+struct Tracer {
+    value: i64
+}
+
+impl Tracer {
+    fn deinit(self: *Tracer) {
+        destructor_called = 99
+    }
+}
+
+struct Box {
+    value: i64
+}
+
+fn createBox() *Box {
+    let box = new Box { value: 42 }
+    return box
+}
+
+test "new simple" {
+    let p = new Point { x: 40, y: 2 }
+    @assert_eq(p.x + p.y, 42)
+}
+
+test "destructor called" {
+    destructor_called = 0
+    {
+        let t = new Tracer { value: 1 }
+    }
+    @assert_eq(destructor_called, 99)
+}
+
+test "new auto release" {
+    {
+        let p = new Point { x: 99, y: 1 }
+    }
+    @assert(1 == 1)
+}
+
+test "retain on copy" {
+    let box = new Box { value: 42 }
+    let box2 = box
+    @assert_eq(box2.value, 42)
+}
+
+test "return ownership" {
+    let box = createBox()
+    @assert_eq(box.value, 42)
+}

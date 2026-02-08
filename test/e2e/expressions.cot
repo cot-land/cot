@@ -1,0 +1,951 @@
+// E2E tests: Expressions (160 tests)
+// Ported from bootstrap-0.2
+
+// === Helper functions (unique names to avoid collisions) ===
+
+fn expr_add(a: i64, b: i64) i64 { return a + b; }
+fn expr_sub(a: i64, b: i64) i64 { return a - b; }
+fn expr_mul(a: i64, b: i64) i64 { return a * b; }
+fn expr_div(a: i64, b: i64) i64 { return a / b; }
+fn expr_calc(a: i64, b: i64, c: i64) i64 { return (a + b) * c; }
+fn expr_inner(x: i64) i64 { return x * 2; }
+fn expr_outer(x: i64) i64 { return expr_inner(x) + 1; }
+fn expr_mod(a: i64, b: i64) i64 { return a % b; }
+fn expr_neg(x: i64) i64 { return -x; }
+fn expr_bitand(a: i64, b: i64) i64 { return a & b; }
+fn expr_bitor(a: i64, b: i64) i64 { return a | b; }
+fn expr_bitxor(a: i64, b: i64) i64 { return a ^ b; }
+fn expr_shl(a: i64, b: i64) i64 { return a << b; }
+fn expr_shr(a: i64, b: i64) i64 { return a >> b; }
+fn expr_lt(a: i64, b: i64) i64 { if a < b { return 1; } return 0; }
+fn expr_le(a: i64, b: i64) i64 { if a <= b { return 1; } return 0; }
+fn expr_gt(a: i64, b: i64) i64 { if a > b { return 1; } return 0; }
+fn expr_ge(a: i64, b: i64) i64 { if a >= b { return 1; } return 0; }
+fn expr_eq(a: i64, b: i64) i64 { if a == b { return 1; } return 0; }
+fn expr_ne(a: i64, b: i64) i64 { if a != b { return 1; } return 0; }
+fn expr_chain(a: i64, b: i64, c: i64) i64 { return a + b + c + a + b + c; }
+fn expr_prec() i64 { return 2 + 3 * 4; }
+fn expr_left_assoc() i64 { return 100 - 30 - 20; }
+fn expr_mixed() i64 { return 10 + 20 * 3 - 5; }
+fn expr_div_mod(a: i64, b: i64) i64 { return (a / b) + (a % b); }
+fn expr_chain4(a: i64, b: i64, c: i64, d: i64) i64 {
+    return a + b - c + d - a + b - c + d;
+}
+fn expr_bitnot(x: i64) i64 { return ~x; }
+fn expr_shift_chain(x: i64) i64 { return ((x << 2) >> 1) << 1; }
+fn expr_bitcombo(a: i64, b: i64) i64 { return (a & b) | (a ^ b); }
+fn expr_max(a: i64, b: i64) i64 { if a > b { return a; } return b; }
+fn expr_min(a: i64, b: i64) i64 { if a < b { return a; } return b; }
+fn expr_abs(x: i64) i64 { if x < 0 { return -x; } return x; }
+fn expr_sign(x: i64) i64 {
+    if x < 0 { return -1; }
+    if x > 0 { return 1; }
+    return 0;
+}
+fn expr_clamp(x: i64, lo: i64, hi: i64) i64 {
+    if x < lo { return lo; }
+    if x > hi { return hi; }
+    return x;
+}
+fn expr_power(base: i64, exp: i64) i64 {
+    var result: i64 = 1;
+    var i: i64 = 0;
+    while i < exp {
+        result = result * base;
+        i = i + 1;
+    }
+    return result;
+}
+fn expr_square(x: i64) i64 { return x * x; }
+fn expr_cube(x: i64) i64 { return x * x * x; }
+fn expr_sum_squares(n: i64) i64 {
+    var sum: i64 = 0;
+    var i: i64 = 1;
+    while i <= n {
+        sum = sum + i * i;
+        i = i + 1;
+    }
+    return sum;
+}
+fn expr_avg(a: i64, b: i64, c: i64) i64 { return (a + b + c) / 3; }
+fn expr_tri_area(base: i64, height: i64) i64 { return (base * height) / 2; }
+fn expr_rect_area(w: i64, h: i64) i64 { return w * h; }
+fn expr_distance(x1: i64, y1: i64, x2: i64, y2: i64) i64 {
+    return expr_abs(x2 - x1) + expr_abs(y2 - y1);
+}
+fn expr_dot(x1: i64, y1: i64, x2: i64, y2: i64) i64 {
+    return x1 * x2 + y1 * y2;
+}
+fn expr_cross(x1: i64, y1: i64, x2: i64, y2: i64) i64 {
+    return x1 * y2 - y1 * x2;
+}
+fn expr_lerp(a: i64, b: i64, t: i64) i64 {
+    return a + (b - a) * t / 100;
+}
+fn expr_popcount(n: i64) i64 {
+    var count: i64 = 0;
+    var x: i64 = n;
+    while x != 0 {
+        count = count + (x & 1);
+        x = x >> 1;
+    }
+    return count;
+}
+fn expr_reverse8(n: i64) i64 {
+    var result: i64 = 0;
+    var x: i64 = n;
+    var i: i64 = 0;
+    while i < 8 {
+        result = result << 1;
+        result = result | (x & 1);
+        x = x >> 1;
+        i = i + 1;
+    }
+    return result;
+}
+fn expr_is_pow2(n: i64) i64 {
+    if n <= 0 { return 0; }
+    if (n & (n - 1)) == 0 { return 1; }
+    return 0;
+}
+fn expr_neg_div(a: i64, b: i64) i64 { return (-a) / b; }
+fn expr_div_neg(a: i64, b: i64) i64 { return a / (-b); }
+fn expr_neg_mod(a: i64, b: i64) i64 { return (-a) % b; }
+fn expr_double_neg(x: i64) i64 { return -(-x); }
+fn expr_triple_neg(x: i64) i64 { return -(-(-x)); }
+fn expr_in_range(x: i64, lo: i64, hi: i64) i64 {
+    if x >= lo {
+        if x <= hi { return 1; }
+    }
+    return 0;
+}
+fn expr_is_zero(x: i64) i64 { if x == 0 { return 1; } return 0; }
+fn expr_is_neg(x: i64) i64 { if x < 0 { return 1; } return 0; }
+fn expr_align_up(n: i64, align: i64) i64 {
+    return (n + align - 1) & (0 - align);
+}
+fn expr_extract_byte(x: i64, pos: i64) i64 {
+    return (x >> (pos * 8)) & 0xFF;
+}
+fn expr_count_bits(n: i64) i64 {
+    var count: i64 = 0;
+    var x: i64 = n;
+    while x > 0 {
+        count = count + (x & 1);
+        x = x >> 1;
+    }
+    return count;
+}
+fn expr_clz_byte(x: i64) i64 {
+    var count: i64 = 0;
+    var mask: i64 = 0x80;
+    while mask > 0 {
+        if (x & mask) != 0 {
+            return count;
+        }
+        count = count + 1;
+        mask = mask >> 1;
+    }
+    return 8;
+}
+
+// === Tests ===
+
+test "001: simple addition" {
+    @assert_eq(expr_add(40, 2), 42)
+}
+
+test "002: simple subtraction" {
+    @assert_eq(expr_sub(50, 8), 42)
+}
+
+test "003: multiplication" {
+    @assert_eq(expr_mul(6, 7), 42)
+}
+
+test "004: division" {
+    @assert_eq(expr_div(84, 2), 42)
+}
+
+test "005: complex expression" {
+    @assert_eq(expr_calc(3, 4, 6), 42)
+}
+
+test "006: nested function calls" {
+    @assert_eq(expr_outer(20), 41)
+}
+
+test "007: modulo" {
+    @assert_eq(expr_mod(17, 5), 2)
+}
+
+test "008: negation" {
+    @assert_eq(expr_neg(42), -42)
+}
+
+test "009: bitwise AND" {
+    @assert_eq(expr_bitand(0xFF, 0x0F), 0x0F)
+}
+
+test "010: bitwise OR" {
+    @assert_eq(expr_bitor(0xF0, 0x0F), 0xFF)
+}
+
+test "011: bitwise XOR" {
+    @assert_eq(expr_bitxor(0xFF, 0x0F), 0xF0)
+}
+
+test "012: shift left" {
+    @assert_eq(expr_shl(1, 4), 16)
+}
+
+test "013: shift right" {
+    @assert_eq(expr_shr(256, 4), 16)
+}
+
+test "014: compare less than" {
+    @assert_eq(expr_lt(5, 10), 1)
+}
+
+test "015: compare less equal" {
+    @assert_eq(expr_le(5, 5), 1)
+}
+
+test "016: compare greater than" {
+    @assert_eq(expr_gt(10, 5), 1)
+}
+
+test "017: compare greater equal" {
+    @assert_eq(expr_ge(5, 5), 1)
+}
+
+test "018: compare equal" {
+    @assert_eq(expr_eq(42, 42), 1)
+}
+
+test "019: compare not equal" {
+    @assert_eq(expr_ne(1, 2), 1)
+}
+
+test "020: chained addition" {
+    @assert_eq(expr_chain(1, 2, 3), 12)
+}
+
+test "021: parenthesized expression" {
+    @assert_eq(expr_calc(2, 3, 4), 20)
+}
+
+test "022: operator precedence" {
+    @assert_eq(expr_prec(), 14)
+}
+
+test "023: left associativity" {
+    @assert_eq(expr_left_assoc(), 50)
+}
+
+test "024: mixed operators" {
+    @assert_eq(expr_mixed(), 65)
+}
+
+test "025: div and mod combined" {
+    @assert_eq(expr_div_mod(17, 5), 5)
+}
+
+test "026: long chain" {
+    @assert_eq(expr_chain4(1, 2, 3, 4), 6)
+}
+
+test "027: bitwise NOT" {
+    @assert_eq(expr_bitnot(0) & 0xFF, 0xFF)
+}
+
+test "028: shift chain" {
+    @assert_eq(expr_shift_chain(1), 4)
+}
+
+test "029: bit combo" {
+    @assert_eq(expr_bitcombo(0xF0, 0x0F), 0xFF)
+}
+
+test "030: arithmetic with assignment" {
+    var x: i64 = 10;
+    x = x + 5;
+    x = x * 2;
+    x = x - 10;
+    @assert_eq(x, 20)
+}
+
+test "031: negation arithmetic" {
+    @assert_eq(-10 + 20, 10)
+}
+
+test "032: zero comparison" {
+    @assert_eq(expr_is_zero(0), 1)
+}
+
+test "033: negative comparison" {
+    @assert_eq(expr_is_neg(-5), 1)
+}
+
+test "034: in range check" {
+    @assert_eq(expr_in_range(5, 1, 10), 1)
+}
+
+test "035: max" {
+    @assert_eq(expr_max(3, 7), 7)
+}
+
+test "036: min" {
+    @assert_eq(expr_min(3, 7), 3)
+}
+
+test "037: abs" {
+    @assert_eq(expr_abs(-42), 42)
+}
+
+test "038: sign" {
+    @assert_eq(expr_sign(-10), -1)
+}
+
+test "039: clamp" {
+    @assert_eq(expr_clamp(50, 0, 10), 10)
+}
+
+test "040: power" {
+    @assert_eq(expr_power(2, 10), 1024)
+}
+
+test "041: square" {
+    @assert_eq(expr_square(7), 49)
+}
+
+test "042: cube" {
+    @assert_eq(expr_cube(4), 64)
+}
+
+test "043: sum of squares" {
+    @assert_eq(expr_sum_squares(5), 55)
+}
+
+test "044: average" {
+    @assert_eq(expr_avg(10, 20, 30), 20)
+}
+
+test "045: triangle area" {
+    @assert_eq(expr_tri_area(10, 8), 40)
+}
+
+test "046: rectangle area" {
+    @assert_eq(expr_rect_area(5, 7), 35)
+}
+
+test "047: manhattan distance" {
+    @assert_eq(expr_distance(1, 2, 4, 6), 7)
+}
+
+test "048: dot product" {
+    @assert_eq(expr_dot(2, 3, 4, 5), 23)
+}
+
+test "049: cross product" {
+    @assert_eq(expr_cross(2, 3, 4, 5), -2)
+}
+
+test "050: lerp" {
+    @assert_eq(expr_lerp(0, 100, 50), 50)
+}
+
+test "051: large constant" {
+    @assert_eq(1000000000, 1000000000)
+}
+
+test "052: negative constant" {
+    @assert_eq(-123456, -123456)
+}
+
+test "053: hex constant" {
+    var x: i64 = 0xDEADBEEF;
+    @assert_eq(x, 0xDEADBEEF)
+}
+
+test "054: zero" {
+    @assert_eq(0, 0)
+}
+
+test "055: one" {
+    @assert_eq(1, 1)
+}
+
+test "056: multiply then add" {
+    @assert_eq(3 * 4 + 5, 17)
+}
+
+test "057: divide then subtract" {
+    @assert_eq(100 / 10 - 5, 5)
+}
+
+test "058: nested parentheses" {
+    @assert_eq((1 + 2) * (3 + 4), 21)
+}
+
+test "059: sum of squares direct" {
+    @assert_eq((3 * 3) + (4 * 4) + (5 * 5), 50)
+}
+
+test "060: all arithmetic ops" {
+    var sum: i64 = 20 + 4;
+    var diff: i64 = 20 - 4;
+    var prod: i64 = 20 * 4;
+    var quot: i64 = 20 / 4;
+    @assert_eq(sum + diff + prod + quot, 125)
+}
+
+test "061: bitwise combo" {
+    @assert_eq((0xAA & 0x55) ^ (0xAA | 0x55), 0xFF)
+}
+
+test "062: mask extract byte" {
+    @assert_eq(expr_extract_byte(0x12345678, 1), 0x56)
+}
+
+test "063: population count" {
+    @assert_eq(expr_popcount(0xFF), 8)
+}
+
+test "064: reverse bits" {
+    @assert_eq(expr_reverse8(0xB0), 0x0D)
+}
+
+test "065: is power of 2" {
+    @assert_eq(expr_is_pow2(64), 1)
+}
+
+test "066: negative division" {
+    @assert_eq(expr_neg_div(20, 4), -5)
+}
+
+test "067: division by negative" {
+    @assert_eq(expr_div_neg(20, 4), -5)
+}
+
+test "068: negative modulo" {
+    @assert_eq(expr_neg_mod(17, 5), -2)
+}
+
+test "069: double negation" {
+    @assert_eq(expr_double_neg(42), 42)
+}
+
+test "070: triple negation" {
+    @assert_eq(expr_triple_neg(42), -42)
+}
+
+test "071: bitwise NOT twice" {
+    var x: i64 = 42;
+    @assert_eq(~(~x), 42)
+}
+
+test "072: large shift" {
+    @assert_eq(1 << 32, 0x100000000)
+}
+
+test "073: shift by zero" {
+    @assert_eq(42 << 0, 42)
+}
+
+test "074: complex shift" {
+    @assert_eq(((0x0A << 4) | (0xB0 >> 4)) & 0xFF, 0xAB)
+}
+
+test "075: overflow add wraps" {
+    var big: i64 = 0x7FFFFFFFFFFFFFFF;
+    var result: i64 = big + 1;
+    @assert(result < 0)
+}
+
+test "076: division edge case" {
+    var x: i64 = 100;
+    var y: i64 = 7;
+    var q: i64 = x / y;
+    var r: i64 = x % y;
+    @assert_eq(q, 14)
+    @assert_eq(r, 2)
+}
+
+test "077: negative division" {
+    var x: i64 = 0 - 100;
+    var y: i64 = 7;
+    var q: i64 = x / y;
+    @assert_eq(q, 0 - 14)
+}
+
+test "078: chain add" {
+    var r: i64 = 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 10;
+    @assert_eq(r, 55)
+}
+
+test "079: chain multiply" {
+    var r: i64 = 1 * 2 * 3 * 4 * 5;
+    @assert_eq(r, 120)
+}
+
+test "080: mixed chain" {
+    var r: i64 = 10 + 20 * 2 - 30 / 3;
+    @assert_eq(r, 40)
+}
+
+test "081: parentheses" {
+    var r: i64 = (10 + 20) * 2;
+    @assert_eq(r, 60)
+}
+
+test "082: nested parentheses" {
+    var r: i64 = ((1 + 2) * (3 + 4)) * 2;
+    @assert_eq(r, 42)
+}
+
+test "083: bit AND" {
+    var a: i64 = 0x0F;
+    var b: i64 = 0x0A;
+    @assert_eq(a & b, 0x0A)
+}
+
+test "084: bit OR" {
+    var a: i64 = 0x0C;
+    var b: i64 = 0x03;
+    @assert_eq(a | b, 0x0F)
+}
+
+test "085: bit XOR" {
+    var a: i64 = 0x0F;
+    var b: i64 = 0x0A;
+    @assert_eq(a ^ b, 0x05)
+}
+
+test "086: large numbers" {
+    var x: i64 = 1000000000;
+    var y: i64 = 2000000000;
+    @assert_eq(x + y, 3000000000)
+}
+
+test "087: very large numbers" {
+    var x: i64 = 4000000000000;
+    var y: i64 = 5000000000000;
+    @assert_eq(x + y, 9000000000000)
+}
+
+test "088: max i64" {
+    var max: i64 = 9223372036854775807;
+    var one: i64 = 1;
+    @assert(max > max - one)
+}
+
+test "089: min i64" {
+    var min: i64 = 0 - 9223372036854775807 - 1;
+    var one: i64 = 1;
+    @assert(min < min + one)
+}
+
+test "090: hex literals" {
+    var x: i64 = 0xFF;
+    var y: i64 = 0x100;
+    @assert_eq(x + 1, y)
+}
+
+test "091: shift left" {
+    var x: i64 = 1;
+    @assert_eq(x << 4, 16)
+}
+
+test "092: shift right" {
+    var x: i64 = 256;
+    @assert_eq(x >> 4, 16)
+}
+
+test "093: shift both" {
+    var x: i64 = 8;
+    @assert_eq(x << 2, 32)
+    @assert_eq(x >> 2, 2)
+}
+
+test "094: bit ops combined" {
+    var a: i64 = 0x0C;
+    var b: i64 = 0x0A;
+    var c: i64 = (a & b) | (a ^ b);
+    @assert_eq(c, 0x0E)
+}
+
+test "095: power of two check" {
+    var n: i64 = 32;
+    @assert_eq(n & (n - 1), 0)
+}
+
+test "096: mask low bits" {
+    var x: i64 = 0xFF;
+    var mask: i64 = 0x0F;
+    @assert_eq(x & mask, 0x0F)
+}
+
+test "097: set bit" {
+    var x: i64 = 0;
+    var bit: i64 = 3;
+    x = x | (1 << bit);
+    @assert_eq(x, 8)
+}
+
+test "098: clear bit" {
+    var x: i64 = 0x0F;
+    var bit: i64 = 2;
+    x = x & (0 - 1 - (1 << bit));
+    @assert_eq(x, 0x0B)
+}
+
+test "099: toggle bit" {
+    var x: i64 = 0x0A;
+    var bit: i64 = 1;
+    x = x ^ (1 << bit);
+    @assert_eq(x, 0x08)
+}
+
+test "100: count bits" {
+    @assert_eq(expr_count_bits(0xEA), 5)
+}
+
+test "101: precedence" {
+    var r: i64 = 2 + 3 * 4;
+    @assert_eq(r, 14)
+}
+
+test "102: precedence 2" {
+    var r: i64 = 20 / 4 + 3 * 2;
+    @assert_eq(r, 11)
+}
+
+test "103: compare chain" {
+    var a: i64 = 5;
+    var b: i64 = 10;
+    var c: i64 = 15;
+    var r1: i64 = 0;
+    var r2: i64 = 0;
+    var r3: i64 = 0;
+    if a < b { r1 = 1; }
+    if b < c { r2 = 1; }
+    if a < c { r3 = 1; }
+    @assert_eq(r1, 1)
+    @assert_eq(r2, 1)
+    @assert_eq(r3, 1)
+}
+
+test "104: complex condition" {
+    var x: i64 = 50;
+    @assert(x >= 0)
+    @assert(x <= 100)
+}
+
+test "105: zero compare" {
+    var x: i64 = 0;
+    @assert_eq(x, 0)
+    @assert(x >= 0)
+    @assert(x <= 0)
+}
+
+test "106: unary minus" {
+    var x: i64 = 42;
+    var y: i64 = 0 - x;
+    @assert_eq(y, 0 - 42)
+}
+
+test "107: double negation via sub" {
+    var x: i64 = 42;
+    var y: i64 = 0 - (0 - x);
+    @assert_eq(y, 42)
+}
+
+test "108: triple multiply" {
+    var a: i64 = 2;
+    var b: i64 = 3;
+    var c: i64 = 4;
+    @assert_eq(a * b * c, 24)
+}
+
+test "109: quad add" {
+    @assert_eq(10 + 20 + 30 + 40, 100)
+}
+
+test "110: mixed ops" {
+    @assert_eq(100 - 50 + 25 - 10 + 5, 70)
+}
+
+test "111: shift as multiply" {
+    var x: i64 = 5;
+    @assert_eq(x << 3, 40)
+}
+
+test "112: shift as divide" {
+    var x: i64 = 64;
+    @assert_eq(x >> 3, 8)
+}
+
+test "113: align up" {
+    @assert_eq(expr_align_up(13, 8), 16)
+}
+
+test "114: complex shift" {
+    var x: i64 = 1;
+    var y: i64 = x << 10;
+    var z: i64 = y >> 5;
+    @assert_eq(z, 32)
+}
+
+test "115: bit extract" {
+    @assert_eq(expr_extract_byte(0x12345678, 0), 0x78)
+}
+
+test "116: rotate bits" {
+    var x: i64 = 0xF0;
+    var left: i64 = (x << 4) & 0xFF;
+    var right: i64 = (x >> 4) & 0xFF;
+    @assert_eq(left, 0)
+    @assert_eq(right, 0x0F)
+}
+
+test "117: swap bytes" {
+    var x: i64 = 0x1234;
+    var lo: i64 = x & 0xFF;
+    var hi: i64 = (x >> 8) & 0xFF;
+    var swapped: i64 = (lo << 8) | hi;
+    @assert_eq(swapped, 0x3412)
+}
+
+test "118: count leading zeros" {
+    @assert_eq(expr_clz_byte(0x20), 2)
+}
+
+test "119: zero checks" {
+    var x: i64 = 0;
+    @assert_eq(x, 0)
+}
+
+test "120: negative compare" {
+    var neg: i64 = 0 - 10;
+    var pos: i64 = 10;
+    @assert(neg < 0)
+    @assert(neg < pos)
+    @assert(pos > 0)
+}
+
+test "121: power of three" {
+    @assert_eq(3 * 3 * 3 * 3, 81)
+}
+
+test "122: sum of products" {
+    @assert_eq(2 * 3 + 4 * 5 + 6 * 7, 68)
+}
+
+test "123: nested mod" {
+    @assert_eq(100 % 30 % 7, 3)
+}
+
+test "124: division chain" {
+    @assert_eq(1000 / 10 / 5 / 2, 10)
+}
+
+test "125: mixed arithmetic" {
+    @assert_eq((10 + 5) * 3 - 20 / 4, 40)
+}
+
+test "126: compare chain nested" {
+    var a: i64 = 5;
+    var b: i64 = 10;
+    var c: i64 = 15;
+    var result: i64 = 0;
+    if a < b {
+        if b < c {
+            result = 1;
+        }
+    }
+    @assert_eq(result, 1)
+}
+
+test "127: equality chain" {
+    var a: i64 = 5;
+    var b: i64 = 5;
+    var c: i64 = 5;
+    var result: i64 = 0;
+    if a == b {
+        if b == c {
+            result = 1;
+        }
+    }
+    @assert_eq(result, 1)
+}
+
+test "128: negative division" {
+    @assert_eq((0 - 20) / 4, 0 - 5)
+}
+
+test "129: negative modulo" {
+    @assert_eq((0 - 17) % 5, 0 - 2)
+}
+
+test "130: abs both signs" {
+    @assert_eq(expr_abs(0 - 42), 42)
+    @assert_eq(expr_abs(42), 42)
+}
+
+test "131: bitwise AND" {
+    @assert_eq(15 & 9, 9)
+}
+
+test "132: bitwise OR" {
+    @assert_eq(12 | 10, 14)
+}
+
+test "133: bitwise XOR" {
+    @assert_eq(12 ^ 10, 6)
+}
+
+test "134: left shift" {
+    @assert_eq(5 << 3, 40)
+}
+
+test "135: right shift" {
+    @assert_eq(64 >> 3, 8)
+}
+
+test "136: combined shift" {
+    var x: i64 = 1;
+    @assert_eq((x << 4) + (x << 2) + (x << 1), 22)
+}
+
+test "137: mask" {
+    @assert_eq(255 & 15, 15)
+}
+
+test "138: set multiple bits" {
+    var x: i64 = 0;
+    x = x | (1 << 3);
+    x = x | (1 << 5);
+    @assert_eq(x, 40)
+}
+
+test "139: clear bit" {
+    var x: i64 = 255;
+    x = x & (255 - 8);
+    @assert_eq(x, 247)
+}
+
+test "140: toggle bit" {
+    var x: i64 = 5;
+    x = x ^ 4;
+    @assert_eq(x, 1)
+}
+
+test "141: chained compare" {
+    var a: i64 = 5;
+    var b: i64 = 10;
+    var c: i64 = 15;
+    var r1: i64 = 0;
+    var r2: i64 = 0;
+    if a < b { r1 = 1; }
+    if b < c { r2 = 1; }
+    @assert_eq(r1, 1)
+    @assert_eq(r2, 1)
+}
+
+test "142: compound expression" {
+    @assert_eq((2 + 3) * (3 + 4), 35)
+}
+
+test "143: division by power" {
+    @assert_eq(256 / 4 / 4 / 4, 4)
+}
+
+test "144: mod chain" {
+    var r1: i64 = 100 % 17;
+    var r2: i64 = r1 % 5;
+    @assert_eq(r2, 0)
+}
+
+test "145: arithmetic mix" {
+    var a: i64 = 10;
+    var b: i64 = 3;
+    var sum: i64 = a + b;
+    var diff: i64 = a - b;
+    var prod: i64 = a * b;
+    var quot: i64 = a / b;
+    var rem: i64 = a % b;
+    @assert_eq(sum + diff + prod + quot + rem, 54)
+}
+
+test "146: nested paren" {
+    var x: i64 = ((2 + 3) * (4 + 5)) - ((1 + 2) * (3 + 4));
+    @assert_eq(x, 24)
+}
+
+test "147: multi multiply" {
+    @assert_eq(2 * 3 * 4 * 5, 120)
+}
+
+test "148: multi add" {
+    @assert_eq(10 + 20 + 30 + 40 + 50, 150)
+}
+
+test "149: multi subtract" {
+    @assert_eq(100 - 10 - 20 - 30, 40)
+}
+
+test "150: associativity test" {
+    var a: i64 = 100 - 50 - 25;
+    var b: i64 = 100 - (50 - 25);
+    @assert_eq(a, 25)
+    @assert_eq(b, 75)
+}
+
+test "151: square expression" {
+    var x: i64 = 7;
+    @assert_eq(x * x, 49)
+}
+
+test "152: cube expression" {
+    var x: i64 = 4;
+    @assert_eq(x * x * x, 64)
+}
+
+test "153: fourth power" {
+    var x: i64 = 3;
+    @assert_eq(x * x * x * x, 81)
+}
+
+test "154: difference of squares" {
+    var a: i64 = 10;
+    var b: i64 = 6;
+    @assert_eq(a * a - b * b, 64)
+}
+
+test "155: sum of squares" {
+    @assert_eq(3 * 3 + 4 * 4, 25)
+}
+
+test "156: product" {
+    @assert_eq(2 * 3 * 7, 42)
+}
+
+test "157: quotient" {
+    @assert_eq(84 / 2, 42)
+}
+
+test "158: remainder" {
+    @assert_eq(47 % 5, 2)
+}
+
+test "159: complex arithmetic" {
+    @assert_eq(2 + 3 * 4 - 6 / 2, 11)
+}
+
+test "160: parenthesized priority" {
+    var a: i64 = 2 + 3 * 4;
+    var b: i64 = (2 + 3) * 4;
+    @assert_eq(a, 14)
+    @assert_eq(b, 20)
+}

@@ -1304,53 +1304,58 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, emit_info: *const EmitInfo, st
         },
 
         // FPU unary operations
+        // Cranelift emit.rs: FpuRR encoding with full top22 values
         .fpu_rr => |payload| {
             const ftype = @as(u32, payload.size.ftype());
-            const enc: u32 = switch (payload.fpu_op) {
+            const top22: u32 = switch (payload.fpu_op) {
                 .abs => 0b000_11110_00_1_000001_10000, // FABS
                 .neg => 0b000_11110_00_1_000010_10000, // FNEG
                 .sqrt => 0b000_11110_00_1_000011_10000, // FSQRT
                 .cvt32_to_64 => 0b000_11110_00_1_00010_1_10000, // FCVT S->D
                 .cvt64_to_32 => 0b000_11110_01_1_00010_0_10000, // FCVT D->S
             };
+            // Insert ftype at position 12 (instruction bits 23:22)
             // For cvt operations, ftype is already encoded in the opcode
-            const adjusted_enc = switch (payload.fpu_op) {
-                .cvt32_to_64, .cvt64_to_32 => enc,
-                else => enc | (ftype << 22),
+            const adjusted_top22 = switch (payload.fpu_op) {
+                .cvt32_to_64, .cvt64_to_32 => top22,
+                else => top22 | (ftype << 12),
             };
-            try sink.put4(encFpurr(adjusted_enc >> 10, payload.rd, payload.rn));
+            try sink.put4(encFpurr(adjusted_top22, payload.rd, payload.rn));
         },
 
         // FPU binary operations
+        // Cranelift emit.rs: FpuRRR encoding with full top22 values
         .fpu_rrr => |payload| {
             const ftype = @as(u32, payload.size.ftype());
-            const opcode: u32 = switch (payload.fpu_op) {
-                .add => 0b001010, // FADD
-                .sub => 0b001110, // FSUB
-                .mul => 0b000010, // FMUL
-                .div => 0b000110, // FDIV
-                .max => 0b010010, // FMAX
-                .min => 0b010110, // FMIN
+            const top22: u32 = switch (payload.fpu_op) {
+                .add => 0b000_11110_00_1_00000_001010, // FADD
+                .sub => 0b000_11110_00_1_00000_001110, // FSUB
+                .mul => 0b000_11110_00_1_00000_000010, // FMUL
+                .div => 0b000_11110_00_1_00000_000110, // FDIV
+                .max => 0b000_11110_00_1_00000_010010, // FMAX
+                .min => 0b000_11110_00_1_00000_010110, // FMIN
             };
-            // 000 11110 ty 1 Rm opcode Rn Rd
+            // Insert ftype at position 12 (instruction bits 23:22)
+            // Cranelift: top22 | size.ftype() << 12
             try sink.put4(encFpurrr(
-                0b000_11110_00_1 | (ftype << 0),
+                top22 | (ftype << 12),
                 payload.rd,
                 payload.rn,
                 payload.rm,
-            ) | (opcode << 10));
+            ));
         },
 
         // FPU ternary operations (fused multiply-add/sub)
+        // Cranelift emit.rs: FpuRRRR encoding with full top17 values
         .fpu_rrrr => |payload| {
             const ftype = @as(u32, payload.size.ftype());
-            const o1: u32 = switch (payload.fpu_op) {
-                .madd => 0, // FMADD
-                .msub => 1, // FMSUB
+            const top17: u32 = switch (payload.fpu_op) {
+                .madd => 0b0_00_11111_00_0_00000_0, // FMADD
+                .msub => 0b0_00_11111_00_1_00000_0, // FMSUB
             };
-            // 000 11111 ty o1 Rm o0 Ra Rn Rd
+            // Insert ftype at position 7 (instruction bits 23:22)
             try sink.put4(encFpurrrr(
-                0b000_11111_00 | (ftype << 0) | (o1 << 5),
+                top17 | (ftype << 7),
                 payload.rd,
                 payload.rn,
                 payload.rm,
@@ -1359,6 +1364,7 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, emit_info: *const EmitInfo, st
         },
 
         // FPU rounding
+        // ARM64: 000 11110 ftype 1 001 rmode 0 10000 Rn Rd
         .fpu_round => |payload| {
             const ftype = @as(u32, payload.size.ftype());
             const rmode: u32 = switch (payload.mode) {
@@ -1367,29 +1373,29 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, emit_info: *const EmitInfo, st
                 .minus_infinity => 0b10, // FRINTM
                 .zero => 0b11, // FRINTZ
             };
-            // 000 11110 ty 1 001 00 rmode 10000 Rn Rd
             try sink.put4(
-                0b000_11110_00_1_001_00_00_10000_00000_00000 |
+                0b000_11110_00_1_001_00_0_10000_00000_00000 |
                     (ftype << 22) |
-                    (rmode << 12) |
+                    (rmode << 16) |
                     (machregToVec(payload.rn) << 5) |
                     machregToVec(payload.rd.toReg()),
             );
         },
 
         // FPU to integer conversion
+        // Cranelift pattern: top16 values (bits 31-16) passed directly
         .fpu_to_int => |payload| {
-            const enc: u32 = switch (payload.op) {
-                .f32_to_u32 => 0b0_00_11110_00_1_11_001_000000, // FCVTZU Wd, Sn
-                .f32_to_i32 => 0b0_00_11110_00_1_11_000_000000, // FCVTZS Wd, Sn
-                .f32_to_u64 => 0b1_00_11110_00_1_11_001_000000, // FCVTZU Xd, Sn
-                .f32_to_i64 => 0b1_00_11110_00_1_11_000_000000, // FCVTZS Xd, Sn
-                .f64_to_u32 => 0b0_00_11110_01_1_11_001_000000, // FCVTZU Wd, Dn
-                .f64_to_i32 => 0b0_00_11110_01_1_11_000_000000, // FCVTZS Wd, Dn
-                .f64_to_u64 => 0b1_00_11110_01_1_11_001_000000, // FCVTZU Xd, Dn
-                .f64_to_i64 => 0b1_00_11110_01_1_11_000_000000, // FCVTZS Xd, Dn
+            const top16: u32 = switch (payload.op) {
+                .f32_to_u32 => 0b0_00_11110_00_1_11_001, // FCVTZU Wd, Sn
+                .f32_to_i32 => 0b0_00_11110_00_1_11_000, // FCVTZS Wd, Sn
+                .f32_to_u64 => 0b1_00_11110_00_1_11_001, // FCVTZU Xd, Sn
+                .f32_to_i64 => 0b1_00_11110_00_1_11_000, // FCVTZS Xd, Sn
+                .f64_to_u32 => 0b0_00_11110_01_1_11_001, // FCVTZU Wd, Dn
+                .f64_to_i32 => 0b0_00_11110_01_1_11_000, // FCVTZS Wd, Dn
+                .f64_to_u64 => 0b1_00_11110_01_1_11_001, // FCVTZU Xd, Dn
+                .f64_to_i64 => 0b1_00_11110_01_1_11_000, // FCVTZS Xd, Dn
             };
-            try sink.put4(encFputoint(enc >> 16, payload.rd, payload.rn));
+            try sink.put4(encFputoint(top16, payload.rd, payload.rn));
         },
 
         // Move from GPR to FPU register (FMOV Dd, Xn / FMOV Sd, Wn)
@@ -1404,18 +1410,19 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, emit_info: *const EmitInfo, st
         },
 
         // Integer to FPU conversion
+        // Cranelift pattern: top16 values (bits 31-16) passed directly
         .int_to_fpu => |payload| {
-            const enc: u32 = switch (payload.op) {
-                .u32_to_f32 => 0b0_00_11110_00_1_00_011_000000, // UCVTF Sd, Wn
-                .i32_to_f32 => 0b0_00_11110_00_1_00_010_000000, // SCVTF Sd, Wn
-                .u64_to_f32 => 0b1_00_11110_00_1_00_011_000000, // UCVTF Sd, Xn
-                .i64_to_f32 => 0b1_00_11110_00_1_00_010_000000, // SCVTF Sd, Xn
-                .u32_to_f64 => 0b0_00_11110_01_1_00_011_000000, // UCVTF Dd, Wn
-                .i32_to_f64 => 0b0_00_11110_01_1_00_010_000000, // SCVTF Dd, Wn
-                .u64_to_f64 => 0b1_00_11110_01_1_00_011_000000, // UCVTF Dd, Xn
-                .i64_to_f64 => 0b1_00_11110_01_1_00_010_000000, // SCVTF Dd, Xn
+            const top16: u32 = switch (payload.op) {
+                .u32_to_f32 => 0b0_00_11110_00_1_00_011, // UCVTF Sd, Wn
+                .i32_to_f32 => 0b0_00_11110_00_1_00_010, // SCVTF Sd, Wn
+                .u64_to_f32 => 0b1_00_11110_00_1_00_011, // UCVTF Sd, Xn
+                .i64_to_f32 => 0b1_00_11110_00_1_00_010, // SCVTF Sd, Xn
+                .u32_to_f64 => 0b0_00_11110_01_1_00_011, // UCVTF Dd, Wn
+                .i32_to_f64 => 0b0_00_11110_01_1_00_010, // SCVTF Dd, Wn
+                .u64_to_f64 => 0b1_00_11110_01_1_00_011, // UCVTF Dd, Xn
+                .i64_to_f64 => 0b1_00_11110_01_1_00_010, // SCVTF Dd, Xn
             };
-            try sink.put4(encInttofpu(enc >> 16, payload.rd, payload.rn));
+            try sink.put4(encInttofpu(top16, payload.rd, payload.rn));
         },
 
         // FPU loads

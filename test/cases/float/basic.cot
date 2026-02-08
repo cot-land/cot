@@ -1,8 +1,0 @@
-// EXPECT: exit_code=0
-fn main() int {
-    let x: f64 = 3.0;
-    let y: f64 = 2.0;
-    let sum = x + y;
-    if sum > 4.5 { return 0; }
-    return 1;
-}

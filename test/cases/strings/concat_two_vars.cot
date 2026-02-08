@@ -1,6 +1,0 @@
-// EXPECT: exit_code=11
-fn main() i64 {
-    let s1 = "hello"
-    let s2 = " world"
-    return len(s1) + len(s2)
-}

@@ -1,0 +1,21 @@
+enum Color {
+    Red,
+    Green,
+    Blue
+}
+
+enum Status {
+    Ok = 0,
+    Warning = 50,
+    Error = 100
+}
+
+test "simple" {
+    let c = Color.Green
+    @assert_eq(c, 1)
+}
+
+test "explicit value" {
+    let s = Status.Error
+    @assert_eq(s, 100)
+}

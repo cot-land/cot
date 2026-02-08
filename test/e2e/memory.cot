@@ -1,0 +1,198 @@
+// E2E tests: Memory (17 tests)
+// Ported from bootstrap-0.2
+// Skipped: 003-008,011-013,017-019,025-027,030,032,033,036-053 (extern/malloc)
+
+// === Struct definitions ===
+
+struct MemData { a: i64, b: i64 }
+struct MemRecord { id: i64, value: i64, flags: i64 }
+struct MemData4 { a: i64, b: i64, c: i64, d: i64 }
+struct MemData3 { a: i64, b: i64, c: i64 }
+
+// === Helper functions ===
+
+fn mem_swap(a: *i64, b: *i64) void {
+    var t: i64 = a.*;
+    a.* = b.*;
+    b.* = t;
+}
+
+fn mem_indirect_add(ptr: *i64, val: i64) void {
+    ptr.* = ptr.* + val;
+}
+
+fn mem_inc_ptr(p: *i64) void { p.* = p.* + 1; }
+
+fn mem_get_addr(p: **i64, x: *i64) void { p.* = x; }
+
+fn mem_copy_struct(src: *MemData, dst: *MemData) void {
+    dst.a = src.a;
+    dst.b = src.b;
+}
+
+fn mem_init_data(d: *MemData4, v: i64) void {
+    d.a = v;
+    d.b = v * 2;
+    d.c = v * 3;
+    d.d = v * 4;
+}
+
+fn mem_clear_data(d: *MemData3) void {
+    d.a = 0;
+    d.b = 0;
+    d.c = 0;
+}
+
+// === Tests ===
+
+test "001: stack locals" {
+    var a: i64 = 1;
+    var b: i64 = 2;
+    var c: i64 = 3;
+    var d: i64 = 4;
+    var e: i64 = 5;
+    @assert_eq(a + b + c + d + e, 15)
+}
+
+test "002: many locals" {
+    var v1: i64 = 1;
+    var v2: i64 = 2;
+    var v3: i64 = 3;
+    var v4: i64 = 4;
+    var v5: i64 = 5;
+    var v6: i64 = 6;
+    var v7: i64 = 7;
+    var v8: i64 = 8;
+    @assert_eq(v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8, 36)
+}
+
+test "009: ptr swap" {
+    var x: i64 = 10;
+    var y: i64 = 20;
+    mem_swap(&x, &y);
+    @assert_eq(x, 20)
+}
+
+test "010: indirect add" {
+    var x: i64 = 10;
+    mem_indirect_add(&x, 5);
+    mem_indirect_add(&x, 5);
+    @assert_eq(x, 20)
+}
+
+test "014: ptr param inc" {
+    var x: i64 = 41;
+    mem_inc_ptr(&x);
+    @assert_eq(x, 42)
+}
+
+test "015: double deref" {
+    var x: i64 = 42;
+    var p1: *i64 = &x;
+    var p2: **i64 = &p1;
+    @assert_eq(p2.*.*, 42)
+}
+
+test "016: addr of local" {
+    var val: i64 = 100;
+    var ptr: *i64 = &val;
+    @assert_eq(ptr.*, 100)
+}
+
+test "020: struct copy" {
+    var s1: MemData = undefined;
+    var s2: MemData = undefined;
+    s1.a = 100;
+    s1.b = 200;
+    mem_copy_struct(&s1, &s2);
+    @assert_eq(s2.a + s2.b, 300)
+}
+
+test "021: ptr chain" {
+    var a: i64 = 42;
+    var p1: *i64 = &a;
+    var p2: *i64 = p1;
+    var p3: *i64 = p2;
+    @assert_eq(p3.*, 42)
+}
+
+test "022: modify via ptr" {
+    var x: i64 = 10;
+    var p: *i64 = &x;
+    p.* = p.* + 5;
+    p.* = p.* * 2;
+    @assert_eq(x, 30)
+}
+
+test "023: multi ptr modify" {
+    var a: i64 = 1;
+    var b: i64 = 2;
+    var pa: *i64 = &a;
+    var pb: *i64 = &b;
+    pa.* = pa.* + pb.*;
+    pb.* = pa.* + pb.*;
+    @assert_eq(a + b, 8)
+}
+
+test "024: ptr reassign" {
+    var a: i64 = 10;
+    var b: i64 = 20;
+    var p: *i64 = &a;
+    var sum: i64 = p.*;
+    p = &b;
+    sum = sum + p.*;
+    @assert_eq(sum, 30)
+}
+
+test "028: nested ptr deref" {
+    var a: i64 = 100;
+    var b: i64 = 200;
+    var pa: *i64 = &a;
+    var pb: *i64 = &b;
+    var ppa: **i64 = &pa;
+    var ppb: **i64 = &pb;
+    var sum: i64 = ppa.*.* + ppb.*.*;
+    @assert_eq(sum, 300)
+}
+
+test "029: ptr swap" {
+    var a: i64 = 10;
+    var b: i64 = 20;
+    var pa: *i64 = &a;
+    var pb: *i64 = &b;
+    var tmp: *i64 = pa;
+    pa = pb;
+    pb = tmp;
+    @assert_eq(pa.*, 20)
+    @assert_eq(pb.*, 10)
+}
+
+test "031: struct offset" {
+    var r: MemRecord = undefined;
+    r.id = 1;
+    r.value = 100;
+    r.flags = 7;
+    var ptr: *MemRecord = &r;
+    var sum: i64 = ptr.id + ptr.value + ptr.flags;
+    @assert_eq(sum, 108)
+}
+
+test "034: struct init all" {
+    var d: MemData4 = undefined;
+    mem_init_data(&d, 10);
+    @assert_eq(d.a, 10)
+    @assert_eq(d.b, 20)
+    @assert_eq(d.c, 30)
+    @assert_eq(d.d, 40)
+}
+
+test "035: struct clear" {
+    var d: MemData3 = undefined;
+    d.a = 100;
+    d.b = 200;
+    d.c = 300;
+    mem_clear_data(&d);
+    @assert_eq(d.a, 0)
+    @assert_eq(d.b, 0)
+    @assert_eq(d.c, 0)
+}

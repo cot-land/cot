@@ -1,0 +1,25 @@
+test "for range sum" {
+    var sum: i64 = 0
+    for i in 0..10 {
+        sum += i
+    }
+    @assert_eq(sum, 45)
+}
+
+test "for range index" {
+    var arr = [10, 20, 30, 40, 50]
+    var sum: i64 = 0
+    for i, x in arr {
+        sum += i
+    }
+    @assert_eq(sum, 10)
+}
+
+test "for range index value" {
+    var arr = [10, 20, 30]
+    var sum: i64 = 0
+    for i, x in arr {
+        sum += i + x
+    }
+    @assert_eq(sum, 63)
+}

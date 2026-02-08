@@ -1,8 +1,0 @@
-// EXPECT: exit_code=10
-fn main() int {
-    let i: int = 0;
-    while (i < 10) {
-        i = i + 1;
-    }
-    return i;
-}

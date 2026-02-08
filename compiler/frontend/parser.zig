@@ -923,7 +923,7 @@ pub const Parser = struct {
             const arg = try self.parseExpr() orelse return null;
             if (!self.expect(.rparen)) return null;
             return try self.tree.addExpr(.{ .builtin_call = .{ .name = name, .type_arg = null_node, .args = .{ arg, null_node, null_node }, .span = Span.init(start, self.pos()) } });
-        } else if (std.mem.eql(u8, name, "realloc")) {
+        } else if (std.mem.eql(u8, name, "assert_eq") or std.mem.eql(u8, name, "realloc")) {
             const ptr_arg = try self.parseExpr() orelse return null;
             if (!self.expect(.comma)) return null;
             const size_arg = try self.parseExpr() orelse return null;

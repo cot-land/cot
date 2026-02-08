@@ -1,5 +1,0 @@
-// EXPECT: exit_code=14
-// Tests: 2 + 3 * 4 = 2 + 12 = 14 (mul before add)
-fn main() int {
-    return 2 + 3 * 4;
-}

@@ -1,8 +1,0 @@
-// Compound div-assign: x /= 2
-// EXPECT: exit_code=5
-
-fn main() i64 {
-    var x = 10
-    x /= 2
-    return x
-}

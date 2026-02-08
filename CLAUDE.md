@@ -124,9 +124,16 @@ Two categories:
 ## Testing
 
 ```bash
-zig build test              # All tests
+zig build test              # All tests (~660 Cot tests via native_e2e_test.zig)
+cot test file.cot           # Run inline tests in a single file
 COT_DEBUG=codegen zig build test  # With debug output
 ```
+
+**Test directories:**
+- `test/cases/` — Category unit tests (21 files, ~100 tests)
+- `test/e2e/` — Comprehensive feature tests (8 files, ~560 tests)
+- All tests use inline `test "name" { @assert_eq(...) }` format
+- See `docs/TESTING.md` for full details
 
 **Every new feature must:**
 1. Work on Wasm (`--target=wasm32`)

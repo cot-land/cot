@@ -125,7 +125,19 @@ pub const Lowerer = struct {
         if (self.builder.func()) |fb| {
             self.current_func = fb;
             const ptr_type = self.type_reg.makePointer(TypeRegistry.U8) catch TypeRegistry.VOID;
+            const err_void_type = self.type_reg.makeErrorUnion(TypeRegistry.VOID) catch TypeRegistry.VOID;
+
+            // fail_count local — counts test failures, returned as exit code
+            const fail_count = try fb.addLocalWithSize("__fail_count", TypeRegistry.I64, true, 8);
+            const zero_init = try fb.emitConstInt(0, TypeRegistry.I64, span);
+            _ = try fb.emitStoreLocal(fail_count, zero_init, span);
+
+            // pass_count local — counts test passes, for summary output
+            const pass_count = try fb.addLocalWithSize("__pass_count", TypeRegistry.I64, true, 8);
+            _ = try fb.emitStoreLocal(pass_count, zero_init, span);
+
             for (self.test_names.items, self.test_display_names.items) |test_name, display_name| {
+                // Print test name: test "name" ...
                 const name_copy = try self.allocator.dupe(u8, display_name);
                 const str_idx = try fb.addStringLiteral(name_copy);
                 const str_slice = try fb.emitConstSlice(str_idx, span);
@@ -133,12 +145,53 @@ pub const Lowerer = struct {
                 const name_len = try fb.emitSliceLen(str_slice, span);
                 var print_args = [_]ir.NodeIndex{ name_ptr, name_len };
                 _ = try fb.emitCall("__test_print_name", &print_args, false, TypeRegistry.VOID, span);
+
+                // Call test function — returns pointer to error union (!void)
                 var no_args = [_]ir.NodeIndex{};
-                _ = try fb.emitCall(test_name, &no_args, false, TypeRegistry.VOID, span);
+                const eu_ptr = try fb.emitCall(test_name, &no_args, false, err_void_type, span);
+
+                // Read error union tag at [eu_ptr + 0]
+                const tag_val = try fb.emitPtrLoadValue(eu_ptr, TypeRegistry.I64, span);
+                const zero = try fb.emitConstInt(0, TypeRegistry.I64, span);
+                const is_error = try fb.emitBinary(.ne, tag_val, zero, TypeRegistry.BOOL, span);
+
+                // Branch: error → fail, ok → pass
+                const fail_block = try fb.newBlock("test.fail");
+                const pass_block = try fb.newBlock("test.pass");
+                const merge_block = try fb.newBlock("test.merge");
+                _ = try fb.emitBranch(is_error, fail_block, pass_block, span);
+
+                // Fail block: print FAIL, increment fail counter
+                fb.setBlock(fail_block);
+                _ = try fb.emitCall("__test_fail", &no_args, false, TypeRegistry.VOID, span);
+                const cur_fail = try fb.emitLoadLocal(fail_count, TypeRegistry.I64, span);
+                const one_f = try fb.emitConstInt(1, TypeRegistry.I64, span);
+                const new_fail = try fb.emitBinary(.add, cur_fail, one_f, TypeRegistry.I64, span);
+                _ = try fb.emitStoreLocal(fail_count, new_fail, span);
+                _ = try fb.emitJump(merge_block, span);
+
+                // Pass block: print ok, increment pass counter
+                fb.setBlock(pass_block);
                 _ = try fb.emitCall("__test_pass", &no_args, false, TypeRegistry.VOID, span);
+                const cur_pass = try fb.emitLoadLocal(pass_count, TypeRegistry.I64, span);
+                const one_p = try fb.emitConstInt(1, TypeRegistry.I64, span);
+                const new_pass = try fb.emitBinary(.add, cur_pass, one_p, TypeRegistry.I64, span);
+                _ = try fb.emitStoreLocal(pass_count, new_pass, span);
+                _ = try fb.emitJump(merge_block, span);
+
+                // Merge block: continue to next test
+                fb.setBlock(merge_block);
             }
-            const zero = try fb.emitConstInt(0, TypeRegistry.I64, span);
-            _ = try fb.emitRet(zero, span);
+
+            // Print summary: __test_summary(pass_count, fail_count)
+            const final_pass = try fb.emitLoadLocal(pass_count, TypeRegistry.I64, span);
+            const final_fail = try fb.emitLoadLocal(fail_count, TypeRegistry.I64, span);
+            var summary_args = [_]ir.NodeIndex{ final_pass, final_fail };
+            _ = try fb.emitCall("__test_summary", &summary_args, false, TypeRegistry.VOID, span);
+
+            // Return fail_count as exit code (0 = all pass)
+            const final_count = try fb.emitLoadLocal(fail_count, TypeRegistry.I64, span);
+            _ = try fb.emitRet(final_count, span);
             self.current_func = null;
         }
         try self.builder.endFunc();
@@ -277,7 +330,10 @@ pub const Lowerer = struct {
         const test_name = try self.sanitizeTestName(test_decl.name);
         try self.test_names.append(self.allocator, test_name);
         try self.test_display_names.append(self.allocator, test_decl.name);
-        self.builder.startFunc(test_name, TypeRegistry.VOID, TypeRegistry.VOID, test_decl.span);
+        // Test functions return !void (error union) — Zig pattern: test blocks return errors
+        // on assertion failure, runner catches and continues to next test
+        const err_void_type = try self.type_reg.makeErrorUnion(TypeRegistry.VOID);
+        self.builder.startFunc(test_name, TypeRegistry.VOID, err_void_type, test_decl.span);
         if (self.builder.func()) |fb| {
             self.current_func = fb;
             self.current_test_name = test_decl.name;
@@ -286,7 +342,15 @@ pub const Lowerer = struct {
                 _ = try self.lowerBlockNode(test_decl.body);
                 if (fb.needsTerminator()) {
                     try self.emitCleanups(0);
-                    _ = try fb.emitRet(null, test_decl.span);
+                    // Return success: error union with tag=0 (no error)
+                    const eu_size = self.type_reg.sizeOf(err_void_type);
+                    const tmp_local = try fb.addLocalWithSize("__test_ok", err_void_type, false, eu_size);
+                    const tag_zero = try fb.emitConstInt(0, TypeRegistry.I64, test_decl.span);
+                    _ = try fb.emitStoreLocalField(tmp_local, 0, 0, tag_zero, test_decl.span);
+                    const zero_payload = try fb.emitConstInt(0, TypeRegistry.I64, test_decl.span);
+                    _ = try fb.emitStoreLocalField(tmp_local, 1, 8, zero_payload, test_decl.span);
+                    const ret_ptr = try fb.emitAddrLocal(tmp_local, TypeRegistry.I64, test_decl.span);
+                    _ = try fb.emitRet(ret_ptr, test_decl.span);
                 }
             }
             self.current_test_name = null;
@@ -989,10 +1053,78 @@ pub const Lowerer = struct {
                         const global_addr = try fb.emitAddrGlobal(g.idx, base_expr.ident.name, ptr_type, span);
                         _ = try fb.emitStoreFieldValue(global_addr, field_idx, field_offset, value_node, span);
                     }
+                } else if (base_expr == .field_access) {
+                    // Nested struct field assign: o.inner.val = 42
+                    // Resolve the base field chain to an address, then store to the final field.
+                    const base_addr = try self.resolveStructFieldAddr(fa.base);
+                    if (base_addr != ir.null_node) {
+                        _ = try fb.emitStoreFieldValue(base_addr, field_idx, field_offset, value_node, span);
+                    }
                 }
                 break;
             }
         }
+    }
+
+    /// Resolve a struct field access expression to its memory address.
+    /// Follows Go's recursive s.addr() pattern for ODOT:
+    ///   addr(o.inner) = addr(o) + offset(inner)
+    /// This handles arbitrary nesting: o.a.b.c resolves to base_addr + offset(a) + offset(b).
+    fn resolveStructFieldAddr(self: *Lowerer, node_idx: NodeIndex) !ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+        const node = self.tree.getNode(node_idx) orelse return ir.null_node;
+        const expr = node.asExpr() orelse return ir.null_node;
+
+        if (expr == .ident) {
+            // Base case: local variable — return its address
+            if (fb.lookupLocal(expr.ident.name)) |local_idx| {
+                const local_type = fb.locals.items[local_idx].type_idx;
+                const ptr_type = self.type_reg.makePointer(local_type) catch TypeRegistry.VOID;
+                return try fb.emitAddrLocal(local_idx, ptr_type, expr.ident.span);
+            }
+            if (self.builder.lookupGlobal(expr.ident.name)) |g| {
+                const ptr_type = self.type_reg.makePointer(g.global.type_idx) catch TypeRegistry.VOID;
+                return try fb.emitAddrGlobal(g.idx, expr.ident.name, ptr_type, expr.ident.span);
+            }
+            return ir.null_node;
+        }
+
+        if (expr == .field_access) {
+            const fa = expr.field_access;
+            const base_type_idx = self.inferExprType(fa.base);
+            const base_type = self.type_reg.get(base_type_idx);
+
+            const struct_type = switch (base_type) {
+                .struct_type => |st| st,
+                .pointer => |ptr| blk: {
+                    const elem = self.type_reg.get(ptr.elem);
+                    if (elem == .struct_type) break :blk elem.struct_type;
+                    return ir.null_node;
+                },
+                else => return ir.null_node,
+            };
+
+            // Recursively get base address (Go: p := s.addr(n.X))
+            const base_addr = if (base_type == .pointer)
+                try self.lowerExprNode(fa.base) // pointer base: load the pointer value
+            else
+                try self.resolveStructFieldAddr(fa.base); // struct base: recurse
+
+            if (base_addr == ir.null_node) return ir.null_node;
+
+            // Find field offset and add it (Go: OpOffPtr with n.Offset())
+            for (struct_type.fields) |field| {
+                if (std.mem.eql(u8, field.name, fa.field)) {
+                    const field_offset: i64 = @intCast(field.offset);
+                    if (field_offset == 0) return base_addr;
+                    const field_ptr_type = self.type_reg.makePointer(field.type_idx) catch TypeRegistry.VOID;
+                    return try fb.emitAddrOffset(base_addr, field_offset, field_ptr_type, fa.span);
+                }
+            }
+            return ir.null_node;
+        }
+
+        return ir.null_node;
     }
 
     fn lowerIndexAssign(self: *Lowerer, idx: ast.Index, value_node: ir.NodeIndex, rhs_ast: NodeIndex, span: Span) !void {
@@ -1759,6 +1891,15 @@ pub const Lowerer = struct {
             const elem_ptr_type = self.type_reg.makePointer(elem_type) catch TypeRegistry.VOID;
             const elem_addr = try fb.emitAddrIndex(base_val, index_node, elem_size, elem_ptr_type, fa.span);
             return try fb.emitFieldValue(elem_addr, field_idx, field_offset, field_type, fa.span);
+        }
+
+        // Nested struct field access: o.inner.val
+        // Resolve the base field chain to an address, then load from it.
+        if (base_expr == .field_access) {
+            const base_addr = try self.resolveStructFieldAddr(fa.base);
+            if (base_addr != ir.null_node) {
+                return try fb.emitFieldValue(base_addr, field_idx, field_offset, field_type, fa.span);
+            }
         }
 
         const base_val = try self.lowerExprNode(fa.base);
@@ -3202,20 +3343,67 @@ pub const Lowerer = struct {
             const fail_block = try fb.newBlock("assert.fail");
             _ = try fb.emitBranch(cond, then_block, fail_block, bc.span);
             fb.setBlock(fail_block);
-            const msg = if (self.current_test_name) |name| try std.fmt.allocPrint(self.allocator, "assertion failed in test \"{s}\"\n", .{name}) else "assertion failed\n";
-            const msg_copy = try self.allocator.dupe(u8, msg);
-            const msg_idx = try fb.addStringLiteral(msg_copy);
-            const msg_str = try fb.emitConstSlice(msg_idx, bc.span);
-            const ptr_type = try self.type_reg.makePointer(TypeRegistry.U8);
-            const msg_ptr = try fb.emitSlicePtr(msg_str, ptr_type, bc.span);
-            const msg_len = try fb.emitSliceLen(msg_str, bc.span);
-            const fd_val = try fb.emitConstInt(2, TypeRegistry.I32, bc.span);
-            var write_args = [_]ir.NodeIndex{ fd_val, msg_ptr, msg_len };
-            _ = try fb.emitCall("write", &write_args, false, TypeRegistry.I64, bc.span);
-            const exit_code = try fb.emitConstInt(1, TypeRegistry.I32, bc.span);
-            var exit_args = [_]ir.NodeIndex{exit_code};
-            _ = try fb.emitCall("exit", &exit_args, false, TypeRegistry.VOID, bc.span);
-            _ = try fb.emitJump(then_block, bc.span);
+            if (self.current_test_name != null) {
+                // In test context: return error (Zig pattern — test functions return !void)
+                // Construct error union with tag=1 (error) and return pointer
+                const ret_type = fb.return_type;
+                const eu_size = self.type_reg.sizeOf(ret_type);
+                const tmp_local = try fb.addLocalWithSize("__assert_err", ret_type, false, eu_size);
+                const tag_one = try fb.emitConstInt(1, TypeRegistry.I64, bc.span);
+                _ = try fb.emitStoreLocalField(tmp_local, 0, 0, tag_one, bc.span);
+                const payload = try fb.emitConstInt(0, TypeRegistry.I64, bc.span);
+                _ = try fb.emitStoreLocalField(tmp_local, 1, 8, payload, bc.span);
+                const err_ret = try fb.emitAddrLocal(tmp_local, TypeRegistry.I64, bc.span);
+                _ = try fb.emitRet(err_ret, bc.span);
+            } else {
+                // Outside test context: print message to stderr + trap
+                const msg = try self.allocator.dupe(u8, "assertion failed\n");
+                const msg_idx = try fb.addStringLiteral(msg);
+                const msg_str = try fb.emitConstSlice(msg_idx, bc.span);
+                const ptr_type = try self.type_reg.makePointer(TypeRegistry.U8);
+                const msg_ptr = try fb.emitSlicePtr(msg_str, ptr_type, bc.span);
+                const msg_len = try fb.emitSliceLen(msg_str, bc.span);
+                const fd_val = try fb.emitConstInt(2, TypeRegistry.I64, bc.span);
+                var write_args = [_]ir.NodeIndex{ fd_val, msg_ptr, msg_len };
+                _ = try fb.emitCall("cot_write", &write_args, false, TypeRegistry.I64, bc.span);
+                _ = try fb.emitTrap(bc.span);
+            }
+            // Both paths terminate (ret or trap), no jump needed — set continue block
+            fb.setBlock(then_block);
+            return ir.null_node;
+        }
+        if (std.mem.eql(u8, bc.name, "assert_eq")) {
+            const left = try self.lowerExprNode(bc.args[0]);
+            const right = try self.lowerExprNode(bc.args[1]);
+            // cond = (left == right)
+            const cond = try fb.emitBinary(.eq, left, right, TypeRegistry.BOOL, bc.span);
+            const then_block = try fb.newBlock("assert_eq.ok");
+            const fail_block = try fb.newBlock("assert_eq.fail");
+            _ = try fb.emitBranch(cond, then_block, fail_block, bc.span);
+            fb.setBlock(fail_block);
+            if (self.current_test_name != null) {
+                const ret_type = fb.return_type;
+                const eu_size = self.type_reg.sizeOf(ret_type);
+                const tmp_local = try fb.addLocalWithSize("__assert_eq_err", ret_type, false, eu_size);
+                const tag_one = try fb.emitConstInt(1, TypeRegistry.I64, bc.span);
+                _ = try fb.emitStoreLocalField(tmp_local, 0, 0, tag_one, bc.span);
+                const payload = try fb.emitConstInt(0, TypeRegistry.I64, bc.span);
+                _ = try fb.emitStoreLocalField(tmp_local, 1, 8, payload, bc.span);
+                const err_ret = try fb.emitAddrLocal(tmp_local, TypeRegistry.I64, bc.span);
+                _ = try fb.emitRet(err_ret, bc.span);
+            } else {
+                const msg = try self.allocator.dupe(u8, "assert_eq failed\n");
+                const msg_idx = try fb.addStringLiteral(msg);
+                const msg_str = try fb.emitConstSlice(msg_idx, bc.span);
+                const ptr_type = try self.type_reg.makePointer(TypeRegistry.U8);
+                const msg_ptr = try fb.emitSlicePtr(msg_str, ptr_type, bc.span);
+                const msg_len = try fb.emitSliceLen(msg_str, bc.span);
+                const fd_val = try fb.emitConstInt(2, TypeRegistry.I64, bc.span);
+                var write_args = [_]ir.NodeIndex{ fd_val, msg_ptr, msg_len };
+                _ = try fb.emitCall("cot_write", &write_args, false, TypeRegistry.I64, bc.span);
+                _ = try fb.emitTrap(bc.span);
+            }
+            // Both paths terminate (ret or trap), no jump needed — set continue block
             fb.setBlock(then_block);
             return ir.null_node;
         }

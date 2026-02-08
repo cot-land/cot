@@ -1,0 +1,57 @@
+// Cross-file generic import test.
+// Imports List(T) from stdlib and exercises it across file boundaries.
+
+import "std/list"
+
+test "cross-file list append and get" {
+    var list: List(i64) = .{}
+    list.append(10)
+    list.append(20)
+    list.append(30)
+    @assert_eq(list.len(), 3)
+    @assert_eq(list.get(0), 10)
+    @assert_eq(list.get(1), 20)
+    @assert_eq(list.get(2), 30)
+    list.free()
+}
+
+test "cross-file list set" {
+    var list: List(i64) = .{}
+    list.append(10)
+    list.append(20)
+    list.append(30)
+    list.set(1, 42)
+    @assert_eq(list.get(1), 42)
+    list.free()
+}
+
+test "cross-file list pop" {
+    var list: List(i64) = .{}
+    list.append(10)
+    list.append(20)
+    list.append(30)
+    let popped = list.pop()
+    @assert_eq(popped, 30)
+    @assert_eq(list.len(), 2)
+    list.free()
+}
+
+test "cross-file list insert" {
+    var list: List(i64) = .{}
+    list.append(10)
+    list.append(42)
+    list.insert(0, 99)
+    @assert_eq(list.get(0), 99)
+    @assert_eq(list.get(1), 10)
+    @assert_eq(list.len(), 3)
+    list.free()
+}
+
+test "cross-file list clear" {
+    var list: List(i64) = .{}
+    list.append(10)
+    list.append(20)
+    list.clear()
+    @assert_eq(list.len(), 0)
+    list.free()
+}

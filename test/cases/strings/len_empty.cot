@@ -1,5 +1,0 @@
-// EXPECT: exit_code=0
-fn main() i64 {
-    let s = ""
-    return len(s)
-}

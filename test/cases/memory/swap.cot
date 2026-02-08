@@ -1,9 +1,0 @@
-// EXPECT: exit_code=5
-fn main() int {
-    let a: int = 5;
-    let b: int = 10;
-    let tmp: int = a;
-    a = b;
-    b = tmp;
-    return b;
-}

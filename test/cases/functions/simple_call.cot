@@ -1,8 +1,0 @@
-// EXPECT: exit_code=42
-fn get_value() int {
-    return 42;
-}
-
-fn main() int {
-    return get_value();
-}

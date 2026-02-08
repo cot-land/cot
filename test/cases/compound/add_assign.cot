@@ -1,8 +1,0 @@
-// Compound add-assign: x += 5
-// EXPECT: exit_code=15
-
-fn main() i64 {
-    var x = 10
-    x += 5
-    return x
-}

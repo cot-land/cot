@@ -1,8 +1,0 @@
-// Shift left - 1 << 4 = 16
-// EXPECT: exit_code=16
-
-fn main() i64 {
-    let a = 1
-    let b = 4
-    return a << b
-}

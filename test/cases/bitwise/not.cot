@@ -1,8 +1,0 @@
-// Bitwise NOT - ~0 = -1, mask to get lower byte
-// EXPECT: exit_code=255
-
-fn main() i64 {
-    let a = 0
-    let b = ~a
-    return b & 255
-}

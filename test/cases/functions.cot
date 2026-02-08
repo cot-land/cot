@@ -1,0 +1,123 @@
+fn get_value() i64 {
+    return 42
+}
+
+fn double(x: i64) i64 {
+    return x * 2
+}
+
+fn add(a: i64, b: i64) i64 {
+    return a + b
+}
+
+fn sum3(a: i64, b: i64, c: i64) i64 {
+    return a + b + c
+}
+
+fn triple(x: i64) i64 {
+    return x * 3
+}
+
+fn identity(x: i64) i64 {
+    return x
+}
+
+fn fibonacci(n: i64) i64 {
+    if n <= 1 {
+        return n
+    }
+    return fibonacci(n - 1) + fibonacci(n - 2)
+}
+
+fn factorial(n: i64) i64 {
+    if n <= 1 {
+        return 1
+    }
+    return n * factorial(n - 1)
+}
+
+fn countdown(n: i64) i64 {
+    if n <= 0 {
+        return 1
+    }
+    return countdown(n - 1)
+}
+
+fn isEven(n: i64) i64 {
+    if n == 0 { return 1 }
+    return isOdd(n - 1)
+}
+
+fn isOdd(n: i64) i64 {
+    if n == 0 { return 0 }
+    return isEven(n - 1)
+}
+
+test "simple call" {
+    @assert_eq(get_value(), 42)
+}
+
+test "one param" {
+    @assert_eq(double(5), 10)
+}
+
+test "two params" {
+    @assert_eq(add(3, 4), 7)
+}
+
+test "three params" {
+    @assert_eq(sum3(2, 5, 7), 14)
+}
+
+test "call in if" {
+    var result: i64 = 0
+    if double(5) == 10 {
+        result = 10
+    }
+    @assert_eq(result, 10)
+}
+
+test "call then return" {
+    let result: i64 = double(5)
+    @assert_eq(result, 10)
+}
+
+test "chained calls" {
+    @assert_eq(triple(add(2, 2)), 12)
+}
+
+test "two calls" {
+    @assert_eq(double(2) + identity(3), 7)
+}
+
+test "fibonacci small" {
+    @assert_eq(fibonacci(5), 5)
+}
+
+test "fibonacci 2" {
+    @assert_eq(fibonacci(2), 1)
+}
+
+test "fibonacci 3" {
+    @assert_eq(fibonacci(3), 2)
+}
+
+test "fibonacci 10" {
+    @assert_eq(fibonacci(10), 55)
+}
+
+test "factorial" {
+    @assert_eq(factorial(5), 120)
+}
+
+test "countdown base" {
+    @assert_eq(countdown(0), 1)
+}
+
+test "countdown one" {
+    @assert_eq(countdown(1), 1)
+}
+
+test "mutual recursion" {
+    @assert_eq(isEven(4), 1)
+}

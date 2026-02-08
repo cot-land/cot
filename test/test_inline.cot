@@ -1,0 +1,15 @@
+test "basic arithmetic" {
+    @assert(1 + 1 == 2)
+    @assert(10 - 3 == 7)
+    @assert(3 * 4 == 12)
+}
+
+test "assert_eq" {
+    @assert_eq(2 + 2, 4)
+    @assert_eq(10 * 10, 100)
+}
+
+test "boolean logic" {
+    @assert(1 == 1)
+    @assert(0 != 1)
+}

@@ -1,6 +1,0 @@
-// EXPECT: exit_code=8
-// Tests subtraction resulting in positive value
-// Note: Negative return values have different representation in native vs wasm
-fn main() int {
-    return 10 - 2;
-}

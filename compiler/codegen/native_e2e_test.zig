@@ -2,11 +2,8 @@
 //!
 //! Tests the full pipeline: Cot source -> Wasm -> CLIF -> Machine Code -> Executable -> Run
 //!
-//! The main test compiles a single combined program (test/native/e2e_all.cot) containing
-//! all 65 sub-tests. One compile + one link = ~500ms total (vs ~30s with individual tests).
-//! Returns 0 on success or a unique error code identifying which sub-test failed.
-//!
-//! Parity tests (expressions, functions, control_flow, variables) remain as separate entries.
+//! All test files use inline `test "name" { }` format with error-union isolation.
+//! Test files live in test/e2e/ (comprehensive) and test/cases/ (category unit tests).
 
 const std = @import("std");
 const Driver = @import("../driver.zig").Driver;
@@ -19,12 +16,16 @@ const NativeResult = struct {
     run_error: bool,
     error_msg: []const u8,
     stdout: []const u8,
+    stderr: []const u8 = "",
 
     pub fn success(code: u32) NativeResult {
         return .{ .exit_code = code, .compile_error = false, .link_error = false, .run_error = false, .error_msg = "", .stdout = "" };
     }
     pub fn successWithOutput(code: u32, output: []const u8) NativeResult {
         return .{ .exit_code = code, .compile_error = false, .link_error = false, .run_error = false, .error_msg = "", .stdout = output };
+    }
+    pub fn successFull(code: u32, stdout_out: []const u8, stderr_out: []const u8) NativeResult {
+        return .{ .exit_code = code, .compile_error = false, .link_error = false, .run_error = false, .error_msg = "", .stdout = stdout_out, .stderr = stderr_out };
     }
     pub fn compileErr(msg: []const u8) NativeResult {
         return .{ .exit_code = null, .compile_error = true, .link_error = false, .run_error = false, .error_msg = msg, .stdout = "" };
@@ -359,64 +360,39 @@ fn subTestName(exit_code: u32) []const u8 {
 }
 
 // ============================================================================
-// Combined native E2E test: all 70 sub-tests in one program
+// E2E tests: comprehensive feature tests (test/e2e/)
 // ============================================================================
 
-test "native: all e2e tests (107 sub-tests)" {
-    const code = @constCast(@as([]const u8, std.fs.cwd().readFileAlloc(std.testing.allocator, "test/native/e2e_all.cot", 1024 * 1024) catch |e| {
-        std.debug.print("Failed to read test file: {any}\n", .{e});
-        return error.FileNotFound;
-    }));
-    defer std.testing.allocator.free(code);
-    try expectExitCode(std.testing.allocator, code, 0, "all_e2e");
+test "e2e: features (107 tests)" {
+    try expectTestModeFile(std.testing.allocator, "test/e2e/features.cot", 107, "all_e2e");
 }
 
-// ============================================================================
-// Parity tests: ported from bootstrap-0.2 (compound test files)
-// ============================================================================
-
-test "parity: expressions (160 tests)" {
-    const code = @constCast(@as([]const u8, std.fs.cwd().readFileAlloc(std.testing.allocator, "test/parity/expressions.cot", 1024 * 1024) catch |e| {
-        std.debug.print("Failed to read test file: {any}\n", .{e});
-        return error.FileNotFound;
-    }));
-    defer std.testing.allocator.free(code);
-    try expectExitCode(std.testing.allocator, code, 0, "parity_expressions");
+test "e2e: expressions (160 tests)" {
+    try expectTestModeFile(std.testing.allocator, "test/e2e/expressions.cot", 160, "expressions");
 }
 
-test "parity: functions (110 tests)" {
-    const code = @constCast(@as([]const u8, std.fs.cwd().readFileAlloc(std.testing.allocator, "test/parity/functions.cot", 1024 * 1024) catch |e| {
-        std.debug.print("Failed to read test file: {any}\n", .{e});
-        return error.FileNotFound;
-    }));
-    defer std.testing.allocator.free(code);
-    try expectExitCode(std.testing.allocator, code, 0, "parity_functions");
+test "e2e: functions (107 tests)" {
+    try expectTestModeFile(std.testing.allocator, "test/e2e/functions.cot", 107, "functions");
 }
 
-test "parity: control_flow (80 tests)" {
-    const code = @constCast(@as([]const u8, std.fs.cwd().readFileAlloc(std.testing.allocator, "test/parity/control_flow.cot", 1024 * 1024) catch |e| {
-        std.debug.print("Failed to read test file: {any}\n", .{e});
-        return error.FileNotFound;
-    }));
-    defer std.testing.allocator.free(code);
-    try expectExitCode(std.testing.allocator, code, 0, "parity_control_flow");
+test "e2e: control_flow (82 tests)" {
+    try expectTestModeFile(std.testing.allocator, "test/e2e/control_flow.cot", 82, "control_flow");
 }
 
-test "parity: variables (40 tests)" {
-    const code = @constCast(@as([]const u8, std.fs.cwd().readFileAlloc(std.testing.allocator, "test/parity/variables.cot", 1024 * 1024) catch |e| {
-        std.debug.print("Failed to read test file: {any}\n", .{e});
-        return error.FileNotFound;
-    }));
-    defer std.testing.allocator.free(code);
-    try expectExitCode(std.testing.allocator, code, 0, "parity_variables");
+test "e2e: variables (40 tests)" {
+    try expectTestModeFile(std.testing.allocator, "test/e2e/variables.cot", 40, "variables");
 }
 
-// ============================================================================
-// Cross-file import tests: verify generics work across file boundaries
-// ============================================================================
+test "e2e: types (46 tests)" {
+    try expectTestModeFile(std.testing.allocator, "test/e2e/types.cot", 46, "types");
+}
 
-test "native: import List(T) from stdlib (48 sub-tests)" {
-    try expectFileExitCode(std.testing.allocator, "test/native/import_list_test.cot", 0, "import_list");
+test "e2e: memory (17 tests)" {
+    try expectTestModeFile(std.testing.allocator, "test/e2e/memory.cot", 17, "memory");
+}
+
+test "e2e: stdlib imports (5 tests)" {
+    try expectTestModeFile(std.testing.allocator, "test/e2e/stdlib.cot", 5, "import_list");
 }
 
 // ============================================================================
@@ -520,4 +496,363 @@ test "native: print does not corrupt return value" {
         \\    return 7
         \\}
     , 7, "42", "print_ret");
+}
+
+// ============================================================================
+// Test Mode (cot test) E2E Tests
+// ============================================================================
+
+/// Compile source in test mode and run. Returns NativeResult with stderr captured.
+fn compileAndRunTestMode(allocator: std.mem.Allocator, code: []const u8, test_name: []const u8) NativeResult {
+    const tmp_dir = "/tmp/cot_native_test";
+    std.fs.cwd().makePath(tmp_dir) catch {};
+
+    const obj_path = std.fmt.allocPrint(allocator, "{s}/{s}.o", .{ tmp_dir, test_name }) catch
+        return NativeResult.compileErr("allocPrint failed");
+    defer allocator.free(obj_path);
+
+    const exe_path = std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_dir, test_name }) catch
+        return NativeResult.compileErr("allocPrint failed");
+    defer allocator.free(exe_path);
+
+    var driver = Driver.init(allocator);
+    driver.setTarget(Target.native());
+    driver.setTestMode(true);
+
+    const obj_code = driver.compileSource(code) catch |e| {
+        const msg = std.fmt.allocPrint(allocator, "compile error: {any}", .{e}) catch "compile error";
+        return NativeResult.compileErr(msg);
+    };
+    defer allocator.free(obj_code);
+
+    std.fs.cwd().writeFile(.{ .sub_path = obj_path, .data = obj_code }) catch
+        return NativeResult.compileErr("failed to write .o file");
+
+    const link_result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &.{ "zig", "cc", "-o", exe_path, obj_path },
+    }) catch return NativeResult.linkErr("failed to spawn linker");
+    defer allocator.free(link_result.stdout);
+    defer allocator.free(link_result.stderr);
+
+    if (link_result.term.Exited != 0) {
+        if (link_result.stderr.len > 0) std.debug.print("LINKER STDERR: {s}\n", .{link_result.stderr});
+        return NativeResult.linkErr("linker failed");
+    }
+
+    const run_result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &.{exe_path},
+    }) catch return NativeResult.runErr("failed to spawn executable");
+    // stdout and stderr ownership transferred to NativeResult (arena-allocated)
+
+    return switch (run_result.term) {
+        .Exited => |exit_code| NativeResult.successFull(exit_code, run_result.stdout, run_result.stderr),
+        .Signal => |sig| blk: {
+            allocator.free(run_result.stdout);
+            allocator.free(run_result.stderr);
+            const msg = std.fmt.allocPrint(allocator, "signal {d}", .{sig}) catch "signal";
+            break :blk NativeResult.runErr(msg);
+        },
+        else => blk: {
+            allocator.free(run_result.stdout);
+            allocator.free(run_result.stderr);
+            break :blk NativeResult.runErr("unknown termination");
+        },
+    };
+}
+
+fn expectTestMode(backing_allocator: std.mem.Allocator, code: []const u8, expected_exit: u32, expected_stderr: []const u8, test_name: []const u8) !void {
+    var timer = std.time.Timer.start() catch {
+        std.debug.print("[native] {s}...", .{test_name});
+        return expectTestModeInner(backing_allocator, code, expected_exit, expected_stderr, test_name);
+    };
+
+    std.debug.print("[native] {s}...", .{test_name});
+
+    try expectTestModeInner(backing_allocator, code, expected_exit, expected_stderr, test_name);
+
+    const elapsed_ns = timer.read();
+    const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
+    if (elapsed_ms >= 1000.0) {
+        std.debug.print("ok ({d:.0}ms) SLOW\n", .{elapsed_ms});
+    } else {
+        std.debug.print("ok ({d:.0}ms)\n", .{elapsed_ms});
+    }
+}
+
+fn expectTestModeInner(backing_allocator: std.mem.Allocator, code: []const u8, expected_exit: u32, expected_stderr: []const u8, test_name: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(backing_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const result = compileAndRunTestMode(allocator, code, test_name);
+
+    if (result.compile_error) {
+        std.debug.print("COMPILE ERROR: {s}\n", .{result.error_msg});
+        return error.CompileError;
+    }
+    if (result.link_error) {
+        std.debug.print("LINK ERROR: {s}\n", .{result.error_msg});
+        return error.LinkError;
+    }
+    if (result.run_error) {
+        std.debug.print("RUN ERROR: {s}\n", .{result.error_msg});
+        return error.RunError;
+    }
+
+    const actual_exit = result.exit_code orelse return error.NoExitCode;
+    if (actual_exit != expected_exit) {
+        std.debug.print("WRONG EXIT CODE: expected {d}, got {d}\nSTDERR: {s}\n", .{ expected_exit, actual_exit, result.stderr });
+        return error.WrongExitCode;
+    }
+
+    if (!std.mem.eql(u8, result.stderr, expected_stderr)) {
+        std.debug.print("WRONG STDERR:\n  expected: \"{s}\" ({d} bytes)\n  actual:   \"{s}\" ({d} bytes)\n", .{
+            expected_stderr, expected_stderr.len,
+            result.stderr,   result.stderr.len,
+        });
+        return error.WrongOutput;
+    }
+}
+
+/// Compile a .cot file in test mode and run. Returns NativeResult with stderr captured.
+fn compileAndRunTestModeFile(allocator: std.mem.Allocator, file_path: []const u8, test_name: []const u8) NativeResult {
+    const tmp_dir = "/tmp/cot_native_test";
+    std.fs.cwd().makePath(tmp_dir) catch {};
+
+    const obj_path = std.fmt.allocPrint(allocator, "{s}/{s}.o", .{ tmp_dir, test_name }) catch
+        return NativeResult.compileErr("allocPrint failed");
+    defer allocator.free(obj_path);
+
+    const exe_path = std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_dir, test_name }) catch
+        return NativeResult.compileErr("allocPrint failed");
+    defer allocator.free(exe_path);
+
+    var driver = Driver.init(allocator);
+    driver.setTarget(Target.native());
+    driver.setTestMode(true);
+
+    const obj_code = driver.compileFile(file_path) catch |e| {
+        const msg = std.fmt.allocPrint(allocator, "compile error: {any}", .{e}) catch "compile error";
+        return NativeResult.compileErr(msg);
+    };
+    defer allocator.free(obj_code);
+
+    std.fs.cwd().writeFile(.{ .sub_path = obj_path, .data = obj_code }) catch
+        return NativeResult.compileErr("failed to write .o file");
+
+    const link_result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &.{ "zig", "cc", "-o", exe_path, obj_path },
+    }) catch return NativeResult.linkErr("failed to spawn linker");
+    defer allocator.free(link_result.stdout);
+    defer allocator.free(link_result.stderr);
+
+    if (link_result.term.Exited != 0) {
+        if (link_result.stderr.len > 0) std.debug.print("LINKER STDERR: {s}\n", .{link_result.stderr});
+        return NativeResult.linkErr("linker failed");
+    }
+
+    const run_result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &.{exe_path},
+    }) catch return NativeResult.runErr("failed to spawn executable");
+
+    return switch (run_result.term) {
+        .Exited => |exit_code| NativeResult.successFull(exit_code, run_result.stdout, run_result.stderr),
+        .Signal => |sig| blk: {
+            allocator.free(run_result.stdout);
+            allocator.free(run_result.stderr);
+            const msg = std.fmt.allocPrint(allocator, "signal {d}", .{sig}) catch "signal";
+            break :blk NativeResult.runErr(msg);
+        },
+        else => blk: {
+            allocator.free(run_result.stdout);
+            allocator.free(run_result.stderr);
+            break :blk NativeResult.runErr("unknown termination");
+        },
+    };
+}
+
+/// Compile a .cot file in test mode, expect exit code 0 and verify summary contains expected pass count.
+fn expectTestModeFile(backing_allocator: std.mem.Allocator, file_path: []const u8, expected_pass_count: u32, test_name: []const u8) !void {
+    var timer = std.time.Timer.start() catch {
+        std.debug.print("[native] {s}...", .{test_name});
+        return expectTestModeFileInner(backing_allocator, file_path, expected_pass_count, test_name);
+    };
+
+    std.debug.print("[native] {s}...", .{test_name});
+
+    try expectTestModeFileInner(backing_allocator, file_path, expected_pass_count, test_name);
+
+    const elapsed_ns = timer.read();
+    const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
+    if (elapsed_ms >= 1000.0) {
+        std.debug.print("ok ({d:.0}ms) SLOW\n", .{elapsed_ms});
+    } else {
+        std.debug.print("ok ({d:.0}ms)\n", .{elapsed_ms});
+    }
+}
+
+fn expectTestModeFileInner(backing_allocator: std.mem.Allocator, file_path: []const u8, expected_pass_count: u32, test_name: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(backing_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const result = compileAndRunTestModeFile(allocator, file_path, test_name);
+
+    if (result.compile_error) {
+        std.debug.print("COMPILE ERROR: {s}\n", .{result.error_msg});
+        return error.CompileError;
+    }
+    if (result.link_error) {
+        std.debug.print("LINK ERROR: {s}\n", .{result.error_msg});
+        return error.LinkError;
+    }
+    if (result.run_error) {
+        std.debug.print("RUN ERROR: {s}\n", .{result.error_msg});
+        return error.RunError;
+    }
+
+    const actual_exit = result.exit_code orelse return error.NoExitCode;
+    if (actual_exit != 0) {
+        std.debug.print("WRONG EXIT CODE: expected 0, got {d}\nSTDERR: {s}\n", .{ actual_exit, result.stderr });
+        return error.WrongExitCode;
+    }
+
+    // Verify summary line contains expected pass count
+    const expected_summary = std.fmt.allocPrint(allocator, "\n{d} passed\n", .{expected_pass_count}) catch
+        return error.CompileError;
+    if (!std.mem.containsAtLeast(u8, result.stderr, 1, expected_summary)) {
+        std.debug.print("WRONG SUMMARY: expected \"{s}\" in stderr\nSTDERR: {s}\n", .{ expected_summary, result.stderr });
+        return error.WrongOutput;
+    }
+}
+
+test "native: test mode - all pass" {
+    try expectTestMode(std.testing.allocator,
+        \\test "math" {
+        \\    @assert(1 + 1 == 2)
+        \\}
+        \\test "bool" {
+        \\    @assert(1 == 1)
+        \\}
+    , 0,
+        "test \"math\" ... ok\ntest \"bool\" ... ok\n\n2 passed\n",
+        "test_all_pass");
+}
+
+test "native: test mode - one failure" {
+    try expectTestMode(std.testing.allocator,
+        \\test "pass" {
+        \\    @assert(1 == 1)
+        \\}
+        \\test "fail" {
+        \\    @assert(1 == 2)
+        \\}
+        \\test "also pass" {
+        \\    @assert(2 == 2)
+        \\}
+    , 1,
+        "test \"pass\" ... ok\ntest \"fail\" ... FAIL\ntest \"also pass\" ... ok\n\n2 passed, 1 failed\n",
+        "test_one_fail");
+}
+
+test "native: test mode - assert_eq" {
+    try expectTestMode(std.testing.allocator,
+        \\test "eq" {
+        \\    @assert_eq(42, 42)
+        \\}
+    , 0,
+        "test \"eq\" ... ok\n\n1 passed\n",
+        "test_assert_eq");
+}
+
+// ============================================================================
+// Inline test files: test/cases/ (converted from orphaned exit-code tests)
+// ============================================================================
+
+test "cases: arithmetic (10 tests)" {
+    try expectTestModeFile(std.testing.allocator, "test/cases/arithmetic.cot", 10, "cases_arithmetic");
+}
+
+test "cases: arrays (6 tests)" {
+    try expectTestModeFile(std.testing.allocator, "test/cases/arrays.cot", 6, "cases_arrays");
+}
+
+test "cases: bitwise (6 tests)" {
+    try expectTestModeFile(std.testing.allocator, "test/cases/bitwise.cot", 6, "cases_bitwise");
+}
+
+test "cases: builtins (4 tests)" {
+    try expectTestModeFile(std.testing.allocator, "test/cases/builtins.cot", 4, "cases_builtins");
+}
+
+test "cases: chars (2 tests)" {
+    try expectTestModeFile(std.testing.allocator, "test/cases/chars.cot", 2, "cases_chars");
+}
+
+test "cases: compound (8 tests)" {
+    try expectTestModeFile(std.testing.allocator, "test/cases/compound.cot", 8, "cases_compound");
+}
+
+test "cases: control flow (14 tests)" {
+    try expectTestModeFile(std.testing.allocator, "test/cases/control_flow.cot", 14, "cases_control_flow");
+}
+
+test "cases: enum (2 tests)" {
+    try expectTestModeFile(std.testing.allocator, "test/cases/enum.cot", 2, "cases_enum");
+}
+
+test "cases: extern (1 test)" {
+    try expectTestModeFile(std.testing.allocator, "test/cases/extern.cot", 1, "cases_extern");
+}
+
+test "cases: float (1 test)" {
+    try expectTestModeFile(std.testing.allocator, "test/cases/float.cot", 1, "cases_float");
+}
+
+test "cases: functions (16 tests)" {
+    try expectTestModeFile(std.testing.allocator, "test/cases/functions.cot", 16, "cases_functions");
+}
+
+test "cases: loops (3 tests)" {
+    try expectTestModeFile(std.testing.allocator, "test/cases/loops.cot", 3, "cases_loops");
+}
+
+test "cases: memory (5 tests)" {
+    try expectTestModeFile(std.testing.allocator, "test/cases/memory.cot", 5, "cases_memory");
+}
+
+test "cases: methods (1 test)" {
+    try expectTestModeFile(std.testing.allocator, "test/cases/methods.cot", 1, "cases_methods");
+}
+
+test "cases: optional (3 tests)" {
+    try expectTestModeFile(std.testing.allocator, "test/cases/optional.cot", 3, "cases_optional");
+}
+
+test "cases: strings (9 tests)" {
+    try expectTestModeFile(std.testing.allocator, "test/cases/strings.cot", 9, "cases_strings");
+}
+
+test "cases: structs (5 tests)" {
+    try expectTestModeFile(std.testing.allocator, "test/cases/structs.cot", 5, "cases_structs");
+}
+
+test "cases: switch (2 tests)" {
+    try expectTestModeFile(std.testing.allocator, "test/cases/switch.cot", 2, "cases_switch");
+}
+
+test "cases: types (2 tests)" {
+    try expectTestModeFile(std.testing.allocator, "test/cases/types.cot", 2, "cases_types");
+}
+
+test "cases: union (4 tests)" {
+    try expectTestModeFile(std.testing.allocator, "test/cases/union.cot", 4, "cases_union");
+}
+
+test "cases: arc (5 tests)" {
+    try expectTestModeFile(std.testing.allocator, "test/cases/arc.cot", 5, "cases_arc");
 }

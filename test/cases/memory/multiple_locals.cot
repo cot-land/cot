@@ -1,6 +1,0 @@
-// EXPECT: exit_code=30
-fn main() int {
-    let a: int = 10;
-    let b: int = 20;
-    return a + b;
-}

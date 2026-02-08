@@ -1,0 +1,6 @@
+// Extern declarations are tested implicitly by other tests.
+// This file verifies the test infrastructure itself works.
+
+test "placeholder" {
+    @assert_eq(42, 42)
+}

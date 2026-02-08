@@ -1,0 +1,397 @@
+// E2E tests: Types (42 tests)
+// Ported from bootstrap-0.2
+// Skipped: 009,010,012,019,034,036,040,042,043,049,050,051,052,053,054,055,065 (extern/malloc)
+// Skipped: 015,016 (global mutation in test format)
+
+// === Struct definitions ===
+
+struct Point { x: i64, y: i64 }
+struct Pair { a: i64, b: i64 }
+struct Inner { val: i64 }
+struct Outer { inner: Inner, extra: i64 }
+struct Triple { a: i64, b: i64, c: i64 }
+struct Quad { a: i64, b: i64, c: i64, d: i64 }
+struct Data5 { a: i64, b: i64, c: i64, d: i64, e: i64 }
+struct Vec2 { x: i64, y: i64 }
+struct Vec3 { x: i64, y: i64, z: i64 }
+struct Rect { x: i64, y: i64, w: i64, h: i64 }
+struct Line { start: Point, end: Point }
+struct DataAB { a: i64, b: i64 }
+
+const MAGIC: i64 = 42;
+const WIDTH: i64 = 80;
+const HEIGHT: i64 = 25;
+const AREA: i64 = 2000;
+
+// === Helper functions ===
+
+fn ty01_test_locals() i64 {
+    var a: i64 = 10;
+    var b: i64 = 20;
+    var c: i64 = a + b;
+    return c;
+}
+
+fn ty02_test_reassign() i64 {
+    var x: i64 = 5;
+    x = x + 10;
+    x = x * 2;
+    return x;
+}
+
+fn ty03_to_bool(x: i64) i64 {
+    if x != 0 { return 1; }
+    return 0;
+}
+
+fn ty06_sum_pair(p: *Pair) i64 { return p.a + p.b; }
+fn ty08_set_value(ptr: *i64, val: i64) void { ptr.* = val; }
+fn ty11_make_pair(a: i64, b: i64, out: *Pair) void { out.a = a; out.b = b; }
+fn ty18_get_value(p: *DataAB) i64 { return p.a; }
+fn ty18_set_value(p: *DataAB, v: i64) void { p.a = v; }
+fn ty20_make_vec(x: i64, y: i64, out: *Vec2) void { out.x = x; out.y = y; }
+fn ty23_add_points(a: *Point, b: *Point, out: *Point) void { out.x = a.x + b.x; out.y = a.y + b.y; }
+fn ty27_distance_sq(p: *Point) i64 { return p.x * p.x + p.y * p.y; }
+fn ty28_translate(p: *Point, dx: i64, dy: i64) void { p.x = p.x + dx; p.y = p.y + dy; }
+fn ty30_area(r: *Rect) i64 { return r.w * r.h; }
+fn ty37_copy_point(src: *Point, dst: *Point) void { dst.x = src.x; dst.y = src.y; }
+fn ty38_points_equal(a: *Point, b: *Point) i64 {
+    if a.x == b.x and a.y == b.y { return 1; }
+    return 0;
+}
+fn ty41_sum_triple(t: *Triple) i64 { return t.a + t.b + t.c; }
+fn ty44_make_pair2(a: i64, b: i64, p: *Pair) void { p.a = a; p.b = b; }
+
+// === Tests ===
+
+test "001: local variables" {
+    @assert_eq(ty01_test_locals(), 30)
+}
+
+test "002: var reassignment" {
+    @assert_eq(ty02_test_reassign(), 30)
+}
+
+test "003: bool conversion" {
+    @assert_eq(ty03_to_bool(42), 1)
+}
+
+test "004: const value" {
+    @assert_eq(MAGIC, 42)
+}
+
+test "005: struct basic" {
+    var p: Point = undefined;
+    p.x = 10;
+    p.y = 20;
+    @assert_eq(p.x + p.y, 30)
+}
+
+test "006: struct pass" {
+    var p: Pair = undefined;
+    p.a = 5;
+    p.b = 7;
+    @assert_eq(ty06_sum_pair(&p), 12)
+}
+
+test "007: nested struct" {
+    var o: Outer = undefined;
+    o.inner.val = 100;
+    o.extra = 5;
+    @assert_eq(o.inner.val + o.extra, 105)
+}
+
+test "008: ptr deref" {
+    var x: i64 = 0;
+    ty08_set_value(&x, 42);
+    @assert_eq(x, 42)
+}
+
+test "011: struct out param" {
+    var p: Pair = undefined;
+    ty11_make_pair(10, 20, &p);
+    @assert_eq(p.a + p.b, 30)
+}
+
+test "013: nested struct fields" {
+    var r: Line = undefined;
+    r.start.x = 10;
+    r.start.y = 20;
+    r.end.x = 100;
+    r.end.y = 50;
+    @assert_eq(r.start.x + r.end.x, 110)
+}
+
+test "014: five field struct" {
+    var d: Data5 = undefined;
+    d.a = 1;
+    d.b = 2;
+    d.c = 3;
+    d.d = 4;
+    d.e = 5;
+    @assert_eq(d.a + d.b + d.c + d.d + d.e, 15)
+}
+
+test "017: const expressions" {
+    @assert_eq(WIDTH * HEIGHT, AREA)
+}
+
+test "018: ptr to struct" {
+    var d: DataAB = undefined;
+    ty18_set_value(&d, 42);
+    @assert_eq(ty18_get_value(&d), 42)
+}
+
+test "020: struct init pattern" {
+    var v: Vec2 = undefined;
+    ty20_make_vec(3, 4, &v);
+    var len_sq: i64 = v.x * v.x + v.y * v.y;
+    @assert_eq(len_sq, 25)
+}
+
+test "021: three field struct" {
+    var t: Triple = undefined;
+    t.a = 1;
+    t.b = 2;
+    t.c = 3;
+    @assert_eq(t.a + t.b + t.c, 6)
+}
+
+test "022: four field struct" {
+    var q: Quad = undefined;
+    q.a = 1;
+    q.b = 2;
+    q.c = 3;
+    q.d = 4;
+    @assert_eq(q.a * q.b * q.c * q.d, 24)
+}
+
+test "023: add two points" {
+    var p1: Point = undefined;
+    var p2: Point = undefined;
+    var p3: Point = undefined;
+    p1.x = 1;
+    p1.y = 2;
+    p2.x = 3;
+    p2.y = 4;
+    ty23_add_points(&p1, &p2, &p3);
+    @assert_eq(p3.x + p3.y, 10)
+}
+
+test "024: struct field sum" {
+    var p: Point = undefined;
+    p.x = 10;
+    p.y = 20;
+    @assert_eq(p.x + p.y, 30)
+}
+
+test "025: struct ptr access" {
+    var p: Point = undefined;
+    p.x = 5;
+    p.y = 10;
+    var ptr: *Point = &p;
+    @assert_eq(ptr.x, 5)
+    @assert_eq(ptr.y, 10)
+}
+
+test "026: modify via ptr" {
+    var p: Point = undefined;
+    p.x = 1;
+    p.y = 2;
+    var ptr: *Point = &p;
+    ptr.x = 100;
+    ptr.y = 200;
+    @assert_eq(p.x, 100)
+    @assert_eq(p.y, 200)
+}
+
+test "027: distance squared" {
+    var p: Point = undefined;
+    p.x = 3;
+    p.y = 4;
+    @assert_eq(ty27_distance_sq(&p), 25)
+}
+
+test "028: translate point" {
+    var p: Point = undefined;
+    p.x = 10;
+    p.y = 20;
+    ty28_translate(&p, 5, 10);
+    @assert_eq(p.x, 15)
+    @assert_eq(p.y, 30)
+}
+
+test "029: vec3 field sum" {
+    var v: Vec3 = undefined;
+    v.x = 1;
+    v.y = 2;
+    v.z = 3;
+    @assert_eq(v.x + v.y + v.z, 6)
+}
+
+test "030: rect area" {
+    var r: Rect = undefined;
+    r.x = 0;
+    r.y = 0;
+    r.w = 10;
+    r.h = 5;
+    @assert_eq(ty30_area(&r), 50)
+}
+
+test "031: ptr to ptr" {
+    var x: i64 = 42;
+    var p: *i64 = &x;
+    var pp: **i64 = &p;
+    @assert_eq(pp.*.*, 42)
+}
+
+test "032: ptr to ptr modify" {
+    var x: i64 = 10;
+    var p: *i64 = &x;
+    var pp: **i64 = &p;
+    pp.*.* = 100;
+    @assert_eq(x, 100)
+}
+
+test "033: line struct deltas" {
+    var l: Line = undefined;
+    l.start.x = 0;
+    l.start.y = 0;
+    l.end.x = 10;
+    l.end.y = 10;
+    var dx: i64 = l.end.x - l.start.x;
+    var dy: i64 = l.end.y - l.start.y;
+    @assert_eq(dx, 10)
+    @assert_eq(dy, 10)
+}
+
+test "035: five field sum" {
+    var d: Data5 = undefined;
+    d.a = 1;
+    d.b = 2;
+    d.c = 3;
+    d.d = 4;
+    d.e = 5;
+    @assert_eq(d.a + d.b + d.c + d.d + d.e, 15)
+}
+
+test "037: struct copy" {
+    var p1: Point = undefined;
+    var p2: Point = undefined;
+    p1.x = 10;
+    p1.y = 20;
+    ty37_copy_point(&p1, &p2);
+    @assert_eq(p2.x, 10)
+    @assert_eq(p2.y, 20)
+}
+
+test "038: struct compare" {
+    var p1: Point = undefined;
+    var p2: Point = undefined;
+    p1.x = 5;
+    p1.y = 10;
+    p2.x = 5;
+    p2.y = 10;
+    @assert_eq(ty38_points_equal(&p1, &p2), 1)
+}
+
+test "039: nested field access" {
+    var o: Outer = undefined;
+    o.inner.val = 42;
+    o.extra = 10;
+    @assert_eq(o.inner.val, 42)
+    @assert_eq(o.extra, 10)
+}
+
+test "041: triple sum fn" {
+    var t: Triple = undefined;
+    t.a = 10;
+    t.b = 20;
+    t.c = 30;
+    @assert_eq(ty41_sum_triple(&t), 60)
+}
+
+test "044: make pair" {
+    var p: Pair = undefined;
+    ty44_make_pair2(10, 20, &p);
+    @assert_eq(p.a, 10)
+    @assert_eq(p.b, 20)
+}
+
+test "045: triple sum and product" {
+    var t: Triple = undefined;
+    t.a = 1;
+    t.b = 2;
+    t.c = 3;
+    var sum: i64 = t.a + t.b + t.c;
+    var prod: i64 = t.a * t.b * t.c;
+    @assert_eq(sum, 6)
+    @assert_eq(prod, 6)
+}
+
+test "046: i64 max value" {
+    var max: i64 = 9223372036854775807;
+    @assert(max > 0)
+}
+
+test "047: large multiply" {
+    var big: i64 = 1000000000;
+    var result: i64 = big * big;
+    @assert_eq(result, 1000000000000000000)
+}
+
+test "048: greater than" {
+    var b: i64 = 5;
+    @assert(b > 3)
+}
+
+test "056: compare neq" {
+    var a: i64 = 5;
+    var b: i64 = 10;
+    @assert(a != b)
+}
+
+test "057: compare lt" {
+    var a: i64 = 5;
+    var b: i64 = 10;
+    @assert(a < b)
+}
+
+test "058: compare gt" {
+    var a: i64 = 10;
+    var b: i64 = 5;
+    @assert(a > b)
+}
+
+test "059: compare lte" {
+    var a: i64 = 5;
+    var b: i64 = 5;
+    @assert(a <= b)
+}
+
+test "060: compare gte" {
+    var a: i64 = 5;
+    var b: i64 = 5;
+    @assert(a >= b)
+}
+
+test "061: negative literal" {
+    var x: i64 = 0 - 42;
+    @assert_eq(x, 0 - 42)
+}
+
+test "062: zero compare" {
+    var x: i64 = 0;
+    @assert_eq(x, 0)
+}
+
+test "063: one compare" {
+    var x: i64 = 1;
+    @assert_eq(x, 1)
+}
+
+test "064: greater comparison" {
+    var a: i64 = 5;
+    var b: i64 = 3;
+    @assert(a > b)
+}

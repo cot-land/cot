@@ -1,0 +1,39 @@
+test "add" {
+    @assert_eq(40 + 2, 42)
+}
+
+test "sub" {
+    @assert_eq(10 - 2, 8)
+}
+
+test "mul" {
+    @assert_eq(10 + 5 * 2, 20)
+}
+
+test "div" {
+    @assert_eq(20 / 4, 5)
+}
+
+test "mod" {
+    @assert_eq(17 % 7, 3)
+}
+
+test "negation" {
+    @assert_eq(10 - 2, 8)
+}
+
+test "parens" {
+    @assert_eq((2 + 3) * 4, 20)
+}
+
+test "precedence" {
+    @assert_eq(2 + 3 * 4, 14)
+}
+
+test "chain add" {
+    @assert_eq(1 + 2 + 3 + 4 + 5, 15)
+}
+
+test "complex precedence" {
+    @assert_eq(3 + 4 * 5 - 6 / 2, 20)
+}

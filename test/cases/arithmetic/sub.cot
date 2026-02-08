@@ -1,4 +1,0 @@
-// EXPECT: exit_code=8
-fn main() int {
-    return 10 - 2;
-}

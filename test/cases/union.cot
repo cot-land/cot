@@ -1,0 +1,43 @@
+union State {
+    Init,
+    Running,
+    Done
+}
+
+union Value {
+    Integer: i64,
+    Small: i32
+}
+
+union Event {
+    Click: i64,
+    Hover,
+    KeyPress: i64
+}
+
+test "simple" {
+    let s = State.Running
+    @assert_eq(s.tag, 1)
+}
+
+test "payload" {
+    let v = Value.Integer(42)
+    @assert_eq(v.tag, 0)
+    @assert_eq(v.Integer, 42)
+}
+
+test "mixed" {
+    let e = Event.Click(100)
+    @assert_eq(e.tag, 0)
+    @assert_eq(e.Click, 100)
+}
+
+test "switch capture" {
+    let v = Value.Integer(42)
+    var result: i64 = 0
+    switch v {
+        Value.Integer |val| => { result = val },
+        Value.Small |val| => { result = 0 }
+    }
+    @assert_eq(result, 42)
+}

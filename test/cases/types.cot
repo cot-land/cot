@@ -1,0 +1,17 @@
+struct Point {
+    x: i64,
+    y: i64
+}
+
+type Int = i64
+type Coord = Point
+
+test "type alias" {
+    let x: Int = 42
+    @assert_eq(x, 42)
+}
+
+test "struct alias" {
+    let pt = Coord { .x = 10, .y = 20 }
+    @assert_eq(pt.x + pt.y, 30)
+}

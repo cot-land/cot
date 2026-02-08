@@ -1,4 +1,0 @@
-// EXPECT: exit_code=20
-fn main() int {
-    return 10 + 5 * 2;
-}

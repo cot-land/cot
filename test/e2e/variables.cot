@@ -1,0 +1,457 @@
+// E2E tests: Variables (40 tests)
+// Ported from bootstrap-0.2
+// Skipped: 007,009 (anonymous block scopes), 028,029,030 (extern/malloc),
+//          031,032 (variable shadowing with block scopes)
+// Converted to inline test format.
+
+test "001: let declaration" {
+    let x: i64 = 42;
+    @assert_eq(x, 42)
+}
+
+test "002: var reassignment" {
+    var x: i64 = 10;
+    x = 20;
+    x = 30;
+    @assert_eq(x, 30)
+}
+
+test "003: eight variables sum" {
+    let a: i64 = 1;
+    let b: i64 = 2;
+    let c: i64 = 3;
+    let d: i64 = 4;
+    let e: i64 = 5;
+    let f: i64 = 6;
+    let g: i64 = 7;
+    let h: i64 = 8;
+    let sum: i64 = a + b + c + d + e + f + g + h;
+    @assert_eq(sum, 36)
+}
+
+test "004: twelve variables sum" {
+    let v1: i64 = 1;
+    let v2: i64 = 2;
+    let v3: i64 = 3;
+    let v4: i64 = 4;
+    let v5: i64 = 5;
+    let v6: i64 = 6;
+    let v7: i64 = 7;
+    let v8: i64 = 8;
+    let v9: i64 = 9;
+    let v10: i64 = 10;
+    let v11: i64 = 11;
+    let v12: i64 = 12;
+    let sum: i64 = v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8 + v9 + v10 + v11 + v12;
+    @assert_eq(sum, 78)
+}
+
+test "005: sixteen variables sum" {
+    let v1: i64 = 1;
+    let v2: i64 = 2;
+    let v3: i64 = 3;
+    let v4: i64 = 4;
+    let v5: i64 = 5;
+    let v6: i64 = 6;
+    let v7: i64 = 7;
+    let v8: i64 = 8;
+    let v9: i64 = 9;
+    let v10: i64 = 10;
+    let v11: i64 = 11;
+    let v12: i64 = 12;
+    let v13: i64 = 13;
+    let v14: i64 = 14;
+    let v15: i64 = 15;
+    let v16: i64 = 16;
+    var sum: i64 = v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8;
+    sum = sum + v9 + v10 + v11 + v12 + v13 + v14 + v15 + v16;
+    @assert_eq(sum, 136)
+}
+
+test "006: twenty variables sum" {
+    let v1: i64 = 1;
+    let v2: i64 = 2;
+    let v3: i64 = 3;
+    let v4: i64 = 4;
+    let v5: i64 = 5;
+    let v6: i64 = 6;
+    let v7: i64 = 7;
+    let v8: i64 = 8;
+    let v9: i64 = 9;
+    let v10: i64 = 10;
+    let v11: i64 = 11;
+    let v12: i64 = 12;
+    let v13: i64 = 13;
+    let v14: i64 = 14;
+    let v15: i64 = 15;
+    let v16: i64 = 16;
+    let v17: i64 = 17;
+    let v18: i64 = 18;
+    let v19: i64 = 19;
+    let v20: i64 = 20;
+    var sum: i64 = v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8 + v9 + v10;
+    sum = sum + v11 + v12 + v13 + v14 + v15 + v16 + v17 + v18 + v19 + v20;
+    @assert_eq(sum, 210)
+}
+
+test "008: loop with local var" {
+    var sum: i64 = 0;
+    var i: i64 = 0;
+    while i < 5 {
+        let term: i64 = i * 2;
+        sum = sum + term;
+        i = i + 1;
+    }
+    @assert_eq(sum, 20)
+}
+
+test "010: copy chain" {
+    let a: i64 = 5;
+    let b: i64 = a;
+    let c: i64 = b;
+    let d: i64 = c;
+    @assert_eq(d, 5)
+}
+
+test "011: variable swap" {
+    var a: i64 = 10;
+    var b: i64 = 20;
+    let tmp: i64 = a;
+    a = b;
+    b = tmp;
+    @assert_eq(a, 20)
+    @assert_eq(b, 10)
+}
+
+test "012: accumulate sum" {
+    var sum: i64 = 0;
+    sum = sum + 10;
+    sum = sum + 20;
+    sum = sum + 30;
+    sum = sum + 40;
+    @assert_eq(sum, 100)
+}
+
+test "013: accumulate product" {
+    var prod: i64 = 1;
+    prod = prod * 2;
+    prod = prod * 3;
+    prod = prod * 4;
+    prod = prod * 5;
+    @assert_eq(prod, 120)
+}
+
+test "014: negation via subtraction" {
+    let x: i64 = 0 - 42;
+    let y: i64 = 0 - x;
+    @assert_eq(y, 42)
+}
+
+test "015: four arithmetic ops" {
+    let a: i64 = 10;
+    let b: i64 = 5;
+    let c: i64 = a + b;
+    let d: i64 = a - b;
+    let e: i64 = a * b;
+    let f: i64 = a / b;
+    @assert_eq(c, 15)
+    @assert_eq(d, 5)
+    @assert_eq(e, 50)
+    @assert_eq(f, 2)
+}
+
+test "016: dependent chain" {
+    let a: i64 = 1;
+    let b: i64 = a + 1;
+    let c: i64 = b + 1;
+    let d: i64 = c + 1;
+    let e: i64 = d + 1;
+    let f: i64 = e + 1;
+    let g: i64 = f + 1;
+    let h: i64 = g + 1;
+    let i: i64 = h + 1;
+    let j: i64 = i + 1;
+    @assert_eq(j, 10)
+}
+
+test "017: doubling chain" {
+    let a: i64 = 1;
+    let b: i64 = a * 2;
+    let c: i64 = b * 2;
+    let d: i64 = c * 2;
+    let e: i64 = d * 2;
+    let f: i64 = e * 2;
+    let g: i64 = f * 2;
+    let h: i64 = g * 2;
+    @assert_eq(h, 128)
+}
+
+test "018: self doubling" {
+    var x: i64 = 1;
+    x = x + x;
+    x = x + x;
+    x = x + x;
+    x = x + x;
+    @assert_eq(x, 16)
+}
+
+test "019: complex expression" {
+    let a: i64 = 15;
+    let b: i64 = 5;
+    let c: i64 = 4;
+    let result: i64 = (a + b) * c / (a + b - c);
+    @assert_eq(result, 5)
+}
+
+test "020: division identity" {
+    let a: i64 = 100;
+    let b: i64 = 7;
+    let q: i64 = a / b;
+    let r: i64 = a % b;
+    let check: i64 = q * b + r;
+    @assert_eq(check, a)
+}
+
+test "021: compound assignment" {
+    var x: i64 = 10;
+    x = x + 5;
+    x = x * 2;
+    x = x - 10;
+    @assert_eq(x, 20)
+}
+
+test "022: three-way rotate" {
+    var a: i64 = 1;
+    var b: i64 = 2;
+    var c: i64 = 3;
+    let t: i64 = a;
+    a = b;
+    b = c;
+    c = t;
+    @assert_eq(a, 2)
+    @assert_eq(b, 3)
+    @assert_eq(c, 1)
+}
+
+test "023: repeated increment" {
+    var x: i64 = 0;
+    x = x + 1;
+    x = x + 1;
+    x = x + 1;
+    x = x + 1;
+    x = x + 1;
+    @assert_eq(x, 5)
+}
+
+test "024: repeated decrement" {
+    var x: i64 = 10;
+    x = x - 1;
+    x = x - 1;
+    x = x - 1;
+    @assert_eq(x, 7)
+}
+
+test "025: self multiply" {
+    var x: i64 = 2;
+    x = x * x;
+    x = x * x;
+    @assert_eq(x, 16)
+}
+
+test "026: cyclic rotate" {
+    var a: i64 = 1;
+    var b: i64 = 2;
+    var c: i64 = 3;
+    let ta: i64 = a;
+    let tb: i64 = b;
+    let tc: i64 = c;
+    a = tc;
+    b = ta;
+    c = tb;
+    @assert_eq(a, 3)
+    @assert_eq(b, 1)
+    @assert_eq(c, 2)
+}
+
+test "027: sum of squares loop" {
+    var acc: i64 = 0;
+    var i: i64 = 1;
+    while i <= 10 {
+        acc = acc + i * i;
+        i = i + 1;
+    }
+    @assert_eq(acc, 385)
+}
+
+test "033: sum 1 to 10" {
+    var sum: i64 = 0;
+    var i: i64 = 1;
+    while i <= 10 {
+        sum = sum + i;
+        i = i + 1;
+    }
+    @assert_eq(sum, 55)
+}
+
+test "034: flag toggle loop" {
+    var flag: i64 = 0;
+    var i: i64 = 0;
+    while i < 5 {
+        if flag == 0 {
+            flag = 1;
+        } else {
+            flag = 0;
+        }
+        i = i + 1;
+    }
+    @assert_eq(flag, 1)
+}
+
+test "035: swap two vars" {
+    var a: i64 = 10;
+    var b: i64 = 20;
+    let t: i64 = a;
+    a = b;
+    b = t;
+    @assert_eq(a, 20)
+    @assert_eq(b, 10)
+}
+
+test "036: fibonacci" {
+    var a: i64 = 0;
+    var b: i64 = 1;
+    var i: i64 = 0;
+    while i < 10 {
+        let t: i64 = a + b;
+        a = b;
+        b = t;
+        i = i + 1;
+    }
+    @assert_eq(a, 55)
+}
+
+test "037: factorial" {
+    var product: i64 = 1;
+    var i: i64 = 1;
+    while i <= 5 {
+        product = product * i;
+        i = i + 1;
+    }
+    @assert_eq(product, 120)
+}
+
+test "038: gcd" {
+    var a: i64 = 48;
+    var b: i64 = 18;
+    while b != 0 {
+        let t: i64 = b;
+        b = a % b;
+        a = t;
+    }
+    @assert_eq(a, 6)
+}
+
+test "039: binary search" {
+    let target: i64 = 37;
+    var lo: i64 = 0;
+    var hi: i64 = 100;
+    while lo < hi {
+        let mid: i64 = (lo + hi) / 2;
+        if mid < target {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    @assert_eq(lo, 37)
+}
+
+test "040: collatz conjecture" {
+    var n: i64 = 27;
+    var steps: i64 = 0;
+    while n != 1 {
+        if n % 2 == 0 {
+            n = n / 2;
+        } else {
+            n = 3 * n + 1;
+        }
+        steps = steps + 1;
+    }
+    @assert_eq(steps, 111)
+}
+
+test "041: popcount loop" {
+    var n: i64 = 255;
+    var count: i64 = 0;
+    while n > 0 {
+        count = count + (n & 1);
+        n = n >> 1;
+    }
+    @assert_eq(count, 8)
+}
+
+test "042: bit reverse" {
+    var n: i64 = 12;
+    var rev: i64 = 0;
+    let bits: i64 = 4;
+    var i: i64 = 0;
+    while i < bits {
+        rev = rev << 1;
+        rev = rev | (n & 1);
+        n = n >> 1;
+        i = i + 1;
+    }
+    @assert_eq(rev, 3)
+}
+
+test "043: prime check" {
+    let n: i64 = 17;
+    var is_prime: i64 = 1;
+    var i: i64 = 2;
+    while i < n {
+        if n % i == 0 {
+            is_prime = 0;
+        }
+        i = i + 1;
+    }
+    @assert_eq(is_prime, 1)
+}
+
+test "044: perfect number" {
+    let n: i64 = 6;
+    var sum: i64 = 0;
+    var i: i64 = 1;
+    while i < n {
+        if n % i == 0 {
+            sum = sum + i;
+        }
+        i = i + 1;
+    }
+    @assert_eq(sum, n)
+}
+
+test "045: reverse digits" {
+    var n: i64 = 123;
+    var rev: i64 = 0;
+    while n > 0 {
+        rev = rev * 10 + n % 10;
+        n = n / 10;
+    }
+    @assert_eq(rev, 321)
+}
+
+test "046: accumulate additions" {
+    var acc: i64 = 0;
+    acc = acc + 10;
+    acc = acc + 20;
+    acc = acc + 30;
+    @assert_eq(acc, 60)
+}
+
+test "047: accumulate multiplies" {
+    var mul: i64 = 1;
+    mul = mul * 2;
+    mul = mul * 3;
+    mul = mul * 7;
+    @assert_eq(mul, 42)
+}
