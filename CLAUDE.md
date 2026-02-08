@@ -17,6 +17,23 @@ See `TROUBLESHOOTING.md` for the full methodology, reference map, and checklist.
 
 **READ: `docs/BR_TABLE_ARCHITECTURE.md`** - br_table is INTENTIONAL, copied from Go's dispatch loop pattern. Do NOT try to remove or "fix" it without reading this document first.
 
+### ⚠️ Adding a new feature? CHECK WASM 3.0 FIRST
+
+**READ: `docs/specs/WASM_3_0_REFERENCE.md`** before implementing any feature that touches the Wasm codegen pipeline.
+
+Cot currently emits Wasm 1.0. WebAssembly 3.0 was released September 2025 and adds tail calls (`return_call`), exception handling (`try_table`/`throw`), typed function references (`call_ref`), and more. These features may provide **better design options** than Wasm 1.0 workarounds.
+
+**Before designing a solution, ask:**
+1. Does Wasm 3.0 have an opcode or feature that handles this natively?
+2. Would using a 3.0 feature produce simpler or more efficient code than a 1.0 workaround?
+3. If yes, prefer the 3.0 approach — Cot targets modern runtimes.
+
+**Examples of where 3.0 matters:**
+- Recursive functions → use `return_call` (0x12) instead of `call` + `return`
+- Closure/function pointer calls → consider `call_ref` (0x14) instead of `call_indirect`
+- Error propagation across calls → consider `try_table`/`throw` instead of manual checks
+- The full spec text is at `docs/specs/wasm-3.0-full.txt` (25K lines) for deep reference
+
 ---
 
 ## CRITICAL WARNING - READ THIS FIRST
@@ -94,8 +111,8 @@ The Go compiler is at `~/learning/go/src/cmd/`. Key files:
 
 ## Current State (February 2026)
 
-**880+ tests pass (0 failures, 0 skipped)** across Wasm and native targets.
-**63 Wasm E2E tests, 48 native E2E tests, 26 test case files.**
+**890+ tests pass (0 failures, 0 skipped)** across Wasm and native targets.
+**66 Wasm E2E tests, 51 native E2E tests, 26 test case files.**
 
 ### What's Done
 
@@ -139,6 +156,8 @@ The Go compiler is at `~/learning/go/src/cmd/`. Key files:
 
 | Document | Purpose |
 |----------|---------|
+| `docs/specs/WASM_3_0_REFERENCE.md` | **Wasm 3.0 (Sep 2025): new opcodes, features, adoption plan for Cot** |
+| `docs/ROADMAP_1_0.md` | **Road to 1.0: versioning philosophy, feature waves, Wasm IR analysis** |
 | `docs/BR_TABLE_ARCHITECTURE.md` | br_table dispatch loop pattern - READ if confused about br_table |
 | `WASM_BACKEND.md` | Wasm milestones M1-M16, implementation details |
 | `ROADMAP_PHASE2.md` | M17-M24 milestones (ARC, heap, strings, arrays) - all complete |
@@ -307,6 +326,7 @@ COT_DEBUG=parse,lower,codegen zig build test
 
 - Run tests after every change: `zig build test`
 - Reference docs before implementing: check WASM_BACKEND.md or CRANELIFT_PORT_MASTER_PLAN.md
+- **Check `docs/specs/WASM_3_0_REFERENCE.md` when adding any feature that touches Wasm codegen** (see below)
 - Reference `bootstrap-0.2/` for working code examples
 - Make incremental changes, verify each one
 - Ask user for direction when uncertain

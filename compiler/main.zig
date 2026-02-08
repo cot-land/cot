@@ -38,16 +38,12 @@ pub const pipeline_debug = @import("pipeline_debug.zig");
 pub const driver = @import("driver.zig");
 
 // Native codegen (AOT compiler path)
-// NOTE: Most native codegen was removed for Cranelift-style rewrite.
-// See CRANELIFT_PORT_MASTER_PLAN.md for progress.
-// Kept files: object file formats and instruction encoding (architecture agnostic)
+// Cranelift-style pipeline: Wasm → CLIF IR → MachInst → ARM64/x64
+// See CRANELIFT_PORT_MASTER_PLAN.md for architecture details.
 pub const native_dwarf = @import("codegen/native/dwarf.zig");
 pub const native_macho = @import("codegen/native/macho.zig");
 pub const native_elf = @import("codegen/native/elf.zig");
 pub const native_wasm_parser = @import("codegen/native/wasm_parser.zig");
-pub const native_arm64_asm = @import("codegen/native/arm64_asm.zig");
-pub const native_amd64_regs = @import("codegen/native/amd64_regs.zig");
-pub const native_amd64_asm = @import("codegen/native/amd64_asm.zig");
 
 // Wasm codegen
 pub const wasm = @import("codegen/wasm.zig");

@@ -495,33 +495,6 @@ fn writeSection(writer: anytype, allocator: std.mem.Allocator, section: c.Sectio
 }
 
 // ============================================================================
-// High-level API for compiling a function
-// ============================================================================
-
-/// Compile a symbol (function) and add it to the linker
-pub fn compileFunc(
-    linker: *Linker,
-    sym: *Symbol,
-    params: []const c.ValType,
-    results: []const c.ValType,
-    exported: bool,
-) !u32 {
-    // Add the function type
-    const type_idx = try linker.addType(params, results);
-
-    // Assemble the function body
-    var assembled = try assemble.assemble(linker.allocator, sym);
-    errdefer assembled.deinit();
-
-    // Add to linker
-    return try linker.addFunc(.{
-        .name = sym.name,
-        .type_idx = type_idx,
-        .code = assembled.code,
-        .exported = exported,
-    });
-}
-
 // ============================================================================
 // Tests
 // ============================================================================

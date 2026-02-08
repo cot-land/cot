@@ -58,13 +58,6 @@ pub const Addr = struct {
         return .{ .type = .mem, .reg = reg, .offset = offset };
     }
 
-    pub fn initBranch(target: *Prog) Addr {
-        return .{ .type = .branch, .branch_target = target };
-    }
-
-    pub fn initSym(sym: *Symbol, name: AddrName) Addr {
-        return .{ .type = .addr, .name = name, .sym = sym };
-    }
 };
 
 /// Value union for Addr
@@ -127,10 +120,6 @@ pub const Prog = struct {
         return .{ .as = as, .to = to };
     }
 
-    /// Create a new Prog with both operands
-    pub fn initFromTo(as: c.As, from: Addr, to: Addr) Prog {
-        return .{ .as = as, .from = from, .to = to };
-    }
 };
 
 /// Instructions that use the destination operand as their only operand
@@ -203,19 +192,6 @@ pub const ProgBuilder = struct {
         return self.appendProg(p);
     }
 
-    /// Append after a specific instruction (like Go's obj.Appendp)
-    pub fn appendAfter(self: *ProgBuilder, prev: *Prog, as: c.As) !*Prog {
-        const p = try self.allocator.create(Prog);
-        p.* = Prog.init(as);
-        p.link = prev.link;
-        prev.link = p;
-        if (self.last == prev) {
-            self.last = p;
-        }
-        self.count += 1;
-        return p;
-    }
-
     fn appendProg(self: *ProgBuilder, p: *Prog) *Prog {
         if (self.last) |last| {
             last.link = p;
@@ -227,20 +203,6 @@ pub const ProgBuilder = struct {
         return p;
     }
 
-    /// Get iterator over all instructions
-    pub fn iterator(self: *const ProgBuilder) ProgIterator {
-        return .{ .current = self.first };
-    }
-};
-
-pub const ProgIterator = struct {
-    current: ?*Prog,
-
-    pub fn next(self: *ProgIterator) ?*Prog {
-        const p = self.current orelse return null;
-        self.current = p.link;
-        return p;
-    }
 };
 
 // ============================================================================
@@ -279,8 +241,8 @@ test "prog builder basic" {
     try std.testing.expectEqual(@as(usize, 3), builder.count);
 
     var count: usize = 0;
-    var iter = builder.iterator();
-    while (iter.next()) |_| {
+    var p = builder.first;
+    while (p) |prog| : (p = prog.link) {
         count += 1;
     }
     try std.testing.expectEqual(@as(usize, 3), count);
