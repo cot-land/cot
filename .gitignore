@@ -5,3 +5,5 @@ zig-out/
 a.out
 a.out.o
 *.wasm
+*.wasm.o
+test_io*

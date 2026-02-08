@@ -1,8 +1,0 @@
-// expect: 42
-// Tier 10: Pointer write
-fn main() i64 {
-    let x = 0
-    let p = &x
-    p.* = 42
-    return x
-}

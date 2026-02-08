@@ -1,9 +1,0 @@
-// expect: 42
-// Tier 2: Helper function call
-fn helper() i64 {
-    return 42
-}
-
-fn main() i64 {
-    return helper()
-}

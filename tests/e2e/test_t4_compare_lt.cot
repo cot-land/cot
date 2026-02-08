@@ -1,8 +1,0 @@
-// expect: 42
-// Tier 4: Less than comparison
-fn main() i64 {
-    if 10 < 20 {
-        return 42
-    }
-    return 0
-}

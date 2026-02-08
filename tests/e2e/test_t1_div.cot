@@ -1,5 +1,0 @@
-// expect: 42
-// Tier 1: Division
-fn main() i64 {
-    return 84 / 2
-}

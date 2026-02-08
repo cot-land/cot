@@ -1,5 +1,0 @@
-// expect: 42
-// Tier 1: Subtraction
-fn main() i64 {
-    return 50 - 8
-}

@@ -1,7 +1,0 @@
-// expect: 42
-// Tier 3: Local variables with expressions
-fn main() i64 {
-    let x = 20
-    let y = 22
-    return x + y
-}

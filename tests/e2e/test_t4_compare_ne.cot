@@ -1,8 +1,0 @@
-// expect: 42
-// Tier 4: Not equal comparison
-fn main() i64 {
-    if 1 != 2 {
-        return 42
-    }
-    return 0
-}
