@@ -203,16 +203,34 @@ fn subTestName(exit_code: u32) []const u8 {
         "test_trap_not_reached",            // 63
         "test_slice_param_basic",           // 64
         "test_slice_param_iteration",       // 65
+        "test_trait_basic",                 // 66
+        "test_trait_primitive",             // 67
+        "test_trait_multi_impl",            // 68
+        "test_trait_generic_usage",         // 69
+        "test_trait_self_type",             // 70
+        "test_const_eval_arithmetic",       // 71
+        "test_const_eval_sizeof",           // 72
+        "test_trait_bound_basic",           // 73
+        "test_trait_bound_multi",           // 74
+        "test_match_wildcard",              // 75
+        "test_match_guard",                 // 76
+        "test_match_range",                 // 77
+        "test_tuple_basic",                 // 78
+        "test_tuple_nested",               // 79
+        "test_tuple_three",                 // 80
+        "test_sret_tuple_return",           // 81
+        "test_sret_struct_return",          // 82
+        "test_sret_chain",                  // 83
     };
     if (exit_code < names.len) return names[exit_code];
     return "unknown (exit code out of range)";
 }
 
 // ============================================================================
-// Combined native E2E test: all 65 sub-tests in one program
+// Combined native E2E test: all 70 sub-tests in one program
 // ============================================================================
 
-test "native: all e2e tests (63 sub-tests)" {
+test "native: all e2e tests (83 sub-tests)" {
     const code = @constCast(@as([]const u8, std.fs.cwd().readFileAlloc(std.testing.allocator, "test/native/e2e_all.cot", 1024 * 1024) catch |e| {
         std.debug.print("Failed to read test file: {any}\n", .{e});
         return error.FileNotFound;

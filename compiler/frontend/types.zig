@@ -70,6 +70,7 @@ pub const SliceType = struct { elem: TypeIndex };
 pub const ArrayType = struct { elem: TypeIndex, length: u64 };
 pub const MapType = struct { key: TypeIndex, value: TypeIndex };
 pub const ListType = struct { elem: TypeIndex };
+pub const TupleType = struct { element_types: []const TypeIndex };
 
 // Aggregate types
 pub const StructField = struct { name: []const u8, type_idx: TypeIndex, offset: u32 };
@@ -91,6 +92,7 @@ pub const Type = union(enum) {
     array: ArrayType,
     map: MapType,
     list: ListType,
+    tuple: TupleType,
     struct_type: StructType,
     enum_type: EnumType,
     union_type: UnionType,
@@ -216,6 +218,19 @@ pub const TypeRegistry = struct {
 
     pub fn lookupByName(self: *const TypeRegistry, n: []const u8) ?TypeIndex { return self.name_map.get(n); }
 
+    /// Returns the display name of a type for diagnostics and trait bound validation.
+    /// Rust: ty::TyKind::to_string(). Go 1.18: types2.Type.String().
+    pub fn typeName(self: *const TypeRegistry, idx: TypeIndex) []const u8 {
+        return switch (self.get(idx)) {
+            .basic => |bk| bk.name(),
+            .struct_type => |s| s.name,
+            .enum_type => |e| e.name,
+            .pointer => "pointer",
+            .tuple => "tuple",
+            else => "unknown",
+        };
+    }
+
     pub fn add(self: *TypeRegistry, t: Type) !TypeIndex {
         const idx: TypeIndex = @intCast(self.types.items.len);
         try self.types.append(self.allocator, t);
@@ -232,6 +247,17 @@ pub const TypeRegistry = struct {
     pub fn makeArray(self: *TypeRegistry, elem: TypeIndex, len: u64) !TypeIndex { return self.add(.{ .array = .{ .elem = elem, .length = len } }); }
     pub fn makeMap(self: *TypeRegistry, key: TypeIndex, value: TypeIndex) !TypeIndex { return self.add(.{ .map = .{ .key = key, .value = value } }); }
     pub fn makeList(self: *TypeRegistry, elem: TypeIndex) !TypeIndex { return self.add(.{ .list = .{ .elem = elem } }); }
+    pub fn makeTuple(self: *TypeRegistry, element_types: []const TypeIndex) !TypeIndex {
+        return self.add(.{ .tuple = .{ .element_types = try self.allocator.dupe(TypeIndex, element_types) } });
+    }
+
+    /// Returns the byte offset of element `index` within a tuple.
+    pub fn tupleElementOffset(self: *const TypeRegistry, tuple_idx: TypeIndex, index: u32) u32 {
+        const tup = self.get(tuple_idx).tuple;
+        var offset: u32 = 0;
+        for (0..index) |i| offset += ((self.sizeOf(tup.element_types[i]) + 7) / 8) * 8;
+        return offset;
+    }
 
     pub fn makeFunc(self: *TypeRegistry, params: []const FuncParam, ret: TypeIndex) !TypeIndex {
         return self.add(.{ .func = .{ .params = try self.allocator.dupe(FuncParam, params), .return_type = ret } });
@@ -249,6 +275,11 @@ pub const TypeRegistry = struct {
         return switch (self.get(idx)) {
             .basic => |k| k.size(),
             .pointer, .map, .list, .func, .error_set => 8,
+            .tuple => |tup| blk: {
+                var total: u32 = 0;
+                for (tup.element_types) |et| total += ((self.sizeOf(et) + 7) / 8) * 8;
+                break :blk total;
+            },
             .optional, .error_union => 16,
             .slice => 24,  // Go's slice: (ptr=8, len=8, cap=8)
             .array => |a| @intCast(self.sizeOf(a.elem) * a.length),
@@ -271,7 +302,7 @@ pub const TypeRegistry = struct {
     pub fn alignmentOf(self: *const TypeRegistry, idx: TypeIndex) u32 {
         return switch (self.get(idx)) {
             .basic => |k| if (k.size() == 0) 1 else k.size(),
-            .pointer, .func, .optional, .error_union, .error_set, .slice, .map, .list, .union_type => 8,
+            .pointer, .func, .optional, .error_union, .error_set, .slice, .map, .list, .union_type, .tuple => 8,
             .array => |a| self.alignmentOf(a.elem),
             .struct_type => |s| s.alignment,
             .enum_type => |e| self.alignmentOf(e.backing_type),
@@ -313,6 +344,11 @@ pub const TypeRegistry = struct {
             .map, .list => false,
             // Union types are trivial for now
             .union_type => true,
+            // Tuples are trivial if all elements are trivial
+            .tuple => |tup| {
+                for (tup.element_types) |et| if (!self.isTrivial(et)) return false;
+                return true;
+            },
         };
     }
 
@@ -350,6 +386,13 @@ pub const TypeRegistry = struct {
             .enum_type => |ea| std.mem.eql(u8, ea.name, tb.enum_type.name),
             .union_type => |ua| std.mem.eql(u8, ua.name, tb.union_type.name),
             .error_set => |es| std.mem.eql(u8, es.name, tb.error_set.name),
+            .tuple => |tup_a| {
+                if (tup_a.element_types.len != tb.tuple.element_types.len) return false;
+                for (tup_a.element_types, tb.tuple.element_types) |a_elem, b_elem| {
+                    if (!self.equal(a_elem, b_elem)) return false;
+                }
+                return true;
+            },
             .func => false,
         };
     }
@@ -417,6 +460,15 @@ pub const TypeRegistry = struct {
         if (from_t == .union_type) return self.isAssignable(from_t.union_type.tag_type, to);
         if (from_t == .pointer and to_t == .pointer) return self.equal(from_t.pointer.elem, to_t.pointer.elem);
         if (from_t == .array and to_t == .array) return from_t.array.length == to_t.array.length and self.isAssignable(from_t.array.elem, to_t.array.elem);
+
+        // Tuple types
+        if (from_t == .tuple and to_t == .tuple) {
+            if (from_t.tuple.element_types.len != to_t.tuple.element_types.len) return false;
+            for (from_t.tuple.element_types, to_t.tuple.element_types) |fe, te| {
+                if (!self.isAssignable(fe, te)) return false;
+            }
+            return true;
+        }
 
         // Function types
         if (from_t == .func and to_t == .func) {

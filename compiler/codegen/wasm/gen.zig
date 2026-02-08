@@ -623,14 +623,15 @@ pub const GenState = struct {
 
             // Local address
             .local_addr => {
-                // SP + actual_byte_offset
-                // Use local_sizes to compute correct offset (handles variable-sized locals like strings)
+                // SP + slot_offset * 8
+                // aux_int is a slot offset (in 8-byte units) computed by ssa_builder.zig
+                // which accounts for multi-word locals (structs, tuples)
                 _ = try self.builder.appendFrom(.get, prog_mod.regAddr(.sp));
                 _ = try self.builder.append(.i64_extend_i32_u);
-                const local_idx: usize = @intCast(v.aux_int);
-                const offset = self.getLocalOffset(local_idx);
-                if (offset != 0) {
-                    _ = try self.builder.appendFrom(.i64_const, prog_mod.constAddr(offset));
+                const slot_offset: i64 = v.aux_int;
+                const byte_offset: i64 = slot_offset * 8;
+                if (byte_offset != 0) {
+                    _ = try self.builder.appendFrom(.i64_const, prog_mod.constAddr(byte_offset));
                     _ = try self.builder.append(.i64_add);
                 }
             },
@@ -891,6 +892,24 @@ pub const GenState = struct {
                 // Same size: no conversion needed
             },
 
+            // Bulk memory copy: dest=args[0], src=args[1], size=aux_int
+            .wasm_lowered_move => {
+                const size: i32 = @intCast(v.aux_int);
+                const num_words: u32 = @intCast(@divTrunc(size + 7, 8));
+                var word_i: u32 = 0;
+                while (word_i < num_words) : (word_i += 1) {
+                    const offset: i64 = @intCast(@as(u32, word_i * 8));
+                    try self.getValue64(v.args[0]); // dest addr
+                    _ = try self.builder.append(.i32_wrap_i64);
+                    try self.getValue64(v.args[1]); // src addr
+                    _ = try self.builder.append(.i32_wrap_i64);
+                    const ld = try self.builder.append(.i64_load);
+                    ld.from = prog_mod.constAddr(offset);
+                    const st = try self.builder.append(.i64_store);
+                    st.to = prog_mod.constAddr(offset);
+                }
+            },
+
             else => {
                 debug.log(.codegen, "wasm/gen: unhandled op {s}", .{@tagName(v.op)});
             },
@@ -1020,7 +1039,8 @@ pub const GenState = struct {
                 if (isRematerializable(v)) continue;
                 if (isCmp(v)) continue;
                 // Go: SliceMake/StringMake are conceptual — no Wasm local needed
-                if (v.op == .slice_make or v.op == .string_make) continue;
+                // wasm_lowered_move is inline bulk copy — no value produced
+                if (v.op == .slice_make or v.op == .string_make or v.op == .wasm_lowered_move) continue;
                 if (isFloatType(v.type_idx)) continue; // Skip floats for pass 2
 
                 const local_idx = self.next_local;

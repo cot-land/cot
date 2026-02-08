@@ -73,8 +73,10 @@ pub const Scope = struct {
 };
 
 /// Info about a generic struct or function definition.
+/// Rust: hir::Generics stores param + bound. Go 1.18: types2.TypeParam stores Constraint.
 pub const GenericInfo = struct {
     type_params: []const []const u8,
+    type_param_bounds: []const ?[]const u8 = &.{}, // parallel array, null = unbounded
     node_idx: NodeIndex,
 };
 
@@ -84,6 +86,12 @@ pub const GenericInstInfo = struct {
     generic_node: NodeIndex,
     type_args: []const TypeIndex,
     type_param_names: []const []const u8 = &.{}, // For impl block methods (type params come from impl, not fn)
+};
+
+/// Info about a trait definition.
+pub const TraitDef = struct {
+    name: []const u8,
+    method_names: []const []const u8,
 };
 
 /// Info about a generic impl block definition.
@@ -110,6 +118,10 @@ pub const Checker = struct {
     generic_inst_by_name: std.StringHashMap(GenericInstInfo) = undefined,
     /// Generic impl blocks keyed by base struct name (e.g., "List" -> impl List(T) { ... })
     generic_impl_blocks: std.StringHashMap(std.ArrayListUnmanaged(GenericImplInfo)) = undefined,
+    /// Trait definitions: "Eq" -> TraitDef
+    trait_defs: std.StringHashMap(TraitDef) = undefined,
+    /// Trait implementations: "Eq:Point" -> trait_name (for validation)
+    trait_impls: std.StringHashMap([]const u8) = undefined,
     /// Type substitution map, active during generic instantiation
     type_substitution: ?std.StringHashMap(TypeIndex) = null,
 
@@ -127,6 +139,8 @@ pub const Checker = struct {
             .generic_instantiations = std.AutoHashMap(NodeIndex, GenericInstInfo).init(allocator),
             .generic_inst_by_name = std.StringHashMap(GenericInstInfo).init(allocator),
             .generic_impl_blocks = std.StringHashMap(std.ArrayListUnmanaged(GenericImplInfo)).init(allocator),
+            .trait_defs = std.StringHashMap(TraitDef).init(allocator),
+            .trait_impls = std.StringHashMap([]const u8).init(allocator),
         };
     }
 
@@ -140,9 +154,9 @@ pub const Checker = struct {
         var gib_it = self.generic_impl_blocks.valueIterator();
         while (gib_it.next()) |list| list.deinit(self.allocator);
         self.generic_impl_blocks.deinit();
+        self.trait_defs.deinit();
+        self.trait_impls.deinit();
     }
-    pub fn getExprType(self: *const Checker, node: NodeIndex) TypeIndex { return self.expr_types.get(node) orelse invalid_type; }
-
     pub fn checkFile(self: *Checker) CheckError!void {
         const file = self.tree.file orelse return;
         for (file.decls) |idx| try self.collectTypeDecl(idx);
@@ -153,7 +167,7 @@ pub const Checker = struct {
     fn collectTypeDecl(self: *Checker, idx: NodeIndex) CheckError!void {
         const decl = (self.tree.getNode(idx) orelse return).asDecl() orelse return;
         switch (decl) {
-            .struct_decl, .enum_decl, .union_decl, .type_alias, .error_set_decl => try self.collectDecl(idx),
+            .struct_decl, .enum_decl, .union_decl, .type_alias, .error_set_decl, .trait_decl => try self.collectDecl(idx),
             else => {},
         }
     }
@@ -161,7 +175,7 @@ pub const Checker = struct {
     fn collectNonTypeDecl(self: *Checker, idx: NodeIndex) CheckError!void {
         const decl = (self.tree.getNode(idx) orelse return).asDecl() orelse return;
         switch (decl) {
-            .fn_decl, .var_decl, .impl_block => try self.collectDecl(idx),
+            .fn_decl, .var_decl, .impl_block, .impl_trait => try self.collectDecl(idx),
             else => {},
         }
     }
@@ -177,7 +191,7 @@ pub const Checker = struct {
                 }
                 // Generic functions: store definition, don't build concrete type yet
                 if (f.type_params.len > 0) {
-                    try self.generic_functions.put(f.name, .{ .type_params = f.type_params, .node_idx = idx });
+                    try self.generic_functions.put(f.name, .{ .type_params = f.type_params, .type_param_bounds = f.type_param_bounds, .node_idx = idx });
                     // Register as a type_name so checkIdentifier knows it's generic
                     try self.scope.define(Symbol.init(f.name, .type_name, invalid_type, idx, false));
                     return;
@@ -247,6 +261,45 @@ pub const Checker = struct {
                     }
                 }
             },
+            .trait_decl => |td| {
+                // Collect trait method names for validation
+                var method_names = std.ArrayListUnmanaged([]const u8){};
+                defer method_names.deinit(self.allocator);
+                for (td.methods) |method_idx| {
+                    const method_decl = (self.tree.getNode(method_idx) orelse continue).asDecl() orelse continue;
+                    if (method_decl == .fn_decl) try method_names.append(self.allocator, method_decl.fn_decl.name);
+                }
+                try self.trait_defs.put(td.name, .{ .name = td.name, .method_names = try self.allocator.dupe([]const u8, method_names.items) });
+            },
+            .impl_trait => |it| {
+                // Validate trait exists
+                const trait_def = self.trait_defs.get(it.trait_name) orelse {
+                    self.err.errorWithCode(it.span.start, .e301, "undefined trait");
+                    return;
+                };
+                // Validate all required methods are provided (name check)
+                for (trait_def.method_names) |required_name| {
+                    var found = false;
+                    for (it.methods) |method_idx| {
+                        const method_decl = (self.tree.getNode(method_idx) orelse continue).asDecl() orelse continue;
+                        if (method_decl == .fn_decl and std.mem.eql(u8, method_decl.fn_decl.name, required_name)) { found = true; break; }
+                    }
+                    if (!found) { self.err.errorWithCode(it.span.start, .e300, "missing required trait method"); return; }
+                }
+                // Register methods (same pattern as impl_block)
+                for (it.methods) |method_idx| {
+                    const method_decl = (self.tree.getNode(method_idx) orelse continue).asDecl() orelse continue;
+                    if (method_decl == .fn_decl) {
+                        const f = method_decl.fn_decl;
+                        const synth_name = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ it.target_type, f.name });
+                        const func_type = try self.buildFuncType(f.params, f.return_type);
+                        try self.scope.define(Symbol.initExtern(synth_name, .function, func_type, method_idx, false, false));
+                        try self.types.registerMethod(it.target_type, types.MethodInfo{ .name = f.name, .func_name = synth_name, .func_type = func_type, .receiver_is_ptr = true });
+                    }
+                }
+                const impl_key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ it.trait_name, it.target_type });
+                try self.trait_impls.put(impl_key, it.trait_name);
+            },
             else => {},
         }
     }
@@ -291,6 +344,16 @@ pub const Checker = struct {
                     if (method_decl == .fn_decl) {
                         const f = method_decl.fn_decl;
                         const synth_name = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ impl_b.type_name, f.name });
+                        try self.checkFnDeclWithName(f, method_idx, synth_name);
+                    }
+                }
+            },
+            .impl_trait => |it| {
+                for (it.methods) |method_idx| {
+                    const method_decl = (self.tree.getNode(method_idx) orelse continue).asDecl() orelse continue;
+                    if (method_decl == .fn_decl) {
+                        const f = method_decl.fn_decl;
+                        const synth_name = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ it.target_type, f.name });
                         try self.checkFnDeclWithName(f, method_idx, synth_name);
                     }
                 }
@@ -382,6 +445,16 @@ pub const Checker = struct {
             } else null else null,
             .paren => |p| self.evalConstExpr(p.inner),
             .ident => |id| if (self.scope.lookup(id.name)) |sym| if (sym.kind == .constant) sym.const_value else null else null,
+            // Go: cmd/compile/internal/ir/const.go — const folding includes sizeof.
+            // Zig: Sema.zig resolves @sizeOf at comptime. We follow Go's limited approach.
+            .builtin_call => |bc| {
+                if (std.mem.eql(u8, bc.name, "sizeOf")) {
+                    const type_idx = self.resolveTypeExpr(bc.type_arg) catch return null;
+                    if (type_idx == invalid_type) return null;
+                    return @as(i64, @intCast(self.types.sizeOf(type_idx)));
+                }
+                return null;
+            },
             else => null,
         };
     }
@@ -425,6 +498,7 @@ pub const Checker = struct {
             .closure_expr => |ce| self.checkClosureExpr(ce),
             .addr_of => |ao| self.checkAddrOf(ao),
             .deref => |d| self.checkDeref(d),
+            .tuple_literal => |tl| self.checkTupleLiteral(tl),
             .zero_init => TypeRegistry.VOID, // Type inferred from var decl context
             .type_expr, .bad_expr => invalid_type,
         };
@@ -582,6 +656,7 @@ pub const Checker = struct {
         const struct_name = switch (base_type) {
             .struct_type => |st| st.name,
             .pointer => |ptr| if (self.types.get(ptr.elem) == .struct_type) self.types.get(ptr.elem).struct_type.name else return false,
+            .basic => |bk| bk.name(),
             else => return false,
         };
         return self.lookupMethod(struct_name, fa.field) != null;
@@ -776,6 +851,22 @@ pub const Checker = struct {
                 self.err.errorWithCode(f.span.start, .e301, "undefined field");
                 return invalid_type;
             },
+            .tuple => |tup| {
+                const idx = std.fmt.parseInt(u32, f.field, 10) catch {
+                    self.err.errorWithCode(f.span.start, .e300, "tuple fields must be numeric (e.g. .0, .1)");
+                    return invalid_type;
+                };
+                if (idx >= tup.element_types.len) {
+                    self.err.errorWithCode(f.span.start, .e300, "tuple index out of bounds");
+                    return invalid_type;
+                }
+                return tup.element_types[idx];
+            },
+            .basic => |bk| {
+                if (self.lookupMethod(bk.name(), f.field)) |m| return m.func_type;
+                self.err.errorWithCode(f.span.start, .e300, "cannot access field on this type");
+                return invalid_type;
+            },
             else => {
                 self.err.errorWithCode(f.span.start, .e300, "cannot access field on this type");
                 return invalid_type;
@@ -851,6 +942,17 @@ pub const Checker = struct {
         return self.types.makeArray(first_type, al.elements.len) catch invalid_type;
     }
 
+    fn checkTupleLiteral(self: *Checker, tl: ast.TupleLiteral) CheckError!TypeIndex {
+        if (tl.elements.len < 2) { self.err.errorWithCode(tl.span.start, .e300, "tuple must have at least 2 elements"); return invalid_type; }
+        var elem_types = std.ArrayListUnmanaged(TypeIndex){};
+        defer elem_types.deinit(self.allocator);
+        for (tl.elements) |elem_idx| {
+            const et = try self.checkExpr(elem_idx);
+            elem_types.append(self.allocator, et) catch return invalid_type;
+        }
+        return self.types.makeTuple(elem_types.items) catch invalid_type;
+    }
+
     fn checkIfExpr(self: *Checker, ie: ast.IfExpr) CheckError!TypeIndex {
         const cond_type = try self.checkExpr(ie.condition);
         if (!types.isBool(self.types.get(cond_type))) self.err.errorWithCode(ie.span.start, .e300, "condition must be bool");
@@ -870,7 +972,10 @@ pub const Checker = struct {
         var result_type: TypeIndex = TypeRegistry.VOID;
         var first = true;
         for (se.cases) |case| {
+            // Range patterns: check both start and end are valid expressions
             for (case.patterns) |val_idx| _ = try self.checkExpr(val_idx);
+            // Rust: match guard type-checked as bool. Guard expression must be boolean.
+            if (case.guard != ast.null_node) _ = try self.checkExpr(case.guard);
 
             // If union switch with capture, define capture variable in a new scope
             if (is_union and case.capture.len > 0) {
@@ -1158,6 +1263,12 @@ pub const Checker = struct {
                 const ret_type = if (f.ret != null_node) try self.resolveTypeExpr(f.ret) else TypeRegistry.VOID;
                 break :blk try self.types.makeFunc(func_params.items, ret_type);
             },
+            .tuple => |elems| blk: {
+                var elem_types = std.ArrayListUnmanaged(TypeIndex){};
+                defer elem_types.deinit(self.allocator);
+                for (elems) |e| try elem_types.append(self.allocator, try self.resolveTypeExpr(e));
+                break :blk try self.types.makeTuple(elem_types.items);
+            },
             .generic_instance => |gi| try self.resolveGenericInstance(gi, te.span),
         };
     }
@@ -1316,6 +1427,22 @@ pub const Checker = struct {
                 return invalid_type;
             }
             try resolved_args.append(self.allocator, arg_type);
+        }
+
+        // Rust: rustc_hir_analysis/src/check/wfcheck.rs — validate trait bounds at instantiation.
+        // Go 1.18: types2/instantiate.go:115-125 — check.implements(TypeArg, Constraint).
+        if (gen_info.type_param_bounds.len > 0) {
+            for (gen_info.type_param_bounds, 0..) |bound, i| {
+                if (bound) |trait_name| {
+                    const type_name = self.types.typeName(resolved_args.items[i]);
+                    const impl_key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ trait_name, type_name });
+                    defer self.allocator.free(impl_key);
+                    if (self.trait_impls.get(impl_key) == null) {
+                        self.err.errorWithCode(c.span.start, .e300, "type does not satisfy trait bound");
+                        return invalid_type;
+                    }
+                }
+            }
         }
 
         // Go pattern: context.go:87-102 — hash-based dedup with identity verification

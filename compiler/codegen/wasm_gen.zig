@@ -304,6 +304,7 @@ pub const FuncGen = struct {
         return switch (v.op) {
             // Side effects only, no value produced
             .wasm_i64_store, .wasm_i32_store, .wasm_return, .wasm_drop,
+            .wasm_lowered_move,
             .init_mem, .phi, .fwd_ref,
             => false,
             // Calls may or may not produce values
@@ -629,6 +630,21 @@ pub const FuncGen = struct {
             // Wasm spec: immediately traps the instance, no continuation.
             .wasm_unreachable => {
                 try self.code.emitUnreachable();
+            },
+
+            // Bulk memory copy: dest=args[0], src=args[1], size=aux_int
+            // Used for multi-word struct/tuple assignments and function return handling
+            .wasm_lowered_move => {
+                const size: i32 = @intCast(v.aux_int);
+                const num_words: u32 = @intCast(@divTrunc(size + 7, 8));
+                var word_i: u32 = 0;
+                while (word_i < num_words) : (word_i += 1) {
+                    const offset: u32 = word_i * 8;
+                    try self.getValue32(v.args[0]); // dest addr
+                    try self.getValue32(v.args[1]); // src addr
+                    try self.code.emitI64Load(3, offset); // load from src+offset
+                    try self.code.emitI64Store(3, offset); // store to dest+offset
+                }
             },
 
             // Memory ops, control flow - handled elsewhere
@@ -1026,7 +1042,7 @@ pub const FuncGen = struct {
             },
 
             // Copy (Go line 454-455)
-            .copy, .wasm_lowered_move => {
+            .copy => {
                 try self.getValue64(v.args[0]);
             },
 

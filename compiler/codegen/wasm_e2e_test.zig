@@ -2184,3 +2184,411 @@ test "wasm e2e: trap conditional" {
     try std.testing.expect(result.wasm_bytes.len > 0);
     try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
 }
+
+test "wasm e2e: trait basic" {
+    const code =
+        \\trait Greet {
+        \\    fn greet(self: *Self) i64
+        \\}
+        \\struct Dog { age: i64 }
+        \\impl Greet for Dog {
+        \\    fn greet(self: *Dog) i64 {
+        \\        return self.age
+        \\    }
+        \\}
+        \\fn main() i64 {
+        \\    var d = Dog { .age = 42 }
+        \\    return d.greet()
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: trait primitive" {
+    const code =
+        \\trait Doubled {
+        \\    fn doubled(self: *Self) i64
+        \\}
+        \\impl Doubled for i64 {
+        \\    fn doubled(self: *i64) i64 {
+        \\        return self.* * 2
+        \\    }
+        \\}
+        \\fn main() i64 {
+        \\    var x: i64 = 21
+        \\    return x.doubled()
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: trait multi impl" {
+    const code =
+        \\trait Value {
+        \\    fn value(self: *Self) i64
+        \\}
+        \\struct Cat { lives: i64 }
+        \\struct Dog { age: i64 }
+        \\impl Value for Cat {
+        \\    fn value(self: *Cat) i64 {
+        \\        return self.lives
+        \\    }
+        \\}
+        \\impl Value for Dog {
+        \\    fn value(self: *Dog) i64 {
+        \\        return self.age
+        \\    }
+        \\}
+        \\fn main() i64 {
+        \\    var c = Cat { .lives = 9 }
+        \\    var d = Dog { .age = 3 }
+        \\    return c.value() + d.value()
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: trait generic usage" {
+    const code =
+        \\trait HasValue {
+        \\    fn getValue(self: *Self) i64
+        \\}
+        \\struct Box { val: i64 }
+        \\impl HasValue for Box {
+        \\    fn getValue(self: *Box) i64 {
+        \\        return self.val
+        \\    }
+        \\}
+        \\fn extract(T)(item: *T) i64 {
+        \\    return item.getValue()
+        \\}
+        \\fn main() i64 {
+        \\    var b = Box { .val = 99 }
+        \\    return extract(Box)(&b)
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: trait self type" {
+    const code =
+        \\trait Eq {
+        \\    fn eq(self: *Self, other: *Self) i64
+        \\}
+        \\struct Point { x: i64, y: i64 }
+        \\impl Eq for Point {
+        \\    fn eq(self: *Point, other: *Point) i64 {
+        \\        if self.x == other.x {
+        \\            if self.y == other.y {
+        \\                return 1
+        \\            }
+        \\        }
+        \\        return 0
+        \\    }
+        \\}
+        \\fn main() i64 {
+        \\    var a = Point { .x = 3, .y = 4 }
+        \\    var b = Point { .x = 3, .y = 4 }
+        \\    var c = Point { .x = 1, .y = 2 }
+        \\    return a.eq(&b) + a.eq(&c)
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+// ============================================================================
+// Wave 2: Const evaluation tests
+// ============================================================================
+
+test "wasm e2e: const eval arithmetic" {
+    // Go: cmd/compile/internal/ir/const.go — const folding of arithmetic chains
+    const code =
+        \\const SIZE: i64 = 8
+        \\const DOUBLE: i64 = SIZE * 2
+        \\const TRIPLE: i64 = SIZE + SIZE + SIZE
+        \\fn main() i64 {
+        \\    return DOUBLE + TRIPLE
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: const eval sizeof" {
+    // Go: sizeof is compile-time known. Zig: @sizeOf resolved at comptime.
+    // Cot: evalConstExpr handles @sizeOf(T) → types.sizeOf(T)
+    const code =
+        \\struct Point { x: i64, y: i64 }
+        \\const POINT_SIZE: i64 = @sizeOf(Point)
+        \\const I64_SIZE: i64 = @sizeOf(i64)
+        \\fn main() i64 {
+        \\    return POINT_SIZE + I64_SIZE
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+// ============================================================================
+// Wave 2: Trait bounds tests
+// ============================================================================
+
+test "wasm e2e: trait bound basic" {
+    // Rust: `fn max<T: Ord>(a: T, b: T) -> T` — bound checked at instantiation.
+    // Go 1.18: `func Max[T constraints.Ordered](a, b T) T` — same concept.
+    // Cot: `fn max(T)(a: T, b: T) T where T: Comparable`
+    const code =
+        \\trait Comparable {
+        \\    fn cmp(self: *Self, other: *Self) i64
+        \\}
+        \\impl Comparable for i64 {
+        \\    fn cmp(self: *i64, other: *i64) i64 {
+        \\        if self.* > other.* { return 1 }
+        \\        if self.* < other.* { return 0 - 1 }
+        \\        return 0
+        \\    }
+        \\}
+        \\fn max(T)(a: T, b: T) T where T: Comparable {
+        \\    var x = a
+        \\    var y = b
+        \\    if x.cmp(&y) > 0 { return a }
+        \\    return b
+        \\}
+        \\fn main() i64 {
+        \\    return max(i64)(10, 20)
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: trait bound multi param" {
+    // Multiple type params with different bounds
+    const code =
+        \\trait Addable {
+        \\    fn value(self: *Self) i64
+        \\}
+        \\impl Addable for i64 {
+        \\    fn value(self: *i64) i64 { return self.* }
+        \\}
+        \\fn sum_values(T)(a: T, b: T) i64 where T: Addable {
+        \\    var x = a
+        \\    var y = b
+        \\    return x.value() + y.value()
+        \\}
+        \\fn main() i64 {
+        \\    return sum_values(i64)(10, 32)
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+// ============================================================================
+// Wave 2: Match expression tests (wildcards, guards, ranges)
+// ============================================================================
+
+test "wasm e2e: match wildcard" {
+    // Zig: _ in switch covers all remaining values. Rust: _ in match is catch-all.
+    const code =
+        \\fn classify(x: i64) i64 {
+        \\    return switch x {
+        \\        1 => 10,
+        \\        2 => 20,
+        \\        _ => 99,
+        \\    }
+        \\}
+        \\fn main() i64 {
+        \\    return classify(1) + classify(2) + classify(42)
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: match guard" {
+    // Rust: match x { n if n > 10 => "big", _ => "small" }
+    const code =
+        \\fn classify(x: i64) i64 {
+        \\    return switch x {
+        \\        1 if x > 0 => 10,
+        \\        2 => 20,
+        \\        _ => 0,
+        \\    }
+        \\}
+        \\fn main() i64 {
+        \\    return classify(1) + classify(2)
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: match range" {
+    // Zig: 1...10 (inclusive range). Rust: 1..=10. Cot: 1..10.
+    const code =
+        \\fn classify(x: i64) i64 {
+        \\    return switch x {
+        \\        1..5 => 1,
+        \\        6..10 => 2,
+        \\        _ => 3,
+        \\    }
+        \\}
+        \\fn main() i64 {
+        \\    return classify(3) + classify(7) + classify(20)
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+// ============================================================================
+// Tuple type tests
+// ============================================================================
+
+test "wasm e2e: tuple basic" {
+    // Rust: let t = (10, 20); t.0 + t.1
+    const code =
+        \\fn main() i64 {
+        \\    var t = (10, 20)
+        \\    return t.0 + t.1
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: tuple param" {
+    // Pass tuple as parameter
+    const code =
+        \\fn sum_pair(p: (i64, i64)) i64 {
+        \\    return p.0 + p.1
+        \\}
+        \\fn main() i64 {
+        \\    var t = (13, 7)
+        \\    return sum_pair(t)
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: tuple three elements" {
+    const code =
+        \\fn main() i64 {
+        \\    var t = (1, 2, 3)
+        \\    return t.0 + t.1 + t.2
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: tuple fn return (SRET)" {
+    // SRET: function returning tuple > 8 bytes uses hidden first param
+    const code =
+        \\fn make_pair() (i64, i64) {
+        \\    return (10, 20)
+        \\}
+        \\fn main() i64 {
+        \\    let p = make_pair()
+        \\    return p.0 + p.1
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: struct fn return (SRET)" {
+    // SRET: function returning struct > 8 bytes uses hidden first param
+    const code =
+        \\struct Point { x: i64, y: i64 }
+        \\fn make_point() Point {
+        \\    return Point { .x = 10, .y = 20 }
+        \\}
+        \\fn main() i64 {
+        \\    let p = make_point()
+        \\    return p.x + p.y
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}
+
+test "wasm e2e: sret chain" {
+    // SRET chain: function returning large type calls another function returning large type
+    const code =
+        \\fn make_pair() (i64, i64) {
+        \\    return (10, 20)
+        \\}
+        \\fn double_pair() (i64, i64) {
+        \\    let p = make_pair()
+        \\    return (p.0 * 2, p.1 * 2)
+        \\}
+        \\fn main() i64 {
+        \\    let d = double_pair()
+        \\    return d.0 + d.1
+        \\}
+    ;
+    var result = try compileToWasmViaDriver(std.testing.allocator, code);
+    defer result.deinit();
+    try std.testing.expect(!result.has_errors);
+    try std.testing.expect(result.wasm_bytes.len > 0);
+    try std.testing.expectEqualSlices(u8, "\x00asm", result.wasm_bytes[0..4]);
+}

@@ -29,6 +29,8 @@ pub const Decl = union(enum) {
     type_alias: TypeAlias,
     import_decl: ImportDecl,
     impl_block: ImplBlock,
+    trait_decl: TraitDecl,
+    impl_trait: ImplTraitBlock,
     error_set_decl: ErrorSetDecl,
     test_decl: TestDecl,
     bad_decl: BadDecl,
@@ -38,10 +40,23 @@ pub const Decl = union(enum) {
     }
 };
 
-pub const FnDecl = struct { name: []const u8, type_params: []const []const u8 = &.{}, params: []const Field, return_type: NodeIndex, body: NodeIndex, is_extern: bool, span: Span };
+// Rust: where T: Ord clause. Go 1.18: [T comparable] inline constraint.
+// Cot uses Rust's where clause: `fn sort(T)(l: *List(T)) void where T: Ord`
+pub const FnDecl = struct {
+    name: []const u8,
+    type_params: []const []const u8 = &.{},
+    type_param_bounds: []const ?[]const u8 = &.{}, // parallel with type_params, null = unbounded
+    params: []const Field,
+    return_type: NodeIndex,
+    body: NodeIndex,
+    is_extern: bool,
+    span: Span,
+};
 pub const VarDecl = struct { name: []const u8, type_expr: NodeIndex, value: NodeIndex, is_const: bool, span: Span };
 pub const StructDecl = struct { name: []const u8, type_params: []const []const u8 = &.{}, fields: []const Field, span: Span };
 pub const ImplBlock = struct { type_name: []const u8, type_params: []const []const u8 = &.{}, methods: []const NodeIndex, span: Span };
+pub const TraitDecl = struct { name: []const u8, methods: []const NodeIndex, span: Span };
+pub const ImplTraitBlock = struct { trait_name: []const u8, target_type: []const u8, type_params: []const []const u8 = &.{}, methods: []const NodeIndex, span: Span };
 pub const TestDecl = struct { name: []const u8, body: NodeIndex, span: Span };
 pub const EnumDecl = struct { name: []const u8, backing_type: NodeIndex, variants: []const EnumVariant, span: Span };
 pub const UnionDecl = struct { name: []const u8, variants: []const UnionVariant, span: Span };
@@ -79,6 +94,7 @@ pub const Expr = union(enum) {
     catch_expr: CatchExpr,
     error_literal: ErrorLiteral,
     closure_expr: ClosureExpr,
+    tuple_literal: TupleLiteral,
     zero_init: ZeroInit,
     addr_of: AddrOf,
     deref: Deref,
@@ -102,7 +118,17 @@ pub const ArrayLiteral = struct { elements: []const NodeIndex, span: Span };
 pub const Paren = struct { inner: NodeIndex, span: Span };
 pub const IfExpr = struct { condition: NodeIndex, then_branch: NodeIndex, else_branch: NodeIndex, span: Span };
 pub const SwitchExpr = struct { subject: NodeIndex, cases: []const SwitchCase, else_body: NodeIndex, span: Span };
-pub const SwitchCase = struct { patterns: []const NodeIndex, capture: []const u8, body: NodeIndex, span: Span };
+// Zig: switch supports ranges (1...10), captures, inline else.
+// Rust: match supports nested patterns, guards (if expr), ranges (1..=10).
+// Cot: extends switch with guards + ranges. Wildcards handled as else at parse time.
+pub const SwitchCase = struct {
+    patterns: []const NodeIndex,
+    capture: []const u8,
+    guard: NodeIndex = null_node, // Rust: `pattern if guard_expr =>`
+    is_range: bool = false, // patterns[0] = start, patterns[1] = end (inclusive)
+    body: NodeIndex,
+    span: Span,
+};
 pub const BlockExpr = struct { stmts: []const NodeIndex, expr: NodeIndex, span: Span };
 pub const StructInit = struct { type_name: []const u8, type_args: []const NodeIndex = &.{}, fields: []const FieldInit, span: Span };
 pub const FieldInit = struct { name: []const u8, value: NodeIndex, span: Span };
@@ -129,12 +155,14 @@ pub const TypeKind = union(enum) {
     map: struct { key: NodeIndex, value: NodeIndex },
     list: NodeIndex,
     function: struct { params: []const NodeIndex, ret: NodeIndex },
+    tuple: []const NodeIndex,
     generic_instance: GenericInstance,
 };
 pub const TryExpr = struct { operand: NodeIndex, span: Span };
 pub const CatchExpr = struct { operand: NodeIndex, capture: []const u8, fallback: NodeIndex, span: Span };
 pub const ErrorLiteral = struct { error_name: []const u8, span: Span };
 pub const ClosureExpr = struct { params: []const Field, return_type: NodeIndex, body: NodeIndex, span: Span };
+pub const TupleLiteral = struct { elements: []const NodeIndex, span: Span };
 pub const ZeroInit = struct { span: Span };
 pub const AddrOf = struct { operand: NodeIndex, span: Span };
 pub const Deref = struct { operand: NodeIndex, span: Span };
@@ -250,14 +278,19 @@ pub const Ast = struct {
                     .impl_block => |ib| {
                         if (ib.type_params.len > 0) self.allocator.free(ib.type_params);
                     },
+                    .impl_trait => |it| {
+                        if (it.type_params.len > 0) self.allocator.free(it.type_params);
+                    },
                     else => {},
                 },
                 .expr => |expr| switch (expr) {
                     .type_expr => |t| switch (t.kind) {
                         .function => |f| if (f.params.len > 0) self.allocator.free(f.params),
                         .generic_instance => |gi| if (gi.type_args.len > 0) self.allocator.free(gi.type_args),
+                        .tuple => |elems| if (elems.len > 0) self.allocator.free(elems),
                         else => {},
                     },
+                    .tuple_literal => |tl| if (tl.elements.len > 0) self.allocator.free(tl.elements),
                     .closure_expr => |ce| if (ce.params.len > 0) self.allocator.free(ce.params),
                     .call => |c| if (c.args.len > 0) self.allocator.free(c.args),
                     .array_literal => |a| if (a.elements.len > 0) self.allocator.free(a.elements),

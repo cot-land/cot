@@ -40,6 +40,9 @@ pub const SSABuilder = struct {
     node_values: std.AutoHashMap(ir.NodeIndex, *Value),
     loop_stack: std.ArrayListUnmanaged(LoopContext),
     cur_pos: Pos,
+    /// Maps IR local_idx → frame slot offset (in 8-byte units).
+    /// Accounts for multi-word locals (structs, tuples) occupying multiple slots.
+    local_slot_offsets: []u32,
 
     const LoopContext = struct { continue_block: *Block, break_block: *Block };
 
@@ -48,6 +51,19 @@ pub const SSABuilder = struct {
         func.* = Func.init(allocator, ir_func.name);
         const entry = try func.newBlock(.plain);
         func.entry = entry;
+
+        // Compute local slot offsets: each IR local gets a frame slot
+        // Multi-word locals (structs, tuples) occupy multiple 8-byte slots
+        const num_locals = ir_func.locals.len;
+        const slot_offsets = try allocator.alloc(u32, num_locals);
+        {
+            var next_slot: u32 = 0;
+            for (ir_func.locals, 0..) |local, idx| {
+                slot_offsets[idx] = next_slot;
+                const num_slots = @max(1, (local.size + 7) / 8);
+                next_slot += num_slots;
+            }
+        }
 
         var vars = std.AutoHashMap(ir.LocalIdx, *Value).init(allocator);
 
@@ -82,7 +98,7 @@ pub const SSABuilder = struct {
 
                 // Store to stack for address-taken variables
                 const addr = try func.newValue(.local_addr, TypeRegistry.VOID, entry, .{});
-                addr.aux_int = @intCast(i);
+                addr.aux_int = @intCast(slot_offsets[i]);
                 try entry.addValue(allocator, addr);
                 const ptr_store = try func.newValue(.store, TypeRegistry.VOID, entry, .{});
                 ptr_store.addArg2(addr, ptr_val);
@@ -107,7 +123,7 @@ pub const SSABuilder = struct {
                 phys_reg_idx += 1;
 
                 const addr = try func.newValue(.local_addr, TypeRegistry.VOID, entry, .{});
-                addr.aux_int = @intCast(i);
+                addr.aux_int = @intCast(slot_offsets[i]);
                 try entry.addValue(allocator, addr);
                 const lo_store = try func.newValue(.store, TypeRegistry.VOID, entry, .{});
                 lo_store.addArg2(addr, lo_val);
@@ -129,7 +145,7 @@ pub const SSABuilder = struct {
 
                 // Store to stack
                 const addr = try func.newValue(.local_addr, TypeRegistry.VOID, entry, .{});
-                addr.aux_int = @intCast(i);
+                addr.aux_int = @intCast(slot_offsets[i]);
                 try entry.addValue(allocator, addr);
                 const store = try func.newValue(.store, TypeRegistry.VOID, entry, .{});
                 store.addArg2(addr, arg_val);
@@ -150,6 +166,7 @@ pub const SSABuilder = struct {
             .node_values = std.AutoHashMap(ir.NodeIndex, *Value).init(allocator),
             .loop_stack = .{},
             .cur_pos = .{},
+            .local_slot_offsets = slot_offsets,
         };
     }
 
@@ -162,6 +179,7 @@ pub const SSABuilder = struct {
         self.block_map.deinit();
         self.node_values.deinit();
         self.loop_stack.deinit(self.allocator);
+        self.allocator.free(self.local_slot_offsets);
     }
 
     pub fn takeFunc(self: *SSABuilder) *Func {
@@ -427,9 +445,19 @@ pub const SSABuilder = struct {
 
     fn emitLocalAddr(self: *SSABuilder, local_idx: ir.LocalIdx, type_idx: TypeIndex, cur: *Block) !*Value {
         const val = try self.func.newValue(.local_addr, type_idx, cur, self.cur_pos);
-        val.aux_int = @intCast(local_idx);
+        // Use slot offset (accounts for multi-word locals) instead of raw local_idx
+        val.aux_int = @intCast(self.getSlotOffset(local_idx));
         try cur.addValue(self.allocator, val);
         return val;
+    }
+
+    fn getSlotOffset(self: *const SSABuilder, local_idx: ir.LocalIdx) u32 {
+        if (local_idx < self.local_slot_offsets.len) {
+            return self.local_slot_offsets[local_idx];
+        }
+        // Fallback for dynamically-added locals not in original IR
+        // This shouldn't happen in normal flow, but be safe
+        return local_idx;
     }
 
     fn convertLoadLocal(self: *SSABuilder, local_idx: ir.LocalIdx, type_idx: TypeIndex, cur: *Block) !*Value {
@@ -519,11 +547,12 @@ pub const SSABuilder = struct {
 
         const addr_val = try self.emitLocalAddr(local_idx, TypeRegistry.VOID, cur);
         const type_size = self.type_registry.sizeOf(value.type_idx);
-        const is_large_struct = value_type == .struct_type and type_size > 8;
-        const is_call_result = value.op == .static_call or value.op == .closure_call;
+        const is_large_struct = (value_type == .struct_type or value_type == .tuple) and type_size > 8;
 
-        if (is_large_struct and !is_call_result) {
+        if (is_large_struct) {
             // Use OpMove for bulk memory copy
+            // For non-call results (e.g. load from another local): extract src addr from load
+            // For call results: value IS the returned address (callee returns addr for large types)
             const src_addr = if (value.op == .load and value.args.len > 0) value.args[0] else value;
             const move_val = try self.func.newValue(.move, TypeRegistry.VOID, cur, self.cur_pos);
             move_val.addArg2(addr_val, src_addr);
@@ -982,10 +1011,9 @@ pub const SSABuilder = struct {
 
         const value_type = self.type_registry.get(value.type_idx);
         const type_size = self.type_registry.sizeOf(value.type_idx);
-        const is_large_struct = value_type == .struct_type and type_size > 8;
-        const is_call_result = value.op == .static_call or value.op == .closure_call;
+        const is_large_struct = (value_type == .struct_type or value_type == .tuple) and type_size > 8;
 
-        if (is_large_struct and !is_call_result) {
+        if (is_large_struct) {
             const src_addr = if (value.op == .load and value.args.len > 0) value.args[0] else value;
             const move_val = try self.func.newValue(.move, TypeRegistry.VOID, cur, self.cur_pos);
             move_val.addArg2(ptr_val, src_addr);

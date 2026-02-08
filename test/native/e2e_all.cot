@@ -965,6 +965,308 @@ fn test_slice_param_iteration() i64 {
 }
 
 // ============================================================================
+// Traits
+// ============================================================================
+
+trait Greetable {
+    fn greet(self: *Self) i64
+}
+
+struct TraitDog { age: i64 }
+
+impl Greetable for TraitDog {
+    fn greet(self: *TraitDog) i64 {
+        return self.age
+    }
+}
+
+fn test_trait_basic() i64 {
+    var d = TraitDog { .age = 42 }
+    if d.greet() != 42 { return 1 }
+    return 0
+}
+
+trait Doubled {
+    fn doubled(self: *Self) i64
+}
+
+impl Doubled for i64 {
+    fn doubled(self: *i64) i64 {
+        return self.* * 2
+    }
+}
+
+fn test_trait_primitive() i64 {
+    var x: i64 = 21
+    if x.doubled() != 42 { return 1 }
+    return 0
+}
+
+trait HasValue {
+    fn value(self: *Self) i64
+}
+
+struct TraitCat { lives: i64 }
+
+impl HasValue for TraitCat {
+    fn value(self: *TraitCat) i64 {
+        return self.lives
+    }
+}
+
+impl HasValue for TraitDog {
+    fn value(self: *TraitDog) i64 {
+        return self.age
+    }
+}
+
+fn test_trait_multi_impl() i64 {
+    var c = TraitCat { .lives = 9 }
+    var d = TraitDog { .age = 3 }
+    if c.value() + d.value() != 12 { return 1 }
+    return 0
+}
+
+fn extractValue(T)(item: *T) i64 {
+    return item.value()
+}
+
+fn test_trait_generic_usage() i64 {
+    var b = TraitCat { .lives = 99 }
+    if extractValue(TraitCat)(&b) != 99 { return 1 }
+    return 0
+}
+
+trait TraitEq {
+    fn eq(self: *Self, other: *Self) i64
+}
+
+struct TraitPoint { x: i64, y: i64 }
+
+impl TraitEq for TraitPoint {
+    fn eq(self: *TraitPoint, other: *TraitPoint) i64 {
+        if self.x == other.x {
+            if self.y == other.y {
+                return 1
+            }
+        }
+        return 0
+    }
+}
+
+fn test_trait_self_type() i64 {
+    var a = TraitPoint { .x = 3, .y = 4 }
+    var b = TraitPoint { .x = 3, .y = 4 }
+    var c = TraitPoint { .x = 1, .y = 2 }
+    if a.eq(&b) != 1 { return 1 }
+    if a.eq(&c) != 0 { return 1 }
+    return 0
+}
+
+// ============================================================================
+// Wave 2: Const evaluation
+// ============================================================================
+
+const CE_SIZE: i64 = 8
+const CE_DOUBLE: i64 = CE_SIZE * 2
+const CE_TRIPLE: i64 = CE_SIZE + CE_SIZE + CE_SIZE
+
+fn test_const_eval_arithmetic() i64 {
+    // Go: cmd/compile/internal/ir/const.go — const folding chains
+    if CE_DOUBLE != 16 { return 1 }
+    if CE_TRIPLE != 24 { return 1 }
+    if CE_DOUBLE + CE_TRIPLE != 40 { return 1 }
+    return 0
+}
+
+struct CEPoint { x: i64, y: i64 }
+const CE_POINT_SIZE: i64 = @sizeOf(CEPoint)
+const CE_I64_SIZE: i64 = @sizeOf(i64)
+
+fn test_const_eval_sizeof() i64 {
+    // Zig: @sizeOf resolved at comptime. Go: unsafe.Sizeof is const-foldable.
+    if CE_I64_SIZE != 8 { return 1 }
+    if CE_POINT_SIZE != 16 { return 1 }
+    if CE_POINT_SIZE + CE_I64_SIZE != 24 { return 1 }
+    return 0
+}
+
+// ============================================================================
+// Wave 2: Trait bounds
+// ============================================================================
+
+trait BComparable {
+    fn bcmp(self: *Self, other: *Self) i64
+}
+
+impl BComparable for i64 {
+    fn bcmp(self: *i64, other: *i64) i64 {
+        if self.* > other.* { return 1 }
+        if self.* < other.* { return 0 - 1 }
+        return 0
+    }
+}
+
+fn bounded_max(T)(a: T, b: T) T where T: BComparable {
+    var x = a
+    var y = b
+    if x.bcmp(&y) > 0 { return a }
+    return b
+}
+
+fn test_trait_bound_basic() i64 {
+    // Rust: fn max<T: Ord>(a: T, b: T) -> T
+    // Go 1.18: func Max[T constraints.Ordered](a, b T) T
+    if bounded_max(i64)(10, 20) != 20 { return 1 }
+    if bounded_max(i64)(30, 5) != 30 { return 1 }
+    return 0
+}
+
+trait BAddable {
+    fn bval(self: *Self) i64
+}
+
+impl BAddable for i64 {
+    fn bval(self: *i64) i64 { return self.* }
+}
+
+fn bounded_sum(T)(a: T, b: T) i64 where T: BAddable {
+    var x = a
+    var y = b
+    return x.bval() + y.bval()
+}
+
+fn test_trait_bound_multi() i64 {
+    if bounded_sum(i64)(10, 32) != 42 { return 1 }
+    return 0
+}
+
+// ============================================================================
+// Wave 2: Match expressions (wildcards, guards, ranges)
+// ============================================================================
+
+fn match_classify_wildcard(x: i64) i64 {
+    return switch x {
+        1 => 10,
+        2 => 20,
+        _ => 99,
+    }
+}
+
+fn test_match_wildcard() i64 {
+    // Zig: _ in switch covers all remaining values. Rust: _ in match is catch-all.
+    if match_classify_wildcard(1) != 10 { return 1 }
+    if match_classify_wildcard(2) != 20 { return 1 }
+    if match_classify_wildcard(42) != 99 { return 1 }
+    if match_classify_wildcard(0) != 99 { return 1 }
+    return 0
+}
+
+fn match_classify_guard(x: i64) i64 {
+    return switch x {
+        1 if x > 0 => 10,
+        2 => 20,
+        _ => 0,
+    }
+}
+
+fn test_match_guard() i64 {
+    // Rust: match x { n if n > 10 => "big", _ => "small" }
+    if match_classify_guard(1) != 10 { return 1 }
+    if match_classify_guard(2) != 20 { return 1 }
+    if match_classify_guard(99) != 0 { return 1 }
+    return 0
+}
+
+fn match_classify_range(x: i64) i64 {
+    return switch x {
+        1..5 => 1,
+        6..10 => 2,
+        _ => 3,
+    }
+}
+
+fn test_match_range() i64 {
+    // Zig: 1...10 (inclusive). Rust: 1..=10. Cot: 1..10 (inclusive).
+    if match_classify_range(1) != 1 { return 1 }
+    if match_classify_range(3) != 1 { return 1 }
+    if match_classify_range(5) != 1 { return 1 }
+    if match_classify_range(6) != 2 { return 1 }
+    if match_classify_range(10) != 2 { return 1 }
+    if match_classify_range(0) != 3 { return 1 }
+    if match_classify_range(11) != 3 { return 1 }
+    return 0
+}
+
+// ============================================================================
+// Wave 2: Tuple types
+// Rust: (T1, T2) product type, indexed by .0, .1
+// Go: no tuples (uses structs or multi-return)
+// ============================================================================
+
+fn test_tuple_basic() i64 {
+    var t = (10, 20)
+    if t.0 != 10 { return 1 }
+    if t.1 != 20 { return 1 }
+    if t.0 + t.1 != 30 { return 1 }
+    return 0
+}
+
+fn test_tuple_nested() i64 {
+    var a = (1, 2)
+    var b = (3, 4)
+    if a.0 + a.1 + b.0 + b.1 != 10 { return 1 }
+    return 0
+}
+
+fn test_tuple_three() i64 {
+    var t = (100, 200, 300)
+    if t.0 + t.1 + t.2 != 600 { return 1 }
+    return 0
+}
+
+// ============================================================================
+// SRET: Function returns for multi-word types
+// ============================================================================
+
+fn make_pair() (i64, i64) {
+    return (10, 20)
+}
+
+fn test_sret_tuple_return() i64 {
+    let p = make_pair()
+    if p.0 != 10 { return 1 }
+    if p.1 != 20 { return 1 }
+    if p.0 + p.1 != 30 { return 1 }
+    return 0
+}
+
+fn make_point() Point {
+    return Point { .x = 10, .y = 20 }
+}
+
+fn test_sret_struct_return() i64 {
+    let p = make_point()
+    if p.x != 10 { return 1 }
+    if p.y != 20 { return 1 }
+    if p.x + p.y != 30 { return 1 }
+    return 0
+}
+
+fn double_pair() (i64, i64) {
+    let p = make_pair()
+    return (p.0 * 2, p.1 * 2)
+}
+
+fn test_sret_chain() i64 {
+    let d = double_pair()
+    if d.0 != 20 { return 1 }
+    if d.1 != 40 { return 1 }
+    if d.0 + d.1 != 60 { return 1 }
+    return 0
+}
+
+// ============================================================================
 // main() dispatcher
 // ============================================================================
 
@@ -1069,6 +1371,36 @@ fn main() i64 {
     // Slice parameter passing
     if test_slice_param_basic() != 0 { return 64 }
     if test_slice_param_iteration() != 0 { return 65 }
+
+    // Traits
+    if test_trait_basic() != 0 { return 66 }
+    if test_trait_primitive() != 0 { return 67 }
+    if test_trait_multi_impl() != 0 { return 68 }
+    if test_trait_generic_usage() != 0 { return 69 }
+    if test_trait_self_type() != 0 { return 70 }
+
+    // Wave 2: Const evaluation
+    if test_const_eval_arithmetic() != 0 { return 71 }
+    if test_const_eval_sizeof() != 0 { return 72 }
+
+    // Wave 2: Trait bounds
+    if test_trait_bound_basic() != 0 { return 73 }
+    if test_trait_bound_multi() != 0 { return 74 }
+
+    // Wave 2: Match expressions
+    if test_match_wildcard() != 0 { return 75 }
+    if test_match_guard() != 0 { return 76 }
+    if test_match_range() != 0 { return 77 }
+
+    // Wave 2: Tuple types
+    if test_tuple_basic() != 0 { return 78 }
+    if test_tuple_nested() != 0 { return 79 }
+    if test_tuple_three() != 0 { return 80 }
+
+    // SRET: function returns for multi-word types
+    if test_sret_tuple_return() != 0 { return 81 }
+    if test_sret_struct_return() != 0 { return 82 }
+    if test_sret_chain() != 0 { return 83 }
 
     return 0
 }

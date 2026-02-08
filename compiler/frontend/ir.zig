@@ -190,6 +190,9 @@ pub const FuncBuilder = struct {
     current_block: BlockIndex = 0,
     local_map: std.StringHashMap(LocalIdx),
     shadow_stack: std.ArrayListUnmanaged(ShadowEntry) = .{},
+    /// Original return type for SRET functions (callee uses this to know
+    /// what type to write to the __sret pointer). null if not SRET.
+    sret_return_type: ?TypeIndex = null,
 
     const ShadowEntry = struct { name: []const u8, old_idx: ?LocalIdx };
 

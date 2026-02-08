@@ -43,6 +43,14 @@ pub const Lowerer = struct {
 
     pub const Error = error{OutOfMemory};
 
+    /// Zig SRET pattern: functions returning structs/tuples > 8 bytes use a hidden
+    /// first parameter for the return value. Caller allocates space, passes pointer.
+    /// Reference: ~/learning/zig/src/codegen/wasm/CodeGen.zig:1354 firstParamSRet()
+    fn needsSret(self: *const Lowerer, type_idx: TypeIndex) bool {
+        const info = self.type_reg.get(type_idx);
+        return (info == .struct_type or info == .tuple) and self.type_reg.sizeOf(type_idx) > 8;
+    }
+
     const LoopContext = struct {
         cond_block: ir.BlockIndex,
         exit_block: ir.BlockIndex,
@@ -155,8 +163,9 @@ pub const Lowerer = struct {
             .var_decl => |d| try self.lowerGlobalVarDecl(d),
             .struct_decl => |d| try self.lowerStructDecl(d),
             .impl_block => |d| try self.lowerImplBlock(d),
+            .impl_trait => |d| try self.lowerImplTraitBlock(d),
             .test_decl => |d| if (self.test_mode) try self.lowerTestDecl(d),
-            .enum_decl, .union_decl, .type_alias, .import_decl, .error_set_decl, .bad_decl => {},
+            .trait_decl, .enum_decl, .union_decl, .type_alias, .import_decl, .error_set_decl, .bad_decl => {},
         }
     }
 
@@ -165,10 +174,19 @@ pub const Lowerer = struct {
         if (fn_decl.type_params.len > 0) return; // Skip generic fn defs — lowered on demand at call sites
         if (self.test_mode and std.mem.eql(u8, fn_decl.name, "main")) return;
         const return_type = if (fn_decl.return_type != null_node) self.resolveTypeNode(fn_decl.return_type) else TypeRegistry.VOID;
-        self.builder.startFunc(fn_decl.name, TypeRegistry.VOID, return_type, fn_decl.span);
+        // SRET: callee receives hidden __sret pointer, returns void at Wasm level
+        const uses_sret = self.needsSret(return_type);
+        const wasm_return_type = if (uses_sret) TypeRegistry.VOID else return_type;
+        self.builder.startFunc(fn_decl.name, TypeRegistry.VOID, wasm_return_type, fn_decl.span);
         if (self.builder.func()) |fb| {
+            // Store the original return type for lowerReturn to use
+            if (uses_sret) fb.sret_return_type = return_type;
             self.current_func = fb;
             self.cleanup_stack.clear();
+            // SRET: add hidden first parameter (Zig firstParamSRet pattern)
+            if (uses_sret) {
+                _ = try fb.addParam("__sret", TypeRegistry.I64, 8);
+            }
             for (fn_decl.params) |param| {
                 const param_type = self.resolveTypeNode(param.type_expr);
                 _ = try fb.addParam(param.name, param_type, self.type_reg.sizeOf(param_type));
@@ -223,12 +241,29 @@ pub const Lowerer = struct {
         }
     }
 
+    fn lowerImplTraitBlock(self: *Lowerer, impl_trait: ast.ImplTraitBlock) !void {
+        for (impl_trait.methods) |method_idx| {
+            const node = self.tree.getNode(method_idx) orelse continue;
+            const decl = node.asDecl() orelse continue;
+            if (decl == .fn_decl) {
+                const synth_name = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ impl_trait.target_type, decl.fn_decl.name });
+                try self.lowerMethodWithName(decl.fn_decl, synth_name);
+            }
+        }
+    }
+
     fn lowerMethodWithName(self: *Lowerer, fn_decl: ast.FnDecl, synth_name: []const u8) !void {
         const return_type = if (fn_decl.return_type != null_node) self.resolveTypeNode(fn_decl.return_type) else TypeRegistry.VOID;
-        self.builder.startFunc(synth_name, TypeRegistry.VOID, return_type, fn_decl.span);
+        const uses_sret = self.needsSret(return_type);
+        const wasm_return_type = if (uses_sret) TypeRegistry.VOID else return_type;
+        self.builder.startFunc(synth_name, TypeRegistry.VOID, wasm_return_type, fn_decl.span);
         if (self.builder.func()) |fb| {
+            if (uses_sret) fb.sret_return_type = return_type;
             self.current_func = fb;
             self.cleanup_stack.clear();
+            if (uses_sret) {
+                _ = try fb.addParam("__sret", TypeRegistry.I64, 8);
+            }
             for (fn_decl.params) |param| {
                 const param_type = self.resolveTypeNode(param.type_expr);
                 _ = try fb.addParam(param.name, param_type, self.type_reg.sizeOf(param_type));
@@ -373,6 +408,55 @@ pub const Lowerer = struct {
                     _ = try fb.emitStoreLocalField(tmp_local, 1, 8, lowered, ret.span);
                     value_node = try fb.emitAddrLocal(tmp_local, TypeRegistry.I64, ret.span);
                 }
+            } else if (fb.sret_return_type) |sret_type| {
+                // SRET: write return value to caller-allocated buffer via __sret pointer.
+                // Zig pattern: firstParamSRet() — callee writes, returns void.
+                const sret_size = self.type_reg.sizeOf(sret_type);
+                const num_words = sret_size / 8;
+                const sret_idx = fb.lookupLocal("__sret").?;
+                const sret_ptr = try fb.emitLoadLocal(sret_idx, TypeRegistry.I64, ret.span);
+
+                const ret_expr = if (ret_node) |n| n.asExpr() else null;
+                if (ret_expr != null and ret_expr.? == .ident) {
+                    // Direct local reference → copy fields from local to SRET
+                    if (fb.lookupLocal(ret_expr.?.ident.name)) |src_local| {
+                        for (0..num_words) |i| {
+                            const offset: i64 = @intCast(i * 8);
+                            const field = try fb.emitFieldLocal(src_local, @intCast(i), offset, TypeRegistry.I64, ret.span);
+                            _ = try fb.emitStoreField(sret_ptr, @intCast(i), offset, field, ret.span);
+                        }
+                    }
+                } else {
+                    // Expression result → lower, store to temp, copy temp fields to SRET
+                    const lowered = try self.lowerExprNode(ret.value);
+                    if (lowered != ir.null_node) {
+                        const tmp_local = try fb.addLocalWithSize("__ret_sret_src", sret_type, false, sret_size);
+                        _ = try fb.emitStoreLocal(tmp_local, lowered, ret.span);
+                        for (0..num_words) |i| {
+                            const offset: i64 = @intCast(i * 8);
+                            const field = try fb.emitFieldLocal(tmp_local, @intCast(i), offset, TypeRegistry.I64, ret.span);
+                            _ = try fb.emitStoreField(sret_ptr, @intCast(i), offset, field, ret.span);
+                        }
+                    }
+                }
+
+                // Forward ownership before cleanup
+                if (ret_node) |node| {
+                    if (node.asExpr()) |expr| {
+                        if (expr == .ident) {
+                            if (fb.lookupLocal(expr.ident.name)) |local_idx| {
+                                _ = self.cleanup_stack.disableForLocal(local_idx);
+                            }
+                        }
+                    }
+                }
+
+                // Handle defers
+                if (self.hasDeferCleanups()) {
+                    try self.emitCleanups(0);
+                }
+                _ = try fb.emitRet(null, ret.span); // return void
+                return;
             } else {
                 const lowered = try self.lowerExprNode(ret.value);
                 if (lowered != ir.null_node) value_node = lowered;
@@ -542,6 +626,7 @@ pub const Lowerer = struct {
             const is_array = self.type_reg.isArray(type_idx);
             const is_slice = self.type_reg.isSlice(type_idx);
             const is_struct_literal = if (value_expr) |e| e == .struct_init else false;
+            const is_tuple_literal = if (value_expr) |e| e == .tuple_literal else false;
 
             if (type_idx == TypeRegistry.STRING) {
                 try self.lowerStringInit(local_idx, var_stmt.value, var_stmt.span);
@@ -551,12 +636,15 @@ pub const Lowerer = struct {
                 try self.lowerArrayInit(local_idx, var_stmt.value, var_stmt.span);
             } else if (is_struct_literal) {
                 try self.lowerStructInit(local_idx, var_stmt.value, var_stmt.span);
+            } else if (is_tuple_literal) {
+                try self.lowerTupleInit(local_idx, var_stmt.value, var_stmt.span);
             } else if (self.type_reg.get(type_idx) == .union_type) {
                 try self.lowerUnionInit(local_idx, var_stmt.value, type_idx, var_stmt.span);
             } else {
                 const type_info = self.type_reg.get(type_idx);
-                const is_struct_copy = type_info == .struct_type and value_expr != null and
+                const is_compound_copy = (type_info == .struct_type or type_info == .tuple) and value_expr != null and
                     (value_expr.? == .field_access or value_expr.? == .index or value_expr.? == .deref);
+                const is_struct_copy = is_compound_copy;
                 if (is_struct_copy) {
                     const src_addr = try self.lowerExprNode(var_stmt.value);
                     if (src_addr == ir.null_node) return;
@@ -703,6 +791,23 @@ pub const Lowerer = struct {
                     break;
                 }
             }
+        }
+    }
+
+    /// Lower tuple literal directly into a target local.
+    /// Same pattern as lowerStructInit — stores each element at its computed offset.
+    fn lowerTupleInit(self: *Lowerer, local_idx: ir.LocalIdx, value_idx: NodeIndex, span: Span) !void {
+        const fb = self.current_func orelse return;
+        const value_node = self.tree.getNode(value_idx) orelse return;
+        const value_expr = value_node.asExpr() orelse return;
+        if (value_expr != .tuple_literal) return;
+        const tl = value_expr.tuple_literal;
+        // Infer tuple type from checker
+        const tuple_type_idx = self.inferExprType(value_idx);
+        for (tl.elements, 0..) |elem_idx, i| {
+            const value_ir = try self.lowerExprNode(elem_idx);
+            const offset: i64 = @intCast(self.type_reg.tupleElementOffset(tuple_type_idx, @intCast(i)));
+            _ = try fb.emitStoreLocalField(local_idx, @intCast(i), offset, value_ir, span);
         }
     }
 
@@ -1276,6 +1381,7 @@ pub const Lowerer = struct {
             .builtin_call => |bc| return try self.lowerBuiltinCall(bc),
             .switch_expr => |se| return try self.lowerSwitchExpr(se),
             .struct_init => |si| return try self.lowerStructInitExpr(si),
+            .tuple_literal => |tl| return try self.lowerTupleLiteral(tl),
             .new_expr => |ne| return try self.lowerNewExpr(ne),
             .closure_expr => |ce| return try self.lowerClosureExpr(ce),
             .block_expr => |block| {
@@ -1564,6 +1670,26 @@ pub const Lowerer = struct {
             return ir.null_node;
         }
 
+        // Tuple element access: t.0, t.1, etc.
+        if (base_type == .tuple) {
+            const idx = std.fmt.parseInt(u32, fa.field, 10) catch return ir.null_node;
+            const tup = base_type.tuple;
+            if (idx >= tup.element_types.len) return ir.null_node;
+            const offset: i64 = @intCast(self.type_reg.tupleElementOffset(base_type_idx, idx));
+            const elem_type = tup.element_types[idx];
+
+            // Check if base is an ident (can use local field load)
+            const base_node_ast2 = self.tree.getNode(fa.base);
+            const base_expr2 = if (base_node_ast2) |n| n.asExpr() else null;
+            if (base_expr2 != null and base_expr2.? == .ident) {
+                if (fb.lookupLocal(base_expr2.?.ident.name)) |lidx| {
+                    return try fb.emitFieldLocal(lidx, idx, offset, elem_type, fa.span);
+                }
+            }
+            const base_val = try self.lowerExprNode(fa.base);
+            return try fb.emitFieldValue(base_val, idx, offset, elem_type, fa.span);
+        }
+
         // Struct field
         const struct_type = switch (base_type) {
             .struct_type => |st| st,
@@ -1817,6 +1943,29 @@ pub const Lowerer = struct {
             }
         }
         return try fb.emitLoadLocal(temp_idx, struct_type_idx, si.span);
+    }
+
+    /// Lower tuple literal: (a, b, c) → allocate stack local, store each element at computed offset
+    /// Rust: tuples are anonymous structs. Go: MakeTuple SSA op. Cot: stack local with offsets.
+    fn lowerTupleLiteral(self: *Lowerer, tl: ast.TupleLiteral) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+        // Infer the tuple type from the checker
+        var elem_types = std.ArrayListUnmanaged(TypeIndex){};
+        defer elem_types.deinit(self.allocator);
+        for (tl.elements) |elem_idx| {
+            const et = self.inferExprType(elem_idx);
+            try elem_types.append(self.allocator, et);
+        }
+        const tuple_type_idx = self.type_reg.makeTuple(elem_types.items) catch return ir.null_node;
+        const size = self.type_reg.sizeOf(tuple_type_idx);
+        const temp_idx = try fb.addLocalWithSize("__tuple_tmp", tuple_type_idx, true, size);
+
+        for (tl.elements, 0..) |elem_idx, i| {
+            const value_node = try self.lowerExprNode(elem_idx);
+            const offset: i64 = @intCast(self.type_reg.tupleElementOffset(tuple_type_idx, @intCast(i)));
+            _ = try fb.emitStoreLocalField(temp_idx, @intCast(i), offset, value_node, tl.span);
+        }
+        return try fb.emitLoadLocal(temp_idx, tuple_type_idx, tl.span);
     }
 
     /// Lower heap allocation expression: new Type { field: value, ... }
@@ -2159,11 +2308,29 @@ pub const Lowerer = struct {
         while (i < se.cases.len) : (i += 1) {
             const case = se.cases[i];
             var case_cond: ir.NodeIndex = ir.null_node;
-            for (case.patterns) |pattern_idx| {
-                const pattern_val = try self.lowerExprNode(pattern_idx);
-                const pattern_cond = try fb.emitBinary(.eq, subject, pattern_val, TypeRegistry.BOOL, se.span);
-                case_cond = if (case_cond == ir.null_node) pattern_cond else try fb.emitBinary(.@"or", case_cond, pattern_cond, TypeRegistry.BOOL, se.span);
+
+            if (case.is_range and case.patterns.len >= 2) {
+                // Range pattern: subject >= start AND subject <= end
+                // Zig: 1...10 uses range checks. Rust: 1..=10 same.
+                const range_start = try self.lowerExprNode(case.patterns[0]);
+                const range_end = try self.lowerExprNode(case.patterns[1]);
+                const ge_cond = try fb.emitBinary(.ge, subject, range_start, TypeRegistry.BOOL, se.span);
+                const le_cond = try fb.emitBinary(.le, subject, range_end, TypeRegistry.BOOL, se.span);
+                case_cond = try fb.emitBinary(.@"and", ge_cond, le_cond, TypeRegistry.BOOL, se.span);
+            } else {
+                for (case.patterns) |pattern_idx| {
+                    const pattern_val = try self.lowerExprNode(pattern_idx);
+                    const pattern_cond = try fb.emitBinary(.eq, subject, pattern_val, TypeRegistry.BOOL, se.span);
+                    case_cond = if (case_cond == ir.null_node) pattern_cond else try fb.emitBinary(.@"or", case_cond, pattern_cond, TypeRegistry.BOOL, se.span);
+                }
             }
+
+            // Rust: match guard — additional condition AND'd with pattern match
+            if (case.guard != ast.null_node and case_cond != ir.null_node) {
+                const guard_cond = try self.lowerExprNode(case.guard);
+                case_cond = try fb.emitBinary(.@"and", case_cond, guard_cond, TypeRegistry.BOOL, se.span);
+            }
+
             const case_block = try fb.newBlock("switch.case");
             const next_block = if (i + 1 < se.cases.len) try fb.newBlock("switch.next") else if (se.else_body != null_node) try fb.newBlock("switch.else") else merge_block;
             if (case_cond != ir.null_node) _ = try fb.emitBranch(case_cond, case_block, next_block, se.span);
@@ -2281,11 +2448,28 @@ pub const Lowerer = struct {
             i -= 1;
             const case = se.cases[i];
             var case_cond: ir.NodeIndex = ir.null_node;
-            for (case.patterns) |pattern_idx| {
-                const pattern_val = try self.lowerExprNode(pattern_idx);
-                const pattern_cond = try fb.emitBinary(.eq, subject, pattern_val, TypeRegistry.BOOL, se.span);
-                case_cond = if (case_cond == ir.null_node) pattern_cond else try fb.emitBinary(.@"or", case_cond, pattern_cond, TypeRegistry.BOOL, se.span);
+
+            if (case.is_range and case.patterns.len >= 2) {
+                // Range pattern in expression form
+                const range_start = try self.lowerExprNode(case.patterns[0]);
+                const range_end = try self.lowerExprNode(case.patterns[1]);
+                const ge_cond = try fb.emitBinary(.ge, subject, range_start, TypeRegistry.BOOL, se.span);
+                const le_cond = try fb.emitBinary(.le, subject, range_end, TypeRegistry.BOOL, se.span);
+                case_cond = try fb.emitBinary(.@"and", ge_cond, le_cond, TypeRegistry.BOOL, se.span);
+            } else {
+                for (case.patterns) |pattern_idx| {
+                    const pattern_val = try self.lowerExprNode(pattern_idx);
+                    const pattern_cond = try fb.emitBinary(.eq, subject, pattern_val, TypeRegistry.BOOL, se.span);
+                    case_cond = if (case_cond == ir.null_node) pattern_cond else try fb.emitBinary(.@"or", case_cond, pattern_cond, TypeRegistry.BOOL, se.span);
+                }
             }
+
+            // Guard in expression form
+            if (case.guard != ast.null_node and case_cond != ir.null_node) {
+                const guard_cond = try self.lowerExprNode(case.guard);
+                case_cond = try fb.emitBinary(.@"and", case_cond, guard_cond, TypeRegistry.BOOL, se.span);
+            }
+
             const case_val = try self.lowerExprNode(case.body);
             result = try fb.emitSelect(case_cond, case_val, result, result_type, se.span);
         }
@@ -2310,6 +2494,7 @@ pub const Lowerer = struct {
                         if (elem == .struct_type) break :blk elem.struct_type.name;
                         break :blk null;
                     },
+                    .basic => |bk| bk.name(),
                     else => null,
                 };
                 if (type_name) |name| {
@@ -2435,6 +2620,18 @@ pub const Lowerer = struct {
                     try gen_args.append(self.allocator, arg_node);
                 }
                 const ret_type = if (concrete_info == .func) concrete_info.func.return_type else TypeRegistry.VOID;
+                // SRET for generic function calls
+                if (self.needsSret(ret_type)) {
+                    const ret_size = self.type_reg.sizeOf(ret_type);
+                    const sret_local = try fb.addLocalWithSize("__sret_tmp", ret_type, false, ret_size);
+                    const sret_addr = try fb.emitAddrLocal(sret_local, TypeRegistry.I64, call.span);
+                    var sret_args = std.ArrayListUnmanaged(ir.NodeIndex){};
+                    defer sret_args.deinit(self.allocator);
+                    try sret_args.append(self.allocator, sret_addr);
+                    try sret_args.appendSlice(self.allocator, gen_args.items);
+                    _ = try fb.emitCall(inst_info.concrete_name, sret_args.items, false, TypeRegistry.VOID, call.span);
+                    return try fb.emitLoadLocal(sret_local, ret_type, call.span);
+                }
                 return try fb.emitCall(inst_info.concrete_name, gen_args.items, false, ret_type, call.span);
             }
         }
@@ -2526,6 +2723,23 @@ pub const Lowerer = struct {
             // Use closure_call: callee=table_idx, context=closure_ptr, args
             return try fb.emitClosureCall(table_idx, closure_ptr, args.items, return_type, call.span);
         }
+
+        // SRET: caller allocates temp, passes address as hidden first arg
+        // Zig pattern: firstParamSRet() — caller allocates, callee writes
+        if (self.needsSret(return_type)) {
+            const ret_size = self.type_reg.sizeOf(return_type);
+            const sret_local = try fb.addLocalWithSize("__sret_tmp", return_type, false, ret_size);
+            const sret_addr = try fb.emitAddrLocal(sret_local, TypeRegistry.I64, call.span);
+            // Prepend SRET address as first argument
+            var sret_args = std.ArrayListUnmanaged(ir.NodeIndex){};
+            defer sret_args.deinit(self.allocator);
+            try sret_args.append(self.allocator, sret_addr);
+            try sret_args.appendSlice(self.allocator, args.items);
+            // Call returns void; result is in sret_local
+            _ = try fb.emitCall(func_name, sret_args.items, false, TypeRegistry.VOID, call.span);
+            return try fb.emitLoadLocal(sret_local, return_type, call.span);
+        }
+
         return try fb.emitCall(func_name, args.items, false, return_type, call.span);
     }
 
@@ -2600,10 +2814,16 @@ pub const Lowerer = struct {
         defer self.type_substitution = null;
 
         const return_type = self.resolveTypeNode(f.return_type);
-        self.builder.startFunc(inst_info.concrete_name, TypeRegistry.VOID, return_type, f.span);
+        const uses_sret = self.needsSret(return_type);
+        const wasm_return_type = if (uses_sret) TypeRegistry.VOID else return_type;
+        self.builder.startFunc(inst_info.concrete_name, TypeRegistry.VOID, wasm_return_type, f.span);
         if (self.builder.func()) |fb| {
+            if (uses_sret) fb.sret_return_type = return_type;
             self.current_func = fb;
             self.cleanup_stack.clear();
+            if (uses_sret) {
+                _ = try fb.addParam("__sret", TypeRegistry.I64, 8);
+            }
             for (f.params) |param| {
                 const param_type = self.resolveTypeNode(param.type_expr);
                 _ = try fb.addParam(param.name, param_type, self.type_reg.sizeOf(param_type));
@@ -2696,6 +2916,18 @@ pub const Lowerer = struct {
 
         const func_type = self.type_reg.get(method_info.func_type);
         const return_type = if (func_type == .func) func_type.func.return_type else TypeRegistry.VOID;
+        // SRET for method calls returning large types
+        if (self.needsSret(return_type)) {
+            const ret_size = self.type_reg.sizeOf(return_type);
+            const sret_local = try fb.addLocalWithSize("__sret_tmp", return_type, false, ret_size);
+            const sret_addr = try fb.emitAddrLocal(sret_local, TypeRegistry.I64, call.span);
+            var sret_args = std.ArrayListUnmanaged(ir.NodeIndex){};
+            defer sret_args.deinit(self.allocator);
+            try sret_args.append(self.allocator, sret_addr);
+            try sret_args.appendSlice(self.allocator, args.items);
+            _ = try fb.emitCall(method_info.func_name, sret_args.items, false, TypeRegistry.VOID, call.span);
+            return try fb.emitLoadLocal(sret_local, return_type, call.span);
+        }
         return try fb.emitCall(method_info.func_name, args.items, false, return_type, call.span);
     }
 
@@ -3069,6 +3301,14 @@ pub const Lowerer = struct {
                     }
                 }
                 return self.type_reg.makeErrorUnion(elem) catch TypeRegistry.VOID;
+            },
+            .tuple => |elems| {
+                var elem_types = std.ArrayListUnmanaged(TypeIndex){};
+                defer elem_types.deinit(self.allocator);
+                for (elems) |e| {
+                    elem_types.append(self.allocator, self.resolveTypeNode(e)) catch return TypeRegistry.VOID;
+                }
+                return self.type_reg.makeTuple(elem_types.items) catch TypeRegistry.VOID;
             },
             .generic_instance => |gi| {
                 // Look up the concrete monomorphized type by cache key

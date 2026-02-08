@@ -111,6 +111,7 @@ pub const Parser = struct {
             .kw_var => self.parseVarDecl(false),
             .kw_const => self.parseVarDecl(true),
             .kw_struct => self.parseStructDecl(),
+            .kw_trait => self.parseTraitDecl(),
             .kw_impl => self.parseImplBlock(),
             .kw_enum => self.parseEnumDecl(),
             .kw_union => self.parseUnionDecl(),
@@ -160,8 +161,34 @@ pub const Parser = struct {
         if (!self.expect(.rparen)) return null;
 
         var return_type: NodeIndex = null_node;
-        if (!self.check(.lbrace) and !self.check(.semicolon) and !self.check(.eof))
+        if (!self.check(.lbrace) and !self.check(.semicolon) and !self.check(.eof) and !self.check(.kw_where))
             return_type = try self.parseType() orelse null_node;
+
+        // Rust: `fn sort(T)(list: *List(T)) void where T: Ord`
+        // Go 1.18: constraints inline `[T comparable]`. We use Rust's where clause.
+        var type_param_bounds: []const ?[]const u8 = &.{};
+        if (self.check(.kw_where) and type_params.len > 0) {
+            var bounds = try self.allocator.alloc(?[]const u8, type_params.len);
+            for (bounds) |*b| b.* = null;
+            self.advance(); // consume 'where'
+            while (self.check(.ident)) {
+                const param_name = self.tok.text;
+                self.advance();
+                if (!self.expect(.colon)) break;
+                if (!self.check(.ident)) { self.syntaxError("expected trait name after ':'"); break; }
+                const trait_name = self.tok.text;
+                self.advance();
+                // Find matching type param and set its bound
+                for (type_params, 0..) |tp, i| {
+                    if (std.mem.eql(u8, tp, param_name)) {
+                        bounds[i] = trait_name;
+                        break;
+                    }
+                }
+                if (!self.match(.comma)) break;
+            }
+            type_param_bounds = bounds;
+        }
 
         var body: NodeIndex = null_node;
         if (is_extern) {
@@ -171,7 +198,7 @@ pub const Parser = struct {
             body = try self.parseBlock() orelse return null;
         }
 
-        return try self.tree.addDecl(.{ .fn_decl = .{ .name = name, .type_params = type_params, .params = params, .return_type = return_type, .body = body, .is_extern = is_extern, .span = Span.init(start, self.pos()) } });
+        return try self.tree.addDecl(.{ .fn_decl = .{ .name = name, .type_params = type_params, .type_param_bounds = type_param_bounds, .params = params, .return_type = return_type, .body = body, .is_extern = is_extern, .span = Span.init(start, self.pos()) } });
     }
 
     fn parseFieldList(self: *Parser, end_tok: Token) ParseError![]const ast.Field {
@@ -284,6 +311,9 @@ pub const Parser = struct {
             type_params = try self.allocator.dupe([]const u8, tp.items);
         }
 
+        // impl Trait for Type { ... } — trait implementation
+        if (self.check(.kw_for)) return self.parseImplTraitBlock(start, type_name, type_params);
+
         if (!self.expect(.lbrace)) return null;
 
         var methods = std.ArrayListUnmanaged(NodeIndex){};
@@ -295,6 +325,53 @@ pub const Parser = struct {
         }
         if (!self.expect(.rbrace)) return null;
         return try self.tree.addDecl(.{ .impl_block = .{ .type_name = type_name, .type_params = type_params, .methods = try self.allocator.dupe(NodeIndex, methods.items), .span = Span.init(start, self.pos()) } });
+    }
+
+    fn parseTraitDecl(self: *Parser) ParseError!?NodeIndex {
+        const start = self.pos();
+        self.advance(); // consume 'trait'
+        if (!self.check(.ident)) { self.err.errorWithCode(self.pos(), .e203, "expected trait name"); return null; }
+        const name = self.tok.text;
+        self.advance();
+        if (!self.expect(.lbrace)) return null;
+
+        var methods = std.ArrayListUnmanaged(NodeIndex){};
+        defer methods.deinit(self.allocator);
+        while (!self.check(.rbrace) and !self.check(.eof)) {
+            if (self.check(.kw_fn)) {
+                // Parse method signature (fn_decl with body = null_node)
+                if (try self.parseFnDecl(false)) |idx| try methods.append(self.allocator, idx);
+            } else { self.syntaxError("expected 'fn' in trait declaration"); self.advance(); }
+        }
+        if (!self.expect(.rbrace)) return null;
+        return try self.tree.addDecl(.{ .trait_decl = .{ .name = name, .methods = try self.allocator.dupe(NodeIndex, methods.items), .span = Span.init(start, self.pos()) } });
+    }
+
+    fn parseImplTraitBlock(self: *Parser, start: Pos, trait_name: []const u8, type_params: []const []const u8) ParseError!?NodeIndex {
+        self.advance(); // consume 'for'
+        // Target type: identifier or type keyword (i64, i32, etc.)
+        var target_type: []const u8 = "";
+        if (self.check(.ident)) {
+            target_type = self.tok.text;
+            self.advance();
+        } else if (self.tok.tok.isTypeKeyword()) {
+            target_type = self.tok.tok.string();
+            self.advance();
+        } else {
+            self.syntaxError("expected type name after 'for'");
+            return null;
+        }
+        if (!self.expect(.lbrace)) return null;
+
+        var methods = std.ArrayListUnmanaged(NodeIndex){};
+        defer methods.deinit(self.allocator);
+        while (!self.check(.rbrace) and !self.check(.eof)) {
+            if (self.check(.kw_fn)) {
+                if (try self.parseFnDecl(false)) |idx| try methods.append(self.allocator, idx);
+            } else { self.syntaxError("expected 'fn' in impl block"); self.advance(); }
+        }
+        if (!self.expect(.rbrace)) return null;
+        return try self.tree.addDecl(.{ .impl_trait = .{ .trait_name = trait_name, .target_type = target_type, .type_params = type_params, .methods = try self.allocator.dupe(NodeIndex, methods.items), .span = Span.init(start, self.pos()) } });
     }
 
     fn parseEnumDecl(self: *Parser) ParseError!?NodeIndex {
@@ -449,6 +526,28 @@ pub const Parser = struct {
             return try self.tree.addExpr(.{ .type_expr = .{ .kind = .{ .named = type_name }, .span = Span.init(start, self.pos()) } });
         }
 
+        // Tuple type: (T1, T2, ...) — disambiguated from grouping by comma
+        if (self.check(.lparen)) {
+            self.advance();
+            const first = try self.parseType() orelse return null;
+            if (self.match(.comma)) {
+                // It's a tuple type
+                var elems = std.ArrayListUnmanaged(NodeIndex){};
+                defer elems.deinit(self.allocator);
+                try elems.append(self.allocator, first);
+                while (!self.check(.rparen) and !self.check(.eof)) {
+                    const elem = try self.parseType() orelse break;
+                    try elems.append(self.allocator, elem);
+                    if (!self.match(.comma)) break;
+                }
+                if (!self.expect(.rparen)) return null;
+                return try self.tree.addExpr(.{ .type_expr = .{ .kind = .{ .tuple = try self.allocator.dupe(NodeIndex, elems.items) }, .span = Span.init(start, self.pos()) } });
+            }
+            // Single type in parens — not a tuple, just grouping
+            if (!self.expect(.rparen)) return null;
+            return first;
+        }
+
         if (self.match(.kw_fn)) {
             if (!self.expect(.lparen)) return null;
             var params = std.ArrayListUnmanaged(NodeIndex){};
@@ -537,6 +636,12 @@ pub const Parser = struct {
                 expr = try self.tree.addExpr(.{ .unary = .{ .op = .question, .operand = expr, .span = Span.init(s.start, self.pos()) } });
             } else if (self.match(.period)) {
                 if (self.check(.ident)) {
+                    const field = self.tok.text;
+                    self.advance();
+                    const s = self.tree.getNode(expr).?.span();
+                    expr = try self.tree.addExpr(.{ .field_access = .{ .base = expr, .field = field, .span = Span.init(s.start, self.pos()) } });
+                } else if (self.check(.int_lit)) {
+                    // Tuple index: t.0, t.1, etc.
                     const field = self.tok.text;
                     self.advance();
                     const s = self.tree.getNode(expr).?.span();
@@ -658,6 +763,19 @@ pub const Parser = struct {
             .lparen => {
                 self.advance();
                 const inner = try self.parseExpr() orelse return null;
+                // Tuple literal: (expr, expr, ...) — disambiguated from paren grouping by comma
+                if (self.match(.comma)) {
+                    var elems = std.ArrayListUnmanaged(NodeIndex){};
+                    defer elems.deinit(self.allocator);
+                    try elems.append(self.allocator, inner);
+                    while (!self.check(.rparen) and !self.check(.eof)) {
+                        const elem = try self.parseExpr() orelse break;
+                        try elems.append(self.allocator, elem);
+                        if (!self.match(.comma)) break;
+                    }
+                    if (!self.expect(.rparen)) return null;
+                    return try self.tree.addExpr(.{ .tuple_literal = .{ .elements = try self.allocator.dupe(NodeIndex, elems.items), .span = Span.init(start, self.pos()) } });
+                }
                 if (!self.expect(.rparen)) return null;
                 return try self.tree.addExpr(.{ .paren = .{ .inner = inner, .span = Span.init(start, self.pos()) } });
             },
@@ -873,15 +991,34 @@ pub const Parser = struct {
                 continue;
             }
 
+            // Wildcard `_` → treat as else branch (Rust/Zig convention)
+            if (self.check(.ident) and std.mem.eql(u8, self.tok.text, "_")) {
+                self.advance();
+                if (!self.expect(.fat_arrow)) return null;
+                else_body = try self.parseExpr() orelse return null;
+                _ = self.match(.comma);
+                continue;
+            }
+
             var patterns = std.ArrayListUnmanaged(NodeIndex){};
             defer patterns.deinit(self.allocator);
+            var is_range = false;
             const first = try self.parsePrimaryExpr() orelse return null;
             try patterns.append(self.allocator, first);
-            while (self.check(.comma) and !self.check(.fat_arrow)) {
+
+            // Range pattern: `1..5` → inclusive range (Zig: 1...5, Rust: 1..=5)
+            if (self.check(.period_period)) {
                 self.advance();
-                if (self.check(.fat_arrow) or self.check(.kw_else)) break;
-                const p = try self.parsePrimaryExpr() orelse return null;
-                try patterns.append(self.allocator, p);
+                const range_end = try self.parsePrimaryExpr() orelse return null;
+                try patterns.append(self.allocator, range_end);
+                is_range = true;
+            } else {
+                while (self.check(.comma) and !self.check(.fat_arrow)) {
+                    self.advance();
+                    if (self.check(.fat_arrow) or self.check(.kw_else)) break;
+                    const p = try self.parsePrimaryExpr() orelse return null;
+                    try patterns.append(self.allocator, p);
+                }
             }
 
             var capture: []const u8 = "";
@@ -889,9 +1026,17 @@ pub const Parser = struct {
                 if (self.check(.ident)) { capture = self.tok.text; self.advance(); } else { self.syntaxError("expected identifier for payload capture"); return null; }
                 if (!self.expect(.@"or")) return null;
             }
+
+            // Guard: `pattern if expr =>` (Rust match guard syntax)
+            var guard: NodeIndex = null_node;
+            if (self.check(.kw_if)) {
+                self.advance();
+                guard = try self.parseExpr() orelse return null;
+            }
+
             if (!self.expect(.fat_arrow)) return null;
             const body = try self.parseExpr() orelse return null;
-            try cases.append(self.allocator, .{ .patterns = try self.allocator.dupe(NodeIndex, patterns.items), .capture = capture, .body = body, .span = Span.init(case_start, self.pos()) });
+            try cases.append(self.allocator, .{ .patterns = try self.allocator.dupe(NodeIndex, patterns.items), .capture = capture, .guard = guard, .is_range = is_range, .body = body, .span = Span.init(case_start, self.pos()) });
             _ = self.match(.comma);
         }
         if (!self.expect(.rbrace)) return null;

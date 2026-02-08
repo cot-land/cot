@@ -29,7 +29,7 @@ pub const Token = enum(u8) {
 
     // Keywords (keyword_beg..keyword_end)
     keyword_beg,
-    kw_fn, kw_var, kw_let, kw_const, kw_struct, kw_impl,
+    kw_fn, kw_var, kw_let, kw_const, kw_struct, kw_impl, kw_trait, kw_where,
     kw_enum, kw_union, kw_type, kw_import, kw_extern, kw_test,
     kw_if, kw_else, kw_switch, kw_while, kw_for, kw_in,
     kw_return, kw_break, kw_continue, kw_defer, kw_try, kw_catch, kw_error,
@@ -157,6 +157,8 @@ const token_strings = blk: {
     s[@intFromEnum(Token.kw_const)] = "const";
     s[@intFromEnum(Token.kw_struct)] = "struct";
     s[@intFromEnum(Token.kw_impl)] = "impl";
+    s[@intFromEnum(Token.kw_trait)] = "trait";
+    s[@intFromEnum(Token.kw_where)] = "where";
     s[@intFromEnum(Token.kw_enum)] = "enum";
     s[@intFromEnum(Token.kw_union)] = "union";
     s[@intFromEnum(Token.kw_type)] = "type";
@@ -205,7 +207,7 @@ const token_strings = blk: {
 
 pub const keywords = std.StaticStringMap(Token).initComptime(.{
     .{ "fn", .kw_fn }, .{ "var", .kw_var }, .{ "let", .kw_let }, .{ "const", .kw_const },
-    .{ "struct", .kw_struct }, .{ "impl", .kw_impl }, .{ "enum", .kw_enum }, .{ "union", .kw_union },
+    .{ "struct", .kw_struct }, .{ "impl", .kw_impl }, .{ "trait", .kw_trait }, .{ "where", .kw_where }, .{ "enum", .kw_enum }, .{ "union", .kw_union },
     .{ "type", .kw_type }, .{ "import", .kw_import }, .{ "extern", .kw_extern }, .{ "test", .kw_test },
     .{ "if", .kw_if }, .{ "else", .kw_else }, .{ "switch", .kw_switch }, .{ "while", .kw_while },
     .{ "for", .kw_for }, .{ "in", .kw_in }, .{ "return", .kw_return }, .{ "break", .kw_break },
