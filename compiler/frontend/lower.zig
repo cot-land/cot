@@ -3140,14 +3140,14 @@ pub const Lowerer = struct {
         if (is_integer) {
             const int_val = try self.lowerExprNode(call.args[0]);
             var print_args = [_]ir.NodeIndex{int_val};
-            _ = try fb.emitCall(if (fd == 2) "__eprint_int" else "__print_int", &print_args, false, TypeRegistry.VOID, call.span);
+            _ = try fb.emitCall(if (fd == 2) "cot_eprint_int" else "cot_print_int", &print_args, false, TypeRegistry.VOID, call.span);
         } else {
             const str_val = try self.lowerExprNode(call.args[0]);
             const ptr_val = try fb.emitSlicePtr(str_val, ptr_type, call.span);
             const len_val = try fb.emitSliceLen(str_val, call.span);
-            const fd_val = try fb.emitConstInt(fd, TypeRegistry.I32, call.span);
+            const fd_val = try fb.emitConstInt(fd, TypeRegistry.I64, call.span);
             var write_args = [_]ir.NodeIndex{ fd_val, ptr_val, len_val };
-            _ = try fb.emitCall("write", &write_args, false, TypeRegistry.I64, call.span);
+            _ = try fb.emitCall("cot_write", &write_args, false, TypeRegistry.I64, call.span);
         }
 
         if (is_println) {
@@ -3155,9 +3155,9 @@ pub const Lowerer = struct {
             const nl_str = try fb.emit(ir.Node.init(.{ .const_slice = .{ .string_index = nl_idx } }, TypeRegistry.STRING, call.span));
             const nl_ptr = try fb.emitSlicePtr(nl_str, ptr_type, call.span);
             const nl_len = try fb.emitConstInt(1, TypeRegistry.I64, call.span);
-            const fd_val = try fb.emitConstInt(fd, TypeRegistry.I32, call.span);
+            const fd_val = try fb.emitConstInt(fd, TypeRegistry.I64, call.span);
             var nl_args = [_]ir.NodeIndex{ fd_val, nl_ptr, nl_len };
-            _ = try fb.emitCall("write", &nl_args, false, TypeRegistry.I64, call.span);
+            _ = try fb.emitCall("cot_write", &nl_args, false, TypeRegistry.I64, call.span);
         }
         return ir.null_node;
     }

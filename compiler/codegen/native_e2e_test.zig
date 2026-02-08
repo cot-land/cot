@@ -18,18 +18,22 @@ const NativeResult = struct {
     link_error: bool,
     run_error: bool,
     error_msg: []const u8,
+    stdout: []const u8,
 
     pub fn success(code: u32) NativeResult {
-        return .{ .exit_code = code, .compile_error = false, .link_error = false, .run_error = false, .error_msg = "" };
+        return .{ .exit_code = code, .compile_error = false, .link_error = false, .run_error = false, .error_msg = "", .stdout = "" };
+    }
+    pub fn successWithOutput(code: u32, output: []const u8) NativeResult {
+        return .{ .exit_code = code, .compile_error = false, .link_error = false, .run_error = false, .error_msg = "", .stdout = output };
     }
     pub fn compileErr(msg: []const u8) NativeResult {
-        return .{ .exit_code = null, .compile_error = true, .link_error = false, .run_error = false, .error_msg = msg };
+        return .{ .exit_code = null, .compile_error = true, .link_error = false, .run_error = false, .error_msg = msg, .stdout = "" };
     }
     pub fn linkErr(msg: []const u8) NativeResult {
-        return .{ .exit_code = null, .compile_error = false, .link_error = true, .run_error = false, .error_msg = msg };
+        return .{ .exit_code = null, .compile_error = false, .link_error = true, .run_error = false, .error_msg = msg, .stdout = "" };
     }
     pub fn runErr(msg: []const u8) NativeResult {
-        return .{ .exit_code = null, .compile_error = false, .link_error = false, .run_error = true, .error_msg = msg };
+        return .{ .exit_code = null, .compile_error = false, .link_error = false, .run_error = true, .error_msg = msg, .stdout = "" };
     }
 };
 
@@ -127,16 +131,20 @@ fn compileAndRun(allocator: std.mem.Allocator, code: []const u8, test_name: []co
         .allocator = allocator,
         .argv = &.{exe_path},
     }) catch return NativeResult.runErr("failed to spawn executable");
-    defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
+    // stdout ownership transferred to NativeResult (arena-allocated)
 
     return switch (run_result.term) {
-        .Exited => |exit_code| NativeResult.success(exit_code),
+        .Exited => |exit_code| NativeResult.successWithOutput(exit_code, run_result.stdout),
         .Signal => |sig| blk: {
+            allocator.free(run_result.stdout);
             const msg = std.fmt.allocPrint(allocator, "signal {d}", .{sig}) catch "signal";
             break :blk NativeResult.runErr(msg);
         },
-        else => NativeResult.runErr("unknown termination"),
+        else => blk: {
+            allocator.free(run_result.stdout);
+            break :blk NativeResult.runErr("unknown termination");
+        },
     };
 }
 
@@ -409,4 +417,107 @@ test "parity: variables (40 tests)" {
 
 test "native: import List(T) from stdlib (48 sub-tests)" {
     try expectFileExitCode(std.testing.allocator, "test/native/import_list_test.cot", 0, "import_list");
+}
+
+// ============================================================================
+// Print tests: verify print/println produce correct stdout output
+// ============================================================================
+
+fn expectOutput(backing_allocator: std.mem.Allocator, code: []const u8, expected_exit: u32, expected_stdout: []const u8, test_name: []const u8) !void {
+    var timer = std.time.Timer.start() catch {
+        std.debug.print("[native] {s}...", .{test_name});
+        return expectOutputInner(backing_allocator, code, expected_exit, expected_stdout, test_name);
+    };
+
+    std.debug.print("[native] {s}...", .{test_name});
+
+    try expectOutputInner(backing_allocator, code, expected_exit, expected_stdout, test_name);
+
+    const elapsed_ns = timer.read();
+    const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
+    if (elapsed_ms >= 1000.0) {
+        std.debug.print("ok ({d:.0}ms) SLOW\n", .{elapsed_ms});
+    } else {
+        std.debug.print("ok ({d:.0}ms)\n", .{elapsed_ms});
+    }
+}
+
+fn expectOutputInner(backing_allocator: std.mem.Allocator, code: []const u8, expected_exit: u32, expected_stdout: []const u8, test_name: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(backing_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const result = compileAndRun(allocator, code, test_name);
+
+    if (result.compile_error) {
+        std.debug.print("COMPILE ERROR: {s}\n", .{result.error_msg});
+        return error.CompileError;
+    }
+    if (result.link_error) {
+        std.debug.print("LINK ERROR: {s}\n", .{result.error_msg});
+        return error.LinkError;
+    }
+    if (result.run_error) {
+        std.debug.print("RUN ERROR: {s}\n", .{result.error_msg});
+        return error.RunError;
+    }
+
+    const actual_exit = result.exit_code orelse return error.NoExitCode;
+    if (actual_exit != expected_exit) {
+        std.debug.print("WRONG EXIT CODE: expected {d}, got {d}\n", .{ expected_exit, actual_exit });
+        return error.WrongExitCode;
+    }
+
+    if (!std.mem.eql(u8, result.stdout, expected_stdout)) {
+        std.debug.print("WRONG STDOUT:\n  expected: \"{s}\" ({d} bytes)\n  actual:   \"{s}\" ({d} bytes)\n", .{
+            expected_stdout, expected_stdout.len,
+            result.stdout,   result.stdout.len,
+        });
+        return error.WrongOutput;
+    }
+}
+
+test "native: print integer" {
+    try expectOutput(std.testing.allocator,
+        \\fn main() i64 {
+        \\    print(42)
+        \\    return 0
+        \\}
+    , 0, "42", "print_int");
+}
+
+test "native: println integer" {
+    try expectOutput(std.testing.allocator,
+        \\fn main() i64 {
+        \\    println(0)
+        \\    return 0
+        \\}
+    , 0, "0\n", "println_zero");
+}
+
+test "native: print negative" {
+    try expectOutput(std.testing.allocator,
+        \\fn main() i64 {
+        \\    print(-1)
+        \\    return 0
+        \\}
+    , 0, "-1", "print_neg");
+}
+
+test "native: println string" {
+    try expectOutput(std.testing.allocator,
+        \\fn main() i64 {
+        \\    println("hello")
+        \\    return 0
+        \\}
+    , 0, "hello\n", "println_str");
+}
+
+test "native: print does not corrupt return value" {
+    try expectOutput(std.testing.allocator,
+        \\fn main() i64 {
+        \\    print(42)
+        \\    return 7
+        \\}
+    , 7, "42", "print_ret");
 }

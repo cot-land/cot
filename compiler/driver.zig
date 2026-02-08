@@ -29,6 +29,7 @@ const wasm = @import("codegen/wasm/wasm.zig"); // New Go-style package (for Link
 const wasm_gen = @import("codegen/wasm_gen.zig");
 const arc = @import("codegen/arc.zig"); // ARC runtime (Swift)
 const slice_runtime = @import("codegen/slice_runtime.zig"); // Slice runtime (Go)
+const print_runtime = @import("codegen/print_runtime.zig"); // Print runtime (Go)
 
 // Native codegen modules (Cranelift-style AOT compiler)
 const native_compile = @import("codegen/native/compile.zig");
@@ -635,7 +636,33 @@ pub const Driver = struct {
 
         // Pass 2: Define all functions (relocations can now resolve forward references)
         for (compiled_funcs, 0..) |*cf, i| {
-            try module.defineFunction(func_ids[i], cf);
+            // Check if this is cot_write — replace with ARM64 syscall
+            var is_cot_write = false;
+            for (exports) |exp| {
+                if (exp.kind == .func and exp.index == i and std.mem.eql(u8, exp.name, "cot_write")) {
+                    is_cot_write = true;
+                    break;
+                }
+            }
+            if (is_cot_write) {
+                // ARM64 macOS syscall for write(fd, ptr, len)
+                // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=fd, x3=ptr, x4=len
+                const arm64_write = [_]u8{
+                    0xFD, 0x7B, 0xBF, 0xA9, // stp x29, x30, [sp, #-16]!
+                    0xFD, 0x03, 0x00, 0x91, // mov x29, sp
+                    0x08, 0x00, 0x41, 0x91, // add x8, x0, #0x40, lsl #12  (vmctx + 0x40000)
+                    0x01, 0x01, 0x03, 0x8B, // add x1, x8, x3  (real_ptr = linmem + wasm_ptr)
+                    0xE0, 0x03, 0x02, 0xAA, // mov x0, x2  (fd)
+                    0xE2, 0x03, 0x04, 0xAA, // mov x2, x4  (len)
+                    0x90, 0x00, 0x80, 0xD2, // mov x16, #4  (SYS_write on macOS ARM64)
+                    0x01, 0x10, 0x00, 0xD4, // svc #0x80
+                    0xFD, 0x7B, 0xC1, 0xA8, // ldp x29, x30, [sp], #16
+                    0xC0, 0x03, 0x5F, 0xD6, // ret
+                };
+                try module.defineFunctionBytes(func_ids[i], &arm64_write, &.{});
+            } else {
+                try module.defineFunction(func_ids[i], cf);
+            }
         }
 
         // If we have a main function, generate the wrapper and static vmctx
@@ -1067,6 +1094,12 @@ pub const Driver = struct {
         // ====================================================================
         const slice_funcs = try slice_runtime.addToLinker(self.allocator, &linker, arc_funcs.heap_ptr_global);
 
+        // ====================================================================
+        // Add print runtime functions (Go style)
+        // Reference: Go runtime/print.go
+        // ====================================================================
+        const print_funcs = try print_runtime.addToLinker(self.allocator, &linker);
+
         // Get actual count from linker - never hardcode (Go: len(hostImports))
         const runtime_func_count = linker.funcCount();
 
@@ -1092,6 +1125,11 @@ pub const Driver = struct {
         // Add slice function names to index map (Go)
         try func_indices.put(self.allocator, slice_runtime.GROWSLICE_NAME, slice_funcs.growslice_idx);
         try func_indices.put(self.allocator, slice_runtime.NEXTSLICECAP_NAME, slice_funcs.nextslicecap_idx);
+
+        // Add print function names to index map (Go)
+        try func_indices.put(self.allocator, print_runtime.WRITE_NAME, print_funcs.write_idx);
+        try func_indices.put(self.allocator, print_runtime.PRINT_INT_NAME, print_funcs.print_int_idx);
+        try func_indices.put(self.allocator, print_runtime.EPRINT_INT_NAME, print_funcs.eprint_int_idx);
 
         // Add user function names (offset by ARC function count)
         for (funcs, 0..) |*ir_func, i| {

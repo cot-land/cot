@@ -342,6 +342,16 @@ pub const CodeBuilder = struct {
         try self.buf.append(self.allocator, Op.i64_rem_s);
     }
 
+    /// Emit i64.div_u instruction.
+    pub fn emitI64DivU(self: *CodeBuilder) !void {
+        try self.buf.append(self.allocator, Op.i64_div_u);
+    }
+
+    /// Emit i64.rem_u instruction.
+    pub fn emitI64RemU(self: *CodeBuilder) !void {
+        try self.buf.append(self.allocator, Op.i64_rem_u);
+    }
+
     /// Emit i64.eq instruction.
     pub fn emitI64Eq(self: *CodeBuilder) !void {
         try self.buf.append(self.allocator, Op.i64_eq);
