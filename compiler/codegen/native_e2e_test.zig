@@ -64,7 +64,7 @@ const batch_files = [_]TestFileSpec{
     .{ .path = "test/e2e/auto_free.cot", .test_count = 5 },
     .{ .path = "test/e2e/set.cot", .test_count = 10 },
     .{ .path = "test/e2e/string_interp.cot", .test_count = 10 },
-    .{ .path = "test/e2e/wasi_io.cot", .test_count = 3 },
+    .{ .path = "test/e2e/wasi_io.cot", .test_count = 6 },
     // cases/
     .{ .path = "test/cases/arithmetic.cot", .test_count = 10 },
     .{ .path = "test/cases/arrays.cot", .test_count = 6 },
@@ -158,7 +158,7 @@ fn buildCombinedSource(allocator: std.mem.Allocator) ![]const u8 {
 // Batch test: ALL test files compiled together (1 compile, 1 link, 1 run)
 // ============================================================================
 
-test "all native tests (727 tests)" {
+test "all native tests (730 tests)" {
     var timer = std.time.Timer.start() catch {
         std.debug.print("[native] all tests (batch)...", .{});
         return runBatchTest(std.testing.allocator);
@@ -424,6 +424,162 @@ test "native: fd_write to stdout" {
         \\    return 0
         \\}
     , 0, "OK", "fd_write_stdout");
+}
+
+// ============================================================================
+// WASI I/O: fd_read with piped stdin
+// Reference: Wasmtime piped_tests.rs — pipe producer→consumer via stdin
+// ============================================================================
+
+/// Compile, link, and run with stdin data piped via shell redirection.
+/// Copied from compileAndRun, modified only for stdin piping.
+fn compileAndRunWithStdin(allocator: std.mem.Allocator, code: []const u8, stdin_data: []const u8, test_name: []const u8) NativeResult {
+    const tmp_dir = "/tmp/cot_native_test";
+    std.fs.cwd().makePath(tmp_dir) catch {};
+
+    const obj_path = std.fmt.allocPrint(allocator, "{s}/{s}.o", .{ tmp_dir, test_name }) catch
+        return NativeResult.compileErr("allocPrint failed");
+    defer allocator.free(obj_path);
+
+    const exe_path = std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_dir, test_name }) catch
+        return NativeResult.compileErr("allocPrint failed");
+    defer allocator.free(exe_path);
+
+    var driver = Driver.init(allocator);
+    driver.setTarget(Target.native());
+
+    const obj_code = driver.compileSource(code) catch |e| {
+        const msg = std.fmt.allocPrint(allocator, "compile error: {any}", .{e}) catch "compile error";
+        return NativeResult.compileErr(msg);
+    };
+    defer allocator.free(obj_code);
+
+    std.fs.cwd().writeFile(.{ .sub_path = obj_path, .data = obj_code }) catch
+        return NativeResult.compileErr("failed to write .o file");
+
+    const link_result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &.{ "zig", "cc", "-o", exe_path, obj_path },
+    }) catch return NativeResult.linkErr("failed to spawn linker");
+    defer allocator.free(link_result.stdout);
+    defer allocator.free(link_result.stderr);
+
+    if (link_result.term.Exited != 0) {
+        if (link_result.stderr.len > 0) std.debug.print("LINKER STDERR: {s}\n", .{link_result.stderr});
+        return NativeResult.linkErr("linker failed");
+    }
+
+    // Write stdin data to temp file, run exe with shell redirection
+    // Reference: Wasmtime piped_tests.rs uses Stdio::piped() + take()
+    const stdin_path = std.fmt.allocPrint(allocator, "{s}/{s}_stdin", .{ tmp_dir, test_name }) catch
+        return NativeResult.runErr("allocPrint failed");
+    defer allocator.free(stdin_path);
+
+    std.fs.cwd().writeFile(.{ .sub_path = stdin_path, .data = stdin_data }) catch
+        return NativeResult.runErr("failed to write stdin data");
+
+    const shell_cmd = std.fmt.allocPrint(allocator, "{s} < {s}", .{ exe_path, stdin_path }) catch
+        return NativeResult.runErr("allocPrint failed");
+    defer allocator.free(shell_cmd);
+
+    const run_result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &.{ "/bin/sh", "-c", shell_cmd },
+    }) catch return NativeResult.runErr("failed to spawn executable");
+    defer allocator.free(run_result.stderr);
+
+    return switch (run_result.term) {
+        .Exited => |exit_code| NativeResult.successWithOutput(exit_code, run_result.stdout),
+        .Signal => |sig| blk: {
+            allocator.free(run_result.stdout);
+            const msg = std.fmt.allocPrint(allocator, "signal {d}", .{sig}) catch "signal";
+            break :blk NativeResult.runErr(msg);
+        },
+        else => blk: {
+            allocator.free(run_result.stdout);
+            break :blk NativeResult.runErr("unknown termination");
+        },
+    };
+}
+
+fn expectOutputWithStdin(backing_allocator: std.mem.Allocator, code: []const u8, stdin_data: []const u8, expected_exit: u32, expected_stdout: []const u8, test_name: []const u8) !void {
+    var timer = std.time.Timer.start() catch {
+        std.debug.print("[native] {s}...", .{test_name});
+        return expectOutputWithStdinInner(backing_allocator, code, stdin_data, expected_exit, expected_stdout, test_name);
+    };
+
+    std.debug.print("[native] {s}...", .{test_name});
+
+    try expectOutputWithStdinInner(backing_allocator, code, stdin_data, expected_exit, expected_stdout, test_name);
+
+    const elapsed_ns = timer.read();
+    const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
+    if (elapsed_ms >= 1000.0) {
+        std.debug.print("ok ({d:.0}ms) SLOW\n", .{elapsed_ms});
+    } else {
+        std.debug.print("ok ({d:.0}ms)\n", .{elapsed_ms});
+    }
+}
+
+fn expectOutputWithStdinInner(backing_allocator: std.mem.Allocator, code: []const u8, stdin_data: []const u8, expected_exit: u32, expected_stdout: []const u8, test_name: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(backing_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const result = compileAndRunWithStdin(allocator, code, stdin_data, test_name);
+
+    if (result.compile_error) {
+        std.debug.print("COMPILE ERROR: {s}\n", .{result.error_msg});
+        return error.CompileError;
+    }
+    if (result.link_error) {
+        std.debug.print("LINK ERROR: {s}\n", .{result.error_msg});
+        return error.LinkError;
+    }
+    if (result.run_error) {
+        std.debug.print("RUN ERROR: {s}\n", .{result.error_msg});
+        return error.RunError;
+    }
+
+    const actual_exit = result.exit_code orelse return error.NoExitCode;
+    if (actual_exit != expected_exit) {
+        std.debug.print("WRONG EXIT CODE: expected {d}, got {d}\n", .{ expected_exit, actual_exit });
+        return error.WrongExitCode;
+    }
+    if (!std.mem.eql(u8, result.stdout, expected_stdout)) {
+        std.debug.print("WRONG STDOUT:\n  expected: \"{s}\" (len={d})\n  actual:   \"{s}\" (len={d})\n", .{
+            expected_stdout, expected_stdout.len,
+            result.stdout,   result.stdout.len,
+        });
+        return error.WrongOutput;
+    }
+}
+
+// fd_read: read from piped stdin, echo to stdout
+// Reference: Wasmtime piped_simple.rs — consumer reads from stdin, verifies data
+test "native: fd_read from stdin" {
+    try expectOutputWithStdin(std.testing.allocator,
+        \\fn main() i64 {
+        \\    var buf = @alloc(16)
+        \\    var n = @fd_read(0, buf, 5)
+        \\    @fd_write(1, buf, n)
+        \\    @dealloc(buf)
+        \\    return 0
+        \\}
+    , "hello", 0, "hello", "fd_read_stdin");
+}
+
+// fd_close: close stderr (fd 2), verify no crash, write still works on stdout
+// Reference: Wasmtime p1_close_preopen.rs — close fd, verify program continues
+test "native: fd_close valid fd" {
+    try expectOutput(std.testing.allocator,
+        \\fn main() i64 {
+        \\    var msg = "OK"
+        \\    var r = @fd_close(2)
+        \\    @fd_write(1, @ptrOf(msg), @lenOf(msg))
+        \\    return 0
+        \\}
+    , 0, "OK", "fd_close_valid");
 }
 
 // ============================================================================

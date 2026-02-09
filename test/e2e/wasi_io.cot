@@ -1,4 +1,4 @@
-// WASI I/O tests — @fd_write builtin
+// WASI I/O tests — @fd_write, @fd_read, @fd_close builtins
 
 test "fd_write returns bytes written" {
     var msg = "hello"
@@ -16,4 +16,31 @@ test "fd_write single byte" {
     var msg = "X"
     var n = @fd_write(1, @ptrOf(msg), @lenOf(msg))
     @assert_eq(n, 1)
+}
+
+// fd_read tests
+// Reference: Wasmtime p1_file_read_write.rs — fd_read returns 0 at EOF
+// Batch test runs with stdin = /dev/null (.Ignore), so read returns 0 (EOF)
+
+test "fd_read returns 0 on EOF" {
+    var buf = @alloc(16)
+    var n = @fd_read(0, buf, 1)
+    @assert_eq(n, 0)
+    @dealloc(buf)
+}
+
+test "fd_read with zero length returns zero" {
+    var buf = @alloc(1)
+    var n = @fd_read(0, buf, 0)
+    @assert_eq(n, 0)
+    @dealloc(buf)
+}
+
+// fd_close tests
+// Reference: Wasmtime p1_close_preopen.rs — fd_close(invalid_fd) returns EBADF
+// macOS ARM64 SVC convention: on error, carry set, x0 = errno (EBADF = 9)
+
+test "fd_close on invalid fd returns EBADF" {
+    var result = @fd_close(999)
+    @assert_eq(result, 9)
 }

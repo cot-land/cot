@@ -775,6 +775,18 @@ pub const Checker = struct {
             _ = try self.checkExpr(bc.args[1]); // ptr: i64
             _ = try self.checkExpr(bc.args[2]); // len: i64
             return TypeRegistry.I64; // returns bytes written
+        } else if (std.mem.eql(u8, bc.name, "fd_read")) {
+            // @fd_read(fd, buf, len) — read from fd into buffer
+            // Reference: Go syscall/fs_wasip1.go:900 Read()
+            _ = try self.checkExpr(bc.args[0]); // fd: i64
+            _ = try self.checkExpr(bc.args[1]); // buf: i64 (pointer into linear memory)
+            _ = try self.checkExpr(bc.args[2]); // len: i64 (max bytes to read)
+            return TypeRegistry.I64; // returns bytes read (0 = EOF)
+        } else if (std.mem.eql(u8, bc.name, "fd_close")) {
+            // @fd_close(fd) — close a file descriptor
+            // Reference: Go syscall/fs_wasip1.go fd_close(fd int32) Errno
+            _ = try self.checkExpr(bc.args[0]); // fd: i64
+            return TypeRegistry.I64; // returns 0 on success
         } else if (std.mem.eql(u8, bc.name, "ptrOf")) {
             // @ptrOf(string_expr) — get raw pointer of a string as i64
             const arg_type = try self.checkExpr(bc.args[0]);

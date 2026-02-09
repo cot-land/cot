@@ -650,7 +650,12 @@ pub const Driver = struct {
             var override_name: ?[]const u8 = null;
             for (exports) |exp| {
                 if (exp.kind == .func and exp.index == i) {
-                    if (std.mem.eql(u8, exp.name, "cot_write") or std.mem.eql(u8, exp.name, "cot_fd_write_simple") or std.mem.eql(u8, exp.name, "wasi_fd_write")) {
+                    if (std.mem.eql(u8, exp.name, "cot_write") or
+                        std.mem.eql(u8, exp.name, "cot_fd_write_simple") or
+                        std.mem.eql(u8, exp.name, "cot_fd_read_simple") or
+                        std.mem.eql(u8, exp.name, "cot_fd_close") or
+                        std.mem.eql(u8, exp.name, "wasi_fd_write"))
+                    {
                         override_name = exp.name;
                         break;
                     }
@@ -660,6 +665,7 @@ pub const Driver = struct {
                 if (std.mem.eql(u8, name, "cot_write") or std.mem.eql(u8, name, "cot_fd_write_simple")) {
                     // ARM64 macOS syscall for write(fd, ptr, len)
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=fd, x3=ptr, x4=len
+                    // Reference: Go syscall/fs_wasip1.go Write() → SYS_write
                     const arm64_write = [_]u8{
                         0xFD, 0x7B, 0xBF, 0xA9, // stp x29, x30, [sp, #-16]!
                         0xFD, 0x03, 0x00, 0x91, // mov x29, sp
@@ -673,6 +679,37 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_write, &.{});
+                } else if (std.mem.eql(u8, name, "cot_fd_read_simple")) {
+                    // ARM64 macOS syscall for read(fd, buf, len) — identical to write but SYS_read=3
+                    // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=fd, x3=buf, x4=len
+                    // Reference: Go syscall/fs_wasip1.go:900 Read() → SYS_read
+                    const arm64_read = [_]u8{
+                        0xFD, 0x7B, 0xBF, 0xA9, // stp x29, x30, [sp, #-16]!
+                        0xFD, 0x03, 0x00, 0x91, // mov x29, sp
+                        0x08, 0x00, 0x41, 0x91, // add x8, x0, #0x40, lsl #12  (vmctx + 0x40000)
+                        0x01, 0x01, 0x03, 0x8B, // add x1, x8, x3  (real_buf = linmem + wasm_ptr)
+                        0xE0, 0x03, 0x02, 0xAA, // mov x0, x2  (fd)
+                        0xE2, 0x03, 0x04, 0xAA, // mov x2, x4  (len)
+                        0x70, 0x00, 0x80, 0xD2, // mov x16, #3  (SYS_read on macOS ARM64)
+                        0x01, 0x10, 0x00, 0xD4, // svc #0x80
+                        0xFD, 0x7B, 0xC1, 0xA8, // ldp x29, x30, [sp], #16
+                        0xC0, 0x03, 0x5F, 0xD6, // ret
+                    };
+                    try module.defineFunctionBytes(func_ids[i], &arm64_read, &.{});
+                } else if (std.mem.eql(u8, name, "cot_fd_close")) {
+                    // ARM64 macOS syscall for close(fd)
+                    // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=fd
+                    // Reference: Go syscall/fs_wasip1.go fd_close(fd int32) → SYS_close
+                    const arm64_close = [_]u8{
+                        0xFD, 0x7B, 0xBF, 0xA9, // stp x29, x30, [sp, #-16]!
+                        0xFD, 0x03, 0x00, 0x91, // mov x29, sp
+                        0xE0, 0x03, 0x02, 0xAA, // mov x0, x2  (fd)
+                        0xD0, 0x00, 0x80, 0xD2, // mov x16, #6  (SYS_close on macOS ARM64)
+                        0x01, 0x10, 0x00, 0xD4, // svc #0x80
+                        0xFD, 0x7B, 0xC1, 0xA8, // ldp x29, x30, [sp], #16
+                        0xC0, 0x03, 0x5F, 0xD6, // ret
+                    };
+                    try module.defineFunctionBytes(func_ids[i], &arm64_close, &.{});
                 } else if (std.mem.eql(u8, name, "wasi_fd_write")) {
                     // ARM64 macOS syscall for WASI fd_write(fd, iovs, iovs_len, nwritten)
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=fd, x3=iovs, x4=iovs_len, x5=nwritten
@@ -1190,6 +1227,8 @@ pub const Driver = struct {
         // Add WASI function names to index map
         try func_indices.put(self.allocator, wasi_runtime.FD_WRITE_NAME, wasi_funcs.fd_write_idx);
         try func_indices.put(self.allocator, wasi_runtime.FD_WRITE_SIMPLE_NAME, wasi_funcs.fd_write_simple_idx);
+        try func_indices.put(self.allocator, wasi_runtime.FD_READ_SIMPLE_NAME, wasi_funcs.fd_read_simple_idx);
+        try func_indices.put(self.allocator, wasi_runtime.FD_CLOSE_NAME, wasi_funcs.fd_close_idx);
 
         // Add test function names to index map (Zig)
         try func_indices.put(self.allocator, test_runtime.TEST_PRINT_NAME_NAME, test_funcs.test_print_name_idx);

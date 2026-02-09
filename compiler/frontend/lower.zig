@@ -3580,13 +3580,30 @@ pub const Lowerer = struct {
             _ = try fb.emitCall("memcpy", &memcpy_args, false, TypeRegistry.VOID, bc.span);
             return ir.null_node;
         }
-        // @fd_write(fd, ptr, len) — WASI fd_write via cot_fd_write_simple adapter
+        // @fd_write(fd, ptr, len) — WASI fd_write via cot_fd_write_simple
+        // Reference: Go syscall/fs_wasip1.go Write() pattern
         if (std.mem.eql(u8, bc.name, "fd_write")) {
             const fd_arg = try self.lowerExprNode(bc.args[0]);
             const ptr_arg = try self.lowerExprNode(bc.args[1]);
             const len_arg = try self.lowerExprNode(bc.args[2]);
             var args = [_]ir.NodeIndex{ fd_arg, ptr_arg, len_arg };
             return try fb.emitCall("cot_fd_write_simple", &args, false, TypeRegistry.I64, bc.span);
+        }
+        // @fd_read(fd, buf, len) — read from fd via cot_fd_read_simple
+        // Reference: Go syscall/fs_wasip1.go:900 Read() — same pattern as Write()
+        if (std.mem.eql(u8, bc.name, "fd_read")) {
+            const fd_arg = try self.lowerExprNode(bc.args[0]);
+            const buf_arg = try self.lowerExprNode(bc.args[1]);
+            const len_arg = try self.lowerExprNode(bc.args[2]);
+            var args = [_]ir.NodeIndex{ fd_arg, buf_arg, len_arg };
+            return try fb.emitCall("cot_fd_read_simple", &args, false, TypeRegistry.I64, bc.span);
+        }
+        // @fd_close(fd) — close file descriptor via cot_fd_close
+        // Reference: Go syscall/fs_wasip1.go fd_close(fd int32)
+        if (std.mem.eql(u8, bc.name, "fd_close")) {
+            const fd_arg = try self.lowerExprNode(bc.args[0]);
+            var args = [_]ir.NodeIndex{fd_arg};
+            return try fb.emitCall("cot_fd_close", &args, false, TypeRegistry.I64, bc.span);
         }
         // @ptrOf(string_expr) — extract raw pointer from string as i64
         if (std.mem.eql(u8, bc.name, "ptrOf")) {
