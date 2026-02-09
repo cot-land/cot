@@ -38,11 +38,11 @@ test "fd_read with zero length returns zero" {
 
 // fd_close tests
 // Reference: Wasmtime p1_close_preopen.rs — fd_close(invalid_fd) returns EBADF
-// macOS ARM64 SVC convention: on error, carry set, x0 = errno (EBADF = 9)
+// macOS ARM64 SVC convention: on error, carry set, NEG x0 → negative errno (EBADF = -9)
 
 test "fd_close on invalid fd returns EBADF" {
     var result = @fd_close(999)
-    @assert_eq(result, 9)
+    @assert_eq(result, -9)
 }
 
 // fd_seek tests
@@ -83,7 +83,7 @@ test "fd_open /dev/null returns valid fd" {
 test "fd_open nonexistent file returns ENOENT" {
     var path = "/tmp/cot_nonexistent_test_file_xyz"
     var result = @fd_open(@ptrOf(path), @lenOf(path), 0)
-    @assert_eq(result, 2)
+    @assert_eq(result, -2)
 }
 
 test "fd_open write and read back" {

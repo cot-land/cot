@@ -673,7 +673,8 @@ pub const Driver = struct {
                 if (std.mem.eql(u8, name, "cot_write") or std.mem.eql(u8, name, "cot_fd_write_simple")) {
                     // ARM64 macOS syscall for write(fd, ptr, len)
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=fd, x3=ptr, x4=len
-                    // Reference: Go syscall/fs_wasip1.go Write() → SYS_write
+                    // Reference: Go syscall1 on Darwin ARM64 — BCC/NEG pattern for error handling
+                    // On success: x0 = bytes written. On error: x0 = -errno (negative).
                     const arm64_write = [_]u8{
                         0xFD, 0x7B, 0xBF, 0xA9, // stp x29, x30, [sp, #-16]!
                         0xFD, 0x03, 0x00, 0x91, // mov x29, sp
@@ -681,16 +682,19 @@ pub const Driver = struct {
                         0x01, 0x01, 0x03, 0x8B, // add x1, x8, x3  (real_ptr = linmem + wasm_ptr)
                         0xE0, 0x03, 0x02, 0xAA, // mov x0, x2  (fd)
                         0xE2, 0x03, 0x04, 0xAA, // mov x2, x4  (len)
-                        0x90, 0x00, 0x80, 0xD2, // mov x16, #4  (SYS_write on macOS ARM64)
+                        0x90, 0x00, 0x80, 0xD2, // mov x16, #4  (SYS_write)
                         0x01, 0x10, 0x00, 0xD4, // svc #0x80
+                        0x43, 0x00, 0x00, 0x54, // b.cc +2     (carry clear = success, skip neg)
+                        0xE0, 0x03, 0x00, 0xCB, // neg x0, x0  (error: negate errno)
                         0xFD, 0x7B, 0xC1, 0xA8, // ldp x29, x30, [sp], #16
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_write, &.{});
                 } else if (std.mem.eql(u8, name, "cot_fd_read_simple")) {
-                    // ARM64 macOS syscall for read(fd, buf, len) — identical to write but SYS_read=3
+                    // ARM64 macOS syscall for read(fd, buf, len)
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=fd, x3=buf, x4=len
-                    // Reference: Go syscall/fs_wasip1.go:900 Read() → SYS_read
+                    // Reference: Go syscall1 on Darwin ARM64 — BCC/NEG pattern
+                    // On success: x0 = bytes read (0 = EOF). On error: x0 = -errno.
                     const arm64_read = [_]u8{
                         0xFD, 0x7B, 0xBF, 0xA9, // stp x29, x30, [sp, #-16]!
                         0xFD, 0x03, 0x00, 0x91, // mov x29, sp
@@ -698,8 +702,10 @@ pub const Driver = struct {
                         0x01, 0x01, 0x03, 0x8B, // add x1, x8, x3  (real_buf = linmem + wasm_ptr)
                         0xE0, 0x03, 0x02, 0xAA, // mov x0, x2  (fd)
                         0xE2, 0x03, 0x04, 0xAA, // mov x2, x4  (len)
-                        0x70, 0x00, 0x80, 0xD2, // mov x16, #3  (SYS_read on macOS ARM64)
+                        0x70, 0x00, 0x80, 0xD2, // mov x16, #3  (SYS_read)
                         0x01, 0x10, 0x00, 0xD4, // svc #0x80
+                        0x43, 0x00, 0x00, 0x54, // b.cc +2     (carry clear = success, skip neg)
+                        0xE0, 0x03, 0x00, 0xCB, // neg x0, x0  (error: negate errno)
                         0xFD, 0x7B, 0xC1, 0xA8, // ldp x29, x30, [sp], #16
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
@@ -707,29 +713,35 @@ pub const Driver = struct {
                 } else if (std.mem.eql(u8, name, "cot_fd_close")) {
                     // ARM64 macOS syscall for close(fd)
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=fd
-                    // Reference: Go syscall/fs_wasip1.go fd_close(fd int32) → SYS_close
+                    // Reference: Go syscall1 on Darwin ARM64 — BCC/NEG pattern
+                    // On success: x0 = 0. On error: x0 = -errno.
                     const arm64_close = [_]u8{
                         0xFD, 0x7B, 0xBF, 0xA9, // stp x29, x30, [sp, #-16]!
                         0xFD, 0x03, 0x00, 0x91, // mov x29, sp
                         0xE0, 0x03, 0x02, 0xAA, // mov x0, x2  (fd)
-                        0xD0, 0x00, 0x80, 0xD2, // mov x16, #6  (SYS_close on macOS ARM64)
+                        0xD0, 0x00, 0x80, 0xD2, // mov x16, #6  (SYS_close)
                         0x01, 0x10, 0x00, 0xD4, // svc #0x80
+                        0x43, 0x00, 0x00, 0x54, // b.cc +2     (carry clear = success, skip neg)
+                        0xE0, 0x03, 0x00, 0xCB, // neg x0, x0  (error: negate errno)
                         0xFD, 0x7B, 0xC1, 0xA8, // ldp x29, x30, [sp], #16
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_close, &.{});
                 } else if (std.mem.eql(u8, name, "cot_fd_seek")) {
-                    // ARM64 macOS syscall for lseek(fd, offset, whence) — no linmem needed
+                    // ARM64 macOS syscall for lseek(fd, offset, whence)
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=fd, x3=offset, x4=whence
-                    // Reference: Go syscall/fs_wasip1.go:928 Seek() → SYS_lseek
+                    // Reference: Go syscall1 on Darwin ARM64 — BCC/NEG pattern
+                    // On success: x0 = new offset. On error: x0 = -errno.
                     const arm64_seek = [_]u8{
                         0xFD, 0x7B, 0xBF, 0xA9, // stp x29, x30, [sp, #-16]!
                         0xFD, 0x03, 0x00, 0x91, // mov x29, sp
                         0xE0, 0x03, 0x02, 0xAA, // mov x0, x2  (fd)
                         0xE1, 0x03, 0x03, 0xAA, // mov x1, x3  (offset, i64)
                         0xE2, 0x03, 0x04, 0xAA, // mov x2, x4  (whence)
-                        0xF0, 0x18, 0x80, 0xD2, // mov x16, #199  (SYS_lseek on macOS ARM64)
+                        0xF0, 0x18, 0x80, 0xD2, // mov x16, #199  (SYS_lseek)
                         0x01, 0x10, 0x00, 0xD4, // svc #0x80
+                        0x43, 0x00, 0x00, 0x54, // b.cc +2     (carry clear = success, skip neg)
+                        0xE0, 0x03, 0x00, 0xCB, // neg x0, x0  (error: negate errno)
                         0xFD, 0x7B, 0xC1, 0xA8, // ldp x29, x30, [sp], #16
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
@@ -737,7 +749,8 @@ pub const Driver = struct {
                 } else if (std.mem.eql(u8, name, "cot_fd_open")) {
                     // ARM64 macOS syscall for openat(AT_FDCWD, path, flags, mode)
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=path_ptr, x3=path_len, x4=flags
-                    // Reference: Go zsyscall_darwin_arm64.go openat() → SYS_openat
+                    // Reference: Go zsyscall_darwin_arm64.go openat() + BCC/NEG pattern
+                    // On success: x0 = fd. On error: x0 = -errno.
                     // Must null-terminate path: copy to stack buffer, append \0
                     const arm64_open = [_]u8{
                         0xFD, 0x7B, 0xBF, 0xA9, // stp x29, x30, [sp, #-16]!
@@ -761,8 +774,10 @@ pub const Driver = struct {
                         0xE1, 0x03, 0x00, 0x91, // mov x1, sp  (null-terminated path on stack)
                         0xE2, 0x03, 0x05, 0xAA, // mov x2, x5  (flags, saved earlier)
                         0x83, 0x34, 0x80, 0xD2, // movz x3, #420  (mode = 0644)
-                        0xF0, 0x39, 0x80, 0xD2, // movz x16, #463  (SYS_openat on macOS ARM64)
+                        0xF0, 0x39, 0x80, 0xD2, // movz x16, #463  (SYS_openat)
                         0x01, 0x10, 0x00, 0xD4, // svc #0x80
+                        0x43, 0x00, 0x00, 0x54, // b.cc +2     (carry clear = success, skip neg)
+                        0xE0, 0x03, 0x00, 0xCB, // neg x0, x0  (error: negate errno)
                         // Restore stack
                         0xBF, 0x03, 0x00, 0x91, // mov sp, x29  (restore from frame pointer)
                         0xFD, 0x7B, 0xC1, 0xA8, // ldp x29, x30, [sp], #16
@@ -774,6 +789,7 @@ pub const Driver = struct {
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx (no user args)
                     // Returns: i64 nanoseconds = tv_sec * 1_000_000_000 + tv_usec * 1_000
                     // Reference: Go runtime/sys_darwin_arm64.s walltime_trampoline
+                    // Note: Go doesn't check gettimeofday errors either — it never fails in practice.
                     const arm64_time = [_]u8{
                         0xFD, 0x7B, 0xBE, 0xA9, // stp x29, x30, [sp, #-32]!  (save FP/LR + 16 bytes for timeval)
                         0xFD, 0x03, 0x00, 0x91, // mov x29, sp
@@ -795,8 +811,8 @@ pub const Driver = struct {
                 } else if (std.mem.eql(u8, name, "cot_random")) {
                     // ARM64 macOS: getentropy(buf, len) — fill buffer with random bytes
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=buf(wasm ptr), x3=len
-                    // Returns: 0 on success, errno on error
-                    // Reference: Go runtime/sys_darwin_arm64.s arc4random_buf_trampoline
+                    // Reference: Go syscall1 on Darwin ARM64 — BCC/NEG pattern
+                    // On success: x0 = 0. On error: x0 = -errno.
                     const arm64_random = [_]u8{
                         0xFD, 0x7B, 0xBF, 0xA9, // stp x29, x30, [sp, #-16]!
                         0xFD, 0x03, 0x00, 0x91, // mov x29, sp
@@ -805,6 +821,8 @@ pub const Driver = struct {
                         0xE1, 0x03, 0x03, 0xAA, // mov x1, x3                  (len)
                         0x90, 0x3E, 0x80, 0xD2, // movz x16, #500              (SYS_getentropy)
                         0x01, 0x10, 0x00, 0xD4, // svc #0x80
+                        0x43, 0x00, 0x00, 0x54, // b.cc +2     (carry clear = success, skip neg)
+                        0xE0, 0x03, 0x00, 0xCB, // neg x0, x0  (error: negate errno)
                         0xFD, 0x7B, 0xC1, 0xA8, // ldp x29, x30, [sp], #16
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
@@ -822,7 +840,7 @@ pub const Driver = struct {
                 } else if (std.mem.eql(u8, name, "wasi_fd_write")) {
                     // ARM64 macOS syscall for WASI fd_write(fd, iovs, iovs_len, nwritten)
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=fd, x3=iovs, x4=iovs_len, x5=nwritten
-                    // Reads iovec[0] from linear memory, calls SYS_write, stores result at nwritten
+                    // Reference: Go syscall1 BCC pattern. On error, skip nwritten store, return errno.
                     const arm64_fd_write = [_]u8{
                         0xFD, 0x7B, 0xBF, 0xA9, // stp x29, x30, [sp, #-16]!
                         0xFD, 0x03, 0x00, 0x91, // mov x29, sp
@@ -835,13 +853,14 @@ pub const Driver = struct {
                         0xE0, 0x03, 0x02, 0x2A, // mov w0, w2            (fd, truncate to i32)
                         0x01, 0x01, 0x2A, 0x8B, // add x1, x8, w10, uxtw (real_ptr = linmem + buf)
                         0xE2, 0x03, 0x0B, 0x2A, // mov w2, w11           (len = buf_len, zero-ext)
-                        0x90, 0x00, 0x80, 0xD2, // mov x16, #4           (SYS_write on macOS ARM64)
+                        0x90, 0x00, 0x80, 0xD2, // mov x16, #4           (SYS_write)
                         0x01, 0x10, 0x00, 0xD4, // svc #0x80
-                        // Store bytes_written at linmem + nwritten
+                        0x82, 0x00, 0x00, 0x54, // b.cs +4     (carry set = error, skip store, ret errno)
+                        // Success: store bytes_written, return ESUCCESS
                         0x09, 0x01, 0x25, 0x8B, // add x9, x8, w5, uxtw  (linmem + nwritten)
                         0x20, 0x01, 0x00, 0xB9, // str w0, [x9]          (store result as i32)
-                        // Return 0 (WASI ESUCCESS)
                         0xE0, 0x03, 0x1F, 0xAA, // mov x0, xzr           (return 0)
+                        // Error: x0 = macOS errno (falls through to epilogue)
                         0xFD, 0x7B, 0xC1, 0xA8, // ldp x29, x30, [sp], #16
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
@@ -857,11 +876,18 @@ pub const Driver = struct {
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_args_count, &.{});
                 } else if (std.mem.eql(u8, name, "cot_arg_len")) {
-                    // ARM64: strlen(argv[n])
+                    // ARM64: strlen(argv[n]) with bounds check
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=n
-                    // vmctx+0x30008 = argv (char**), read argv[n], then strlen
+                    // Reference: Go goenvs() validates argc before accessing argv
+                    // Returns 0 if n >= argc (out of bounds).
                     const arm64_arg_len = [_]u8{
                         0x08, 0xC0, 0x40, 0x91, // add x8, x0, #0x30, lsl #12  (vmctx + 0x30000)
+                        0x09, 0x01, 0x40, 0xF9, // ldr x9, [x8]                (x9 = argc)
+                        0x5F, 0x00, 0x09, 0xEB, // cmp x2, x9                  (n vs argc)
+                        0x63, 0x00, 0x00, 0x54, // b.lo +3                     (n < argc → .valid)
+                        0x00, 0x00, 0x80, 0xD2, // movz x0, #0                 (out of bounds)
+                        0xC0, 0x03, 0x5F, 0xD6, // ret
+                        // .valid:
                         0x09, 0x05, 0x40, 0xF9, // ldr x9, [x8, #8]            (x9 = argv)
                         0x29, 0x79, 0x62, 0xF8, // ldr x9, [x9, x2, lsl #3]    (x9 = argv[n])
                         0x00, 0x00, 0x80, 0xD2, // movz x0, #0                 (len = 0)
@@ -875,14 +901,22 @@ pub const Driver = struct {
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_arg_len, &.{});
                 } else if (std.mem.eql(u8, name, "cot_arg_ptr")) {
-                    // ARM64: copy argv[n] into linear memory at wasm offset 0xAF000, return offset
+                    // ARM64: copy argv[n] into linear memory at wasm offset 0xAF000, with bounds check
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=n
+                    // Reference: Go goenvs() validates argc before accessing argv
+                    // Returns 0 if n >= argc (out of bounds).
                     // Dest: vmctx + 0x40000 (linmem) + 0xAF000 = vmctx + 0xEF000
-                    // Returns wasm pointer 0xAF000 (caller pairs with @arg_len for length)
                     const arm64_arg_ptr = [_]u8{
                         0xFD, 0x7B, 0xBF, 0xA9, // stp x29, x30, [sp, #-16]!
                         0xFD, 0x03, 0x00, 0x91, // mov x29, sp
                         0x08, 0xC0, 0x40, 0x91, // add x8, x0, #0x30, lsl #12  (vmctx + 0x30000)
+                        0x09, 0x01, 0x40, 0xF9, // ldr x9, [x8]                (x9 = argc)
+                        0x5F, 0x00, 0x09, 0xEB, // cmp x2, x9                  (n vs argc)
+                        0x83, 0x00, 0x00, 0x54, // b.lo +4                     (n < argc → .valid)
+                        0x00, 0x00, 0x80, 0xD2, // movz x0, #0                 (out of bounds)
+                        0xFD, 0x7B, 0xC1, 0xA8, // ldp x29, x30, [sp], #16
+                        0xC0, 0x03, 0x5F, 0xD6, // ret
+                        // .valid:
                         0x09, 0x05, 0x40, 0xF9, // ldr x9, [x8, #8]            (x9 = argv)
                         0x29, 0x79, 0x62, 0xF8, // ldr x9, [x9, x2, lsl #3]    (x9 = argv[n], src)
                         0x0A, 0x00, 0x41, 0x91, // add x10, x0, #0x40, lsl #12 (linmem base)
