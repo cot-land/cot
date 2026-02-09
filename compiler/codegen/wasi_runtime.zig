@@ -34,6 +34,9 @@ pub const FD_OPEN_NAME = "cot_fd_open";
 pub const TIME_NAME = "cot_time";
 pub const RANDOM_NAME = "cot_random";
 pub const EXIT_NAME = "cot_exit";
+pub const ARGS_COUNT_NAME = "cot_args_count";
+pub const ARG_LEN_NAME = "cot_arg_len";
+pub const ARG_PTR_NAME = "cot_arg_ptr";
 
 // =============================================================================
 // Return Type
@@ -49,6 +52,9 @@ pub const WasiFunctions = struct {
     time_idx: u32,
     random_idx: u32,
     exit_idx: u32,
+    args_count_idx: u32,
+    arg_len_idx: u32,
+    arg_ptr_idx: u32,
 };
 
 // =============================================================================
@@ -179,6 +185,37 @@ pub fn addToLinker(allocator: std.mem.Allocator, linker: *@import("wasm/link.zig
         .exported = true, // ARM64 override in driver.zig
     });
 
+    // cot_args_count: () -> i64
+    // Returns number of CLI arguments (argc). On native, reads from vmctx+0x30000.
+    const args_count_body = try generateStubReturnsZero(allocator);
+    const args_count_idx = try linker.addFunc(.{
+        .name = ARGS_COUNT_NAME,
+        .type_idx = time_type, // Same type: () -> i64
+        .code = args_count_body,
+        .exported = true, // ARM64 override in driver.zig
+    });
+
+    // cot_arg_len: (n: i64) -> i64
+    // Returns length of CLI argument n (strlen(argv[n])). On native, walks argv array.
+    const arg_len_body = try generateStubReturnsZero(allocator);
+    const arg_len_idx = try linker.addFunc(.{
+        .name = ARG_LEN_NAME,
+        .type_idx = fd_close_type, // Same type: (i64) -> i64
+        .code = arg_len_body,
+        .exported = true, // ARM64 override in driver.zig
+    });
+
+    // cot_arg_ptr: (n: i64) -> i64
+    // Copies CLI argument n into linear memory at reserved offset 0xF0000, returns wasm pointer.
+    // On native, copies from real argv[n] into linmem.
+    const arg_ptr_body = try generateStubReturnsZero(allocator);
+    const arg_ptr_idx = try linker.addFunc(.{
+        .name = ARG_PTR_NAME,
+        .type_idx = fd_close_type, // Same type: (i64) -> i64
+        .code = arg_ptr_body,
+        .exported = true, // ARM64 override in driver.zig
+    });
+
     return WasiFunctions{
         .fd_write_idx = fd_write_idx,
         .fd_write_simple_idx = fd_write_simple_idx,
@@ -189,6 +226,9 @@ pub fn addToLinker(allocator: std.mem.Allocator, linker: *@import("wasm/link.zig
         .time_idx = time_idx,
         .random_idx = random_idx,
         .exit_idx = exit_idx,
+        .args_count_idx = args_count_idx,
+        .arg_len_idx = arg_len_idx,
+        .arg_ptr_idx = arg_ptr_idx,
     };
 }
 

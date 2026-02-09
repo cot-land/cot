@@ -830,6 +830,17 @@ pub const Checker = struct {
             _ = try self.checkExpr(bc.args[0]); // buf: i64 (pointer into linear memory)
             _ = try self.checkExpr(bc.args[1]); // len: i64
             return TypeRegistry.I64; // returns 0 on success, errno on error
+        } else if (std.mem.eql(u8, bc.name, "args_count")) {
+            // @args_count() — returns number of CLI arguments (argc)
+            return TypeRegistry.I64;
+        } else if (std.mem.eql(u8, bc.name, "arg_len")) {
+            // @arg_len(n) — returns length of CLI argument n (strlen(argv[n]))
+            _ = try self.checkExpr(bc.args[0]); // n: i64 (argument index)
+            return TypeRegistry.I64;
+        } else if (std.mem.eql(u8, bc.name, "arg_ptr")) {
+            // @arg_ptr(n) — copies CLI argument n into linear memory, returns wasm pointer
+            _ = try self.checkExpr(bc.args[0]); // n: i64 (argument index)
+            return TypeRegistry.I64;
         }
         self.err.errorWithCode(bc.span.start, .e300, "unknown builtin");
         return invalid_type;

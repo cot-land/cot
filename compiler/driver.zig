@@ -659,7 +659,10 @@ pub const Driver = struct {
                         std.mem.eql(u8, exp.name, "cot_time") or
                         std.mem.eql(u8, exp.name, "cot_random") or
                         std.mem.eql(u8, exp.name, "cot_exit") or
-                        std.mem.eql(u8, exp.name, "wasi_fd_write"))
+                        std.mem.eql(u8, exp.name, "wasi_fd_write") or
+                        std.mem.eql(u8, exp.name, "cot_args_count") or
+                        std.mem.eql(u8, exp.name, "cot_arg_len") or
+                        std.mem.eql(u8, exp.name, "cot_arg_ptr"))
                     {
                         override_name = exp.name;
                         break;
@@ -843,6 +846,58 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_fd_write, &.{});
+                } else if (std.mem.eql(u8, name, "cot_args_count")) {
+                    // ARM64: read argc from vmctx+0x30000
+                    // Cranelift CC: x0=vmctx, x1=caller_vmctx (no user args)
+                    // vmctx+0x30000 = argc (stored by _main wrapper)
+                    const arm64_args_count = [_]u8{
+                        0x08, 0xC0, 0x40, 0x91, // add x8, x0, #0x30, lsl #12  (vmctx + 0x30000)
+                        0x00, 0x01, 0x40, 0xF9, // ldr x0, [x8]                (x0 = argc)
+                        0xC0, 0x03, 0x5F, 0xD6, // ret
+                    };
+                    try module.defineFunctionBytes(func_ids[i], &arm64_args_count, &.{});
+                } else if (std.mem.eql(u8, name, "cot_arg_len")) {
+                    // ARM64: strlen(argv[n])
+                    // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=n
+                    // vmctx+0x30008 = argv (char**), read argv[n], then strlen
+                    const arm64_arg_len = [_]u8{
+                        0x08, 0xC0, 0x40, 0x91, // add x8, x0, #0x30, lsl #12  (vmctx + 0x30000)
+                        0x09, 0x05, 0x40, 0xF9, // ldr x9, [x8, #8]            (x9 = argv)
+                        0x29, 0x79, 0x62, 0xF8, // ldr x9, [x9, x2, lsl #3]    (x9 = argv[n])
+                        0x00, 0x00, 0x80, 0xD2, // movz x0, #0                 (len = 0)
+                        // .strlen_loop:
+                        0x2A, 0x69, 0x60, 0x38, // ldrb w10, [x9, x0]          (byte at argv[n][len])
+                        0x6A, 0x00, 0x00, 0x34, // cbz w10, +3                 (if null → ret)
+                        0x00, 0x04, 0x00, 0x91, // add x0, x0, #1              (len++)
+                        0xFD, 0xFF, 0xFF, 0x17, // b -3                        (→ .strlen_loop)
+                        // .done:
+                        0xC0, 0x03, 0x5F, 0xD6, // ret                         (x0 = strlen)
+                    };
+                    try module.defineFunctionBytes(func_ids[i], &arm64_arg_len, &.{});
+                } else if (std.mem.eql(u8, name, "cot_arg_ptr")) {
+                    // ARM64: copy argv[n] into linear memory at wasm offset 0xAF000, return offset
+                    // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=n
+                    // Dest: vmctx + 0x40000 (linmem) + 0xAF000 = vmctx + 0xEF000
+                    // Returns wasm pointer 0xAF000 (caller pairs with @arg_len for length)
+                    const arm64_arg_ptr = [_]u8{
+                        0xFD, 0x7B, 0xBF, 0xA9, // stp x29, x30, [sp, #-16]!
+                        0xFD, 0x03, 0x00, 0x91, // mov x29, sp
+                        0x08, 0xC0, 0x40, 0x91, // add x8, x0, #0x30, lsl #12  (vmctx + 0x30000)
+                        0x09, 0x05, 0x40, 0xF9, // ldr x9, [x8, #8]            (x9 = argv)
+                        0x29, 0x79, 0x62, 0xF8, // ldr x9, [x9, x2, lsl #3]    (x9 = argv[n], src)
+                        0x0A, 0x00, 0x41, 0x91, // add x10, x0, #0x40, lsl #12 (linmem base)
+                        0x4A, 0xBD, 0x42, 0x91, // add x10, x10, #0xAF, lsl #12 (+ 0xAF000 = dest)
+                        // .copy_loop:
+                        0x2B, 0x15, 0x40, 0x38, // ldrb w11, [x9], #1          (load byte, post-inc)
+                        0x4B, 0x15, 0x00, 0x38, // strb w11, [x10], #1         (store byte, post-inc)
+                        0xCB, 0xFF, 0xFF, 0x35, // cbnz w11, -2                (→ .copy_loop)
+                        // .done: return wasm offset 0xAF000
+                        0x00, 0x00, 0x9E, 0xD2, // movz x0, #0xF000
+                        0x40, 0x01, 0xA0, 0xF2, // movk x0, #0xA, lsl #16     (x0 = 0xAF000)
+                        0xFD, 0x7B, 0xC1, 0xA8, // ldp x29, x30, [sp], #16
+                        0xC0, 0x03, 0x5F, 0xD6, // ret
+                    };
+                    try module.defineFunctionBytes(func_ids[i], &arm64_arg_ptr, &.{});
                 }
             } else {
                 try module.defineFunction(func_ids[i], cf);
@@ -872,7 +927,10 @@ pub const Driver = struct {
         //   0x10000: Stack pointer global (i32) - initialized to 64KB
         //   0x20000: Heap base pointer (i64) - to be filled by wrapper
         //   0x20008: Heap bound (i64) - ~15.7MB
+        //   0x30000: argc (i64) - set by _main wrapper from OS
+        //   0x30008: argv (i64, char**) - set by _main wrapper from OS
         //   0x40000 - 0xFFFFFF: Linear memory (~15.7MB heap)
+        //     0xEF000 (linmem+0xAF000): arg string buffer for @arg_ptr
         // =================================================================
         const vmctx_size: usize = 0x1000000; // 16MB
         const vmctx_data = try self.allocator.alloc(u8, vmctx_size);
@@ -935,22 +993,31 @@ pub const Driver = struct {
         // =================================================================
         // Step 2: Generate _main wrapper function
         // This wrapper:
-        //   1. Loads address of _vmctx_data
-        //   2. Initializes heap base pointer (requires runtime address)
-        //   3. Calls __wasm_main(vmctx, vmctx)
-        //   4. Returns result
+        //   1. Saves argc (x0) and argv (x1) from macOS C runtime
+        //   2. Loads address of _vmctx_data
+        //   3. Initializes heap base pointer (requires runtime address)
+        //   4. Stores argc/argv at vmctx+0x30000/0x30008
+        //   5. Calls __wasm_main(vmctx, vmctx)
+        //   6. Returns result
         //
-        // ARM64 code:
-        //   stp     x29, x30, [sp, #-16]!
+        // ARM64 code (18 instructions, 72 bytes):
+        //   stp     x29, x30, [sp, #-32]!
         //   mov     x29, sp
-        //   adrp    x0, _vmctx_data@PAGE
-        //   add     x0, x0, _vmctx_data@PAGEOFF
+        //   stp     x19, x20, [sp, #16]     ; save callee-saved regs
+        //   mov     x19, x0                 ; save argc
+        //   mov     x20, x1                 ; save argv
+        //   adrp    x0, _vmctx_data@PAGE    (reloc at offset 20)
+        //   add     x0, x0, _vmctx_data@PAGEOFF (reloc at offset 24)
         //   add     x8, x0, #0x20, lsl #12  ; x8 = vmctx + 0x20000
         //   add     x9, x0, #0x40, lsl #12  ; x9 = vmctx + 0x40000 (heap base)
         //   str     x9, [x8]                ; Store heap base ptr
+        //   add     x10, x0, #0x30, lsl #12 ; x10 = vmctx + 0x30000 (args area)
+        //   str     x19, [x10]              ; Store argc
+        //   str     x20, [x10, #8]          ; Store argv
         //   mov     x1, x0                  ; caller_vmctx = vmctx
-        //   bl      __wasm_main
-        //   ldp     x29, x30, [sp], #16
+        //   bl      __wasm_main             (reloc at offset 56)
+        //   ldp     x19, x20, [sp, #16]     ; restore callee-saved regs
+        //   ldp     x29, x30, [sp], #32
         //   ret
         // =================================================================
         var wrapper_code = std.ArrayListUnmanaged(u8){};
@@ -963,13 +1030,19 @@ pub const Driver = struct {
             }
         }.f;
 
-        // stp x29, x30, [sp, #-16]!
-        try appendInst(&wrapper_code, self.allocator, 0xA9BF7BFD);
+        // stp x29, x30, [sp, #-32]! (save frame, 32 bytes for x19/x20)
+        try appendInst(&wrapper_code, self.allocator, 0xA9BE7BFD);
         // mov x29, sp
         try appendInst(&wrapper_code, self.allocator, 0x910003FD);
-        // adrp x0, _vmctx_data@PAGE (reloc at offset 8)
+        // stp x19, x20, [sp, #16] (save callee-saved regs)
+        try appendInst(&wrapper_code, self.allocator, 0xA90153F3);
+        // mov x19, x0 (save argc from OS)
+        try appendInst(&wrapper_code, self.allocator, 0xAA0003F3);
+        // mov x20, x1 (save argv from OS)
+        try appendInst(&wrapper_code, self.allocator, 0xAA0103F4);
+        // adrp x0, _vmctx_data@PAGE (reloc at offset 20)
         try appendInst(&wrapper_code, self.allocator, 0x90000000);
-        // add x0, x0, _vmctx_data@PAGEOFF (reloc at offset 12)
+        // add x0, x0, _vmctx_data@PAGEOFF (reloc at offset 24)
         try appendInst(&wrapper_code, self.allocator, 0x91000000);
         // add x8, x0, #0x20, lsl #12 (x8 = vmctx + 0x20000)
         try appendInst(&wrapper_code, self.allocator, 0x91408008);
@@ -977,12 +1050,20 @@ pub const Driver = struct {
         try appendInst(&wrapper_code, self.allocator, 0x91410009);
         // str x9, [x8] (store heap base pointer)
         try appendInst(&wrapper_code, self.allocator, 0xF9000109);
+        // add x10, x0, #0x30, lsl #12 (x10 = vmctx + 0x30000, args area)
+        try appendInst(&wrapper_code, self.allocator, 0x9140C00A);
+        // str x19, [x10] (store argc)
+        try appendInst(&wrapper_code, self.allocator, 0xF9000153);
+        // str x20, [x10, #8] (store argv)
+        try appendInst(&wrapper_code, self.allocator, 0xF9000554);
         // mov x1, x0 (caller_vmctx = vmctx)
         try appendInst(&wrapper_code, self.allocator, 0xAA0003E1);
-        // bl __wasm_main (reloc at offset 32)
+        // bl __wasm_main (reloc at offset 56)
         try appendInst(&wrapper_code, self.allocator, 0x94000000);
-        // ldp x29, x30, [sp], #16
-        try appendInst(&wrapper_code, self.allocator, 0xA8C17BFD);
+        // ldp x19, x20, [sp, #16] (restore callee-saved regs)
+        try appendInst(&wrapper_code, self.allocator, 0xA94153F3);
+        // ldp x29, x30, [sp], #32
+        try appendInst(&wrapper_code, self.allocator, 0xA8C27BFD);
         // ret
         try appendInst(&wrapper_code, self.allocator, 0xD65F03C0);
 
@@ -1010,23 +1091,23 @@ pub const Driver = struct {
         try module.declareExternalName(wasm_main_ext_idx, "__wasm_main");
 
         const relocs = [_]FinalizedMachReloc{
-            // ADRP x0, _vmctx_data@PAGE at offset 8
+            // ADRP x0, _vmctx_data@PAGE at offset 20 (after 5 setup instrs)
             .{
-                .offset = 8,
+                .offset = 20,
                 .kind = Reloc.Aarch64AdrPrelPgHi21,
                 .target = FinalizedRelocTarget{ .ExternalName = vmctx_name_ref },
                 .addend = 0,
             },
-            // ADD x0, x0, _vmctx_data@PAGEOFF at offset 12
+            // ADD x0, x0, _vmctx_data@PAGEOFF at offset 24
             .{
-                .offset = 12,
+                .offset = 24,
                 .kind = Reloc.Aarch64AddAbsLo12Nc,
                 .target = FinalizedRelocTarget{ .ExternalName = vmctx_name_ref },
                 .addend = 0,
             },
-            // BL __wasm_main at offset 32
+            // BL __wasm_main at offset 56
             .{
-                .offset = 32,
+                .offset = 56,
                 .kind = Reloc.Arm64Call,
                 .target = FinalizedRelocTarget{ .ExternalName = wasm_main_name_ref },
                 .addend = 0,
@@ -1128,7 +1209,10 @@ pub const Driver = struct {
         //   0x10000: Stack pointer global (i32) - initialized to 64KB
         //   0x20000: Heap base pointer (i64) - to be filled by wrapper
         //   0x20008: Heap bound (i64) - ~15.7MB
+        //   0x30000: argc (i64) - set by _main wrapper from OS
+        //   0x30008: argv (i64, char**) - set by _main wrapper from OS
         //   0x40000 - 0xFFFFFF: Linear memory (~15.7MB heap)
+        //     0xEF000 (linmem+0xAF000): arg string buffer for @arg_ptr
         // =================================================================
         const vmctx_size: usize = 0x1000000; // 16MB
         const vmctx_data = try self.allocator.alloc(u8, vmctx_size);
@@ -1340,6 +1424,9 @@ pub const Driver = struct {
         try func_indices.put(self.allocator, wasi_runtime.TIME_NAME, wasi_funcs.time_idx);
         try func_indices.put(self.allocator, wasi_runtime.RANDOM_NAME, wasi_funcs.random_idx);
         try func_indices.put(self.allocator, wasi_runtime.EXIT_NAME, wasi_funcs.exit_idx);
+        try func_indices.put(self.allocator, wasi_runtime.ARGS_COUNT_NAME, wasi_funcs.args_count_idx);
+        try func_indices.put(self.allocator, wasi_runtime.ARG_LEN_NAME, wasi_funcs.arg_len_idx);
+        try func_indices.put(self.allocator, wasi_runtime.ARG_PTR_NAME, wasi_funcs.arg_ptr_idx);
 
         // Add test function names to index map (Zig)
         try func_indices.put(self.allocator, test_runtime.TEST_PRINT_NAME_NAME, test_funcs.test_print_name_idx);

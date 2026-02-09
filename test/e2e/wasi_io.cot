@@ -135,3 +135,28 @@ test "random with zero length succeeds" {
     @assert_eq(result, 0)
     @dealloc(buf)
 }
+
+// @args_count() tests
+// In batch test mode, the binary is called with no extra args, so argc >= 1
+// (argv[0] is always the program name)
+
+test "args_count returns at least 1" {
+    var n = @args_count()
+    @assert(n >= 1)
+}
+
+// @arg_len(n) tests
+// argv[0] is the program path, which always has length > 0
+
+test "arg_len of program name is positive" {
+    var len = @arg_len(0)
+    @assert(len > 0)
+}
+
+// @arg_ptr(n) tests
+// argv[0] points to the program path
+
+test "arg_ptr of program name returns valid pointer" {
+    var ptr = @arg_ptr(0)
+    @assert(ptr > 0)
+}

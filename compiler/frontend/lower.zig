@@ -3670,6 +3670,22 @@ pub const Lowerer = struct {
             var args = [_]ir.NodeIndex{ buf_arg, len_arg };
             return try fb.emitCall("cot_random", &args, false, TypeRegistry.I64, bc.span);
         }
+        // @args_count() — returns number of CLI arguments (argc)
+        if (std.mem.eql(u8, bc.name, "args_count")) {
+            return try fb.emitCall("cot_args_count", &[_]ir.NodeIndex{}, false, TypeRegistry.I64, bc.span);
+        }
+        // @arg_len(n) — returns length of CLI argument n
+        if (std.mem.eql(u8, bc.name, "arg_len")) {
+            const n_arg = try self.lowerExprNode(bc.args[0]);
+            var args = [_]ir.NodeIndex{n_arg};
+            return try fb.emitCall("cot_arg_len", &args, false, TypeRegistry.I64, bc.span);
+        }
+        // @arg_ptr(n) — copies CLI argument n into linear memory, returns wasm pointer
+        if (std.mem.eql(u8, bc.name, "arg_ptr")) {
+            const n_arg = try self.lowerExprNode(bc.args[0]);
+            var args = [_]ir.NodeIndex{n_arg};
+            return try fb.emitCall("cot_arg_ptr", &args, false, TypeRegistry.I64, bc.span);
+        }
         return ir.null_node;
     }
 

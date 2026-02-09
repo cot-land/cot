@@ -64,7 +64,7 @@ const batch_files = [_]TestFileSpec{
     .{ .path = "test/e2e/auto_free.cot", .test_count = 5 },
     .{ .path = "test/e2e/set.cot", .test_count = 10 },
     .{ .path = "test/e2e/string_interp.cot", .test_count = 10 },
-    .{ .path = "test/e2e/wasi_io.cot", .test_count = 15 },
+    .{ .path = "test/e2e/wasi_io.cot", .test_count = 18 },
     // cases/
     .{ .path = "test/cases/arithmetic.cot", .test_count = 10 },
     .{ .path = "test/cases/arrays.cot", .test_count = 6 },
@@ -638,6 +638,45 @@ test "native: exit with code 0" {
         \\    return 1
         \\}
     , 0, "", "exit_0");
+}
+
+// @args_count() — verify argc >= 1 (program name always present)
+test "native: args_count returns at least 1" {
+    try expectOutput(std.testing.allocator,
+        \\fn main() i64 {
+        \\    var n = @args_count()
+        \\    if n >= 1 {
+        \\        return 0
+        \\    }
+        \\    return 1
+        \\}
+    , 0, "", "args_count");
+}
+
+// @arg_len(0) — verify program name has positive length
+test "native: arg_len of program name" {
+    try expectOutput(std.testing.allocator,
+        \\fn main() i64 {
+        \\    var len = @arg_len(0)
+        \\    if len > 0 {
+        \\        return 0
+        \\    }
+        \\    return 1
+        \\}
+    , 0, "", "arg_len_0");
+}
+
+// @arg_ptr(0) — verify program name pointer is valid
+test "native: arg_ptr of program name" {
+    try expectOutput(std.testing.allocator,
+        \\fn main() i64 {
+        \\    var ptr = @arg_ptr(0)
+        \\    if ptr > 0 {
+        \\        return 0
+        \\    }
+        \\    return 1
+        \\}
+    , 0, "", "arg_ptr_0");
 }
 
 // ============================================================================
