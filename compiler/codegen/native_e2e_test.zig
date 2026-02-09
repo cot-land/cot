@@ -64,7 +64,7 @@ const batch_files = [_]TestFileSpec{
     .{ .path = "test/e2e/auto_free.cot", .test_count = 5 },
     .{ .path = "test/e2e/set.cot", .test_count = 10 },
     .{ .path = "test/e2e/string_interp.cot", .test_count = 10 },
-    .{ .path = "test/e2e/wasi_io.cot", .test_count = 18 },
+    .{ .path = "test/e2e/wasi_io.cot", .test_count = 19 },
     // cases/
     .{ .path = "test/cases/arithmetic.cot", .test_count = 10 },
     .{ .path = "test/cases/arrays.cot", .test_count = 6 },
@@ -158,7 +158,7 @@ fn buildCombinedSource(allocator: std.mem.Allocator) ![]const u8 {
 // Batch test: ALL test files compiled together (1 compile, 1 link, 1 run)
 // ============================================================================
 
-test "all native tests (734 tests)" {
+test "all native tests (735 tests)" {
     var timer = std.time.Timer.start() catch {
         std.debug.print("[native] all tests (batch)...", .{});
         return runBatchTest(std.testing.allocator);

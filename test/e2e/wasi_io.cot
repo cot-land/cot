@@ -138,6 +138,13 @@ test "random with zero length succeeds" {
     @dealloc(buf)
 }
 
+test "random with 512 bytes exercises chunk loop" {
+    var buf = @alloc(512)
+    var result = @random(buf, 512)
+    @assert_eq(result, 0)
+    @dealloc(buf)
+}
+
 // @args_count() tests
 // In batch test mode, the binary is called with no extra args, so argc >= 1
 // (argv[0] is always the program name)
