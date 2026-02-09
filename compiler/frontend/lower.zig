@@ -3646,6 +3646,17 @@ pub const Lowerer = struct {
             fb.setBlock(dead_block);
             return ir.null_node;
         }
+        // @exit(code) — exit the process (no return)
+        // Reference: WASI proc_exit(rval), macOS SYS_exit(1)
+        if (std.mem.eql(u8, bc.name, "exit")) {
+            const code_arg = try self.lowerExprNode(bc.args[0]);
+            var args = [_]ir.NodeIndex{code_arg};
+            _ = try fb.emitCall("cot_exit", &args, false, TypeRegistry.VOID, bc.span);
+            // After exit, switch to dead block (exit never returns)
+            const dead_block = try fb.newBlock("exit.dead");
+            fb.setBlock(dead_block);
+            return ir.null_node;
+        }
         // @time() — get current wall-clock time in nanoseconds since epoch
         // Reference: Go runtime/sys_darwin_arm64.s walltime_trampoline
         if (std.mem.eql(u8, bc.name, "time")) {

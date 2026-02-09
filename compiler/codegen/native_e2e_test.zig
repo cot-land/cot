@@ -620,6 +620,26 @@ test "native: random returns success" {
     , 0, "", "random_success");
 }
 
+// @exit(code) — verify it exits with the specified code
+test "native: exit with code 42" {
+    try expectOutput(std.testing.allocator,
+        \\fn main() i64 {
+        \\    @exit(42)
+        \\    return 0
+        \\}
+    , 42, "", "exit_42");
+}
+
+// @exit(code) — verify it exits with code 0
+test "native: exit with code 0" {
+    try expectOutput(std.testing.allocator,
+        \\fn main() i64 {
+        \\    @exit(0)
+        \\    return 1
+        \\}
+    , 0, "", "exit_0");
+}
+
 // ============================================================================
 // Test Mode (cot test) E2E Tests -- inline code, verify output format
 // ============================================================================

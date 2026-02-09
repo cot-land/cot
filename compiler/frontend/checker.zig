@@ -815,6 +815,11 @@ pub const Checker = struct {
         } else if (std.mem.eql(u8, bc.name, "trap")) {
             // @trap() — Wasm unreachable / ARM64 brk #1 / x64 ud2
             return TypeRegistry.VOID;
+        } else if (std.mem.eql(u8, bc.name, "exit")) {
+            // @exit(code) — exit the process with given exit code (no return)
+            // Reference: WASI proc_exit(rval), macOS SYS_exit(1)
+            _ = try self.checkExpr(bc.args[0]); // code: i64
+            return TypeRegistry.VOID;
         } else if (std.mem.eql(u8, bc.name, "time")) {
             // @time() — returns nanoseconds since epoch as i64
             // Reference: Go runtime/sys_darwin_arm64.s walltime_trampoline → clock_gettime(CLOCK_REALTIME)

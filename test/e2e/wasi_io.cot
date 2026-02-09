@@ -120,7 +120,7 @@ test "time is monotonically increasing" {
 
 // @random(buf, len) tests
 // Reference: Go runtime/sys_darwin_arm64.s arc4random_buf_trampoline
-// SYS_getentropy(244) — fill buffer with cryptographic random bytes
+// SYS_getentropy(500) — fill buffer with cryptographic random bytes
 
 test "random returns success" {
     var buf = @alloc(16)

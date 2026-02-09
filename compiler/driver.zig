@@ -658,6 +658,7 @@ pub const Driver = struct {
                         std.mem.eql(u8, exp.name, "cot_fd_open") or
                         std.mem.eql(u8, exp.name, "cot_time") or
                         std.mem.eql(u8, exp.name, "cot_random") or
+                        std.mem.eql(u8, exp.name, "cot_exit") or
                         std.mem.eql(u8, exp.name, "wasi_fd_write"))
                     {
                         override_name = exp.name;
@@ -805,6 +806,16 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_random, &.{});
+                } else if (std.mem.eql(u8, name, "cot_exit")) {
+                    // ARM64 macOS: exit(code) — never returns
+                    // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=code
+                    // Reference: WASI proc_exit, Go runtime/sys_darwin_arm64.s exit_trampoline
+                    const arm64_exit = [_]u8{
+                        0xE0, 0x03, 0x02, 0xAA, // mov x0, x2              (exit code)
+                        0x30, 0x00, 0x80, 0xD2, // movz x16, #1            (SYS_exit)
+                        0x01, 0x10, 0x00, 0xD4, // svc #0x80
+                    };
+                    try module.defineFunctionBytes(func_ids[i], &arm64_exit, &.{});
                 } else if (std.mem.eql(u8, name, "wasi_fd_write")) {
                     // ARM64 macOS syscall for WASI fd_write(fd, iovs, iovs_len, nwritten)
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=fd, x3=iovs, x4=iovs_len, x5=nwritten
@@ -1328,6 +1339,7 @@ pub const Driver = struct {
         try func_indices.put(self.allocator, wasi_runtime.FD_OPEN_NAME, wasi_funcs.fd_open_idx);
         try func_indices.put(self.allocator, wasi_runtime.TIME_NAME, wasi_funcs.time_idx);
         try func_indices.put(self.allocator, wasi_runtime.RANDOM_NAME, wasi_funcs.random_idx);
+        try func_indices.put(self.allocator, wasi_runtime.EXIT_NAME, wasi_funcs.exit_idx);
 
         // Add test function names to index map (Zig)
         try func_indices.put(self.allocator, test_runtime.TEST_PRINT_NAME_NAME, test_funcs.test_print_name_idx);

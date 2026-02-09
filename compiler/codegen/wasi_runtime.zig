@@ -12,6 +12,7 @@
 //!   cot_fd_open(path_ptr, path_len, flags) -> i64        — open file (stub, ARM64 override)
 //!   cot_time() -> i64                                    — wall clock nanos (stub, ARM64 override)
 //!   cot_random(buf, len) -> i64                          — random bytes (stub, ARM64 override)
+//!   cot_exit(code) -> void                               — exit process (trap stub, ARM64 override)
 
 const std = @import("std");
 const wasm = @import("wasm.zig");
@@ -32,6 +33,7 @@ pub const FD_SEEK_NAME = "cot_fd_seek";
 pub const FD_OPEN_NAME = "cot_fd_open";
 pub const TIME_NAME = "cot_time";
 pub const RANDOM_NAME = "cot_random";
+pub const EXIT_NAME = "cot_exit";
 
 // =============================================================================
 // Return Type
@@ -46,6 +48,7 @@ pub const WasiFunctions = struct {
     fd_open_idx: u32,
     time_idx: u32,
     random_idx: u32,
+    exit_idx: u32,
 };
 
 // =============================================================================
@@ -161,6 +164,21 @@ pub fn addToLinker(allocator: std.mem.Allocator, linker: *@import("wasm/link.zig
         .exported = true, // ARM64 override in driver.zig
     });
 
+    // cot_exit: (code: i64) -> void
+    // Reference: WASI proc_exit(rval), macOS SYS_exit(1)
+    // Exits the process. Never returns. On native, ARM64 override does SYS_exit.
+    const exit_type = try linker.addType(
+        &[_]ValType{.i64},
+        &[_]ValType{},
+    );
+    const exit_body = try generateStubTrap(allocator);
+    const exit_idx = try linker.addFunc(.{
+        .name = EXIT_NAME,
+        .type_idx = exit_type,
+        .code = exit_body,
+        .exported = true, // ARM64 override in driver.zig
+    });
+
     return WasiFunctions{
         .fd_write_idx = fd_write_idx,
         .fd_write_simple_idx = fd_write_simple_idx,
@@ -170,6 +188,7 @@ pub fn addToLinker(allocator: std.mem.Allocator, linker: *@import("wasm/link.zig
         .fd_open_idx = fd_open_idx,
         .time_idx = time_idx,
         .random_idx = random_idx,
+        .exit_idx = exit_idx,
     };
 }
 
@@ -200,5 +219,18 @@ fn generateStubReturnsZero(allocator: std.mem.Allocator) ![]const u8 {
     defer code.deinit();
 
     try code.emitI64Const(0);
+    return try code.finish();
+}
+
+// =============================================================================
+// Stub that traps — for functions that should never return (e.g., cot_exit)
+// On Wasm: emits unreachable. On native: ARM64 override does real SYS_exit.
+// =============================================================================
+
+fn generateStubTrap(allocator: std.mem.Allocator) ![]const u8 {
+    var code = wasm.CodeBuilder.init(allocator);
+    defer code.deinit();
+
+    try code.emitUnreachable();
     return try code.finish();
 }
