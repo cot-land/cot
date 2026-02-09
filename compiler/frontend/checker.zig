@@ -787,6 +787,21 @@ pub const Checker = struct {
             // Reference: Go syscall/fs_wasip1.go fd_close(fd int32) Errno
             _ = try self.checkExpr(bc.args[0]); // fd: i64
             return TypeRegistry.I64; // returns 0 on success
+        } else if (std.mem.eql(u8, bc.name, "fd_seek")) {
+            // @fd_seek(fd, offset, whence) — seek in file descriptor
+            // Reference: Go syscall/fs_wasip1.go:928 Seek() — lseek(fd, offset, whence)
+            // Whence: 0=SEEK_SET, 1=SEEK_CUR, 2=SEEK_END
+            _ = try self.checkExpr(bc.args[0]); // fd: i64
+            _ = try self.checkExpr(bc.args[1]); // offset: i64 (signed)
+            _ = try self.checkExpr(bc.args[2]); // whence: i64 (0=SET, 1=CUR, 2=END)
+            return TypeRegistry.I64; // returns new offset
+        } else if (std.mem.eql(u8, bc.name, "fd_open")) {
+            // @fd_open(path_ptr, path_len, flags) — open file by path
+            // Reference: Go zsyscall_darwin_arm64.go openat(AT_FDCWD, path, flags, mode)
+            _ = try self.checkExpr(bc.args[0]); // path_ptr: i64 (pointer into linear memory)
+            _ = try self.checkExpr(bc.args[1]); // path_len: i64
+            _ = try self.checkExpr(bc.args[2]); // flags: i64 (O_RDONLY=0, O_WRONLY=1, O_RDWR=2, +O_CREAT, etc.)
+            return TypeRegistry.I64; // returns fd on success, errno on error
         } else if (std.mem.eql(u8, bc.name, "ptrOf")) {
             // @ptrOf(string_expr) — get raw pointer of a string as i64
             const arg_type = try self.checkExpr(bc.args[0]);

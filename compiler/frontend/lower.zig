@@ -3605,6 +3605,24 @@ pub const Lowerer = struct {
             var args = [_]ir.NodeIndex{fd_arg};
             return try fb.emitCall("cot_fd_close", &args, false, TypeRegistry.I64, bc.span);
         }
+        // @fd_seek(fd, offset, whence) — seek via cot_fd_seek
+        // Reference: Go syscall/fs_wasip1.go:928 Seek()
+        if (std.mem.eql(u8, bc.name, "fd_seek")) {
+            const fd_arg = try self.lowerExprNode(bc.args[0]);
+            const offset_arg = try self.lowerExprNode(bc.args[1]);
+            const whence_arg = try self.lowerExprNode(bc.args[2]);
+            var args = [_]ir.NodeIndex{ fd_arg, offset_arg, whence_arg };
+            return try fb.emitCall("cot_fd_seek", &args, false, TypeRegistry.I64, bc.span);
+        }
+        // @fd_open(path_ptr, path_len, flags) — open file via cot_fd_open
+        // Reference: Go zsyscall_darwin_arm64.go openat(AT_FDCWD, path, flags, mode)
+        if (std.mem.eql(u8, bc.name, "fd_open")) {
+            const path_ptr_arg = try self.lowerExprNode(bc.args[0]);
+            const path_len_arg = try self.lowerExprNode(bc.args[1]);
+            const flags_arg = try self.lowerExprNode(bc.args[2]);
+            var args = [_]ir.NodeIndex{ path_ptr_arg, path_len_arg, flags_arg };
+            return try fb.emitCall("cot_fd_open", &args, false, TypeRegistry.I64, bc.span);
+        }
         // @ptrOf(string_expr) — extract raw pointer from string as i64
         if (std.mem.eql(u8, bc.name, "ptrOf")) {
             const str_val = try self.lowerExprNode(bc.args[0]);

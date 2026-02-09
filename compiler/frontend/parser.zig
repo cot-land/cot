@@ -992,10 +992,12 @@ pub const Parser = struct {
             const size_arg = try self.parseExpr() orelse return null;
             if (!self.expect(.rparen)) return null;
             return try self.tree.addExpr(.{ .builtin_call = .{ .name = name, .type_arg = null_node, .args = .{ ptr_arg, size_arg, null_node }, .span = Span.init(start, self.pos()) } });
-        } else if (std.mem.eql(u8, name, "memcpy") or std.mem.eql(u8, name, "fd_write") or std.mem.eql(u8, name, "fd_read")) {
+        } else if (std.mem.eql(u8, name, "memcpy") or std.mem.eql(u8, name, "fd_write") or std.mem.eql(u8, name, "fd_read") or std.mem.eql(u8, name, "fd_seek") or std.mem.eql(u8, name, "fd_open")) {
             // @memcpy(dst, src, num_bytes) — 3 args
             // @fd_write(fd, ptr, len) — 3 args
             // @fd_read(fd, buf, len) — 3 args
+            // @fd_seek(fd, offset, whence) — 3 args
+            // @fd_open(path_ptr, path_len, flags) — 3 args
             const dst_arg = try self.parseExpr() orelse return null;
             if (!self.expect(.comma)) return null;
             const src_arg = try self.parseExpr() orelse return null;

@@ -64,7 +64,7 @@ const batch_files = [_]TestFileSpec{
     .{ .path = "test/e2e/auto_free.cot", .test_count = 5 },
     .{ .path = "test/e2e/set.cot", .test_count = 10 },
     .{ .path = "test/e2e/string_interp.cot", .test_count = 10 },
-    .{ .path = "test/e2e/wasi_io.cot", .test_count = 6 },
+    .{ .path = "test/e2e/wasi_io.cot", .test_count = 11 },
     // cases/
     .{ .path = "test/cases/arithmetic.cot", .test_count = 10 },
     .{ .path = "test/cases/arrays.cot", .test_count = 6 },
@@ -158,7 +158,7 @@ fn buildCombinedSource(allocator: std.mem.Allocator) ![]const u8 {
 // Batch test: ALL test files compiled together (1 compile, 1 link, 1 run)
 // ============================================================================
 
-test "all native tests (730 tests)" {
+test "all native tests (734 tests)" {
     var timer = std.time.Timer.start() catch {
         std.debug.print("[native] all tests (batch)...", .{});
         return runBatchTest(std.testing.allocator);
@@ -580,6 +580,19 @@ test "native: fd_close valid fd" {
         \\    return 0
         \\}
     , 0, "OK", "fd_close_valid");
+}
+
+// fd_open: verify we can open /dev/null and get a valid fd
+// Simplified to avoid register pressure in main() mode
+test "native: fd_open dev null" {
+    try expectOutput(std.testing.allocator,
+        \\fn main() i64 {
+        \\    var path = "/dev/null"
+        \\    var fd = @fd_open(@ptrOf(path), @lenOf(path), 0)
+        \\    @fd_close(fd)
+        \\    return fd
+        \\}
+    , 3, "", "fd_open_devnull");
 }
 
 // ============================================================================

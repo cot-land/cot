@@ -8,6 +8,8 @@
 //!   cot_fd_write_simple(fd, ptr, len) -> i64             — simple write (stub, ARM64 override)
 //!   cot_fd_read_simple(fd, buf, len) -> i64              — simple read (stub, ARM64 override)
 //!   cot_fd_close(fd) -> i64                              — close fd (stub, ARM64 override)
+//!   cot_fd_seek(fd, offset, whence) -> i64               — seek (stub, ARM64 override)
+//!   cot_fd_open(path_ptr, path_len, flags) -> i64        — open file (stub, ARM64 override)
 
 const std = @import("std");
 const wasm = @import("wasm.zig");
@@ -24,6 +26,8 @@ pub const FD_WRITE_NAME = "wasi_fd_write";
 pub const FD_WRITE_SIMPLE_NAME = "cot_fd_write_simple";
 pub const FD_READ_SIMPLE_NAME = "cot_fd_read_simple";
 pub const FD_CLOSE_NAME = "cot_fd_close";
+pub const FD_SEEK_NAME = "cot_fd_seek";
+pub const FD_OPEN_NAME = "cot_fd_open";
 
 // =============================================================================
 // Return Type
@@ -34,6 +38,8 @@ pub const WasiFunctions = struct {
     fd_write_simple_idx: u32,
     fd_read_simple_idx: u32,
     fd_close_idx: u32,
+    fd_seek_idx: u32,
+    fd_open_idx: u32,
 };
 
 // =============================================================================
@@ -97,11 +103,35 @@ pub fn addToLinker(allocator: std.mem.Allocator, linker: *@import("wasm/link.zig
         .exported = true, // ARM64 override in driver.zig
     });
 
+    // cot_fd_seek: (fd: i64, offset: i64, whence: i64) -> i64
+    // Reference: Go syscall/fs_wasip1.go:928 Seek() — lseek(fd, offset, whence) -> newoffset
+    // Returns new offset on success. On native, ARM64 override does SYS_lseek.
+    const fd_seek_body = try generateStubReturnsZero(allocator);
+    const fd_seek_idx = try linker.addFunc(.{
+        .name = FD_SEEK_NAME,
+        .type_idx = fd_write_simple_type, // Same type: (i64, i64, i64) -> i64
+        .code = fd_seek_body,
+        .exported = true, // ARM64 override in driver.zig
+    });
+
+    // cot_fd_open: (path_ptr: i64, path_len: i64, flags: i64) -> i64
+    // Reference: Go syscall/zsyscall_darwin_arm64.go openat() — openat(AT_FDCWD, path, flags, mode)
+    // Returns fd on success, errno on error. On native, ARM64 override does SYS_openat.
+    const fd_open_body = try generateStubReturnsZero(allocator);
+    const fd_open_idx = try linker.addFunc(.{
+        .name = FD_OPEN_NAME,
+        .type_idx = fd_write_simple_type, // Same type: (i64, i64, i64) -> i64
+        .code = fd_open_body,
+        .exported = true, // ARM64 override in driver.zig
+    });
+
     return WasiFunctions{
         .fd_write_idx = fd_write_idx,
         .fd_write_simple_idx = fd_write_simple_idx,
         .fd_read_simple_idx = fd_read_simple_idx,
         .fd_close_idx = fd_close_idx,
+        .fd_seek_idx = fd_seek_idx,
+        .fd_open_idx = fd_open_idx,
     };
 }
 

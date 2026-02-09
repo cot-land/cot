@@ -44,3 +44,61 @@ test "fd_close on invalid fd returns EBADF" {
     var result = @fd_close(999)
     @assert_eq(result, 9)
 }
+
+// fd_seek tests
+// Reference: Wasmtime p1_file_seek_tell.rs, Go syscall/fs_wasip1.go Seek()
+// Note: stdin may be /dev/null in test mode (seekable), so test on a real file
+
+test "fd_seek to beginning of file" {
+    var path = "/tmp/cot_test_seek_file"
+    var fd = @fd_open(@ptrOf(path), @lenOf(path), 1537)
+    var msg = "hello"
+    @fd_write(fd, @ptrOf(msg), @lenOf(msg))
+    var pos = @fd_seek(fd, 0, 0)
+    @assert_eq(pos, 0)
+    @fd_close(fd)
+}
+
+test "fd_seek returns current position" {
+    var path = "/tmp/cot_test_seek_file2"
+    var fd = @fd_open(@ptrOf(path), @lenOf(path), 1537)
+    var msg = "abcde"
+    @fd_write(fd, @ptrOf(msg), @lenOf(msg))
+    var pos = @fd_seek(fd, 0, 1)
+    @assert_eq(pos, 5)
+    @fd_close(fd)
+}
+
+// fd_open tests
+// Reference: Go zsyscall_darwin_arm64.go openat()
+// Open /dev/null (read-only), verify valid fd returned
+
+test "fd_open /dev/null returns valid fd" {
+    var path = "/dev/null"
+    var fd = @fd_open(@ptrOf(path), @lenOf(path), 0)
+    @assert(fd > 2)
+    @fd_close(fd)
+}
+
+test "fd_open nonexistent file returns ENOENT" {
+    var path = "/tmp/cot_nonexistent_test_file_xyz"
+    var result = @fd_open(@ptrOf(path), @lenOf(path), 0)
+    @assert_eq(result, 2)
+}
+
+test "fd_open write and read back" {
+    var path = "/tmp/cot_test_io_file"
+    var fd = @fd_open(@ptrOf(path), @lenOf(path), 1537)
+    @assert(fd > 2)
+    var msg = "hello"
+    var n = @fd_write(fd, @ptrOf(msg), @lenOf(msg))
+    @assert_eq(n, 5)
+    @fd_close(fd)
+    var fd2 = @fd_open(@ptrOf(path), @lenOf(path), 0)
+    @assert(fd2 > 2)
+    var buf = @alloc(16)
+    var nr = @fd_read(fd2, buf, 5)
+    @assert_eq(nr, 5)
+    @fd_close(fd2)
+    @dealloc(buf)
+}

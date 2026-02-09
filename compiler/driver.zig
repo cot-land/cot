@@ -654,6 +654,8 @@ pub const Driver = struct {
                         std.mem.eql(u8, exp.name, "cot_fd_write_simple") or
                         std.mem.eql(u8, exp.name, "cot_fd_read_simple") or
                         std.mem.eql(u8, exp.name, "cot_fd_close") or
+                        std.mem.eql(u8, exp.name, "cot_fd_seek") or
+                        std.mem.eql(u8, exp.name, "cot_fd_open") or
                         std.mem.eql(u8, exp.name, "wasi_fd_write"))
                     {
                         override_name = exp.name;
@@ -710,6 +712,57 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_close, &.{});
+                } else if (std.mem.eql(u8, name, "cot_fd_seek")) {
+                    // ARM64 macOS syscall for lseek(fd, offset, whence) — no linmem needed
+                    // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=fd, x3=offset, x4=whence
+                    // Reference: Go syscall/fs_wasip1.go:928 Seek() → SYS_lseek
+                    const arm64_seek = [_]u8{
+                        0xFD, 0x7B, 0xBF, 0xA9, // stp x29, x30, [sp, #-16]!
+                        0xFD, 0x03, 0x00, 0x91, // mov x29, sp
+                        0xE0, 0x03, 0x02, 0xAA, // mov x0, x2  (fd)
+                        0xE1, 0x03, 0x03, 0xAA, // mov x1, x3  (offset, i64)
+                        0xE2, 0x03, 0x04, 0xAA, // mov x2, x4  (whence)
+                        0xF0, 0x18, 0x80, 0xD2, // mov x16, #199  (SYS_lseek on macOS ARM64)
+                        0x01, 0x10, 0x00, 0xD4, // svc #0x80
+                        0xFD, 0x7B, 0xC1, 0xA8, // ldp x29, x30, [sp], #16
+                        0xC0, 0x03, 0x5F, 0xD6, // ret
+                    };
+                    try module.defineFunctionBytes(func_ids[i], &arm64_seek, &.{});
+                } else if (std.mem.eql(u8, name, "cot_fd_open")) {
+                    // ARM64 macOS syscall for openat(AT_FDCWD, path, flags, mode)
+                    // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=path_ptr, x3=path_len, x4=flags
+                    // Reference: Go zsyscall_darwin_arm64.go openat() → SYS_openat
+                    // Must null-terminate path: copy to stack buffer, append \0
+                    const arm64_open = [_]u8{
+                        0xFD, 0x7B, 0xBF, 0xA9, // stp x29, x30, [sp, #-16]!
+                        0xFD, 0x03, 0x00, 0x91, // mov x29, sp
+                        0x08, 0x00, 0x41, 0x91, // add x8, x0, #0x40, lsl #12  (linmem base)
+                        0x09, 0x01, 0x02, 0x8B, // add x9, x8, x2  (real path = linmem + path_ptr)
+                        0xE5, 0x03, 0x04, 0xAA, // mov x5, x4  (save flags before clobbering)
+                        0xFF, 0x43, 0x10, 0xD1, // sub sp, sp, #1040  (stack buf: 1024 + 16 align)
+                        0xEB, 0x03, 0x00, 0x91, // mov x11, sp  (dst = stack buffer)
+                        0xEC, 0x03, 0x03, 0xAA, // mov x12, x3  (counter = path_len)
+                        // .copy_loop:
+                        0xAC, 0x00, 0x00, 0xB4, // cbz x12, +5  (skip to null-term if empty)
+                        0x2D, 0x15, 0x40, 0x38, // ldrb w13, [x9], #1  (load byte, post-inc)
+                        0x6D, 0x15, 0x00, 0x38, // strb w13, [x11], #1  (store byte, post-inc)
+                        0x8C, 0x05, 0x00, 0xD1, // sub x12, x12, #1
+                        0xFC, 0xFF, 0xFF, 0x17, // b -4  (back to cbz)
+                        // .copy_done:
+                        0x7F, 0x01, 0x00, 0x39, // strb wzr, [x11]  (null terminate)
+                        // openat(AT_FDCWD, path, flags, mode)
+                        0x60, 0x0C, 0x80, 0x92, // movn x0, #99  (AT_FDCWD = -100)
+                        0xE1, 0x03, 0x00, 0x91, // mov x1, sp  (null-terminated path on stack)
+                        0xE2, 0x03, 0x05, 0xAA, // mov x2, x5  (flags, saved earlier)
+                        0x83, 0x34, 0x80, 0xD2, // movz x3, #420  (mode = 0644)
+                        0xF0, 0x39, 0x80, 0xD2, // movz x16, #463  (SYS_openat on macOS ARM64)
+                        0x01, 0x10, 0x00, 0xD4, // svc #0x80
+                        // Restore stack
+                        0xBF, 0x03, 0x00, 0x91, // mov sp, x29  (restore from frame pointer)
+                        0xFD, 0x7B, 0xC1, 0xA8, // ldp x29, x30, [sp], #16
+                        0xC0, 0x03, 0x5F, 0xD6, // ret
+                    };
+                    try module.defineFunctionBytes(func_ids[i], &arm64_open, &.{});
                 } else if (std.mem.eql(u8, name, "wasi_fd_write")) {
                     // ARM64 macOS syscall for WASI fd_write(fd, iovs, iovs_len, nwritten)
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=fd, x3=iovs, x4=iovs_len, x5=nwritten
@@ -1229,6 +1282,8 @@ pub const Driver = struct {
         try func_indices.put(self.allocator, wasi_runtime.FD_WRITE_SIMPLE_NAME, wasi_funcs.fd_write_simple_idx);
         try func_indices.put(self.allocator, wasi_runtime.FD_READ_SIMPLE_NAME, wasi_funcs.fd_read_simple_idx);
         try func_indices.put(self.allocator, wasi_runtime.FD_CLOSE_NAME, wasi_funcs.fd_close_idx);
+        try func_indices.put(self.allocator, wasi_runtime.FD_SEEK_NAME, wasi_funcs.fd_seek_idx);
+        try func_indices.put(self.allocator, wasi_runtime.FD_OPEN_NAME, wasi_funcs.fd_open_idx);
 
         // Add test function names to index map (Zig)
         try func_indices.put(self.allocator, test_runtime.TEST_PRINT_NAME_NAME, test_funcs.test_print_name_idx);
