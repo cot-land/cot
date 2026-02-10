@@ -373,7 +373,14 @@ var addr = @ptrToInt(ptr)
 
 | Builtin | Purpose |
 |---------|---------|
-| `@sqrt(value)` | Square root |
+| `@abs(value)` | Absolute value (float) |
+| `@ceil(value)` | Ceiling (float) |
+| `@floor(value)` | Floor (float) |
+| `@trunc(value)` | Truncate toward zero (float) |
+| `@round(value)` | Round to nearest (float) |
+| `@sqrt(value)` | Square root (float) |
+| `@fmin(a, b)` | Minimum of two floats |
+| `@fmax(a, b)` | Maximum of two floats |
 
 ### File I/O (WASI)
 
@@ -412,6 +419,23 @@ var addr = @ptrToInt(ptr)
 | `@target_os()` | Target OS as string ("darwin", "linux") |
 | `@target_arch()` | Target arch as string ("arm64", "x86_64") |
 | `@target()` | Full target description |
+| `@compileError("msg")` | Trigger compile-time error with message |
+
+`comptime { expr }` blocks evaluate expressions at compile time:
+
+```cot
+const SIZE = comptime { 4 * 1024 }
+```
+
+Dead branch elimination: if an `if` condition is comptime-known, only the taken branch is checked. This enables `@compileError` in unreachable branches:
+
+```cot
+if @target_os() == "darwin" {
+    // macOS code
+} else {
+    @compileError("unsupported OS")
+}
+```
 
 ### Testing
 
@@ -468,13 +492,17 @@ import "std/list"          // stdlib modules
 
 | Module | Import | Contents |
 |--------|--------|----------|
-| `fs` | `import "fs"` | File struct, openFile, createFile, stdin/stdout/stderr, read/write/close |
-| `os` | `import "os"` | exit, argsCount, argLen, argPtr, environCount, environLen, environPtr |
-| `time` | `import "time"` | Timer struct, nanoTimestamp, milliTimestamp, timestamp |
-| `random` | `import "random"` | fillBytes, randomInt, randomRange |
-| `list` | `import "std/list"` | List(T) with ~35 methods |
-| `map` | `import "std/map"` | Map(K,V) with splitmix64 hash |
+| `fs` | `import "std/fs"` | File struct, openFile, createFile, readFile, writeFile, stdin/stdout/stderr |
+| `os` | `import "std/os"` | exit, arg(n), environ(n), argsCount, environCount |
+| `time` | `import "std/time"` | Timer struct, nanoTimestamp, milliTimestamp, timestamp |
+| `random` | `import "std/random"` | fillBytes, randomInt, randomRange |
+| `list` | `import "std/list"` | List(T) with ~20 methods (append, get, remove, indexOf, clone, etc.) |
+| `map` | `import "std/map"` | Map(K,V) with splitmix64 hash, ~25 methods |
 | `set` | `import "std/set"` | Set(T) wrapping Map(T, i64) |
+| `string` | `import "std/string"` | ~25 string functions (indexOf, split, trim, replace, etc.) + StringBuilder |
+| `math` | `import "std/math"` | abs, min, max, clamp, ipow, fabs, ceil, floor, sqrt, fmin, fmax, PI, E |
+| `json` | `import "std/json"` | JSON parser (parse) + encoder (encode), JsonValue constructors + accessors |
+| `sort` | `import "std/sort"` | Insertion sort + reverse for List(T) |
 
 ## No Semicolons
 

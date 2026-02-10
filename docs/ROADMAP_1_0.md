@@ -212,19 +212,19 @@ Zig is 10+ years of development and still on 0.15. Each version represents a mea
 - ~~`std/random`~~ — **Done** — fillBytes, randomInt, randomRange (via getentropy)
 - ~~Comptime target builtins~~ — **Done** — `@target_os()`, `@target_arch()`, `@target()` + const-fold if-expressions
 - ~~Platform-conditional stdlib~~ — **Done** — `stdlib/fs.cot` uses `if @target_os() == "linux" { ... } else { ... }` for flags
-- `--target=wasm32-wasi` WASI imports — `wasi_runtime.zig` always emits stubs; needs conditional real WASI imports when `target.os == .wasi`
-- High-level stdlib APIs — `args() List(string)`, `getenv(key: string)`, `readFile(path)`, `writeFile(path, data)` on top of existing low-level builtins
-- StringBuilder — efficient append-based string building
-- String methods — split, trim, indexOf, contains, startsWith, endsWith, replace
+- ~~`--target=wasm32-wasi` WASI imports~~ — **Done** — emits `wasi_snapshot_preview1` imports
+- ~~High-level stdlib APIs~~ — **Done** — `arg(n)`, `environ(n)`, `readFile(path)`, `writeFile(path, data)`
+- ~~StringBuilder~~ — **Done** — in `std/string`, append/appendByte/appendInt/toString
+- ~~String methods~~ — **Done** — `std/string` with ~25 functions (split, trim, indexOf, contains, startsWith, endsWith, replace, etc.)
+- ~~`std/math`~~ — **Done** — @abs/@ceil/@floor/@trunc/@round/@sqrt builtins + `std/math` stdlib (abs, min, max, clamp, ipow, fabs, ceil, floor, sqrt, etc.)
+- ~~`std/json`~~ — **Done** — recursive descent parser + StringBuilder-based encoder, ported from Go encoding/json
+- ~~`std/sort`~~ — **Done** — insertion sort + reverse for List(T)
+- ~~Comptime Tier 2~~ — **Done** — `comptime { }` blocks, `@compileError`, dead branch elimination, local const propagation
 - `for key, value in map` — iterator protocol
-- `match` expressions — full pattern matching
 - Multiple return values — `fn divmod(a, b: i64) (i64, i64)`
 - `weak` references — ARC cycle breaker
-- `std/fmt` — string formatting
-- `std/math` — math functions
-- `std/json` — JSON parse/serialize
+- `std/fmt` — string formatting (partially covered by string interpolation + StringBuilder)
 - `std/dom` — browser DOM API
-- Comptime Tier 2+ — `comptime { }` blocks, comptime function evaluation, `@compileError`, branch quota (see Zig's Sema.zig for reference)
 
 **I/O implementation:** I/O functions are defined using the WASI interface design. The compiler emits:
 - Native: libc calls (`read()`, `write()`, `socket()`) linked at compile time
@@ -311,13 +311,15 @@ The server communicates via JSON-RPC over stdin/stdout — a protocol Cot can ha
 
 ### What's Missing (Blockers)
 
-| Feature | Blocker Level | Needed For |
-|---------|--------------|------------|
-| **`std/json`** | **Critical** | MCP uses JSON-RPC — must parse and serialize JSON |
-| **String methods** | **Critical** | Parsing `Content-Length:` headers, splitting on `\n`, trimming whitespace |
-| **StringBuilder** | **High** | Building JSON responses efficiently (currently no append-based string building) |
-| **String iteration** | **High** | Walking input character-by-character for JSON parsing |
-| **Buffered I/O** | **Medium** | Each `@fd_read` is a raw syscall — need line-buffered stdin reading |
+| Feature | Blocker Level | Needed For | Status |
+|---------|--------------|------------|--------|
+| ~~**`std/json`**~~ | ~~Critical~~ | MCP uses JSON-RPC — must parse and serialize JSON | **Done** |
+| ~~**String methods**~~ | ~~Critical~~ | Parsing `Content-Length:` headers, splitting on `\n`, trimming whitespace | **Done** |
+| ~~**StringBuilder**~~ | ~~High~~ | Building JSON responses efficiently | **Done** |
+| ~~**String iteration**~~ | ~~High~~ | Walking input character-by-character for JSON parsing | **Done** (charAt, @intToPtr) |
+| **Buffered I/O** | **Medium** | Each `@fd_read` is a raw syscall — need line-buffered stdin reading | Not started |
+
+All critical blockers for the MCP server are now resolved. Only buffered I/O remains as a nice-to-have.
 
 ### What's Not Needed (stdio transport only)
 
@@ -330,12 +332,12 @@ The server communicates via JSON-RPC over stdin/stdout — a protocol Cot can ha
 
 ### Implementation Path
 
-**Phase 1 — Prerequisites (0.3 remaining):**
-1. `std/json` — hand-rolled recursive descent JSON parser + serializer
-2. String methods — `split()`, `trim()`, `indexOf()`, `startsWith()`, `contains()`
-3. `StringBuilder` — `List(u8)` with `.toString()` method
+**Phase 1 — Prerequisites (COMPLETE):**
+1. ~~`std/json`~~ — **Done** — recursive descent parser + encoder (ported from Go encoding/json)
+2. ~~String methods~~ — **Done** — `std/string` with ~25 functions
+3. ~~`StringBuilder`~~ — **Done** — in `std/string` with append/appendByte/appendInt/toString
 
-**Phase 2 — Minimal MCP server:**
+**Phase 2 — Minimal MCP server (READY TO START):**
 1. Read JSON-RPC messages from stdin (parse `Content-Length:` header + JSON body)
 2. Route `initialize`, `tools/list`, `tools/call` methods
 3. Implement `validate_syntax` tool — shell out to `cot check --stdin`

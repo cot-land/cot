@@ -9,7 +9,7 @@ Cot uses inline test blocks (Zig syntax) with error-union-based test isolation. 
 | Tier | Command | What it runs | Speed |
 |------|---------|-------------|-------|
 | **Zig compiler tests** | `zig build test` | ~163 Zig-level tests with inline Cot snippets | Fast (<10s) |
-| **Cot language tests** | `./test/run_all.sh` | ~785 Cot tests across 35 `.cot` files | Slower (~60s) |
+| **Cot language tests** | `./test/run_all.sh` | ~914 Cot tests across 41 `.cot` files | Slower (~60s) |
 | **Single file** | `cot test file.cot` | Tests in one file | Fast |
 
 ### `zig build test` — Compiler internals
@@ -29,14 +29,14 @@ Discovers all `.cot` files in `test/e2e/` and `test/cases/`, runs each with `cot
 
 ```bash
 ./test/run_all.sh
-# Running 35 Cot test files...
-#
+# test/e2e/auto_free.cot                       ok  5 passed
+# test/e2e/control_flow.cot                    ok  82 passed
+# ...
+# test/e2e/json.cot                            ok  38 passed
+# ...
 # test/cases/arithmetic.cot                    ok  10 passed
-# test/cases/arrays.cot                        ok  6 passed
 # ...
-# test/e2e/features.cot                        ok  114 passed
-# ...
-# 35/35 files passed
+# 41/41 files passed
 ```
 
 ## Syntax
@@ -140,8 +140,8 @@ test/
     switch.cot             2 tests
     types.cot              2 tests
     union.cot              4 tests
-  e2e/                  # Comprehensive feature tests (14 files, ~679 tests)
-    features.cot         114 tests
+  e2e/                  # Comprehensive feature tests (20 files, ~808 tests)
+    features.cot         127 tests
     expressions.cot      160 tests
     functions.cot        107 tests
     control_flow.cot      82 tests
@@ -154,7 +154,13 @@ test/
     set.cot               10 tests
     string_interp.cot     10 tests
     wasi_io.cot           19 tests
-    std_io.cot            30 tests
+    std_io.cot            34 tests
+    string_methods.cot    34 tests
+    math.cot               8 tests
+    std_math.cot          16 tests
+    sort.cot               7 tests
+    json.cot              38 tests
+    safe_mode.cot          8 tests
   test_inline.cot       # Manual smoke test
   browser/              # Pre-compiled Wasm for manual browser testing
 ```

@@ -33,9 +33,9 @@ Zig took 10 years and 36+ contributors to reach 0.15. Cot can move faster with L
 
 ## Where Cot Is Now (0.3.1)
 
-**Time from first commit:** ~7 weeks
+**Time from first commit:** ~8 weeks
 **Contributors:** 1 + Claude
-**Tests:** ~785 Cot language tests + ~163 Zig compiler tests
+**Tests:** ~914 Cot language tests across 41 files + ~163 Zig compiler tests
 
 **Cot 0.3.1 already has things Zig 0.4 didn't:**
 - LSP server with 5 features (Zig: ZLS came 14 months after 0.4)
@@ -47,12 +47,12 @@ Zig took 10 years and 36+ contributors to reach 0.15. Cot can move faster with L
 - Tuples (Zig: 0.6, 14 months after 0.4)
 - Semantic tokens in editor
 - Generic `Set(T)` (Zig had `BufSet` only at 0.4)
+- `comptime {}` blocks and `@compileError` (Zig: more powerful, but Cot has the basics)
+- JSON parser + encoder in stdlib (Zig: `std.json` was minimal at 0.4)
 
 **Cot 0.3.1 lacks things Zig 0.4 had:**
-- comptime (Zig's killer feature — full compile-time execution)
+- Full comptime (Zig's killer feature — full compile-time execution; Cot has Tier 2: const-fold, comptime blocks, dead branch elimination)
 - Async/coroutines with event loops
-- ~50-module standard library (math, json, crypto, net, sort, fmt, unicode, etc.)
-- String methods (split, trim, indexOf — Zig had these via slice operations)
 - 20+ architecture targets (via LLVM)
 - Cross-compilation
 - Code formatter (`zig fmt`)
@@ -190,10 +190,10 @@ Zig 0.4.0 (April 2019) represented 18 months from first beta, 46 contributors, 8
 
 | Feature | Zig 0.4 | Cot 0.3.1 | Status |
 |---------|---------|-----------|--------|
-| `comptime` keyword | Yes | No | **Different by design** |
+| `comptime` keyword | Yes | Partial | **Partial** — `comptime { expr }` blocks evaluate at compile time |
 | Types as first-class values | Yes | No | **Different** — monomorphization |
 | Compile-time function evaluation | Yes (full) | No | Missing |
-| `@compileError` | Yes | No | Missing |
+| `@compileError` | Yes | Yes | **Has it** — dead branch elimination enables `@compileError` in unreachable code |
 | `@compileLog` | Yes | No | Missing |
 | `@typeInfo` reflection | Yes | No | Missing |
 | `@typeName` | Yes | No | Missing |
@@ -202,12 +202,12 @@ Zig 0.4.0 (April 2019) represented 18 months from first beta, 46 contributors, 8
 | `@memberCount`/`@memberName`/`@memberType` | Yes | No | Missing |
 | `@This()` | Yes | No | Missing |
 | `@field(obj, "name")` | Yes | No | Missing |
-| `comptime { }` blocks | Yes | No | Missing |
+| `comptime { }` blocks | Yes | Yes | **Has it** — evaluates constant expressions at compile time |
 | `@setEvalBranchQuota` | Yes | No | Missing |
 | `@target_os()` / `@target_arch()` | No (via std.os) | Yes | **Has it** |
 | Const-fold if-expressions | Yes | Yes | **Has it** |
 
-**Gap summary:** This is Cot's largest deliberate divergence from Zig. Zig's comptime is its killer feature — full compile-time execution where types are values. Cot's monomorphized generics + const-fold achieves 80% of the practical benefit with 10% of the compiler complexity. For a web-focused language, this is the right trade. More const-eval (evaluating pure functions at compile time) would still be valuable.
+**Gap summary:** Cot has Tier 2 comptime: `comptime {}` blocks, `@compileError`, const-fold if-expressions, local const propagation, and dead branch elimination. This is a deliberate subset of Zig's full comptime (where types are values and functions execute at compile time). Cot's monomorphized generics + const-fold achieves ~80% of the practical benefit with ~10% of the compiler complexity. For a web-focused language, this is the right trade.
 
 ### 7. Error Handling
 
@@ -255,14 +255,14 @@ Zig 0.4.0 (April 2019) represented 18 months from first beta, 46 contributors, 8
 | LinkedList | Yes | No | Missing |
 | PriorityQueue | Yes | No | Missing |
 | Red-Black tree | Yes | No | Missing |
-| Sorting | Yes (`std.sort`) | No | Missing |
-| Math (trig, log, pow, etc.) | Yes (comprehensive) | `@sqrt` only | **Major gap** |
+| Sorting | Yes (`std.sort`) | Yes (`std/sort`) | **Has it** — insertion sort for List(T) |
+| Math (trig, log, pow, etc.) | Yes (comprehensive) | Yes (`std/math` + builtins) | **Has it** — @abs/@ceil/@floor/@trunc/@round/@sqrt + stdlib |
 | String formatting | Yes (`std.fmt`) | String interpolation | **Partial** (interp covers some cases) |
 | File I/O | Yes (`std.os.file`) | Yes (`std/fs`) | **Has it** |
 | Process args/env | Yes (`std.os`) | Yes (`std/os`) | **Has it** |
 | Time | Yes (`std.os.time`) | Yes (`std/time`) | **Has it** |
 | Random | Yes (`std.rand`) | Yes (`std/random`) | **Has it** |
-| JSON | Yes (`std.json`) | No | Missing |
+| JSON | Yes (`std.json`) | Yes (`std/json`) | **Has it** — recursive descent parser + encoder |
 | Networking (TCP) | Yes (`std.net`) | No | Missing |
 | Crypto (SHA, BLAKE2, etc.) | Yes (7+ algorithms) | No | Missing |
 | Hash functions (CRC, FNV, etc.) | Yes | `splitmix64` only | **Partial** |
@@ -275,13 +275,9 @@ Zig 0.4.0 (April 2019) represented 18 months from first beta, 46 contributors, 8
 | Debug / stack traces | Yes (`std.debug`) | No | Missing |
 | Testing assertions | Yes (`std.testing`) | Yes (`@assert`, `@assert_eq`) | **Has it** |
 | Build system API | Yes (`std.build`) | No | Missing |
-| String methods (split, trim, etc.) | Via slices | No | **Major gap** |
+| String methods (split, trim, etc.) | Via slices | Yes (`std/string`) | **Has it** — ~25 functions + StringBuilder |
 
-**Gap summary:** Cot has the essentials (collections, file I/O, time, random, testing). The biggest gaps that affect day-to-day programming:
-1. **String methods** — split, trim, indexOf, contains, startsWith, endsWith. Critical for any real program.
-2. **Math** — trig, log, pow, abs, min, max. Required for anything beyond trivial programs.
-3. **Sorting** — every program needs to sort things eventually.
-4. **JSON** — critical for web development, APIs, configuration files.
+**Gap summary:** Cot has strong stdlib coverage for its stage: collections (List, Map, Set), string methods (~25 functions + StringBuilder), math (builtins + stdlib), JSON (parser + encoder), sorting, file I/O, time, random, and testing. The remaining gaps are networking (TCP/HTTP), crypto, unicode, and more advanced data structures — reasonable for 0.3.
 
 ### 10. Async / Concurrency
 
@@ -395,24 +391,24 @@ Zig 0.4.0 (April 2019) represented 18 months from first beta, 46 contributors, 8
 | Pointers | 11 | 2 | 2 | 6 | 0 |
 | Control flow | 15 | 7 | 2 | 6 | 0 |
 | Functions | 14 | 4 | 0 | 9 | 1 |
-| Comptime | 16 | 2 | 0 | 13 | 1 |
+| Comptime | 16 | 4 | 1 | 10 | 1 |
 | Error handling | 11 | 3 | 1 | 7 | 0 |
 | Memory | 11 | 3 | 1 | 0 | 4 |
-| Stdlib | 33 | 8 | 2 | 20 | 1 |
+| Stdlib | 33 | 12 | 2 | 16 | 1 |
 | Async | 12 | 0 | 0 | 12 | 0 |
 | Tooling | 12 | 3 | 0 | 2 | 5 |
 | Targets | 12 | 3 | 0 | 8 | 0 |
 | C interop | 6 | 0 | 0 | 2 | 0 |
 | Safety | 9 | 3 | 0 | 5 | 0 |
 | Testing | 8 | 5 | 0 | 2 | 0 |
-| **Total** | **201** | **58** | **9** | **105** | **15** |
+| **Total** | **201** | **64** | **10** | **99** | **15** |
 
-**Cot covers ~33% of Zig 0.4's feature set** (58 has + 9 partial + 15 ahead = 82 out of 201+15). But this number understates Cot's practical capability — many "missing" features are C-interop or systems-programming features that don't apply to Cot's web-focused mission.
+**Cot covers ~41% of Zig 0.4's feature set** (64 has + 10 partial + 15 ahead = 89 out of 201+15). Many "missing" features are C-interop or systems-programming features that don't apply to Cot's web-focused mission.
 
 **Adjusted for Cot's mission** (excluding C interop, inline assembly, LLVM-specific targets, packed/extern types, and Valgrind):
 - Relevant Zig 0.4 features: ~155
-- Cot has or exceeds: ~82
-- **Mission-adjusted coverage: ~53%**
+- Cot has or exceeds: ~89
+- **Mission-adjusted coverage: ~57%**
 
 ---
 
@@ -422,16 +418,16 @@ Based on this audit, here are the highest-impact gaps to close, ordered by value
 
 **Tier 1 — Would unblock real programs:**
 
-| # | Feature | Why | Effort |
-|---|---------|-----|--------|
-| 1 | String methods (split, trim, indexOf, contains, startsWith, endsWith, replace) | Every real program needs string manipulation | Medium |
-| 2 | `std/math` (abs, min, max, pow, floor, ceil, sin, cos, log, exp) | Basic math is table-stakes | Medium |
-| 3 | `std/json` (parse + serialize) | Critical for web dev, APIs, config files | Large |
-| 4 | `std/sort` (array/list sorting) | Universal need | Small |
-| 5 | `cot fmt` (auto-formatter) | Table-stakes DX, Zig had it at 0.3 | Large |
-| 6 | `errdefer` | Zig's most elegant cleanup pattern | Small |
-| 7 | StringBuilder | Efficient string building (currently only interpolation) | Small |
-| 8 | Multiple return values | Common need, Zig uses anon structs | Medium |
+| # | Feature | Why | Effort | Status |
+|---|---------|-----|--------|--------|
+| 1 | ~~String methods~~ | Every real program needs string manipulation | Medium | **Done** — `std/string` ~25 functions |
+| 2 | ~~`std/math`~~ | Basic math is table-stakes | Medium | **Done** — builtins + `std/math` |
+| 3 | ~~`std/json`~~ | Critical for web dev, APIs, config files | Large | **Done** — recursive descent parser + encoder |
+| 4 | ~~`std/sort`~~ | Universal need | Small | **Done** — insertion sort for List(T) |
+| 5 | `cot fmt` (auto-formatter) | Table-stakes DX, Zig had it at 0.3 | Large | Not started |
+| 6 | `errdefer` | Zig's most elegant cleanup pattern | Small | Not started |
+| 7 | ~~StringBuilder~~ | Efficient string building | Small | **Done** — in `std/string` |
+| 8 | Multiple return values | Common need, Zig uses anon structs | Medium | Not started |
 
 **Tier 2 — Would improve developer experience:**
 
@@ -467,25 +463,25 @@ Based on this audit, here are the highest-impact gaps to close, ordered by value
 **Zig parallel: 0.3 → 0.4 (6 months)**
 Zig added `zig cc`, SIMD, bundled libc. Cot focuses on closing the highest-impact gaps identified in the Zig 0.4 audit above. Goal: raise mission-adjusted coverage from ~53% to ~70%.
 
-**Already done (completed in late 0.3):** `std/fs`, `std/os`, `std/time`, `std/random`, `Set(T)`, string interpolation, comptime target builtins.
+**Already done (completed in late 0.3):** `std/fs`, `std/os`, `std/time`, `std/random`, `Set(T)`, string interpolation, comptime target builtins, comptime blocks, `@compileError`, `std/string` (~25 functions + StringBuilder), `std/math` (builtins + stdlib), `std/json` (parser + encoder), `std/sort`, `--target=wasm32-wasi`, high-level stdlib APIs (readFile, writeFile, arg, environ).
 
-| Priority | Feature | Notes |
-|:--------:|---------|-------|
-| 1 | String methods | split, trim, indexOf, contains, startsWith, endsWith, replace |
-| 2 | `std/math` | abs, min, max, pow, floor, ceil, sin, cos, log, exp |
-| 3 | `std/json` | Recursive descent parser + serializer |
-| 4 | `std/sort` | Array/List sorting with comparator |
-| 5 | `cot fmt` | Auto-formatter (Zig had this at 0.3) |
-| 6 | `errdefer` | Zig's most elegant cleanup pattern |
-| 7 | StringBuilder | Efficient append-based string building |
-| 8 | Multiple return values | `fn divmod(a, b: i64) (i64, i64)` |
-| 9 | `if (optional) \|val\|` syntax | Zig's ergonomic optional unwrap |
-| 10 | `for key, value in map` | Iterator protocol |
-| 11 | Named error sets | `error{NotFound, PermissionDenied}` |
-| 12 | `switch` range prongs | `1...10 =>` |
-| 13 | Improved error messages | Source locations, underlines, suggestions |
-| 14 | LSP: autocomplete | The biggest missing IDE feature |
-| 15 | Test filtering by name | Development productivity |
+| Priority | Feature | Notes | Status |
+|:--------:|---------|-------|--------|
+| 1 | ~~String methods~~ | ~25 functions in `std/string` | **Done** |
+| 2 | ~~`std/math`~~ | @abs/@ceil/@floor/@trunc/@round/@sqrt + stdlib | **Done** |
+| 3 | ~~`std/json`~~ | Recursive descent parser + encoder | **Done** |
+| 4 | ~~`std/sort`~~ | Insertion sort for List(T) | **Done** |
+| 5 | `cot fmt` | Auto-formatter (Zig had this at 0.3) | Not started |
+| 6 | `errdefer` | Zig's most elegant cleanup pattern | Not started |
+| 7 | ~~StringBuilder~~ | In `std/string` | **Done** |
+| 8 | Multiple return values | `fn divmod(a, b: i64) (i64, i64)` | Not started |
+| 9 | `if (optional) \|val\|` syntax | Zig's ergonomic optional unwrap | Not started |
+| 10 | `for key, value in map` | Iterator protocol | Not started |
+| 11 | Named error sets | `error{NotFound, PermissionDenied}` | Not started |
+| 12 | `switch` range prongs | `1...10 =>` | Not started |
+| 13 | Improved error messages | Source locations, underlines, suggestions | Not started |
+| 14 | LSP: autocomplete | The biggest missing IDE feature | Not started |
+| 15 | Test filtering by name | Development productivity | Not started |
 
 ### 0.5: Make It Production-Capable
 
@@ -616,7 +612,7 @@ Zig's package manager came at 0.11. Cot targets self-hosting here — the compil
 | Self-hosting | 7 years | ~0.11 (TBD) | — |
 | 1.0 | Not reached (10+ years) | TBD | — |
 
-The early-stage speedup is ~26x — LLM-assisted development compresses the "write boilerplate, port reference implementations" phase dramatically. 6 weeks to reach what took Zig 3 years with 36 contributors. The later milestones (self-hosting, ecosystem) involve design decisions and community building that can't be compressed the same way, but the velocity advantage should remain significant.
+The early-stage speedup is ~26x — LLM-assisted development compresses the "write boilerplate, port reference implementations" phase dramatically. 8 weeks to reach what took Zig 3 years with 36 contributors. The later milestones (self-hosting, ecosystem) involve design decisions and community building that can't be compressed the same way, but the velocity advantage should remain significant.
 
 ---
 
@@ -632,7 +628,7 @@ The early-stage speedup is ~26x — LLM-assisted development compresses the "wri
 ### Things Cot Should Copy from Zig
 
 1. **Version discipline.** Zig doesn't rush to 1.0. Each version represents real progress.
-2. **Test infrastructure.** Zig's behavior test suite (1,900+ tests) catches regressions. Cot's 1,600 tests are a good start.
+2. **Test infrastructure.** Zig's behavior test suite (1,900+ tests) catches regressions. Cot's ~914 language tests + 163 compiler tests are a solid start.
 3. **Cross-compilation as a feature.** Zig's ability to target any platform from any platform is a genuine differentiator.
 4. **`zig fmt` existed at 0.3.** Cot should have `cot fmt` by 0.4 at the latest.
 

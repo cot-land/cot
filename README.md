@@ -78,9 +78,10 @@ Cot Source → Scanner → Parser → Checker → IR → SSA
 - Traits: `trait`/`impl Trait for Type` (monomorphized, no vtables)
 - I/O: `print`, `println`, `eprint`, `eprintln` (native syscalls)
 - Imports: `import "std/list"` with cross-file generic instantiation
-- Stdlib: `List(T)` with ~20 methods (append, get, remove, indexOf, clone, etc.)
+- Stdlib: `List(T)`, `Map(K,V)`, `Set(T)`, `std/string` (~25 functions + StringBuilder), `std/math`, `std/json` (parser + encoder), `std/sort`, `std/fs`, `std/os`, `std/time`, `std/random`
+- Comptime: `comptime {}` blocks, `@compileError`, const-fold if-expressions, dead branch elimination
 - CLI: `cot build`, `cot run`, `cot test`, `cot version`
-- Targets: Wasm32, ARM64 (macOS), x64 (Linux)
+- Targets: Wasm32, WASI (`--target=wasm32-wasi`), ARM64 (macOS), x64 (Linux)
 
 ## Project Status
 
@@ -96,7 +97,7 @@ All tests passing across Wasm E2E, native E2E, and unit tests.
 | Native AOT (Cranelift-port: CLIF IR → regalloc2 → ARM64/x64) | Complete |
 | ARC runtime (retain/release, heap, destructors) | Complete |
 
-**Next:** Map(K,V), trait bounds, string interpolation, iterator protocol. See [docs/ROADMAP_1_0.md](docs/ROADMAP_1_0.md).
+**Next:** MCP server dogfooding, iterator protocol, `cot fmt`, `errdefer`. See [docs/ROADMAP_1_0.md](docs/ROADMAP_1_0.md).
 
 ## Design Decisions
 
@@ -121,7 +122,7 @@ All tests passing across Wasm E2E, native E2E, and unit tests.
 | [docs/ROADMAP_1_0.md](docs/ROADMAP_1_0.md) | Road to 1.0 |
 | [docs/PIPELINE_ARCHITECTURE.md](docs/PIPELINE_ARCHITECTURE.md) | Full pipeline reference map |
 | [docs/BR_TABLE_ARCHITECTURE.md](docs/BR_TABLE_ARCHITECTURE.md) | br_table dispatch pattern |
-| [docs/PRODUCTION_LANGUAGE_PLAN.md](docs/PRODUCTION_LANGUAGE_PLAN.md) | Production language gaps and fixes |
+| [docs/COT_SYNTAX.md](docs/COT_SYNTAX.md) | Complete language syntax reference |
 | [docs/specs/WASM_3_0_REFERENCE.md](docs/specs/WASM_3_0_REFERENCE.md) | Wasm 3.0 features |
 | [docs/archive/](docs/archive/) | Historical milestones and postmortems |
 
@@ -146,7 +147,17 @@ cot/
 │           ├── isa/x64/       # x64 backend
 │           └── regalloc/      # Register allocator (regalloc2 port)
 ├── stdlib/                # Standard library (.cot files)
-│   └── list.cot           # List(T) — ~20 methods
+│   ├── list.cot           # List(T) — ~20 methods
+│   ├── map.cot            # Map(K,V) — hash map with splitmix64
+│   ├── set.cot            # Set(T) — thin wrapper over Map
+│   ├── string.cot         # ~25 string functions + StringBuilder
+│   ├── math.cot           # Integer/float math utilities
+│   ├── json.cot           # JSON parser + encoder
+│   ├── sort.cot           # Insertion sort for List(T)
+│   ├── fs.cot             # File I/O (File struct, openFile, readFile, etc.)
+│   ├── os.cot             # Process args, env, exit
+│   ├── time.cot           # Timestamps, Timer struct
+│   └── random.cot         # Random bytes, ints, ranges
 ├── runtime/               # Native runtime (.o files)
 ├── test/cases/            # .cot test files
 ├── VERSION                # Semantic version (single source of truth)
