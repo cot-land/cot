@@ -632,19 +632,14 @@ pub const FuncGen = struct {
                 try self.code.emitUnreachable();
             },
 
-            // Bulk memory copy: dest=args[0], src=args[1], size=aux_int
-            // Used for multi-word struct/tuple assignments and function return handling
+            // Bulk memory copy using memory.copy (Wasm 2.0)
+            // Stack: [dest_i32, src_i32, size_i32] → []
             .wasm_lowered_move => {
                 const size: i32 = @intCast(v.aux_int);
-                const num_words: u32 = @intCast(@divTrunc(size + 7, 8));
-                var word_i: u32 = 0;
-                while (word_i < num_words) : (word_i += 1) {
-                    const offset: u32 = word_i * 8;
-                    try self.getValue32(v.args[0]); // dest addr
-                    try self.getValue32(v.args[1]); // src addr
-                    try self.code.emitI64Load(3, offset); // load from src+offset
-                    try self.code.emitI64Store(3, offset); // store to dest+offset
-                }
+                try self.getValue32(v.args[0]); // dest addr (i32)
+                try self.getValue32(v.args[1]); // src addr (i32)
+                try self.code.emitI32Const(size);
+                try self.code.emitMemoryCopy();
             },
 
             // Memory ops, control flow - handled elsewhere

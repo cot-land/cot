@@ -434,6 +434,17 @@ pub const Linker = struct {
         }
 
         // ====================================================================
+        // Data Count Section (Wasm 2.0 - required for bulk memory ops)
+        // Must appear between element section and code section.
+        // ====================================================================
+        if (self.data_segments.items.len > 0) {
+            var dc_buf = std.ArrayListUnmanaged(u8){};
+            defer dc_buf.deinit(self.allocator);
+            try assemble.writeULEB128(self.allocator, &dc_buf, self.data_segments.items.len);
+            try writeSection(writer, self.allocator, .data_count, dc_buf.items);
+        }
+
+        // ====================================================================
         // Code Section (Go: asm.go writeCodeSec)
         // ====================================================================
         if (self.funcs.items.len > 0) {

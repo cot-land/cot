@@ -974,12 +974,13 @@ pub const GenState = struct {
                 const to_is_32 = (to_type == 4); // I32
 
                 if (from_is_float and !to_is_float) {
-                    // f64 -> i64: truncate float to signed integer
+                    // f64 -> i64: saturating truncate float to signed integer (Wasm 2.0)
+                    // trunc_sat returns 0 for NaN, min/max for overflow (never traps)
                     if (to_is_32) {
-                        _ = try self.builder.append(.i32_trunc_f64_s);
+                        _ = try self.builder.append(.i32_trunc_sat_f64_s);
                         _ = try self.builder.append(.i64_extend_i32_s);
                     } else {
-                        _ = try self.builder.append(.i64_trunc_f64_s);
+                        _ = try self.builder.append(.i64_trunc_sat_f64_s);
                     }
                 } else if (!from_is_float and to_is_float) {
                     // i64 -> f64: convert signed integer to float
@@ -994,22 +995,17 @@ pub const GenState = struct {
                 // Same size: no conversion needed
             },
 
-            // Bulk memory copy: dest=args[0], src=args[1], size=aux_int
+            // Bulk memory copy using memory.copy (Wasm 2.0)
+            // Stack: [dest_i32, src_i32, size_i32] → []
             .wasm_lowered_move => {
                 const size: i32 = @intCast(v.aux_int);
-                const num_words: u32 = @intCast(@divTrunc(size + 7, 8));
-                var word_i: u32 = 0;
-                while (word_i < num_words) : (word_i += 1) {
-                    const offset: i64 = @intCast(@as(u32, word_i * 8));
-                    try self.getValue64(v.args[0]); // dest addr
-                    _ = try self.builder.append(.i32_wrap_i64);
-                    try self.getValue64(v.args[1]); // src addr
-                    _ = try self.builder.append(.i32_wrap_i64);
-                    const ld = try self.builder.append(.i64_load);
-                    ld.from = prog_mod.constAddr(offset);
-                    const st = try self.builder.append(.i64_store);
-                    st.to = prog_mod.constAddr(offset);
-                }
+                try self.getValue64(v.args[0]); // dest addr
+                _ = try self.builder.append(.i32_wrap_i64);
+                try self.getValue64(v.args[1]); // src addr
+                _ = try self.builder.append(.i32_wrap_i64);
+                const size_op = try self.builder.append(.i32_const);
+                size_op.from = prog_mod.constAddr(size);
+                _ = try self.builder.append(.memory_copy);
             },
 
             else => {

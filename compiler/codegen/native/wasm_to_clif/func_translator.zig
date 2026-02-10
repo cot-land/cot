@@ -399,9 +399,10 @@ pub const WasmFuncTranslator = struct {
             .f32_reinterpret_i32 => try translator.translateReinterpret(Type.F32, Type.I32),
             .f64_reinterpret_i64 => try translator.translateReinterpret(Type.F64, Type.I64),
 
-            // Memory size and grow
+            // Memory size, grow, and copy
             .memory_size => |mem_idx| try translator.translateMemorySize(mem_idx),
             .memory_grow => |mem_idx| try translator.translateMemoryGrow(mem_idx),
+            .memory_copy => |_| try translator.translateMemoryCopy(),
         }
     }
 };
@@ -590,6 +591,7 @@ pub const WasmOperator = union(enum) {
     // Memory operations
     memory_size: u32,
     memory_grow: u32,
+    memory_copy: struct { dst: u32, src: u32 },
 
     // Parametric
     drop,

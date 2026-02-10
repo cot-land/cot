@@ -487,6 +487,9 @@ pub const WasmOp = union(enum) {
             .f32_reinterpret_i32 => .f32_reinterpret_i32,
             .f64_reinterpret_i64 => .f64_reinterpret_i64,
 
+            // Bulk memory
+            .memory_copy => |m| WasmOperator{ .memory_copy = .{ .dst = m.dst, .src = m.src } },
+
             // Not yet supported in basic translator
             else => null,
         };
@@ -799,6 +802,16 @@ pub const Decoder = struct {
     fn decodeMultiByteOp(self: *Self) !WasmOp {
         const sub_opcode = self.readU32();
         return switch (sub_opcode) {
+            // Saturating truncation (Wasm 2.0): map to same WasmOp as trapping variants
+            // CLIF's fcvtToSint/fcvtToUint are already non-trapping
+            0x00 => .i32_trunc_f32_s,
+            0x01 => .i32_trunc_f32_u,
+            0x02 => .i32_trunc_f64_s,
+            0x03 => .i32_trunc_f64_u,
+            0x04 => .i64_trunc_f32_s,
+            0x05 => .i64_trunc_f32_u,
+            0x06 => .i64_trunc_f64_s,
+            0x07 => .i64_trunc_f64_u,
             0x0A => blk: {
                 // memory.copy dst_memidx src_memidx
                 const dst = self.readU32();
