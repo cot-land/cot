@@ -30,12 +30,33 @@ fn debugLog(comptime fmt: []const u8, args: anytype) void {
 
 /// Function type signature
 pub const FuncType = struct {
-    params: []const c.ValType,
-    results: []const c.ValType,
+    params_offset: u32,
+    params_len: u32,
+    results_offset: u32,
+    results_len: u32,
 
-    pub fn eql(self: FuncType, other: FuncType) bool {
-        return std.mem.eql(c.ValType, self.params, other.params) and
-            std.mem.eql(c.ValType, self.results, other.results);
+    pub fn getParams(self: FuncType, storage: []const c.WasmType) []const c.WasmType {
+        return storage[self.params_offset..][0..self.params_len];
+    }
+
+    pub fn getResults(self: FuncType, storage: []const c.WasmType) []const c.WasmType {
+        return storage[self.results_offset..][0..self.results_len];
+    }
+
+    pub fn eqlWith(self: FuncType, other: FuncType, storage: []const c.WasmType) bool {
+        const sp = self.getParams(storage);
+        const op = other.getParams(storage);
+        if (sp.len != op.len) return false;
+        for (sp, op) |a, b| {
+            if (!a.eql(b)) return false;
+        }
+        const sr = self.getResults(storage);
+        const or_ = other.getResults(storage);
+        if (sr.len != or_.len) return false;
+        for (sr, or_) |a, b| {
+            if (!a.eql(b)) return false;
+        }
+        return true;
     }
 };
 
@@ -49,6 +70,19 @@ pub const WasmFunc = struct {
     pub fn deinit(self: *WasmFunc, allocator: std.mem.Allocator) void {
         allocator.free(self.code);
     }
+};
+
+/// WasmGC field type definition
+pub const GcFieldType = struct {
+    val_type: c.ValType,
+    mutable: bool,
+};
+
+/// WasmGC struct type definition
+pub const GcStructType = struct {
+    name: []const u8,
+    field_count: u32,
+    field_offset: u32, // index into gc_field_storage
 };
 
 /// Host import definition (Go: hostImport in asm.go)
@@ -83,7 +117,7 @@ pub const Linker = struct {
 
     // Type section
     types: std.ArrayListUnmanaged(FuncType) = .{},
-    type_storage: std.ArrayListUnmanaged(c.ValType) = .{}, // Storage for param/result slices
+    type_storage: std.ArrayListUnmanaged(c.WasmType) = .{}, // Storage for param/result slices
 
     // Import section (Go: hostImports in asm.go)
     imports: std.ArrayListUnmanaged(WasmImport) = .{},
@@ -105,6 +139,11 @@ pub const Linker = struct {
     table_size: u32 = 0, // 0 means no table
     table_funcs: std.ArrayListUnmanaged(u32) = .{}, // Functions to put in table
 
+    // WasmGC struct types (type indices 0..N-1, before function types)
+    gc_struct_types: std.ArrayListUnmanaged(GcStructType) = .{},
+    gc_field_storage: std.ArrayListUnmanaged(GcFieldType) = .{},
+    gc_struct_name_map: std.StringHashMapUnmanaged(u32) = .{}, // struct name → gc type index
+
     pub fn init(allocator: std.mem.Allocator) Linker {
         return .{ .allocator = allocator };
     }
@@ -120,34 +159,86 @@ pub const Linker = struct {
         self.type_storage.deinit(self.allocator);
         self.data_segments.deinit(self.allocator);
         self.table_funcs.deinit(self.allocator);
+        self.gc_struct_types.deinit(self.allocator);
+        self.gc_field_storage.deinit(self.allocator);
+        self.gc_struct_name_map.deinit(self.allocator);
     }
 
-    /// Add or find a function type, return its index
-    pub fn addType(self: *Linker, params: []const c.ValType, results: []const c.ValType) !u32 {
-        const sig = FuncType{ .params = params, .results = results };
+    /// Get the number of GC struct types (used to offset function type indices)
+    pub fn gcTypeCount(self: *const Linker) u32 {
+        return @intCast(self.gc_struct_types.items.len);
+    }
 
-        // Check if type already exists
+    /// Convert a raw function type index to an adjusted index that accounts for
+    /// GC struct types occupying the first N type indices.
+    pub fn funcTypeIndex(self: *const Linker, raw_idx: u32) u32 {
+        return raw_idx + self.gcTypeCount();
+    }
+
+    /// Add or find a GC struct type, return its type index.
+    /// The type index is in the range 0..N-1 (before function types).
+    pub fn addGcStructType(self: *Linker, type_name: []const u8, fields: []const GcFieldType) !u32 {
+        // Check if already registered
+        if (self.gc_struct_name_map.get(type_name)) |idx| {
+            return idx;
+        }
+
+        const type_idx: u32 = @intCast(self.gc_struct_types.items.len);
+        const field_offset: u32 = @intCast(self.gc_field_storage.items.len);
+
+        try self.gc_field_storage.appendSlice(self.allocator, fields);
+        try self.gc_struct_types.append(self.allocator, .{
+            .name = type_name,
+            .field_count = @intCast(fields.len),
+            .field_offset = field_offset,
+        });
+        try self.gc_struct_name_map.put(self.allocator, type_name, type_idx);
+
+        return type_idx;
+    }
+
+    /// Add or find a function type, return its index.
+    /// Accepts simple ValType params/results (backward-compatible with runtime code).
+    /// NOTE: The returned index is a raw index (0-based among function types).
+    /// When emitting to the Wasm binary, use funcTypeIndex() to get the
+    /// adjusted index that accounts for GC struct types.
+    pub fn addType(self: *Linker, params: []const c.ValType, results: []const c.ValType) !u32 {
+        // Convert ValType to WasmType and delegate to addTypeWasm
+        var param_buf: [32]c.WasmType = undefined;
+        var result_buf: [32]c.WasmType = undefined;
+        for (params, 0..) |p, i| param_buf[i] = c.WasmType.fromVal(p);
+        for (results, 0..) |r, i| result_buf[i] = c.WasmType.fromVal(r);
+        return self.addTypeWasm(param_buf[0..params.len], result_buf[0..results.len]);
+    }
+
+    /// Add or find a function type with GC ref type support.
+    /// Accepts WasmType params/results which can represent (ref null $T).
+    /// Reference: Kotlin/Wasm type section emission
+    pub fn addTypeWasm(self: *Linker, params: []const c.WasmType, results: []const c.WasmType) !u32 {
+        // Store first, then compare with stored data to avoid dangling slices.
+        // type_storage may reallocate, so we use offsets, not slices.
+        const params_start: u32 = @intCast(self.type_storage.items.len);
+        try self.type_storage.appendSlice(self.allocator, params);
+        const results_start: u32 = @intCast(self.type_storage.items.len);
+        try self.type_storage.appendSlice(self.allocator, results);
+
+        const new_type = FuncType{
+            .params_offset = params_start,
+            .params_len = @intCast(params.len),
+            .results_offset = results_start,
+            .results_len = @intCast(results.len),
+        };
+
+        // Check if type already exists (compare via storage)
         for (self.types.items, 0..) |existing, i| {
-            if (sig.eql(existing)) {
+            if (new_type.eqlWith(existing, self.type_storage.items)) {
+                // Duplicate found — roll back type_storage
+                self.type_storage.shrinkRetainingCapacity(params_start);
                 return @intCast(i);
             }
         }
 
-        // Store the slices
-        const params_start = self.type_storage.items.len;
-        try self.type_storage.appendSlice(self.allocator, params);
-        const params_end = self.type_storage.items.len;
-
-        const results_start = self.type_storage.items.len;
-        try self.type_storage.appendSlice(self.allocator, results);
-        const results_end = self.type_storage.items.len;
-
-        // Add new type with references to stored slices
-        try self.types.append(self.allocator, .{
-            .params = self.type_storage.items[params_start..params_end],
-            .results = self.type_storage.items[results_start..results_end],
-        });
-
+        try self.types.append(self.allocator, new_type);
         return @intCast(self.types.items.len - 1);
     }
 
@@ -245,24 +336,57 @@ pub const Linker = struct {
 
         // ====================================================================
         // Type Section (Go: asm.go writeTypeSec)
+        // GC struct types get indices 0..N-1, function types get N..N+M-1
         // ====================================================================
-        if (self.types.items.len > 0) {
-            var type_buf = std.ArrayListUnmanaged(u8){};
-            defer type_buf.deinit(self.allocator);
+        {
+            const gc_count = self.gc_struct_types.items.len;
+            const func_count = self.types.items.len;
+            const total_count = gc_count + func_count;
 
-            try assemble.writeULEB128(self.allocator, &type_buf, self.types.items.len);
-            for (self.types.items) |t| {
-                try type_buf.append(self.allocator, c.FUNC_TYPE_TAG); // 0x60
-                try assemble.writeULEB128(self.allocator, &type_buf, t.params.len);
-                for (t.params) |p| {
-                    try type_buf.append(self.allocator, @intFromEnum(p));
+            if (total_count > 0) {
+                var type_buf = std.ArrayListUnmanaged(u8){};
+                defer type_buf.deinit(self.allocator);
+
+                try assemble.writeULEB128(self.allocator, &type_buf, total_count);
+
+                // Emit GC struct types first (indices 0..N-1)
+                for (self.gc_struct_types.items) |st| {
+                    try type_buf.append(self.allocator, c.GC_STRUCT_TYPE); // 0x5F
+                    try assemble.writeULEB128(self.allocator, &type_buf, st.field_count);
+                    const fields = self.gc_field_storage.items[st.field_offset .. st.field_offset + st.field_count];
+                    for (fields) |f| {
+                        try type_buf.append(self.allocator, @intFromEnum(f.val_type));
+                        try type_buf.append(self.allocator, if (f.mutable) c.GC_FIELD_MUT else c.GC_FIELD_IMMUT);
+                    }
                 }
-                try assemble.writeULEB128(self.allocator, &type_buf, t.results.len);
-                for (t.results) |r| {
-                    try type_buf.append(self.allocator, @intFromEnum(r));
+
+                // Emit function types (indices N..N+M-1)
+                // Reference: Kotlin/Wasm encodes ref types as 0x64 + LEB128(typeidx)
+                for (self.types.items) |t| {
+                    const t_params = t.getParams(self.type_storage.items);
+                    const t_results = t.getResults(self.type_storage.items);
+                    try type_buf.append(self.allocator, c.FUNC_TYPE_TAG); // 0x60
+                    try assemble.writeULEB128(self.allocator, &type_buf, t_params.len);
+                    for (t_params) |p| {
+                        if (p.gc_ref) |gc_idx| {
+                            try type_buf.append(self.allocator, c.GC_REF_TYPE_NULL); // 0x64
+                            try assemble.writeULEB128(self.allocator, &type_buf, gc_idx);
+                        } else {
+                            try type_buf.append(self.allocator, @intFromEnum(p.val));
+                        }
+                    }
+                    try assemble.writeULEB128(self.allocator, &type_buf, t_results.len);
+                    for (t_results) |r| {
+                        if (r.gc_ref) |gc_idx| {
+                            try type_buf.append(self.allocator, c.GC_REF_TYPE_NULL); // 0x64
+                            try assemble.writeULEB128(self.allocator, &type_buf, gc_idx);
+                        } else {
+                            try type_buf.append(self.allocator, @intFromEnum(r.val));
+                        }
+                    }
                 }
+                try writeSection(writer, self.allocator, .type, type_buf.items);
             }
-            try writeSection(writer, self.allocator, .type, type_buf.items);
         }
 
         // ====================================================================
@@ -296,8 +420,9 @@ pub const Linker = struct {
             defer func_buf.deinit(self.allocator);
 
             try assemble.writeULEB128(self.allocator, &func_buf, self.funcs.items.len);
+            const gc_offset = self.gcTypeCount();
             for (self.funcs.items) |f| {
-                try assemble.writeULEB128(self.allocator, &func_buf, f.type_idx);
+                try assemble.writeULEB128(self.allocator, &func_buf, f.type_idx + gc_offset);
             }
             try writeSection(writer, self.allocator, .function, func_buf.items);
         }
@@ -559,6 +684,38 @@ test "linker emit" {
     // Verify header
     try testing.expectEqualSlices(u8, &c.WASM_MAGIC, output.items[0..4]);
     try testing.expectEqual(@as(u8, 1), output.items[4]); // version
+}
+
+test "linker gc struct types" {
+    const allocator = testing.allocator;
+    var linker = Linker.init(allocator);
+    defer linker.deinit();
+
+    // Add a GC struct type: Point { x: i64, y: i64 }
+    const fields = [_]GcFieldType{
+        .{ .val_type = .i64, .mutable = true },
+        .{ .val_type = .i64, .mutable = true },
+    };
+    const type_idx = try linker.addGcStructType("Point", &fields);
+    try testing.expectEqual(@as(u32, 0), type_idx);
+
+    // Same name returns same index
+    const type_idx2 = try linker.addGcStructType("Point", &fields);
+    try testing.expectEqual(@as(u32, 0), type_idx2);
+
+    // Different struct gets new index
+    const fields2 = [_]GcFieldType{
+        .{ .val_type = .i64, .mutable = true },
+    };
+    const type_idx3 = try linker.addGcStructType("Foo", &fields2);
+    try testing.expectEqual(@as(u32, 1), type_idx3);
+
+    // Function type indices should be offset
+    const func_type = try linker.addType(&[_]c.ValType{}, &[_]c.ValType{.i64});
+    try testing.expectEqual(@as(u32, 0), func_type); // Raw index
+    try testing.expectEqual(@as(u32, 2), linker.funcTypeIndex(func_type)); // Adjusted: 0 + 2 gc types
+
+    try testing.expectEqual(@as(u32, 2), linker.gcTypeCount());
 }
 
 test "linker with imports" {

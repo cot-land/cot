@@ -211,7 +211,9 @@ fn testCommand(allocator: std.mem.Allocator, opts: cli.TestOptions) void {
     else
         tmp_output;
 
-    const argv: []const []const u8 = if (opts.target.isWasm())
+    const argv: []const []const u8 = if (opts.target.isWasmGC())
+        &.{ "wasmtime", "-W", "gc=y", run_path }
+    else if (opts.target.isWasm())
         &.{ "wasmtime", run_path }
     else
         &.{run_path};

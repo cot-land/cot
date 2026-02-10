@@ -80,6 +80,7 @@ pub const Symbol = struct {
     locals_size: i32 = 0, // Locals size
     param_count: u32 = 0, // Number of function parameters
     float_local_count: u32 = 0, // Number of f64 locals (contiguous at end of declared range)
+    gc_ref_locals: []const u32 = &.{}, // GC type indices for ref-typed locals (after f64 locals)
 
     // The Prog chain for this function
     text: ?*Prog = null,

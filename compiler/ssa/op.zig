@@ -211,6 +211,11 @@ pub const Op = enum(u16) {
     // ARC runtime calls
     wasm_lowered_retain, wasm_lowered_release,
 
+    // WasmGC struct operations
+    wasm_gc_struct_new, // args: [field_values...], aux: gc_type_idx → ref
+    wasm_gc_struct_get, // args: [ref], aux: gc_type_idx | (field_idx << 16) → value
+    wasm_gc_struct_set, // args: [ref, value], aux: gc_type_idx | (field_idx << 16) → void
+
     pub fn info(self: Op) OpInfo { return op_info_table[@intFromEnum(self)]; }
     pub fn isCall(self: Op) bool { return self.info().call; }
     pub fn name(self: Op) []const u8 { return self.info().name; }
@@ -611,6 +616,11 @@ const op_info_table = blk: {
     // Wasm ARC ops (lowered - call runtime functions)
     table[@intFromEnum(Op.wasm_lowered_retain)] = .{ .name = "WasmLoweredRetain", .generic = false, .arg_len = 1, .has_side_effects = true, .call = true };
     table[@intFromEnum(Op.wasm_lowered_release)] = .{ .name = "WasmLoweredRelease", .generic = false, .arg_len = 1, .has_side_effects = true, .call = true };
+
+    // WasmGC struct operations
+    table[@intFromEnum(Op.wasm_gc_struct_new)] = .{ .name = "WasmGcStructNew", .generic = false, .arg_len = -1, .aux_type = .int64, .has_side_effects = true };
+    table[@intFromEnum(Op.wasm_gc_struct_get)] = .{ .name = "WasmGcStructGet", .generic = false, .arg_len = 1, .aux_type = .int64 };
+    table[@intFromEnum(Op.wasm_gc_struct_set)] = .{ .name = "WasmGcStructSet", .generic = false, .arg_len = 2, .aux_type = .int64, .has_side_effects = true };
 
     break :blk table;
 };

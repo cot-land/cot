@@ -222,7 +222,8 @@ pub fn addToLinker(allocator: std.mem.Allocator, linker: *wasm_link.Linker) !Run
 
     // Generate release function: (i64) -> void
     const release_type = destructor_type; // Same signature as destructors
-    const release_body = try generateReleaseBody(allocator, destructor_type, dealloc_idx);
+    // Use funcTypeIndex to get the GC-offset-adjusted type index for call_indirect
+    const release_body = try generateReleaseBody(allocator, linker.funcTypeIndex(destructor_type), dealloc_idx);
     const release_idx = try linker.addFunc(.{
         .name = RELEASE_NAME,
         .type_idx = release_type,

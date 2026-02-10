@@ -72,6 +72,10 @@ pub const GenState = struct {
     /// Number of f64 locals (at end of declared local range, after all i64 locals)
     float_local_count: u32 = 0,
 
+    /// GC ref locals: each entry is a GC struct type index.
+    /// These locals are declared after f64 locals, as (ref null $typeidx).
+    gc_ref_locals: std.ArrayListUnmanaged(u32) = .{},
+
     /// Maps function names to Wasm function indices
     func_indices: ?*const FuncIndexMap = null,
 
@@ -84,6 +88,9 @@ pub const GenState = struct {
     /// Maps function names to element table indices (for addr → call_indirect)
     /// Go reference: link/internal/wasm/asm.go:476 (funcValueOffset + func_index)
     func_table_indices: ?*const std.StringHashMap(u32) = null,
+
+    /// Maps struct type names to GC struct type indices (for WasmGC)
+    gc_struct_name_map: ?*const std.StringHashMapUnmanaged(u32) = null,
 
     /// Maps function names to Wasm type section indices (for call_indirect type)
     /// Go reference: wasmobj.go:1286-1291 (type index from instruction)
@@ -121,6 +128,10 @@ pub const GenState = struct {
         self.func_table_indices = indices;
     }
 
+    pub fn setGcStructNameMap(self: *GenState, map: *const std.StringHashMapUnmanaged(u32)) void {
+        self.gc_struct_name_map = map;
+    }
+
     pub fn setFuncTypeIndices(self: *GenState, indices: *const std.StringHashMap(u32)) void {
         self.func_type_indices = indices;
     }
@@ -129,6 +140,7 @@ pub const GenState = struct {
         self.builder.deinit();
         self.value_to_local.deinit(self.allocator);
         self.compound_len_locals.deinit(self.allocator);
+        self.gc_ref_locals.deinit(self.allocator);
         self.branches.deinit(self.allocator);
         self.bstart.deinit(self.allocator);
     }
@@ -984,6 +996,46 @@ pub const GenState = struct {
                 // No result (void function)
             },
 
+            // WasmGC struct operations
+            // Reference: Wasm GC proposal spec — 0xFB prefix + opcode + type/field indices
+            .wasm_gc_struct_new => {
+                // Push all field values onto stack, then emit struct.new $typeidx
+                // Result ref left on stack — setReg in ssaGenValue handles local.set
+                for (v.args) |arg| {
+                    try self.getValue64(arg);
+                }
+                const type_name = v.aux.string;
+                const gc_type_idx: i64 = if (self.gc_struct_name_map) |m| @intCast(m.get(type_name) orelse 0) else 0;
+                const p = try self.builder.append(.gc_struct_new);
+                p.from = prog_mod.constAddr(gc_type_idx);
+            },
+
+            .wasm_gc_struct_get => {
+                // Push ref onto stack, then emit struct.get $typeidx $fieldidx
+                // Result value left on stack — setReg in ssaGenValue handles local.set
+                try self.getValue64(v.args[0]);
+                const type_name = v.aux.string;
+                const gc_type_idx: i64 = if (self.gc_struct_name_map) |m| @intCast(m.get(type_name) orelse 0) else 0;
+                const field_idx = v.aux_int;
+                const p = try self.builder.append(.gc_struct_get);
+                p.from = prog_mod.constAddr(gc_type_idx);
+                p.to = prog_mod.constAddr(field_idx);
+            },
+
+            .wasm_gc_struct_set => {
+                // Push ref + value onto stack, then emit struct.set $typeidx $fieldidx
+                try self.getValue64(v.args[0]); // ref
+                try self.getValue64(v.args[1]); // value
+                // Resolve type name → GC type index, field_idx from aux_int
+                const type_name = v.aux.string;
+                const gc_type_idx: i64 = if (self.gc_struct_name_map) |m| @intCast(m.get(type_name) orelse 0) else 0;
+                const field_idx = v.aux_int;
+                const p = try self.builder.append(.gc_struct_set);
+                p.from = prog_mod.constAddr(gc_type_idx);
+                p.to = prog_mod.constAddr(field_idx);
+                // No result (void)
+            },
+
             // Type conversion (int cast, float-to-int, int-to-float)
             // Go reference: cmd/compile/internal/wasm/ssa.go:479-501
             .convert => {
@@ -1185,6 +1237,7 @@ pub const GenState = struct {
                 // wasm_return_call is a terminator (opcode 0x12) — no value on stack
                 if (v.op == .slice_make or v.op == .string_make or v.op == .wasm_lowered_move or v.op == .wasm_return_call) continue;
                 if (isFloatType(v.type_idx)) continue; // Skip floats for pass 2
+                if (v.op == .wasm_gc_struct_new) continue; // Skip GC refs for pass 3
 
                 const local_idx = self.next_local;
                 self.next_local += 1;
@@ -1209,6 +1262,22 @@ pub const GenState = struct {
             }
         }
         self.float_local_count = float_count;
+
+        // Pass 3: Allocate GC ref locals (reference-typed, after f64 locals)
+        for (self.func.blocks.items) |block| {
+            for (block.values.items) |v| {
+                if (v.op != .wasm_gc_struct_new) continue;
+                if (v.uses == 0 and !v.hasSideEffects()) continue;
+
+                const local_idx = self.next_local;
+                self.next_local += 1;
+                // Resolve type name → GC type index from linker
+                const type_name = v.aux.string;
+                const gc_type_idx: u32 = if (self.gc_struct_name_map) |m| m.get(type_name) orelse 0 else 0;
+                try self.gc_ref_locals.append(self.allocator, gc_type_idx);
+                try self.value_to_local.put(self.allocator, v.id, local_idx);
+            }
+        }
     }
 
     /// Compute byte offset for a local variable by summing sizes of all preceding locals.

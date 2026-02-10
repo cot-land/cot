@@ -941,6 +941,31 @@ pub const Lowerer = struct {
         const type_info = self.type_reg.get(struct_type_idx);
         const struct_type = if (type_info == .struct_type) type_info.struct_type else return;
 
+        // WasmGC path: ALL structs are GC objects — no stack allocation
+        // Reference: Kotlin/Dart WasmGC strategy — no dual representation
+        if (self.target.isWasmGC()) {
+            const type_name = if (struct_init.type_args.len > 0) struct_type.name else struct_init.type_name;
+            var field_values = try self.allocator.alloc(ir.NodeIndex, struct_type.fields.len);
+            for (field_values) |*fv| fv.* = ir.null_node;
+            for (struct_init.fields) |field_init| {
+                for (struct_type.fields, 0..) |struct_field, i| {
+                    if (std.mem.eql(u8, struct_field.name, field_init.name)) {
+                        field_values[i] = try self.lowerExprNode(field_init.value);
+                        break;
+                    }
+                }
+            }
+            for (struct_type.fields, 0..) |struct_field, i| {
+                if (field_values[i] == ir.null_node) {
+                    field_values[i] = try fb.emitConstInt(0, struct_field.type_idx, span);
+                }
+            }
+            const gc_ref = try fb.emitGcStructNew(type_name, field_values, struct_type_idx, span);
+            _ = try fb.emitStoreLocal(local_idx, gc_ref, span);
+            return;
+        }
+
+        // ARC path (unchanged): store fields to local via offset
         for (struct_init.fields) |field_init| {
             for (struct_type.fields, 0..) |struct_field, i| {
                 if (std.mem.eql(u8, struct_field.name, field_init.name)) {
@@ -1147,9 +1172,9 @@ pub const Lowerer = struct {
         switch (target_expr) {
             .ident => |id| {
                 if (fb.lookupLocal(id.name)) |local_idx| {
-                    // Port of Swift's emitSemanticStore(IsNotInitialization):
-                    // Release old value before storing new if local has ARC cleanup
-                    if (self.cleanup_stack.hasCleanupForLocal(local_idx)) {
+                    // ARC: Release old value before storing new if local has cleanup
+                    // WasmGC: skip retain/release — GC handles lifetimes
+                    if (!self.target.isWasmGC() and self.cleanup_stack.hasCleanupForLocal(local_idx)) {
                         const local_type = fb.locals.items[local_idx].type_idx;
                         const old_value = try fb.emitLoadLocal(local_idx, local_type, assign.span);
                         var release_args = [_]ir.NodeIndex{old_value};
@@ -1170,15 +1195,17 @@ pub const Lowerer = struct {
             .index => |idx| try self.lowerIndexAssign(idx, value_node, assign.value, assign.span),
             .deref => |d| {
                 const ptr_node = try self.lowerExprNode(d.operand);
-                // ARC: release old value at *ptr before storing new
-                const ptr_type_idx = self.inferExprType(d.operand);
-                const ptr_type_info = self.type_reg.get(ptr_type_idx);
-                if (ptr_type_info == .pointer) {
-                    const pointee_type = ptr_type_info.pointer.elem;
-                    if (self.type_reg.couldBeARC(pointee_type) and self.baseHasCleanup(d.operand)) {
-                        const old_val = try fb.emitPtrLoadValue(ptr_node, pointee_type, assign.span);
-                        var release_args = [_]ir.NodeIndex{old_val};
-                        _ = try fb.emitCall("cot_release", &release_args, false, TypeRegistry.VOID, assign.span);
+                // ARC: release old value at *ptr before storing new (skip for WasmGC)
+                if (!self.target.isWasmGC()) {
+                    const ptr_type_idx = self.inferExprType(d.operand);
+                    const ptr_type_info = self.type_reg.get(ptr_type_idx);
+                    if (ptr_type_info == .pointer) {
+                        const pointee_type = ptr_type_info.pointer.elem;
+                        if (self.type_reg.couldBeARC(pointee_type) and self.baseHasCleanup(d.operand)) {
+                            const old_val = try fb.emitPtrLoadValue(ptr_node, pointee_type, assign.span);
+                            var release_args = [_]ir.NodeIndex{old_val};
+                            _ = try fb.emitCall("cot_release", &release_args, false, TypeRegistry.VOID, assign.span);
+                        }
                     }
                 }
                 _ = try fb.emitPtrStoreValue(ptr_node, value_node, assign.span);
@@ -1201,6 +1228,18 @@ pub const Lowerer = struct {
             },
             else => return,
         };
+
+        // WasmGC path: use gc_struct_set instead of offset-based stores
+        if (self.target.isWasmGC()) {
+            for (struct_type.fields, 0..) |field, i| {
+                if (std.mem.eql(u8, field.name, fa.field)) {
+                    const base_val = try self.lowerExprNode(fa.base);
+                    _ = try fb.emitGcStructSet(base_val, struct_type.name, @intCast(i), value_node, span);
+                    return;
+                }
+            }
+            return;
+        }
 
         for (struct_type.fields, 0..) |field, i| {
             if (std.mem.eql(u8, field.name, fa.field)) {
@@ -2075,6 +2114,12 @@ pub const Lowerer = struct {
             }
         }
 
+        // WasmGC path: use gc_struct_get instead of offset-based loads
+        if (self.target.isWasmGC()) {
+            const base_val = try self.lowerExprNode(fa.base);
+            return try fb.emitGcStructGet(base_val, struct_type.name, field_idx, field_type, fa.span);
+        }
+
         const base_is_pointer = base_type == .pointer;
         const base_node = self.tree.getNode(fa.base) orelse return ir.null_node;
         const base_expr = base_node.asExpr() orelse return ir.null_node;
@@ -2341,7 +2386,8 @@ pub const Lowerer = struct {
     }
 
     /// Lower heap allocation expression: new Type { field: value, ... }
-    /// Emits cot_alloc call and initializes fields.
+    /// ARC path: cot_alloc call + field stores via linear memory.
+    /// WasmGC path: gc_struct_new with field values (GC-managed object).
     /// Reference: Go's walkNew (walk/builtin.go:601-616)
     fn lowerNewExpr(self: *Lowerer, ne: ast.NewExpr) Error!ir.NodeIndex {
         const fb = self.current_func orelse return ir.null_node;
@@ -2355,6 +2401,32 @@ pub const Lowerer = struct {
         const type_info = self.type_reg.get(struct_type_idx);
         const struct_type = if (type_info == .struct_type) type_info.struct_type else return ir.null_node;
 
+        // WasmGC path: emit gc_struct_new with all field values
+        // Reference: Kotlin/Wasm WasmGC codegen — all structs are GC objects
+        if (self.target.isWasmGC()) {
+            const type_name = if (ne.type_args.len > 0) struct_type.name else ne.type_name;
+            // Collect field values in struct field order
+            var field_values = try self.allocator.alloc(ir.NodeIndex, struct_type.fields.len);
+            // Initialize to null_node
+            for (field_values) |*fv| fv.* = ir.null_node;
+            for (ne.fields) |field_init| {
+                for (struct_type.fields, 0..) |struct_field, i| {
+                    if (std.mem.eql(u8, struct_field.name, field_init.name)) {
+                        field_values[i] = try self.lowerExprNode(field_init.value);
+                        break;
+                    }
+                }
+            }
+            // For any uninitialized fields, emit zero
+            for (struct_type.fields, 0..) |struct_field, i| {
+                if (field_values[i] == ir.null_node) {
+                    field_values[i] = try fb.emitConstInt(0, struct_field.type_idx, ne.span);
+                }
+            }
+            return try fb.emitGcStructNew(type_name, field_values, struct_type_idx, ne.span);
+        }
+
+        // ARC path (unchanged): cot_alloc + field stores via linear memory
         // Calculate size including heap object header (16 bytes for 32-bit Wasm)
         // Header: total_size (4) + metadata ptr (4) + refcount (8) = 16 bytes
         const HEAP_HEADER_SIZE: u32 = 16;
@@ -3275,6 +3347,13 @@ pub const Lowerer = struct {
         // Prepare receiver
         const receiver_val = blk: {
             if (method_info.receiver_is_ptr) {
+                // WasmGC: struct refs are NOT memory pointers. Pass the ref directly.
+                // Reference: Kotlin/Dart WasmGC — method self is a struct ref, not address.
+                if (self.target.isWasmGC() and (base_type == .struct_type or
+                    (base_type == .pointer and self.type_reg.get(base_type.pointer.elem) == .struct_type)))
+                {
+                    break :blk try self.lowerExprNode(fa.base);
+                }
                 if (base_type == .pointer) {
                     break :blk try self.lowerExprNode(fa.base);
                 } else {

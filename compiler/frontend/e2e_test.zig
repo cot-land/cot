@@ -77,7 +77,7 @@ fn runPipeline(backing: std.mem.Allocator, code: []const u8) !PipelineResult {
     // Convert IR to SSA
     var ssa_funcs = std.ArrayListUnmanaged(*Func){};
     for (ir_data.funcs) |*ir_func| {
-        var builder = try ssa_builder.SSABuilder.init(allocator, ir_func, &type_reg);
+        var builder = try ssa_builder.SSABuilder.init(allocator, ir_func, &type_reg, target);
         const ssa_func = builder.build() catch |e| {
             std.debug.print("SSA build error for {s}: {}\n", .{ ir_func.name, e });
             builder.deinit();

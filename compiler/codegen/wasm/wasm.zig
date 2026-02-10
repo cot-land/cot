@@ -28,6 +28,7 @@ pub const gen = @import("gen.zig");
 pub const As = constants.As;
 pub const Reg = constants.Reg;
 pub const ValType = constants.ValType;
+pub const WasmType = constants.WasmType;
 pub const Section = constants.Section;
 pub const ExportKind = constants.ExportKind;
 
@@ -77,6 +78,7 @@ pub fn generateFunc(
     string_offsets: ?*const StringOffsetMap,
     metadata_offsets: ?*const StringOffsetMap,
     func_table_indices: ?*const std.StringHashMap(u32),
+    gc_struct_name_map: ?*const std.StringHashMapUnmanaged(u32),
 ) ![]u8 {
     debug.log(.codegen, "wasm: generateFunc '{s}'", .{ssa_func.name});
 
@@ -96,6 +98,9 @@ pub fn generateFunc(
     if (func_table_indices) |indices| {
         gen_state.setFuncTableIndices(indices);
     }
+    if (gc_struct_name_map) |m| {
+        gen_state.setGcStructNameMap(m);
+    }
 
     try gen_state.generate();
 
@@ -104,6 +109,7 @@ pub fn generateFunc(
     sym.frame_size = gen_state.frame_size;
     sym.param_count = gen_state.param_count;
     sym.float_local_count = gen_state.float_local_count;
+    sym.gc_ref_locals = gen_state.gc_ref_locals.items;
     sym.text = gen_state.builder.first;
 
     // Step 2: Preprocess - transform pseudo-instructions, add dispatch loop (Go's wasmobj.go)

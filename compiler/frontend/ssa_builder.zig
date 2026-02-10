@@ -4,12 +4,14 @@ const std = @import("std");
 const ir = @import("ir.zig");
 const types = @import("types.zig");
 const source = @import("source.zig");
+const target_mod = @import("../core/target.zig");
 const ssa = @import("../ssa/func.zig");
 const ssa_block = @import("../ssa/block.zig");
 const ssa_value = @import("../ssa/value.zig");
 const ssa_op = @import("../ssa/op.zig");
 
 const Allocator = std.mem.Allocator;
+const Target = target_mod.Target;
 const TypeRegistry = types.TypeRegistry;
 const TypeIndex = types.TypeIndex;
 
@@ -32,6 +34,7 @@ pub const SSABuilder = struct {
     func: *Func,
     ir_func: *const ir.Func,
     type_registry: *TypeRegistry,
+    target: Target,
     vars: std.AutoHashMap(ir.LocalIdx, *Value),
     fwd_vars: std.AutoHashMap(ir.LocalIdx, *Value),
     defvars: std.AutoHashMap(u32, std.AutoHashMap(ir.LocalIdx, *Value)),
@@ -46,7 +49,7 @@ pub const SSABuilder = struct {
 
     const LoopContext = struct { continue_block: *Block, break_block: *Block };
 
-    pub fn init(allocator: Allocator, ir_func: *const ir.Func, type_registry: *TypeRegistry) !SSABuilder {
+    pub fn init(allocator: Allocator, ir_func: *const ir.Func, type_registry: *TypeRegistry, target: Target) !SSABuilder {
         const func = try allocator.create(Func);
         func.* = Func.init(allocator, ir_func.name);
         const entry = try func.newBlock(.plain);
@@ -69,11 +72,12 @@ pub const SSABuilder = struct {
 
         // Initialize parameters - emit arg ops for each param
         var phys_reg_idx: i32 = 0;
+        const is_wasm_gc = target.isWasmGC();
         for (ir_func.params, 0..) |param, i| {
             const local_type = type_registry.get(param.type_idx);
-            const is_string_or_slice = param.type_idx == TypeRegistry.STRING or local_type == .slice;
+            const is_string_or_slice = !is_wasm_gc and (param.type_idx == TypeRegistry.STRING or local_type == .slice);
             const type_size = type_registry.sizeOf(param.type_idx);
-            const is_large_struct = local_type == .struct_type and type_size > 8;
+            const is_large_struct = !is_wasm_gc and local_type == .struct_type and type_size > 8;
 
             if (is_string_or_slice) {
                 // String/slice: two registers (ptr, len)
@@ -145,13 +149,20 @@ pub const SSABuilder = struct {
                 phys_reg_idx += 1;
                 try vars.put(@intCast(i), arg_val);
 
-                // Store to stack
-                const addr = try func.newValue(.local_addr, TypeRegistry.VOID, entry, .{});
-                addr.aux_int = @intCast(slot_offsets[i]);
-                try entry.addValue(allocator, addr);
-                const store = try func.newValue(.store, TypeRegistry.VOID, entry, .{});
-                store.addArg2(addr, arg_val);
-                try entry.addValue(allocator, store);
+                // Store to stack — but NOT for WasmGC struct/pointer-to-struct params
+                // (they're GC refs, not linear memory values). This covers both
+                // direct struct params and self: *Type method params.
+                // Reference: Kotlin/Dart WasmGC — struct refs stay in Wasm locals.
+                const is_gc_ref_param = is_wasm_gc and (local_type == .struct_type or
+                    (local_type == .pointer and type_registry.get(local_type.pointer.elem) == .struct_type));
+                if (!is_gc_ref_param) {
+                    const addr = try func.newValue(.local_addr, TypeRegistry.VOID, entry, .{});
+                    addr.aux_int = @intCast(slot_offsets[i]);
+                    try entry.addValue(allocator, addr);
+                    const store = try func.newValue(.store, TypeRegistry.VOID, entry, .{});
+                    store.addArg2(addr, arg_val);
+                    try entry.addValue(allocator, store);
+                }
             }
         }
 
@@ -160,6 +171,7 @@ pub const SSABuilder = struct {
             .func = func,
             .ir_func = ir_func,
             .type_registry = type_registry,
+            .target = target,
             .vars = vars,
             .fwd_vars = std.AutoHashMap(ir.LocalIdx, *Value).init(allocator),
             .defvars = std.AutoHashMap(u32, std.AutoHashMap(ir.LocalIdx, *Value)).init(allocator),
@@ -430,6 +442,11 @@ pub const SSABuilder = struct {
             .ptr_cast => |p| try self.convertCast(p.operand, node.type_idx, cur),
             .int_to_ptr => |p| try self.convertCast(p.operand, node.type_idx, cur),
             .ptr_to_int => |p| try self.convertCast(p.operand, node.type_idx, cur),
+
+            // WasmGC struct operations - converted to Wasm-level ops
+            .gc_struct_new => |gc| try self.convertGcStructNew(gc, node.type_idx, cur),
+            .gc_struct_get => |gc| try self.convertGcStructGet(gc, node.type_idx, cur),
+            .gc_struct_set => |gc| try self.convertGcStructSet(gc, cur),
         };
 
         if (result) |v| try self.node_values.put(node_idx, v);
@@ -471,8 +488,24 @@ pub const SSABuilder = struct {
     }
 
     fn convertLoadLocal(self: *SSABuilder, local_idx: ir.LocalIdx, type_idx: TypeIndex, cur: *Block) !*Value {
-        const addr_val = try self.emitLocalAddr(local_idx, TypeRegistry.VOID, cur);
         const load_type = self.type_registry.get(type_idx);
+
+        // WasmGC: struct and pointer-to-struct locals hold GC refs — return SSA value directly.
+        // Covers both direct struct vars and self: *Type method params.
+        // Reference: Kotlin/Dart WasmGC — struct refs are Wasm locals, not memory.
+        const is_gc_ref = self.target.isWasmGC() and (load_type == .struct_type or
+            (load_type == .pointer and self.type_registry.get(load_type.pointer.elem) == .struct_type));
+        if (is_gc_ref) {
+            if (self.vars.get(local_idx)) |v| return v;
+            // Check sealed block defs
+            var it = self.defvars.iterator();
+            while (it.next()) |entry| {
+                if (entry.value_ptr.get(local_idx)) |v| return v;
+            }
+            return error.MissingValue;
+        }
+
+        const addr_val = try self.emitLocalAddr(local_idx, TypeRegistry.VOID, cur);
 
         if (load_type == .slice) {
             // Slice: load ptr, len, cap separately, combine with slice_make
@@ -516,6 +549,14 @@ pub const SSABuilder = struct {
     fn convertStoreLocal(self: *SSABuilder, local_idx: ir.LocalIdx, value_idx: ir.NodeIndex, cur: *Block) !*Value {
         const value = try self.convertNode(value_idx) orelse return error.MissingValue;
         const value_type = self.type_registry.get(value.type_idx);
+
+        // WasmGC: struct values are GC refs — assign directly to local, no memory store.
+        // The Wasm codegen (setReg) emits local.set for the assigned value.
+        if (self.target.isWasmGC() and (value.op == .wasm_gc_struct_new or value_type == .struct_type)) {
+            self.assign(local_idx, value);
+            return value;
+        }
+
         const is_slice_value = (value.op == .slice_make or value.op == .string_make) and value.args.len >= 2;
 
         if (is_slice_value) {
@@ -701,6 +742,12 @@ pub const SSABuilder = struct {
     /// Must match callee param decomposition in buildSSA.
     /// Go reference: ssagen/ssa.go uses OSPTR()/OLEN() to decompose slice args at call sites.
     fn addCallArg(self: *SSABuilder, call_val: *Value, arg_val: *Value, cur: *Block) !void {
+        // WasmGC: all args (including structs, strings) are single ref values — no decomposition
+        if (self.target.isWasmGC()) {
+            try call_val.addArgAlloc(arg_val, self.allocator);
+            return;
+        }
+
         const arg_type = self.type_registry.get(arg_val.type_idx);
         const type_size = self.type_registry.sizeOf(arg_val.type_idx);
 
@@ -1449,6 +1496,40 @@ pub const SSABuilder = struct {
             }
         }
     }
+
+    // === WasmGC struct conversion helpers ===
+
+    fn convertGcStructNew(self: *SSABuilder, gc: ir.GcStructNew, type_idx: TypeIndex, cur: *Block) !*Value {
+        const val = try self.func.newValue(.wasm_gc_struct_new, type_idx, cur, self.cur_pos);
+        val.aux = .{ .string = gc.type_name };
+        for (gc.field_values) |field_val| {
+            const arg = try self.convertNode(field_val) orelse continue;
+            try val.addArgAlloc(arg, self.allocator);
+        }
+        try cur.addValue(self.allocator, val);
+        return val;
+    }
+
+    fn convertGcStructGet(self: *SSABuilder, gc: ir.GcStructGet, type_idx: TypeIndex, cur: *Block) !*Value {
+        const val = try self.func.newValue(.wasm_gc_struct_get, type_idx, cur, self.cur_pos);
+        val.aux = .{ .string = gc.type_name };
+        val.aux_int = @intCast(gc.field_idx);
+        const base_val = try self.convertNode(gc.base) orelse return val;
+        val.addArg(base_val);
+        try cur.addValue(self.allocator, val);
+        return val;
+    }
+
+    fn convertGcStructSet(self: *SSABuilder, gc: ir.GcStructSet, cur: *Block) !*Value {
+        const val = try self.func.newValue(.wasm_gc_struct_set, TypeRegistry.VOID, cur, self.cur_pos);
+        val.aux = .{ .string = gc.type_name };
+        val.aux_int = @intCast(gc.field_idx);
+        const base_val = try self.convertNode(gc.base) orelse return val;
+        const value_val = try self.convertNode(gc.value) orelse return val;
+        val.addArg2(base_val, value_val);
+        try cur.addValue(self.allocator, val);
+        return val;
+    }
 };
 
 // ============================================================================
@@ -1462,7 +1543,7 @@ test "SSABuilder basic init" {
 
     var ir_func = ir.Func{ .name = "test", .type_idx = 0, .return_type = TypeRegistry.VOID, .params = &.{}, .locals = &.{}, .blocks = &.{}, .entry = 0, .nodes = &.{}, .span = source.Span.zero };
 
-    var builder = try SSABuilder.init(allocator, &ir_func, &type_reg);
+    var builder = try SSABuilder.init(allocator, &ir_func, &type_reg, Target.native());
     defer {
         const func = builder.func;
         builder.deinit();
@@ -1481,7 +1562,7 @@ test "SSABuilder block transitions" {
 
     var ir_func = ir.Func{ .name = "test", .type_idx = 0, .return_type = TypeRegistry.VOID, .params = &.{}, .locals = &.{}, .blocks = &.{}, .entry = 0, .nodes = &.{}, .span = source.Span.zero };
 
-    var builder = try SSABuilder.init(allocator, &ir_func, &type_reg);
+    var builder = try SSABuilder.init(allocator, &ir_func, &type_reg, Target.native());
     defer {
         const func = builder.func;
         builder.deinit();
@@ -1513,7 +1594,7 @@ test "SSABuilder variable tracking" {
 
     var ir_func = ir.Func{ .name = "test", .type_idx = 0, .return_type = TypeRegistry.VOID, .params = &.{}, .locals = &.{}, .blocks = &.{}, .entry = 0, .nodes = &.{}, .span = source.Span.zero };
 
-    var builder = try SSABuilder.init(allocator, &ir_func, &type_reg);
+    var builder = try SSABuilder.init(allocator, &ir_func, &type_reg, Target.native());
     defer {
         const func = builder.func;
         builder.deinit();

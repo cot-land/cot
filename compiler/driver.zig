@@ -1999,6 +1999,8 @@ pub const Driver = struct {
         var linker = wasm.Linker.init(self.allocator);
         defer linker.deinit();
 
+        const is_wasm_gc = self.target.isWasmGC();
+
         // Configure memory (3 pages = 192KB minimum)
         // Page 0: Stack (grows down from 64KB)
         // Page 1: Heap (starts at 64KB)
@@ -2011,6 +2013,32 @@ pub const Driver = struct {
         // Layout: SP(0), CTXT(1), heap_ptr(2)
         // ====================================================================
         _ = try linker.addGlobal(.{ .val_type = .i64, .mutable = true, .init_i64 = 0 });
+
+        // ====================================================================
+        // WasmGC: Register GC struct types in linker BEFORE runtime functions.
+        // GC types get indices 0..N-1, shifting all function type indices by N.
+        // This must happen before ARC/runtime function assembly so that
+        // call_indirect type indices in those functions are correct.
+        // ====================================================================
+        if (is_wasm_gc) {
+            const wasm_link = @import("codegen/wasm/link.zig");
+            for (type_reg.types.items) |t| {
+                if (t == .struct_type) {
+                    const st = t.struct_type;
+                    var gc_fields = try self.allocator.alloc(wasm_link.GcFieldType, st.fields.len);
+                    defer self.allocator.free(gc_fields);
+                    for (st.fields, 0..) |field, fi| {
+                        const is_float = field.type_idx == types_mod.TypeRegistry.F64 or
+                            field.type_idx == types_mod.TypeRegistry.F32;
+                        gc_fields[fi] = .{
+                            .val_type = if (is_float) .f64 else .i64,
+                            .mutable = true,
+                        };
+                    }
+                    _ = try linker.addGcStructType(st.name, gc_fields);
+                }
+            }
+        }
 
         // ====================================================================
         // Add ARC runtime functions first (they get indices 0, 1, 2, ...)
@@ -2106,6 +2134,7 @@ pub const Driver = struct {
         // ====================================================================
         // Build destructor table: map type_name -> table index
         // Reference: Swift stores destructor pointer in type metadata
+        // WasmGC: skip — GC handles object lifetime, no manual destructors
         // ====================================================================
         var destructor_table = std.StringHashMap(u32).init(self.allocator);
         defer destructor_table.deinit();
@@ -2114,25 +2143,27 @@ pub const Driver = struct {
         var metadata_addrs = std.StringHashMap(i32).init(self.allocator);
         defer metadata_addrs.deinit();
 
-        // Reserve table index 0 as null (no destructor)
-        // This ensures actual destructors start at index 1+
-        _ = try linker.addTableFunc(arc_funcs.release_idx); // Placeholder at index 0
+        if (!is_wasm_gc) {
+            // Reserve table index 0 as null (no destructor)
+            // This ensures actual destructors start at index 1+
+            _ = try linker.addTableFunc(arc_funcs.release_idx); // Placeholder at index 0
 
-        // Find all destructor functions (marked by is_destructor flag during lowering)
-        // and add them to the table. Uses semantic metadata instead of name scanning
-        // to avoid false positives on generic methods like "List(i64)_deinit".
-        for (funcs, 0..) |*ir_func, i| {
-            if (ir_func.is_destructor) {
-                // Extract type name: "TypeName_deinit" → "TypeName"
-                if (std.mem.lastIndexOf(u8, ir_func.name, "_")) |sep| {
-                    const type_name = ir_func.name[0..sep];
-                    const func_idx: u32 = @intCast(i + runtime_func_count);
+            // Find all destructor functions (marked by is_destructor flag during lowering)
+            // and add them to the table. Uses semantic metadata instead of name scanning
+            // to avoid false positives on generic methods like "List(i64)_deinit".
+            for (funcs, 0..) |*ir_func, i| {
+                if (ir_func.is_destructor) {
+                    // Extract type name: "TypeName_deinit" → "TypeName"
+                    if (std.mem.lastIndexOf(u8, ir_func.name, "_")) |sep| {
+                        const type_name = ir_func.name[0..sep];
+                        const func_idx: u32 = @intCast(i + runtime_func_count);
 
-                    // Add to table (table_index starts at 1, 0 is reserved for null)
-                    const table_idx = try linker.addTableFunc(func_idx);
-                    try destructor_table.put(type_name, table_idx);
+                        // Add to table (table_index starts at 1, 0 is reserved for null)
+                        const table_idx = try linker.addTableFunc(func_idx);
+                        try destructor_table.put(type_name, table_idx);
 
-                    pipeline_debug.log(.codegen, "driver: destructor {s} at table[{d}] = func[{d}]", .{ ir_func.name, table_idx, func_idx });
+                        pipeline_debug.log(.codegen, "driver: destructor {s} at table[{d}] = func[{d}]", .{ ir_func.name, table_idx, func_idx });
+                    }
                 }
             }
         }
@@ -2160,30 +2191,32 @@ pub const Driver = struct {
         var func_type_indices = std.StringHashMap(u32).init(self.allocator);
         defer func_type_indices.deinit();
 
-        // Reserve offset 0 as null sentinel. cot_release checks
-        // "if (metadata_ptr != 0)" to skip destructor lookup — so metadata must
-        // never live at offset 0. This matches C's convention (address 0 = NULL).
-        _ = try linker.addData(&[_]u8{ 0, 0, 0, 0, 0, 0, 0, 0 });
+        if (!is_wasm_gc) {
+            // Reserve offset 0 as null sentinel. cot_release checks
+            // "if (metadata_ptr != 0)" to skip destructor lookup — so metadata must
+            // never live at offset 0. This matches C's convention (address 0 = NULL).
+            _ = try linker.addData(&[_]u8{ 0, 0, 0, 0, 0, 0, 0, 0 });
 
-        // Generate metadata for each type with destructor
-        // Metadata layout: type_id(4), size(4), destructor_ptr(4) = 12 bytes
-        var metadata_buf: [12]u8 = undefined;
+            // Generate metadata for each type with destructor
+            // Metadata layout: type_id(4), size(4), destructor_ptr(4) = 12 bytes
+            var metadata_buf: [12]u8 = undefined;
 
-        var type_id: u32 = 1;
-        var dtor_iter = destructor_table.iterator();
-        while (dtor_iter.next()) |entry| {
-            const dtor_idx = entry.value_ptr.*;
+            var type_id: u32 = 1;
+            var dtor_iter = destructor_table.iterator();
+            while (dtor_iter.next()) |entry| {
+                const dtor_idx = entry.value_ptr.*;
 
-            // Build metadata bytes
-            std.mem.writeInt(u32, metadata_buf[0..4], type_id, .little); // type_id
-            std.mem.writeInt(u32, metadata_buf[4..8], 8, .little); // size (placeholder)
-            std.mem.writeInt(u32, metadata_buf[8..12], dtor_idx, .little); // destructor table index
+                // Build metadata bytes
+                std.mem.writeInt(u32, metadata_buf[0..4], type_id, .little); // type_id
+                std.mem.writeInt(u32, metadata_buf[4..8], 8, .little); // size (placeholder)
+                std.mem.writeInt(u32, metadata_buf[8..12], dtor_idx, .little); // destructor table index
 
-            const offset = try linker.addData(&metadata_buf);
-            try metadata_addrs.put(entry.key_ptr.*, offset);
+                const offset = try linker.addData(&metadata_buf);
+                try metadata_addrs.put(entry.key_ptr.*, offset);
 
-            pipeline_debug.log(.codegen, "driver: metadata for {s} at offset {d}, dtor_idx={d}", .{ entry.key_ptr.*, offset, dtor_idx });
-            type_id += 1;
+                pipeline_debug.log(.codegen, "driver: metadata for {s} at offset {d}, dtor_idx={d}", .{ entry.key_ptr.*, offset, dtor_idx });
+                type_id += 1;
+            }
         }
 
         // ====================================================================
@@ -2207,7 +2240,7 @@ pub const Driver = struct {
         // ====================================================================
         for (funcs) |*ir_func| {
             // Build SSA
-            var ssa_builder = try ssa_builder_mod.SSABuilder.init(self.allocator, ir_func, type_reg);
+            var ssa_builder = try ssa_builder_mod.SSABuilder.init(self.allocator, ir_func, type_reg, self.target);
             errdefer ssa_builder.deinit();
 
             const ssa_func = try ssa_builder.build();
@@ -2244,34 +2277,54 @@ pub const Driver = struct {
                 }
             }
             var params: [32]wasm.ValType = undefined;
+            // WasmGC: parallel array for GC-aware param types (ref types for structs)
+            var gc_params: [32]wasm.WasmType = undefined;
             {
                 // Build Wasm param types, decomposing compound types (slice, string)
                 // into 2 separate i64 entries (ptr, len). This must match the SSA
                 // builder's arg decomposition in ssa_builder.zig.
+                // WasmGC: no decomposition — structs are single (ref null $T) values.
                 var wasm_param_idx: usize = 0;
                 for (ir_func.params) |param| {
                     const param_type = type_reg.get(param.type_idx);
-                    const is_string_or_slice = param.type_idx == types_mod.TypeRegistry.STRING or param_type == .slice;
+                    const is_string_or_slice = !is_wasm_gc and (param.type_idx == types_mod.TypeRegistry.STRING or param_type == .slice);
                     const type_size = type_reg.sizeOf(param.type_idx);
-                    const is_large_struct = param_type == .struct_type and type_size > 8;
+                    const is_large_struct = !is_wasm_gc and param_type == .struct_type and type_size > 8;
 
-                    if (is_string_or_slice) {
+                    // WasmGC: struct and pointer-to-struct params are single (ref null $typeidx)
+                    // Reference: Kotlin/Dart WasmGC — struct refs in params, including self: *Type
+                    const is_gc_struct_param = is_wasm_gc and (param_type == .struct_type or
+                        (param_type == .pointer and type_reg.get(param_type.pointer.elem) == .struct_type));
+                    if (is_gc_struct_param) {
+                        const st = if (param_type == .struct_type)
+                            param_type.struct_type
+                        else
+                            type_reg.get(param_type.pointer.elem).struct_type;
+                        const gc_type_idx = linker.gc_struct_name_map.get(st.name) orelse 0;
+                        gc_params[wasm_param_idx] = wasm.WasmType.gcRefNull(gc_type_idx);
+                        params[wasm_param_idx] = .i64; // placeholder for param_count
+                        wasm_param_idx += 1;
+                    } else if (is_string_or_slice) {
                         // String/slice: 2 i64 params (ptr+len)
                         params[wasm_param_idx] = .i64;
+                        gc_params[wasm_param_idx] = wasm.WasmType.fromVal(.i64);
                         wasm_param_idx += 1;
                         params[wasm_param_idx] = .i64;
+                        gc_params[wasm_param_idx] = wasm.WasmType.fromVal(.i64);
                         wasm_param_idx += 1;
                     } else if (is_large_struct) {
                         // Large struct: N i64 params (one per 8-byte chunk)
                         const num_slots = (type_size + 7) / 8;
                         for (0..num_slots) |_| {
                             params[wasm_param_idx] = .i64;
+                            gc_params[wasm_param_idx] = wasm.WasmType.fromVal(.i64);
                             wasm_param_idx += 1;
                         }
                     } else {
                         const is_float = param.type_idx == types_mod.TypeRegistry.F64 or
                             param.type_idx == types_mod.TypeRegistry.F32;
                         params[wasm_param_idx] = if (is_float) .f64 else .i64;
+                        gc_params[wasm_param_idx] = wasm.WasmType.fromVal(if (is_float) .f64 else .i64);
                         wasm_param_idx += 1;
                     }
                 }
@@ -2281,8 +2334,9 @@ pub const Driver = struct {
                 ir_func.return_type == types_mod.TypeRegistry.F32;
             // Decompose compound return types (string, slice) into 2 i64 values
             // to match the param decomposition pattern above.
+            // WasmGC: no decomposition — compound returns are single ref values.
             const ret_type_info = type_reg.get(ir_func.return_type);
-            const ret_is_compound = ir_func.return_type == types_mod.TypeRegistry.STRING or ret_type_info == .slice;
+            const ret_is_compound = !is_wasm_gc and (ir_func.return_type == types_mod.TypeRegistry.STRING or ret_type_info == .slice);
             const results: []const wasm.ValType = if (!has_return)
                 &[_]wasm.ValType{}
             else if (ret_is_compound)
@@ -2293,7 +2347,13 @@ pub const Driver = struct {
                 &[_]wasm.ValType{.i64};
 
             // Add function type to linker
-            const type_idx = try linker.addType(params[0..param_count], results);
+            // WasmGC: use addTypeWasm for GC-aware type registration (ref type params)
+            const type_idx = if (is_wasm_gc) blk: {
+                // Convert results to WasmType
+                var gc_results: [4]wasm.WasmType = undefined;
+                for (results, 0..) |r, ri| gc_results[ri] = wasm.WasmType.fromVal(r);
+                break :blk try linker.addTypeWasm(gc_params[0..param_count], gc_results[0..results.len]);
+            } else try linker.addType(params[0..param_count], results);
 
             // Register this function's Wasm type index for call_indirect resolution
             try func_type_indices.put(ir_func.name, type_idx);
@@ -2333,7 +2393,8 @@ pub const Driver = struct {
             }
 
             // Generate function body code using Go-style two-pass architecture
-            const body = try wasm.generateFunc(self.allocator, ssa_func, &func_indices, &string_offsets, &metadata_addrs, &func_table_indices);
+            const gc_name_map = if (is_wasm_gc) &linker.gc_struct_name_map else null;
+            const body = try wasm.generateFunc(self.allocator, ssa_func, &func_indices, &string_offsets, &metadata_addrs, &func_table_indices, gc_name_map);
             errdefer self.allocator.free(body);
 
             // Export all functions for AOT compatibility

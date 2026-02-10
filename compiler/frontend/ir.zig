@@ -98,6 +98,11 @@ pub const PtrToInt = struct { operand: NodeIndex };
 pub const TypeMetadata = struct { type_name: []const u8 };
 pub const WasmGlobalRead = struct { global_idx: u32 };
 
+// WasmGC struct operations
+pub const GcStructNew = struct { type_name: []const u8, field_values: []const NodeIndex };
+pub const GcStructGet = struct { base: NodeIndex, type_name: []const u8, field_idx: u32 };
+pub const GcStructSet = struct { base: NodeIndex, type_name: []const u8, field_idx: u32, value: NodeIndex };
+
 pub const Node = struct {
     type_idx: TypeIndex,
     span: Span,
@@ -124,6 +129,9 @@ pub const Node = struct {
         ptr_cast: PtrCast, int_to_ptr: IntToPtr, ptr_to_int: PtrToInt,
         type_metadata: TypeMetadata,
         wasm_global_read: WasmGlobalRead,
+        gc_struct_new: GcStructNew,
+        gc_struct_get: GcStructGet,
+        gc_struct_set: GcStructSet,
         nop: void,
         trap: void,
     };
@@ -131,7 +139,7 @@ pub const Node = struct {
     pub fn init(data: Data, type_idx: TypeIndex, span: Span) Node { return .{ .type_idx = type_idx, .span = span, .block = null_block, .data = data }; }
     pub fn withBlock(self: Node, block: BlockIndex) Node { var n = self; n.block = block; return n; }
     pub fn isTerminator(self: *const Node) bool { return switch (self.data) { .ret, .jump, .branch, .trap => true, else => false }; }
-    pub fn hasSideEffects(self: *const Node) bool { return switch (self.data) { .store_local, .ptr_store, .ptr_store_value, .ptr_field_store, .store_local_field, .call, .call_indirect, .closure_call, .ret, .jump, .branch, .trap, .list_new, .list_push, .list_set, .list_free, .map_new, .map_set, .map_free => true, else => false }; }
+    pub fn hasSideEffects(self: *const Node) bool { return switch (self.data) { .store_local, .ptr_store, .ptr_store_value, .ptr_field_store, .store_local_field, .call, .call_indirect, .closure_call, .ret, .jump, .branch, .trap, .list_new, .list_push, .list_set, .list_free, .map_new, .map_set, .map_free, .gc_struct_new, .gc_struct_set => true, else => false }; }
     pub fn isConstant(self: *const Node) bool { return switch (self.data) { .const_int, .const_float, .const_bool, .const_null, .const_slice => true, else => false }; }
 };
 
@@ -356,6 +364,17 @@ pub const FuncBuilder = struct {
     pub fn emitTypeMetadata(self: *FuncBuilder, type_name: []const u8, span: Span) !NodeIndex { return self.emit(Node.init(.{ .type_metadata = .{ .type_name = type_name } }, TypeRegistry.I64, span)); }
     pub fn emitUnionInit(self: *FuncBuilder, variant_idx: u32, payload: ?NodeIndex, type_idx: TypeIndex, span: Span) !NodeIndex { return self.emit(Node.init(.{ .union_init = .{ .variant_idx = variant_idx, .payload = payload } }, type_idx, span)); }
     pub fn emitWasmGlobalRead(self: *FuncBuilder, global_idx: u32, type_idx: TypeIndex, span: Span) !NodeIndex { return self.emit(Node.init(.{ .wasm_global_read = .{ .global_idx = global_idx } }, type_idx, span)); }
+
+    // WasmGC struct operations
+    pub fn emitGcStructNew(self: *FuncBuilder, type_name: []const u8, field_values: []const NodeIndex, type_idx: TypeIndex, span: Span) !NodeIndex {
+        return self.emit(Node.init(.{ .gc_struct_new = .{ .type_name = type_name, .field_values = try self.allocator.dupe(NodeIndex, field_values) } }, type_idx, span));
+    }
+    pub fn emitGcStructGet(self: *FuncBuilder, base: NodeIndex, type_name: []const u8, field_idx: u32, type_idx: TypeIndex, span: Span) !NodeIndex {
+        return self.emit(Node.init(.{ .gc_struct_get = .{ .base = base, .type_name = type_name, .field_idx = field_idx } }, type_idx, span));
+    }
+    pub fn emitGcStructSet(self: *FuncBuilder, base: NodeIndex, type_name: []const u8, field_idx: u32, value: NodeIndex, span: Span) !NodeIndex {
+        return self.emit(Node.init(.{ .gc_struct_set = .{ .base = base, .type_name = type_name, .field_idx = field_idx, .value = value } }, TypeRegistry.VOID, span));
+    }
 
     pub fn build(self: *FuncBuilder) !Func {
         var params = std.ArrayListUnmanaged(Local){};

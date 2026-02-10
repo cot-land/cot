@@ -105,7 +105,7 @@ fn compileToWasm(backing: std.mem.Allocator, code: []const u8) !WasmResult {
     // Second pass: process each function
     for (ir_data.funcs) |*ir_func| {
         // Build SSA
-        var builder = try ssa_builder.SSABuilder.init(allocator, ir_func, &type_reg);
+        var builder = try ssa_builder.SSABuilder.init(allocator, ir_func, &type_reg, target);
         const ssa_func = builder.build() catch |e| {
             std.debug.print("SSA build error for {s}: {}\n", .{ ir_func.name, e });
             builder.deinit();

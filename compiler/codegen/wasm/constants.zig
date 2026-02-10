@@ -21,6 +21,32 @@ pub const ValType = enum(u8) {
     funcref = 0x70,
 };
 
+/// Extended Wasm type for function signatures, supporting GC ref types.
+/// Wasm spec: valtype = numtype | vectype | reftype
+/// For GC: (ref null $typeidx) encoded as 0x64 + LEB128(typeidx)
+/// Reference: Kotlin/Wasm WasmType class hierarchy
+pub const WasmType = struct {
+    val: ValType = .i64,
+    gc_ref: ?u32 = null, // if set, represents (ref null $gc_ref), val is ignored
+
+    pub fn fromVal(v: ValType) WasmType {
+        return .{ .val = v };
+    }
+
+    pub fn gcRefNull(type_idx: u32) WasmType {
+        return .{ .gc_ref = type_idx };
+    }
+
+    pub fn eql(a: WasmType, b: WasmType) bool {
+        if (a.gc_ref) |ar| {
+            if (b.gc_ref) |br| return ar == br;
+            return false;
+        }
+        if (b.gc_ref != null) return false;
+        return a.val == b.val;
+    }
+};
+
 // ============================================================================
 // Registers (Go reference: a.out.go lines 263-341)
 // ============================================================================
@@ -399,6 +425,11 @@ pub const As = enum(u16) {
     mov_w, // Move word
     mov_d, // Move doubleword
 
+    // WasmGC struct operations (GC proposal, 0xFB prefix)
+    gc_struct_new, // 0xFB 0x00 - struct.new $typeidx
+    gc_struct_get, // 0xFB 0x02 - struct.get $typeidx $fieldidx
+    gc_struct_set, // 0xFB 0x05 - struct.set $typeidx $fieldidx
+
     // Misc
     word, // Raw data
     text, // Function start
@@ -617,6 +648,24 @@ pub const As = enum(u16) {
         };
     }
 
+    /// Returns true if this is a GC-prefixed instruction (0xFB prefix)
+    pub fn isGcPrefixed(self: As) bool {
+        return switch (self) {
+            .gc_struct_new, .gc_struct_get, .gc_struct_set => true,
+            else => false,
+        };
+    }
+
+    /// Get the GC-prefixed opcode byte
+    pub fn gcOpcode(self: As) ?u8 {
+        return switch (self) {
+            .gc_struct_new => GC_STRUCT_NEW,
+            .gc_struct_get => GC_STRUCT_GET,
+            .gc_struct_set => GC_STRUCT_SET,
+            else => null,
+        };
+    }
+
     /// Get the FC-prefixed opcode byte
     pub fn fcOpcode(self: As) ?u8 {
         return switch (self) {
@@ -714,6 +763,42 @@ pub const WASM_PAGE_SIZE: u32 = 65536;
 
 /// Default stack size (64KB = 1 Wasm page)
 pub const STACK_SIZE: u32 = WASM_PAGE_SIZE;
+
+// ============================================================================
+// WasmGC opcodes (GC proposal, standardized in Wasm 3.0)
+// ============================================================================
+
+/// GC prefix byte (0xFB) - all struct/array ops are prefixed with this
+pub const GC_PREFIX: u8 = 0xFB;
+
+/// Struct operations (GC-prefixed)
+pub const GC_STRUCT_NEW: u8 = 0x00; // struct.new $typeidx
+pub const GC_STRUCT_NEW_DEFAULT: u8 = 0x01; // struct.new_default $typeidx
+pub const GC_STRUCT_GET: u8 = 0x02; // struct.get $typeidx $fieldidx
+pub const GC_STRUCT_GET_S: u8 = 0x03; // struct.get_s (signed)
+pub const GC_STRUCT_GET_U: u8 = 0x04; // struct.get_u (unsigned)
+pub const GC_STRUCT_SET: u8 = 0x05; // struct.set $typeidx $fieldidx
+
+/// Array operations (GC-prefixed)
+pub const GC_ARRAY_NEW: u8 = 0x06;
+pub const GC_ARRAY_NEW_DEFAULT: u8 = 0x07;
+pub const GC_ARRAY_GET: u8 = 0x0B;
+pub const GC_ARRAY_SET: u8 = 0x0C;
+pub const GC_ARRAY_LEN: u8 = 0x0F;
+
+/// Reference type opcodes (NOT GC-prefixed, standalone)
+pub const REF_NULL: u8 = 0xD0; // ref.null $heaptype
+pub const REF_IS_NULL: u8 = 0xD1; // ref.is_null
+
+/// Type constructors for type section
+pub const GC_STRUCT_TYPE: u8 = 0x5F; // struct type tag
+pub const GC_ARRAY_TYPE: u8 = 0x5E; // array type tag
+pub const GC_FIELD_MUT: u8 = 0x01; // mutable field
+pub const GC_FIELD_IMMUT: u8 = 0x00; // immutable field
+pub const GC_REF_TYPE: u8 = 0x63; // (ref $ht) non-nullable
+pub const GC_REF_TYPE_NULL: u8 = 0x64; // (ref null $ht) nullable
+pub const GC_REC_TYPE: u8 = 0x4E; // rec group wrapper
+pub const GC_SUB_TYPE_FINAL: u8 = 0x4E; // sub final (no inheritance)
 
 // ============================================================================
 // Tests

@@ -113,19 +113,32 @@ pub fn assemble(allocator: std.mem.Allocator, sym: *Symbol) !AssembledFunc {
     const param_count: u64 = sym.param_count;
     const float_count: u64 = sym.float_local_count;
 
+    // GC ref locals: declared after i64 and f64 locals
+    const gc_ref_locals = sym.gc_ref_locals;
+    const gc_ref_count: u64 = gc_ref_locals.len;
+
     // Calculate number of declared value locals (after PC_B)
     // max_local_idx includes params, so subtract param_count and 1 for PC_B
+    // Also subtract GC ref locals — they occupy the highest local indices but
+    // are declared separately as ref types, not as i64.
     const total_value_locals: u64 = if (max_local_idx > param_count + 1)
         max_local_idx - param_count - 1
     else
         0;
-    const i64_value_locals: u64 = if (total_value_locals >= float_count) total_value_locals - float_count else total_value_locals;
+    const i64_value_locals: u64 = if (total_value_locals >= float_count + gc_ref_count)
+        total_value_locals - float_count - gc_ref_count
+    else if (total_value_locals >= float_count)
+        total_value_locals - float_count
+    else
+        total_value_locals;
 
     // Count how many local groups we need
     var num_groups: u64 = 0;
     if (has_dispatch_loop) num_groups += 1; // PC_B (i32)
     if (i64_value_locals > 0) num_groups += 1; // i64 locals
     if (float_count > 0) num_groups += 1; // f64 locals
+    // GC ref locals: each ref local is its own group (different type index)
+    num_groups += gc_ref_count;
 
     if (num_groups == 0 and !has_dispatch_loop and max_local_idx <= param_count) {
         try writeULEB128(allocator, &w, 0); // 0 local groups
@@ -143,9 +156,34 @@ pub fn assemble(allocator: std.mem.Allocator, sym: *Symbol) !AssembledFunc {
             try writeULEB128(allocator, &w, float_count);
             try w.append(allocator, @intFromEnum(c.ValType.f64));
         }
+        // GC ref locals: each declared as (ref null $typeidx)
+        for (gc_ref_locals) |gc_type_idx| {
+            try writeULEB128(allocator, &w, 1); // 1 local of this ref type
+            try w.append(allocator, c.GC_REF_TYPE_NULL); // 0x64 = (ref null ...)
+            try writeULEB128(allocator, &w, gc_type_idx); // type index
+        }
     }
 
     debugLog( "  {d} total locals, {d} params, {d} i64, {d} f64", .{ max_local_idx, param_count, i64_value_locals, float_count });
+
+    // WasmGC: explicitly initialize ref locals at function entry.
+    // Reference: Kotlin/Dart WasmGC — the br_table dispatch loop means ref locals
+    // may be read in blocks before the linear code flow sets them. The GC spec
+    // requires ref locals to be provably initialized before use. This must be
+    // emitted BEFORE the dispatch loop (which wraps the Prog chain), not inside it.
+    // Note: struct.new_default (0xFB 0x01) produces (ref $T) — non-nullable.
+    // ref.null (0xD0) produces (ref null $T) which wasmtime rejects for local.set.
+    if (gc_ref_locals.len > 0) {
+        const ref_local_start: u64 = if (has_dispatch_loop) param_count + 1 + i64_value_locals + float_count else param_count + i64_value_locals + float_count;
+        for (gc_ref_locals, 0..) |gc_type_idx, i| {
+            const ref_local_idx = ref_local_start + i;
+            try w.append(allocator, c.GC_PREFIX); // 0xFB
+            try w.append(allocator, c.GC_STRUCT_NEW_DEFAULT); // 0x01
+            try writeULEB128(allocator, &w, gc_type_idx);
+            try w.append(allocator, 0x21); // local.set
+            try writeULEB128(allocator, &w, ref_local_idx);
+        }
+    }
 
     // ========================================================================
     // Encode instructions
@@ -423,6 +461,33 @@ fn encodeInstruction(
             if (p.to.type == .const_int) {
                 try writeULEB128(allocator, w, @as(u64, @intCast(p.to.offset)));
             }
+        },
+
+        // ====================================================================
+        // WasmGC struct operations (0xFB prefix)
+        // ====================================================================
+
+        .gc_struct_new => {
+            // 0xFB 0x00 <type_idx>
+            try w.append(allocator, c.GC_PREFIX);
+            try w.append(allocator, c.GC_STRUCT_NEW);
+            try writeULEB128(allocator, w, @as(u64, @intCast(p.from.offset)));
+        },
+
+        .gc_struct_get => {
+            // 0xFB 0x02 <type_idx> <field_idx>
+            try w.append(allocator, c.GC_PREFIX);
+            try w.append(allocator, c.GC_STRUCT_GET);
+            try writeULEB128(allocator, w, @as(u64, @intCast(p.from.offset)));
+            try writeULEB128(allocator, w, @as(u64, @intCast(p.to.offset)));
+        },
+
+        .gc_struct_set => {
+            // 0xFB 0x05 <type_idx> <field_idx>
+            try w.append(allocator, c.GC_PREFIX);
+            try w.append(allocator, c.GC_STRUCT_SET);
+            try writeULEB128(allocator, w, @as(u64, @intCast(p.from.offset)));
+            try writeULEB128(allocator, w, @as(u64, @intCast(p.to.offset)));
         },
 
         // ====================================================================
