@@ -124,12 +124,21 @@ Two categories:
 
 ## Testing
 
-**Two tiers:**
+**Workflow: `zig build test` once, then `cot test` for everything else.**
+
+`zig build test` validates the Zig compiler internals. Run it once after changes to confirm the compiler builds correctly. After that, **use `cot test` as the primary verification tool** — it exercises the full pipeline (parse → check → SSA → Wasm → execute) and catches real-world regressions that unit tests miss.
+
 ```bash
-zig build test              # Zig compiler tests only (~163 tests, fast)
-./test/run_all.sh           # All Cot language tests (~785 tests across 35 files)
-cot test file.cot           # Run a single Cot test file
+zig build test                                    # Compiler internals (~163 tests, run once)
+cot test test/e2e/features.cot                    # Primary: 127 feature tests, native
+cot test test/e2e/features.cot --target=wasm32    # Primary: same tests, wasm via wasmtime
+cot test test/cases/<category>.cot                # Targeted: specific category
+./test/run_all.sh                                 # Full suite (~785 tests across 35 files)
 ```
+
+**`cot test --target=wasm32`** runs Wasm binaries via `wasmtime` (must be installed). Use this to verify Wasm codegen — bugs often manifest on one target but not the other.
+
+**Troubleshooting tip:** When a feature works on native but fails on wasm (or vice versa), test both targets to isolate whether the bug is in the shared frontend or in a target-specific backend.
 
 **Adding Cot tests:** Add `test "name" { }` blocks to `.cot` files. Run `cot test <file>`.
 **Adding compiler tests:** Add `test "..." { }` blocks in Zig source with inline Cot snippets.
@@ -173,7 +182,8 @@ try list.append(allocator, 42);
 ## Behavioral Guidelines
 
 **DO:**
-- Run `zig build test` after every change
+- Run `zig build test` once after compiler changes, then use `cot test` for ongoing verification
+- Use `cot test test/e2e/features.cot` (native) and `cot test test/e2e/features.cot --target=wasm32` (wasm) as the primary check — these catch real regressions faster than unit tests
 - After changing `compiler/lsp/`: run `zig build` to update the LSP binary
 - After changing `editors/vscode/`: rebuild + reinstall extension (see Editor Extensions & LSP section)
 - After changing either: do BOTH — `zig build` AND reinstall extension
