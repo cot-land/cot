@@ -210,6 +210,10 @@ Zig is 10+ years of development and still on 0.15. Each version represents a mea
 - ~~`std/os`~~ — **Done** — argsCount, argLen, argPtr, environCount, environLen, environPtr, exit
 - ~~`std/time`~~ — **Done** — nanoTimestamp, milliTimestamp, timestamp, Timer struct
 - ~~`std/random`~~ — **Done** — fillBytes, randomInt, randomRange (via getentropy)
+- ~~Comptime target builtins~~ — **Done** — `@target_os()`, `@target_arch()`, `@target()` + const-fold if-expressions
+- ~~Platform-conditional stdlib~~ — **Done** — `stdlib/fs.cot` uses `if @target_os() == "linux" { ... } else { ... }` for flags
+- `--target=wasm32-wasi` WASI imports — `wasi_runtime.zig` always emits stubs; needs conditional real WASI imports when `target.os == .wasi`
+- High-level stdlib APIs — `args() List(string)`, `getenv(key: string)`, `readFile(path)`, `writeFile(path, data)` on top of existing low-level builtins
 - StringBuilder — efficient append-based string building
 - String methods — split, trim, indexOf, contains, startsWith, endsWith, replace
 - `for key, value in map` — iterator protocol
@@ -220,7 +224,7 @@ Zig is 10+ years of development and still on 0.15. Each version represents a mea
 - `std/math` — math functions
 - `std/json` — JSON parse/serialize
 - `std/dom` — browser DOM API
-- WASI-modeled I/O abstraction layer
+- Comptime Tier 2+ — `comptime { }` blocks, comptime function evaluation, `@compileError`, branch quota (see Zig's Sema.zig for reference)
 
 **I/O implementation:** I/O functions are defined using the WASI interface design. The compiler emits:
 - Native: libc calls (`read()`, `write()`, `socket()`) linked at compile time
