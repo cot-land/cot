@@ -844,6 +844,32 @@ pub const GenState = struct {
                 p.to = prog_mod.constAddr(v.aux_int);
             },
 
+            // Wasm 3.0 tail call — return_call (opcode 0x12)
+            // Same as wasm_call/wasm_lowered_static_call but emits return_call
+            // The call implicitly returns, so no separate return is needed.
+            .wasm_return_call => {
+                // Push arguments onto stack
+                for (v.args) |arg| {
+                    try self.getValue64(arg);
+                }
+                // Get function index from name (same as wasm_lowered_static_call)
+                const rc_fn_name: ?[]const u8 = switch (v.aux) {
+                    .string => |s| s,
+                    else => null,
+                };
+                const rc_func_idx: i64 = if (rc_fn_name) |name_str| blk: {
+                    if (self.func_indices) |indices| {
+                        if (indices.get(name_str)) |idx| {
+                            break :blk @intCast(idx);
+                        }
+                    }
+                    break :blk v.aux_int;
+                } else v.aux_int;
+
+                const rc_p = try self.builder.append(.return_call);
+                rc_p.to = prog_mod.constAddr(rc_func_idx);
+            },
+
             .wasm_lowered_static_call => {
                 // Push arguments onto stack
                 for (v.args) |arg| {
@@ -1105,6 +1131,10 @@ pub const GenState = struct {
         // Generate value and store to local
         try self.ssaGenValueOnStack(v);
 
+        // wasm_return_call is a terminator (opcode 0x12) — it doesn't leave
+        // a value on the Wasm stack. Skip setReg to avoid popping from empty stack.
+        if (v.op == .wasm_return_call) return;
+
         // Compound return handling: calls returning string/slice push 2 values (ptr, len).
         // Store len to a separate local, then ptr to the value's main local.
         const is_call = v.op == .wasm_call or v.op == .wasm_lowered_static_call;
@@ -1152,7 +1182,8 @@ pub const GenState = struct {
                 if (isCmp(v)) continue;
                 // Go: SliceMake/StringMake are conceptual — no Wasm local needed
                 // wasm_lowered_move is inline bulk copy — no value produced
-                if (v.op == .slice_make or v.op == .string_make or v.op == .wasm_lowered_move) continue;
+                // wasm_return_call is a terminator (opcode 0x12) — no value on stack
+                if (v.op == .slice_make or v.op == .string_make or v.op == .wasm_lowered_move or v.op == .wasm_return_call) continue;
                 if (isFloatType(v.type_idx)) continue; // Skip floats for pass 2
 
                 const local_idx = self.next_local;

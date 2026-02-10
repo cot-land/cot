@@ -1421,6 +1421,14 @@ pub const FuncTranslator = struct {
         _ = num_returns;
     }
 
+    /// Translate a Wasm 3.0 return_call (tail call).
+    /// For native, we translate as call + return (correct semantics).
+    /// Native tail call optimization (stack frame reuse) can be added later.
+    pub fn translateReturnCall(self: *Self, function_index: u32) !void {
+        try self.translateCall(function_index);
+        try self.translateReturn();
+    }
+
     /// Translate an indirect function call (AOT version).
     ///
     /// For AOT compilation, we know the table contents at compile time from the
@@ -1903,8 +1911,12 @@ pub const FuncTranslator = struct {
     ///
     /// Since our codegen always emits memory.copy with a constant size (from
     /// wasm_lowered_move), we expand to inline load/store pairs (8 bytes at a
-    /// time), which is equivalent to what the old word-by-word loop did but
-    /// expressed as CLIF IR.
+    /// time). Each load/store goes through prepareAddr → boundsCheckAndComputeAddr
+    /// (same path as translateLoad/translateStore) for correct heap base resolution.
+    ///
+    /// Reference: Cranelift calls a runtime builtin for memory.copy
+    /// (func_environ.rs:3527). We inline it since our sizes are always constant,
+    /// but use the same address resolution path as regular loads/stores.
     pub fn translateMemoryCopy(self: *Self) !void {
         const len_val = self.state.pop1(); // size (i32)
         const src_val = self.state.pop1(); // src addr (i32)
@@ -1922,22 +1934,29 @@ pub const FuncTranslator = struct {
                     else => {},
                 }
             }
-            // Non-constant size: shouldn't happen in our codegen, but emit
-            // a single 8-byte copy as fallback
             break :blk 8;
         };
 
-        // Extend i32 addresses to i64 for CLIF load/store
-        const src_i64 = try self.builder.ins().uextend(Type.I64, src_val);
-        const dest_i64 = try self.builder.ins().uextend(Type.I64, dest_val);
-
-        // Emit inline load/store pairs (8 bytes at a time)
+        // Decompose into per-word load/store pairs using prepareAddr
+        // (same path as translateLoad/translateStore). Each call to prepareAddr
+        // pops an address from the state stack and resolves it through
+        // boundsCheckAndComputeAddr (heap base + bounds check).
         const num_words: u32 = @intCast(@divTrunc(size + 7, 8));
         var i: u32 = 0;
         while (i < num_words) : (i += 1) {
-            const offset: i32 = @intCast(i * 8);
-            const loaded = try self.builder.ins().load(Type.I64, clif.MemFlags.DEFAULT, src_i64, offset);
-            _ = try self.builder.ins().store(clif.MemFlags.DEFAULT, loaded, dest_i64, offset);
+            const offset: u64 = @intCast(@as(u32, i * 8));
+
+            // Load from src: push src addr, prepareAddr resolves heap base
+            try self.state.push1(src_val);
+            const src_memarg = MemArg{ .align_ = 3, .offset = offset, .memory = 0 };
+            const src_prepared = try self.prepareAddr(src_memarg, 8);
+            const loaded = try self.builder.ins().load(Type.I64, src_prepared.flags, src_prepared.addr, 0);
+
+            // Store to dest: push dest addr, prepareAddr resolves heap base
+            try self.state.push1(dest_val);
+            const dest_memarg = MemArg{ .align_ = 3, .offset = offset, .memory = 0 };
+            const dest_prepared = try self.prepareAddr(dest_memarg, 8);
+            _ = try self.builder.ins().store(dest_prepared.flags, loaded, dest_prepared.addr, 0);
         }
     }
 };

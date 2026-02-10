@@ -346,6 +346,7 @@ pub const WasmFuncTranslator = struct {
             // Port of code_translator.rs:654-717
             .call => |idx| try translator.translateCall(idx),
             .call_indirect => |data| try translator.translateCallIndirect(data.type_index, data.table_index),
+            .return_call => |idx| try translator.translateReturnCall(idx),
 
             // Float constants
             .f32_const => |val| try translator.translateF32Const(val),
@@ -633,6 +634,7 @@ pub const WasmOperator = union(enum) {
         type_index: u32,
         table_index: u32,
     },
+    return_call: u32, // Wasm 3.0 tail call (opcode 0x12)
 };
 
 // ============================================================================

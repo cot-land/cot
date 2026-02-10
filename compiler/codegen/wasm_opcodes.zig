@@ -66,6 +66,7 @@ pub const Op = struct {
     pub const return_op: u8 = 0x0F;
     pub const call: u8 = 0x10;
     pub const call_indirect: u8 = 0x11;
+    pub const return_call: u8 = 0x12;
 
     // Parametric instructions
     pub const drop: u8 = 0x1A;

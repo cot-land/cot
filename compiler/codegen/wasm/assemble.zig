@@ -280,9 +280,10 @@ fn encodeInstruction(
         // Call instructions
         // ====================================================================
 
-        .call => {
+        .call, .return_call => {
             // Go: wasmobj.go lines 1257-1284
-            try writeOpcode(allocator, w, .call);
+            // return_call has same encoding as call (opcode + funcidx)
+            try writeOpcode(allocator, w, p.as);
             if (p.to.type == .const_int) {
                 try writeULEB128(allocator, w, @as(u64, @intCast(p.to.offset)));
             } else if (p.to.sym) |s| {

@@ -214,6 +214,31 @@ pub fn preprocess(allocator: std.mem.Allocator, sym: *Symbol) !void {
             },
 
             // ----------------------------------------------------------------
+            // return_call (Wasm 3.0 tail call, opcode 0x12)
+            // Same epilogue as aret (SP restoration) but NO explicit return.
+            // return_call handles the return implicitly after calling the target.
+            // Without this, the Wasm stack pointer leaks by framesize per call.
+            // ----------------------------------------------------------------
+            .return_call => {
+                if (framesize > 0) {
+                    // Save return_call operands, replace with NOP + epilogue + return_call
+                    const saved_to = current.to;
+                    const saved_link = current.link;
+                    current.as = .nop;
+                    current.to = .{};
+                    var emit = current;
+                    // SP += framesize (restore stack frame)
+                    emit = try appendAfter(allocator, emit, .get, prog.regAddr(.sp), .{});
+                    emit = try appendAfter(allocator, emit, .i32_const, prog.constAddr(framesize), .{});
+                    emit = try appendAfter(allocator, emit, .i32_add, .{}, .{});
+                    emit = try appendAfter(allocator, emit, .set, .{}, prog.regAddr(.sp));
+                    // Re-emit return_call with original operands
+                    emit = try appendAfter(allocator, emit, .return_call, .{}, saved_to);
+                    emit.link = saved_link;
+                }
+            },
+
+            // ----------------------------------------------------------------
             // Get with address mode
             // Go: wasmobj.go lines 565-585
             // ----------------------------------------------------------------

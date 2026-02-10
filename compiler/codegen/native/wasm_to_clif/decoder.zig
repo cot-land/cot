@@ -52,6 +52,7 @@ pub const WasmOp = union(enum) {
     // ========================================================================
     call: u32,
     call_indirect: CallIndirectData,
+    return_call: u32, // Wasm 3.0 tail call (opcode 0x12)
 
     // ========================================================================
     // Variables
@@ -375,6 +376,7 @@ pub const WasmOp = union(enum) {
 
             // Calls - Port of code_translator.rs:654-717
             .call => |idx| WasmOperator{ .call = idx },
+            .return_call => |idx| WasmOperator{ .return_call = idx },
             .call_indirect => |d| WasmOperator{ .call_indirect = .{ .type_index = d.type_index, .table_index = d.table_index } },
 
             // Float constants
@@ -583,6 +585,7 @@ pub const Decoder = struct {
             wasm.Op.br_table => try self.readBrTable(),
             wasm.Op.return_op => .return_op,
             wasm.Op.call => WasmOp{ .call = self.readU32() },
+            wasm.Op.return_call => WasmOp{ .return_call = self.readU32() },
             wasm.Op.call_indirect => WasmOp{ .call_indirect = .{
                 .type_index = self.readU32(),
                 .table_index = self.readU32(),

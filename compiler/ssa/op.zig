@@ -198,7 +198,7 @@ pub const Op = enum(u16) {
     wasm_global_get, wasm_global_set,
 
     // Control flow
-    wasm_call, wasm_call_indirect,
+    wasm_call, wasm_call_indirect, wasm_return_call,
     wasm_drop, wasm_select,
     wasm_unreachable, wasm_nop,
     wasm_return,
@@ -593,6 +593,7 @@ const op_info_table = blk: {
     // Control flow
     table[@intFromEnum(Op.wasm_call)] = .{ .name = "WasmCall", .generic = false, .arg_len = -1, .aux_type = .call, .call = true, .has_side_effects = true };
     table[@intFromEnum(Op.wasm_call_indirect)] = .{ .name = "WasmCallIndirect", .generic = false, .arg_len = -1, .aux_type = .call, .call = true, .has_side_effects = true };
+    table[@intFromEnum(Op.wasm_return_call)] = .{ .name = "WasmReturnCall", .generic = false, .arg_len = -1, .aux_type = .call, .call = true, .has_side_effects = true };
     table[@intFromEnum(Op.wasm_drop)] = .{ .name = "WasmDrop", .generic = false, .arg_len = 1, .has_side_effects = true };
     table[@intFromEnum(Op.wasm_select)] = .{ .name = "WasmSelect", .generic = false, .arg_len = 3 };
     table[@intFromEnum(Op.wasm_unreachable)] = .{ .name = "WasmUnreachable", .generic = false, .has_side_effects = true };

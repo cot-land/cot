@@ -41,6 +41,9 @@ pub fn lower(f: *Func) !void {
     }
 
     debug.log(.codegen, "  lowered {d}, unchanged {d}", .{ lowered, unchanged });
+
+    // Peephole: convert call+return patterns to return_call (Wasm 3.0 tail calls)
+    optimizeTailCalls(f);
 }
 
 /// Lower a single value's op from generic to Wasm-specific.
@@ -276,7 +279,7 @@ fn lowerValue(v: *Value) bool {
         .wasm_f64_load, .wasm_f64_store, .wasm_f32_load, .wasm_f32_store,
         .wasm_local_get, .wasm_local_set, .wasm_local_tee,
         .wasm_global_get, .wasm_global_set,
-        .wasm_call, .wasm_call_indirect, .wasm_drop, .wasm_select,
+        .wasm_call, .wasm_call_indirect, .wasm_return_call, .wasm_drop, .wasm_select,
         .wasm_unreachable, .wasm_nop, .wasm_return,
         .wasm_lowered_move, .wasm_lowered_zero, .wasm_lowered_nil_check,
         .wasm_lowered_static_call, .wasm_lowered_closure_call, .wasm_lowered_inter_call,
@@ -344,7 +347,7 @@ fn lowerValue(v: *Value) bool {
         => null, // High multiply and divmod need special handling
         .convert => null, // Generic convert needs type info
         .cvt32to32f, .cvt32fto32 => null, // 32-bit float conversions
-        .tail_call => null, // Wasm has no tail call (yet)
+        .tail_call => .wasm_return_call, // Wasm 3.0 tail call (opcode 0x12)
         .atomic_load32, .atomic_load64, .atomic_store32, .atomic_store64,
         .atomic_add32, .atomic_add64, .atomic_cas32, .atomic_cas64,
         .atomic_exchange32, .atomic_exchange64,
@@ -357,6 +360,38 @@ fn lowerValue(v: *Value) bool {
         return true;
     }
     return false;
+}
+
+/// Peephole optimization: convert call+return patterns to return_call.
+/// If a ret block's control value is a call with exactly 1 use (the return),
+/// and that call is the last value in the block, convert it to wasm_return_call
+/// and change the block to exit (no explicit return needed).
+///
+/// This is safe with defers/ARC: if cleanups are emitted between the call and
+/// the return, the return value becomes a local_get (not a call), so the pattern
+/// won't match. Only cleanup-free `return f(args)` patterns are converted.
+fn optimizeTailCalls(f: *Func) void {
+    var converted: usize = 0;
+    for (f.blocks.items) |block| {
+        if (block.kind != .ret) continue;
+        const ret_val = block.controls[0] orelse continue;
+        // Control value must be a call with exactly 1 use (the return)
+        if (ret_val.op != .wasm_lowered_static_call and ret_val.op != .wasm_call) continue;
+        if (ret_val.uses != 1) continue;
+        // Must be the last value in the block (nothing between call and return)
+        if (block.values.items.len == 0) continue;
+        if (block.values.items[block.values.items.len - 1] != ret_val) continue;
+        // Skip compound returns (string, etc.) — too complex
+        if (ret_val.type_idx == TypeRegistry.STRING) continue;
+        // Convert to tail call
+        ret_val.op = .wasm_return_call;
+        block.kind = .exit;
+        block.resetControls();
+        converted += 1;
+    }
+    if (converted > 0) {
+        debug.log(.codegen, "  tail-call optimized {d} blocks", .{converted});
+    }
 }
 
 fn isFloatType(type_idx: TypeIndex) bool {

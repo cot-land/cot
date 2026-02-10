@@ -166,6 +166,7 @@ pub const As = enum(u16) {
     @"return", // 0x0F
     call, // 0x10
     call_indirect, // 0x11
+    return_call, // 0x12 (Wasm 3.0 tail call)
 
     // Parametric (Go: lines 47-48, opcodes 0x1A-0x1B)
     drop, // 0x1A
@@ -421,6 +422,7 @@ pub const As = enum(u16) {
             .@"return" => 0x0F,
             .call => 0x10,
             .call_indirect => 0x11,
+            .return_call => 0x12,
             .drop => 0x1A,
             .select => 0x1B,
             .local_get => 0x20,
