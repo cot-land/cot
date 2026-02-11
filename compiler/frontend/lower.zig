@@ -1185,7 +1185,30 @@ pub const Lowerer = struct {
                         _ = try fb.emitStoreLocal(local_idx, retained, assign.span);
                         self.cleanup_stack.updateValueForLocal(local_idx, retained);
                     } else {
-                        _ = try fb.emitStoreLocal(local_idx, value_node, assign.span);
+                        const local_type = fb.locals.items[local_idx].type_idx;
+                        if (local_type == TypeRegistry.STRING) {
+                            // Compound reassignment: decompose into ptr + len
+                            // Must match lowerStringInit pattern (line ~1130)
+                            const ptr_type = self.type_reg.makePointer(TypeRegistry.U8) catch TypeRegistry.VOID;
+                            const ptr_val = try fb.emitSlicePtr(value_node, ptr_type, assign.span);
+                            const len_val = try fb.emitSliceLen(value_node, assign.span);
+                            _ = try fb.emitStoreLocalField(local_idx, 0, 0, ptr_val, assign.span);
+                            _ = try fb.emitStoreLocalField(local_idx, 1, 8, len_val, assign.span);
+                        } else if (self.type_reg.isSlice(local_type)) {
+                            // Slice compound reassignment: ptr + len + cap
+                            // Must match lowerSliceInit pattern (line ~1141)
+                            const slice_info = self.type_reg.get(local_type);
+                            const elem_type = if (slice_info == .slice) slice_info.slice.elem else TypeRegistry.U8;
+                            const ptr_type = self.type_reg.makePointer(elem_type) catch TypeRegistry.VOID;
+                            const ptr_val = try fb.emitSlicePtr(value_node, ptr_type, assign.span);
+                            const len_val = try fb.emitSliceLen(value_node, assign.span);
+                            const cap_val = try fb.emitSliceCap(value_node, assign.span);
+                            _ = try fb.emitStoreLocalField(local_idx, 0, 0, ptr_val, assign.span);
+                            _ = try fb.emitStoreLocalField(local_idx, 1, 8, len_val, assign.span);
+                            _ = try fb.emitStoreLocalField(local_idx, 2, 16, cap_val, assign.span);
+                        } else {
+                            _ = try fb.emitStoreLocal(local_idx, value_node, assign.span);
+                        }
                     }
                 } else if (self.builder.lookupGlobal(id.name)) |g| {
                     _ = try fb.emitGlobalStore(g.idx, id.name, value_node, assign.span);

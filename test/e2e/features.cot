@@ -1752,3 +1752,34 @@ test "auto-deref returned pointer" {
     var f = createFoo(33)
     @assert_eq(f.x, 33)
 }
+
+// --- String compound reassignment ---
+
+fn getGreeting() string {
+    return "hello world"
+}
+
+test "string reassignment from function call" {
+    var s = ""
+    s = getGreeting()
+    @assert_eq(@lenOf(s), 11)
+    @assert_eq(s, "hello world")
+}
+
+test "string reassignment preserves length" {
+    var s = "short"
+    @assert_eq(@lenOf(s), 5)
+    s = "a longer string"
+    @assert_eq(@lenOf(s), 15)
+    @assert_eq(s, "a longer string")
+}
+
+test "string conditional reassignment" {
+    var s = ""
+    var flag: i64 = 1
+    if flag == 1 {
+        s = "yes"
+    }
+    @assert_eq(s, "yes")
+    @assert_eq(@lenOf(s), 3)
+}

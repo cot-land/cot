@@ -1,0 +1,427 @@
+// cot-mcp — MCP (Model Context Protocol) server for Cot language tools.
+//
+// Provides Claude with Cot syntax reference, stdlib docs, and known issues.
+// Protocol: JSON-RPC 2.0 over stdio, newline-delimited.
+//
+// Architecture: All tool content is appended directly to the response
+// StringBuilder to avoid freelist memory corruption from intermediate
+// allocations.
+
+import "std/json"
+import "std/string"
+import "std/io"
+
+// ============================================================================
+// Heap string helpers
+// ============================================================================
+
+fn heapSB(sb: *StringBuilder) i64 {
+    var p = @alloc(16)
+    @intToPtr(*i64, p).* = sb.buf
+    @intToPtr(*i64, p + 8).* = sb.len
+    return p
+}
+
+// ============================================================================
+// JSON response builder
+// ============================================================================
+
+fn buildErrorResponse(id_val: i64, code: i64, message: string) i64 {
+    var sb = StringBuilder { .buf = 0, .len = 0, .cap = 0 }
+    sb.append("{\"jsonrpc\":\"2.0\",\"id\":")
+    sb.appendInt(id_val)
+    sb.append(",\"error\":{\"code\":")
+    sb.appendInt(code)
+    sb.append(",\"message\":\"")
+    sb.append(message)
+    sb.append("\"}}")
+    return heapSB(&sb)
+}
+
+// Start a tools/call result response — caller appends escaped text then calls finishToolResponse
+fn startToolResponse(sb: *StringBuilder, id_val: i64) void {
+    sb.append("{\"jsonrpc\":\"2.0\",\"id\":")
+    sb.appendInt(id_val)
+    sb.append(",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"")
+}
+
+fn finishToolResponse(sb: *StringBuilder) i64 {
+    sb.append("\"}]}}")
+    return heapSB(sb)
+}
+
+// ============================================================================
+// MCP handlers
+// ============================================================================
+
+fn handleInitialize(id_val: i64) i64 {
+    var sb = StringBuilder { .buf = 0, .len = 0, .cap = 0 }
+    sb.append("{\"jsonrpc\":\"2.0\",\"id\":")
+    sb.appendInt(id_val)
+    sb.append(",\"result\":{\"protocolVersion\":\"2024-11-05\"")
+    sb.append(",\"capabilities\":{\"tools\":{}}")
+    sb.append(",\"serverInfo\":{\"name\":\"cot-tools\",\"version\":\"0.3.1\"}}}")
+    return heapSB(&sb)
+}
+
+fn handleToolsList(id_val: i64) i64 {
+    var sb = StringBuilder { .buf = 0, .len = 0, .cap = 0 }
+    sb.append("{\"jsonrpc\":\"2.0\",\"id\":")
+    sb.appendInt(id_val)
+    sb.append(",\"result\":{\"tools\":[")
+
+    sb.append("{\"name\":\"get_syntax_reference\"")
+    sb.append(",\"description\":\"Get Cot language syntax cheat sheet\"")
+    sb.append(",\"inputSchema\":{\"type\":\"object\"}}")
+
+    sb.appendByte(44)
+    sb.append("{\"name\":\"get_stdlib_docs\"")
+    sb.append(",\"description\":\"Get Cot stdlib function signatures\"")
+    sb.append(",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"module\":{\"type\":\"string\"")
+    sb.append(",\"description\":\"Module: json string fs io list map os time random sort set math\"}}}}")
+
+    sb.appendByte(44)
+    sb.append("{\"name\":\"get_known_issues\"")
+    sb.append(",\"description\":\"Get known Cot compiler bugs and workarounds\"")
+    sb.append(",\"inputSchema\":{\"type\":\"object\"}}")
+
+    sb.append("]}}")
+    return heapSB(&sb)
+}
+
+fn handleToolsCall(req: i64, id_val: i64) i64 {
+    var params = jsonObjectGet(req, "params")
+    if params == 0 { return buildErrorResponse(id_val, 0 - 32602, "Missing params") }
+    var name = jsonObjectGetString(params, "name")
+    if @lenOf(name) == 0 { return buildErrorResponse(id_val, 0 - 32602, "Missing tool name") }
+
+    // Build entire response inline — no cross-function SB passing
+    var sb = StringBuilder { .buf = 0, .len = 0, .cap = 0 }
+    sb.append("{\"jsonrpc\":\"2.0\",\"id\":")
+    sb.appendInt(id_val)
+    sb.append(",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"")
+
+    if name == "get_syntax_reference" {
+        appendSyntaxReference(&sb)
+    } else if name == "get_stdlib_docs" {
+        var args = jsonObjectGet(params, "arguments")
+        var module = ""
+        if args != 0 {
+            module = jsonObjectGetString(args, "module")
+        }
+        appendStdlibDocs(&sb, module)
+    } else if name == "get_known_issues" {
+        appendKnownIssues(&sb)
+    } else {
+        return buildErrorResponse(id_val, 0 - 32602, "Unknown tool")
+    }
+
+    sb.append("\"}]}}")
+    return heapSB(&sb)
+}
+
+// ============================================================================
+// Request routing
+// ============================================================================
+
+fn getIdVal(req: i64) i64 {
+    var id = jsonObjectGet(req, "id")
+    if id == 0 { return 0 }
+    return jsonGetInt(id)
+}
+
+fn handleRequest(req: i64, writer: i64) void {
+    var method = jsonObjectGetString(req, "method")
+    var id_val = getIdVal(req)
+
+    var resp_hp: i64 = 0
+    if method == "initialize" {
+        resp_hp = handleInitialize(id_val)
+    } else if method == "tools/list" {
+        resp_hp = handleToolsList(id_val)
+    } else if method == "tools/call" {
+        resp_hp = handleToolsCall(req, id_val)
+    } else if method == "notifications/initialized" {
+        return
+    } else {
+        if id_val != 0 {
+            resp_hp = buildErrorResponse(id_val, 0 - 32601, "Method not found")
+        }
+    }
+
+    if resp_hp != 0 {
+        var ptr = @intToPtr(*i64, resp_hp).*
+        var len = @intToPtr(*i64, resp_hp + 8).*
+        writerWriteAll(writer, ptr, len)
+        writeByte(writer, 10)
+        writerFlush(writer)
+    }
+}
+
+// ============================================================================
+// Main loop
+// ============================================================================
+
+fn main() i64 {
+    var reader = newBufferedReader(0)
+    var writer = newBufferedWriter(1)
+
+    var running: i64 = 1
+    while running == 1 {
+        var line = readLine(reader)
+        if @lenOf(line) == 0 {
+            running = 0
+        } else {
+            var request = parse(line)
+            handleRequest(request, writer)
+        }
+    }
+    return 0
+}
+
+// ============================================================================
+// Tool: get_syntax_reference
+// All text is pre-escaped for JSON string context:
+//   \\n = newline, \\t = tab, \\" = quote
+// ============================================================================
+
+fn appendSyntaxReference(sb: *StringBuilder) void {
+    sb.append("# Cot Language Syntax Reference\\n\\n")
+
+    sb.append("## Variables & Constants\\n")
+    sb.append("const x: i64 = 10    // immutable, typed\\n")
+    sb.append("const y = 20         // immutable, inferred\\n")
+    sb.append("var z = 30           // mutable, inferred\\n")
+    sb.append("No semicolons.\\n\\n")
+
+    sb.append("## Types\\n")
+    sb.append("Primitives: i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 bool void\\n")
+    sb.append("Aliases: int=i64, float=f64, byte=u8, string=[]u8\\n")
+    sb.append("Composite: *T (pointer), ?T (optional), E!T (error union)\\n\\n")
+
+    sb.append("## Functions\\n")
+    sb.append("fn add(a: i64, b: i64) i64 { return a + b }\\n")
+    sb.append("fn noop() void { }\\n")
+    sb.append("fn apply(f: fn(i64) -> i64, x: i64) i64 { return f(x) }\\n\\n")
+
+    sb.append("## Generics (separate parens, NOT angle brackets)\\n")
+    sb.append("fn max(T)(a: T, b: T) T { if a > b { return a } return b }\\n")
+    sb.append("struct Box(T) { value: T }\\n")
+    sb.append("var b = Box(i64) { .value = 42 }\\n\\n")
+
+    sb.append("## Structs\\n")
+    sb.append("struct Point { x: i64, y: i64 }\\n")
+    sb.append("// Stack init (PERIOD prefix, EQUALS sign):\\n")
+    sb.append("var p = Point { .x = 10, .y = 20 }\\n")
+    sb.append("// Heap init (NO period, COLON separator):\\n")
+    sb.append("var h = new Point { x: 10, y: 20 }\\n\\n")
+
+    sb.append("## Methods (explicit self, like Zig)\\n")
+    sb.append("impl Point {\\n")
+    sb.append("    fn sum(self: Point) i64 { return self.x + self.y }\\n")
+    sb.append("}\\n\\n")
+
+    sb.append("## Control Flow\\n")
+    sb.append("if condition { } else if other { } else { }\\n")
+    sb.append("while condition { }\\n")
+    sb.append("for item in collection { }\\n")
+    sb.append("break / continue\\n")
+    sb.append("Logical: and, or, not (NOT &&, ||, !)\\n\\n")
+
+    sb.append("## Error Handling (Zig-style)\\n")
+    sb.append("const MyError = error { NotFound, IoError }\\n")
+    sb.append("fn read() MyError!i64 { return error.IoError }\\n")
+    sb.append("var val = read() catch 0    // catch with default\\n")
+    sb.append("var val = try read()        // propagate error\\n\\n")
+
+    sb.append("## Imports\\n")
+    sb.append("import \\\"std/json\\\"          // stdlib module\\n")
+    sb.append("import \\\"std/string\\\"        // stdlib module\\n")
+    sb.append("import \\\"./myfile\\\"          // relative file\\n\\n")
+
+    sb.append("## Builtins\\n")
+    sb.append("@alloc(size)  @dealloc(ptr)  @realloc(ptr, size)\\n")
+    sb.append("@memcpy(dst, src, len)  @sizeOf(T)  @intCast(T, val)\\n")
+    sb.append("@intToPtr(*T, addr)  @string(ptr, len)\\n")
+    sb.append("@ptrOf(s)  @lenOf(s)  @assert(cond)  @assert_eq(a, b)\\n")
+    sb.append("@print(val)  @trap()  @target_os()\\n")
+    sb.append("@fd_read(fd, buf, len)  @fd_write(fd, buf, len)\\n")
+    sb.append("@fd_open(ptr, len, flags)  @fd_close(fd)  @fd_seek(fd, off, whence)\\n\\n")
+
+    sb.append("## Tests\\n")
+    sb.append("test \\\"my test\\\" { @assert_eq(1 + 1, 2) }\\n")
+    sb.append("Run: cot test file.cot\\n")
+}
+
+// ============================================================================
+// Tool: get_stdlib_docs
+// ============================================================================
+
+fn appendStdlibDocs(sb: *StringBuilder, module: string) void {
+    if @lenOf(module) == 0 {
+        sb.append("# Cot Stdlib Modules\\n\\n")
+        sb.append("Available: json, string, fs, io, list, map, os, time, random, sort, set, math\\n")
+        sb.append("Use get_stdlib_docs with module param for details.\\n")
+        return
+    }
+
+    if module == "json" {
+        sb.append("# std/json\\n\\n")
+        sb.append("JSON parser + encoder. Values are heap-allocated i64 pointers.\\n\\n")
+        sb.append("## Constructors (return i64)\\n")
+        sb.append("jsonNull()  jsonBool(val: bool)  jsonInt(val: i64)  jsonString(val: string)\\n")
+        sb.append("jsonArray()  jsonObject()\\n\\n")
+        sb.append("## Accessors\\n")
+        sb.append("jsonTag(val: i64) i64       // 0=null 1=bool 2=int 3=string 4=array 5=object\\n")
+        sb.append("jsonIsNull(val: i64) bool\\n")
+        sb.append("jsonGetBool(val: i64) bool  jsonGetInt(val: i64) i64  jsonGetString(val: i64) string\\n\\n")
+        sb.append("## Array ops\\n")
+        sb.append("jsonArrayLen(val: i64) i64  jsonArrayGet(val: i64, index: i64) i64\\n")
+        sb.append("jsonArrayPush(arr: i64, val: i64) void\\n\\n")
+        sb.append("## Object ops\\n")
+        sb.append("jsonObjectLen(val: i64) i64  jsonObjectPut(obj: i64, key: string, val: i64) void\\n")
+        sb.append("jsonObjectGet(obj: i64, key: string) i64\\n")
+        sb.append("jsonObjectGetString(obj: i64, key: string) string\\n")
+        sb.append("jsonObjectGetInt(obj: i64, key: string) i64\\n\\n")
+        sb.append("## Parse/Encode\\n")
+        sb.append("parse(input: string) i64    encode(val: i64) string\\n")
+    } else if module == "string" {
+        sb.append("# std/string\\n\\n")
+        sb.append("charAt(s, index) i64  indexOf(s, needle) i64  lastIndexOf(s, needle) i64\\n")
+        sb.append("contains(s, needle) bool  startsWith(s, prefix) bool  endsWith(s, suffix) bool\\n")
+        sb.append("count(s, needle) i64  substring(s, start, end) string\\n")
+        sb.append("trim(s) string  trimLeft(s) string  trimRight(s) string\\n")
+        sb.append("toUpper(s) string  toLower(s) string  replace(s, old, new) string\\n")
+        sb.append("repeat(s, n) string  parseInt(s) i64  intToString(n) string\\n")
+        sb.append("compare(a, b) i64  splitInto(s, sep, result: *List(string)) void\\n\\n")
+        sb.append("## StringBuilder\\n")
+        sb.append("var sb = StringBuilder { .buf = 0, .len = 0, .cap = 0 }\\n")
+        sb.append("sb.append(s)  sb.appendByte(b)  sb.appendInt(n)\\n")
+        sb.append("sb.toString() string  sb.length() i64  sb.clear()  sb.free()\\n")
+    } else if module == "fs" {
+        sb.append("# std/fs\\n\\n")
+        sb.append("struct File { fd: i64 }\\n")
+        sb.append("openFile(path: string, flags: i64) File\\n")
+        sb.append("createFile(path: string) File\\n")
+        sb.append("readFile(path: string) string  writeFile(path: string, data: string) void\\n")
+        sb.append("stdin() File  stdout() File  stderr() File\\n\\n")
+        sb.append("## File methods\\n")
+        sb.append("f.read(buf, len) FsError!i64  f.write(buf, len) FsError!i64\\n")
+        sb.append("f.writeAll(s: string) FsError!i64  f.close() void  f.isValid() i64\\n")
+        sb.append("f.seekTo(pos) FsError!i64  f.seekBy(delta) FsError!i64  f.getPos() FsError!i64\\n\\n")
+        sb.append("## Flags\\n")
+        sb.append("O_RDONLY=0  O_WRONLY=1  O_RDWR=2  O_CREATE  O_WRITE_CREATE\\n")
+    } else if module == "io" {
+        sb.append("# std/io\\n\\n")
+        sb.append("Buffered I/O. State is heap-allocated (i64 pointer).\\n\\n")
+        sb.append("## BufferedReader\\n")
+        sb.append("newBufferedReader(fd: i64) i64\\n")
+        sb.append("newBufferedReaderSize(fd: i64, size: i64) i64\\n")
+        sb.append("readByte(r: i64) i64           // -1 on EOF\\n")
+        sb.append("readLine(r: i64) string         // empty string on EOF\\n")
+        sb.append("readerFill(r: i64) void\\n\\n")
+        sb.append("## BufferedWriter\\n")
+        sb.append("newBufferedWriter(fd: i64) i64\\n")
+        sb.append("newBufferedWriterSize(fd: i64, size: i64) i64\\n")
+        sb.append("writeByte(w: i64, b: i64) void\\n")
+        sb.append("writeString(w: i64, s: string) void\\n")
+        sb.append("writerWriteAll(w: i64, ptr: i64, len: i64) void\\n")
+        sb.append("writerFlush(w: i64) void\\n")
+    } else if module == "list" {
+        sb.append("# std/list\\n\\n")
+        sb.append("struct List(T) { items: i64, count: i64, capacity: i64 }\\n")
+        sb.append("var l: List(i64) = .{}\\n\\n")
+        sb.append("## Core\\n")
+        sb.append("l.append(val)  l.get(i) T  l.set(i, val)  l.pop() T\\n")
+        sb.append("l.len() i64  l.cap() i64  l.first() T  l.last() T\\n\\n")
+        sb.append("## Modify\\n")
+        sb.append("l.insert(i, val)  l.orderedRemove(i) T  l.swapRemove(i) T\\n")
+        sb.append("l.appendSlice(src, n)  l.reverse()  l.clone() List(T)\\n")
+        sb.append("l.clear()  l.free()  l.resize(n)  l.sort(cmp)\\n\\n")
+        sb.append("## Search\\n")
+        sb.append("l.indexOf(val) i64  l.contains(val) i64  l.equal(other) i64\\n")
+    } else if module == "map" {
+        sb.append("# std/map\\n\\n")
+        sb.append("struct Map(K, V) -- hash map with open addressing.\\n")
+        sb.append("var m: Map(i64, i64) = .{}\\n\\n")
+        sb.append("m.set(key, val)  m.get(key) V  m.contains(key) i64\\n")
+        sb.append("m.remove(key) i64  m.len() i64  m.clear()  m.free()\\n")
+        sb.append("m.keys() List(K)  m.values() List(V)\\n")
+    } else if module == "os" {
+        sb.append("# std/os\\n\\n")
+        sb.append("exit(code: i64)  argsCount() i64  argLen(n) i64  argPtr(n) i64\\n")
+        sb.append("arg(n: i64) string  environ(n: i64) string\\n")
+        sb.append("environCount() i64  environLen(n) i64  environPtr(n) i64\\n")
+    } else if module == "time" {
+        sb.append("# std/time\\n\\n")
+        sb.append("nanoTimestamp() i64  milliTimestamp() i64  timestamp() i64\\n")
+        sb.append("struct Timer { start_time: i64 }\\n")
+        sb.append("t.elapsed() i64  t.reset() void\\n")
+        sb.append("ns_per_ms=1000000  ns_per_s=1000000000  ms_per_s=1000\\n")
+    } else if module == "random" {
+        sb.append("# std/random\\n\\n")
+        sb.append("fillBytes(buf: i64, len: i64) i64\\n")
+        sb.append("randomInt() i64  randomRange(max: i64) i64\\n")
+    } else if module == "sort" {
+        sb.append("# std/sort\\n\\n")
+        sb.append("insertionSort for List(T) with comparator function.\\n")
+    } else if module == "set" {
+        sb.append("# std/set\\n\\n")
+        sb.append("struct Set(T) -- hash set.\\n")
+        sb.append("var s: Set(i64) = .{}\\n")
+        sb.append("s.add(val)  s.contains(val) i64  s.remove(val) i64\\n")
+        sb.append("s.len() i64  s.clear()  s.free()\\n")
+    } else if module == "math" {
+        sb.append("# std/math\\n\\n")
+        sb.append("abs(x) i64  min(a, b) i64  max(a, b) i64  clamp(x, lo, hi) i64\\n")
+        sb.append("@sqrt(x)  @floor(x)  @ceil(x)  @fabs(x)  @min(a,b)  @max(a,b)\\n")
+    } else {
+        sb.append("Unknown module: ")
+        sb.append(module)
+        sb.append("\\nAvailable: json, string, fs, io, list, map, os, time, random, sort, set, math\\n")
+    }
+}
+
+// ============================================================================
+// Tool: get_known_issues
+// ============================================================================
+
+fn appendKnownIssues(sb: *StringBuilder) void {
+    sb.append("# Known Cot Compiler Issues & Workarounds\\n\\n")
+
+    sb.append("## Bug #12: String+struct return materialization (native only)\\n")
+    sb.append("Functions with string param returning a struct have field access issues.\\n")
+    sb.append("Workaround: assert struct fields immediately after call.\\n")
+    sb.append("  var f = openFile(path, flags)\\n")
+    sb.append("  @assert(f.fd > 0)  // forces materialization\\n\\n")
+
+    sb.append("## Bug #16: while not done infinite loop (native only)\\n")
+    sb.append("var done = false; while not done { done = true } loops forever.\\n")
+    sb.append("Workaround: use integer flags instead of bool.\\n")
+    sb.append("  var done: i64 = 0\\n")
+    sb.append("  while done == 0 { done = 1 }\\n\\n")
+
+    sb.append("## Bug #17: Direct return of compound method call\\n")
+    sb.append("return sb.toString() fails for cross-file imported methods returning string.\\n")
+    sb.append("Workaround: use intermediate variable.\\n")
+    sb.append("  var result = sb.toString()\\n")
+    sb.append("  return result\\n\\n")
+
+    sb.append("## Struct method issue: >16-byte structs with compound params\\n")
+    sb.append("impl methods on structs with >2 fields + string params cause peekn assertion.\\n")
+    sb.append("Workaround: use free functions with heap-allocated state (json.cot pattern).\\n")
+    sb.append("  var reader = newBufferedReader(fd)  // returns i64 pointer\\n")
+    sb.append("  var line = readLine(reader)          // free function, not method\\n\\n")
+
+    sb.append("## wasm32 limitation: std/string import fails\\n")
+    sb.append("Any code importing std/string fails on --target=wasm32.\\n")
+    sb.append("Workaround: use native target (default) for code using string module.\\n\\n")
+
+    sb.append("## General tips\\n")
+    sb.append("- No semicolons in Cot\\n")
+    sb.append("- Struct init: Point { .x = 10 } (period + equals)\\n")
+    sb.append("- Heap init: new Point { x: 10 } (no period + colon)\\n")
+    sb.append("- Generics: fn foo(T)(a: T) (separate parens, not angle brackets)\\n")
+    sb.append("- Logical ops: and, or, not (not &&, ||, !)\\n")
+    sb.append("- >> is unsigned shift (logical, zero-fills)\\n")
+}
