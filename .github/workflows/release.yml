@@ -1,0 +1,73 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-macos
+            artifact: cot-aarch64-macos
+          - os: macos-13
+            target: x86_64-macos
+            artifact: cot-x86_64-macos
+          - os: ubuntu-latest
+            target: x86_64-linux-gnu
+            artifact: cot-x86_64-linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Build
+        run: zig build -Doptimize=ReleaseFast
+
+      - name: Test
+        run: |
+          zig build test
+          ./test/run_all.sh
+
+      - name: Package
+        run: |
+          cd zig-out/bin
+          tar -czf ${{ matrix.artifact }}.tar.gz cot
+          shasum -a 256 ${{ matrix.artifact }}.tar.gz > ${{ matrix.artifact }}.tar.gz.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            zig-out/bin/${{ matrix.artifact }}.tar.gz
+            zig-out/bin/${{ matrix.artifact }}.tar.gz.sha256
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            cot-aarch64-macos.tar.gz
+            cot-aarch64-macos.tar.gz.sha256
+            cot-x86_64-macos.tar.gz
+            cot-x86_64-macos.tar.gz.sha256
+            cot-x86_64-linux.tar.gz
+            cot-x86_64-linux.tar.gz.sha256
+          generate_release_notes: true

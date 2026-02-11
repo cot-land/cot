@@ -1,11 +1,21 @@
 #!/bin/bash
 # Run all Cot language tests via `cot test`.
-# Usage: ./test/run_all.sh
+# Usage: ./test/run_all.sh [--target=wasm32]
 #
 # Discovers all .cot files in test/e2e/ and test/cases/, runs each with `cot test`,
 # reports per-file pass/fail, exits with total failure count.
+# Pass --target=<target> to forward to `cot test`.
 
 set -euo pipefail
+
+# Parse arguments
+TARGET_FLAG=""
+for arg in "$@"; do
+    case "$arg" in
+        --target=*) TARGET_FLAG="$arg" ;;
+        *) echo "Unknown argument: $arg"; exit 1 ;;
+    esac
+done
 
 # Find repo root (directory containing this script's parent)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -37,12 +47,16 @@ for f in test/e2e/*.cot test/cases/*.cot; do
 done
 
 total=${#files[@]}
-echo "Running $total Cot test files..."
+if [ -n "$TARGET_FLAG" ]; then
+    echo "Running $total Cot test files ($TARGET_FLAG)..."
+else
+    echo "Running $total Cot test files..."
+fi
 echo ""
 
 for f in "${files[@]}"; do
     printf "%-45s" "$f"
-    if output=$("$COT" test "$f" 2>&1); then
+    if output=$("$COT" test "$f" $TARGET_FLAG 2>&1); then
         # Extract summary line (last non-empty line of stderr)
         summary=$(echo "$output" | grep -E '[0-9]+ passed' | tail -1)
         echo "ok  $summary"

@@ -6,12 +6,32 @@ A Wasm-first language for full-stack web development.
 
 See **[VISION.md](VISION.md)** for the complete language vision and strategy.
 
+## Installation
+
+### Quick Install (macOS / Linux)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/cot-land/cot/main/install.sh | sh
+```
+
+### From GitHub Releases
+
+Download the latest binary from [GitHub Releases](https://github.com/cot-land/cot/releases).
+
+### Build from Source
+
+Requires [Zig 0.15+](https://ziglang.org/download/).
+
+```sh
+git clone https://github.com/cot-land/cot.git
+cd cot
+zig build
+./zig-out/bin/cot version
+```
+
 ## Quick Start
 
 ```bash
-# Build the compiler
-zig build
-
 # Compile and run
 cot run hello.cot
 
@@ -25,8 +45,8 @@ cot build --target=wasm32 hello.cot   # → hello.wasm
 # Version
 cot version                      # → cot 0.3.1 (arm64-macos)
 
-# Run compiler tests
-zig build test
+# Run tests
+cot test myfile.cot
 ```
 
 ## Example
