@@ -630,8 +630,9 @@ pub const Lowerer = struct {
         if (type_info != .struct_type) return;
         const struct_name = type_info.struct_type.name;
 
-        // Check if this struct has a free() method
-        if (self.chk.lookupMethod(struct_name, "free")) |method_info| {
+        // Check if this struct has a deinit() method (automatic destructor).
+        // Note: free() is manual cleanup — only deinit() triggers scope_destroy.
+        if (self.chk.lookupMethod(struct_name, "deinit")) |method_info| {
             // Queue the generic function for lowering (same as lowerMethodCall does)
             if (self.chk.generics.generic_inst_by_name.get(method_info.func_name)) |inst_info| {
                 try self.ensureGenericFnQueued(inst_info);
