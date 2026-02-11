@@ -32,6 +32,8 @@ jobs:
       - name: Cot tests (wasm)
         run: |
           wasmtime --version
+          # Debug: test a single file first
+          ./zig-out/bin/cot test test/e2e/auto_free.cot --target=wasm32 || echo "Exit code: $?"
           ./test/run_all.sh --target=wasm32
 
   test-linux:
@@ -60,4 +62,6 @@ jobs:
       - name: Cot tests (wasm)
         run: |
           wasmtime --version
+          # Debug: test a single file first
+          ./zig-out/bin/cot test test/e2e/auto_free.cot --target=wasm32 || echo "Exit code: $?"
           ./test/run_all.sh --target=wasm32
