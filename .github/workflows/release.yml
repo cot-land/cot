@@ -14,9 +14,6 @@ jobs:
           - os: macos-14
             target: aarch64-macos
             artifact: cot-aarch64-macos
-          - os: macos-13
-            target: x86_64-macos
-            artifact: cot-x86_64-macos
           - os: ubuntu-latest
             target: x86_64-linux-gnu
             artifact: cot-x86_64-linux
@@ -66,8 +63,6 @@ jobs:
           files: |
             cot-aarch64-macos.tar.gz
             cot-aarch64-macos.tar.gz.sha256
-            cot-x86_64-macos.tar.gz
-            cot-x86_64-macos.tar.gz.sha256
             cot-x86_64-linux.tar.gz
             cot-x86_64-linux.tar.gz.sha256
           generate_release_notes: true
