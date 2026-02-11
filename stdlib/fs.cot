@@ -16,7 +16,7 @@ const O_TRUNC: i64 = if @target_os() == "linux" { 512 } else { 1024 }
 const O_APPEND: i64 = if @target_os() == "linux" { 1024 } else { 8 }
 const O_EXCL: i64 = if @target_os() == "linux" { 128 } else { 2048 }
 const O_CREATE: i64 = if @target_os() == "linux" { 577 } else { 1538 }
-const O_WRITE_CREATE: i64 = if @target_os() == "linux" { 576 } else { 1537 }
+const O_WRITE_CREATE: i64 = if @target_os() == "linux" { 577 } else { 1537 }
 
 // Seek whence
 const SEEK_SET: i64 = 0

@@ -468,6 +468,8 @@ pub const Inst = union(enum) {
         kind: ShiftKind,
         /// Shift amount: either an immediate or CL register.
         shift_by: ShiftBy,
+        /// Value to be shifted (3-operand: emit handles mov value→dst).
+        value: Gpr,
         dst: WritableGpr,
         /// Shift amount source vreg (used when shift_by == .cl, constrained to RCX).
         src: Gpr = Gpr.unwrapNew(regs.rcx()),
@@ -580,11 +582,14 @@ pub const Inst = union(enum) {
         dst: WritableGpr,
     },
 
-    /// Conditional move.
+    /// Conditional move (3-operand: emit handles mov alt→dst before cmov).
     cmove: struct {
         size: OperandSize,
         cc: CC,
+        /// Consequent value (moved to dst if condition is true).
         src: GprMem,
+        /// Alternative value (default, moved to dst unconditionally first).
+        alt: Gpr,
         dst: WritableGpr,
     },
 
@@ -709,10 +714,13 @@ pub const Inst = union(enum) {
     // XMM (SSE/AVX) instructions
     //=========================================================================
 
-    /// XMM binary operation (addss, subss, mulss, divss, etc.).
+    /// XMM binary operation (3-operand: emit handles movss/movsd src1→dst).
     xmm_rm_r: struct {
         op: SseOpcode,
-        src: XmmMem,
+        /// First source (copied to dst before operation).
+        src1: Xmm,
+        /// Second source (operand to the SSE operation).
+        src2: XmmMem,
         dst: WritableXmm,
     },
 
@@ -1564,9 +1572,10 @@ pub const Inst = union(enum) {
 
             // XMM instructions
             .xmm_rm_r => |p| {
-                try writer.print("{s} {s}, {s}", .{
+                try writer.print("{s} {s}, {s}, {s}", .{
                     sseOpcodeName(p.op),
-                    p.src.inner.prettyPrint(16),
+                    regs.prettyPrintReg(p.src1.toReg(), 16),
+                    p.src2.inner.prettyPrint(16),
                     regs.prettyPrintReg(p.dst.toReg().toReg(), 16),
                 });
             },
@@ -1856,20 +1865,56 @@ pub const Inst = union(enum) {
     pub fn genEpilogue(frame_layout: *const FrameLayout) abi.BoundedArray(Inst, 16) {
         var insts = abi.BoundedArray(Inst, 16){};
         const setup_frame = frame_layout.setup_area_size > 0;
+        const num_saves = frame_layout.num_clobbered_callee_saves;
 
-        // Pop callee-saved registers in reverse order
-        var i: usize = frame_layout.num_clobbered_callee_saves;
-        while (i > 0) {
-            i -= 1;
-            const reg_enc = frame_layout.clobbered_callee_saves[i];
+        if (setup_frame and num_saves > 0) {
+            // The prologue pushed callee-saves right after rbp, then may have
+            // done `sub rsp, N` for stack allocation/alignment. The callee-save
+            // slots are at [rbp-8], [rbp-16], ..., [rbp-num_saves*8].
+            // We must restore rsp to point at the callee-saves before popping.
+            //
+            // mov rsp, rbp — restore to frame pointer
             insts.appendAssumeCapacity(.{
-                .pop = .{
-                    .dst = WritableGpr.fromReg(Gpr.unwrapNew(regs.gpr(reg_enc))),
+                .mov_r_r = .{
+                    .size = .size64,
+                    .src = Gpr.unwrapNew(rbp()),
+                    .dst = WritableGpr.fromReg(Gpr.unwrapNew(rsp())),
                 },
             });
-        }
 
-        if (setup_frame) {
+            // sub rsp, num_saves * 8 — back up to callee-save area
+            const callee_save_size: u32 = @intCast(num_saves * 8);
+            const rsp_gpr = Gpr.unwrapNew(rsp());
+            insts.appendAssumeCapacity(.{
+                .alu_rmi_r = .{
+                    .size = .size64,
+                    .op = .sub,
+                    .src1 = rsp_gpr,
+                    .src2 = GprMemImm{ .inner = .{ .imm = callee_save_size } },
+                    .dst = WritableGpr.fromReg(rsp_gpr),
+                },
+            });
+
+            // Pop callee-saved registers in reverse order
+            var i: usize = num_saves;
+            while (i > 0) {
+                i -= 1;
+                const reg_enc = frame_layout.clobbered_callee_saves[i];
+                insts.appendAssumeCapacity(.{
+                    .pop = .{
+                        .dst = WritableGpr.fromReg(Gpr.unwrapNew(regs.gpr(reg_enc))),
+                    },
+                });
+            }
+
+            // pop rbp (rsp is now at rbp after all callee-save pops)
+            insts.appendAssumeCapacity(.{
+                .pop = .{
+                    .dst = WritableGpr.fromReg(Gpr.unwrapNew(rbp())),
+                },
+            });
+        } else if (setup_frame) {
+            // No callee-saves to restore, just tear down frame
             // mov rsp, rbp
             insts.appendAssumeCapacity(.{
                 .mov_r_r = .{

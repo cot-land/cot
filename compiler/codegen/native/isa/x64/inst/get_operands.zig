@@ -349,6 +349,17 @@ pub const OperandVisitor = union(enum) {
         }
     }
 
+    /// Mark an XMM as defined at early position (3-operand pattern).
+    /// Prevents regalloc from overlapping dst with any uses.
+    pub fn xmmEarlyDef(self: *OperandVisitor, wxmm: *args.WritableXmm) void {
+        switch (self.*) {
+            .collector => |c| c.operands.append(c.allocator, .{
+                .reg = wxmm.toReg().toReg(), .preg = null, .kind = .def, .pos = .early,
+            }) catch unreachable,
+            .callback => |cb| cb.func(cb.ctx, wxmm.regMut().regMut(), .any, .def, .early),
+        }
+    }
+
     /// Mark an XMM as reused (read-modify-write).
     pub fn xmmReuseDef(self: *OperandVisitor, wxmm: *args.WritableXmm, _: usize) void {
         switch (self.*) {
@@ -474,7 +485,8 @@ pub fn getOperands(inst: *Inst, visitor: *OperandVisitor) void {
         // Shifts
         //=====================================================================
         .shift_r => |*p| {
-            visitor.gprReuseDef(&p.dst, 0);
+            visitor.gprEarlyDef(&p.dst);
+            visitor.gprUse(&p.value);
             switch (p.shift_by) {
                 .cl => {
                     // Shift amount vreg must be in RCX (CL is low byte of RCX).
@@ -592,7 +604,8 @@ pub fn getOperands(inst: *Inst, visitor: *OperandVisitor) void {
         // CMOVcc
         //=====================================================================
         .cmove => |*p| {
-            visitor.gprReuseDef(&p.dst, 0);
+            visitor.gprEarlyDef(&p.dst);
+            visitor.gprUse(&p.alt);
             gprMemOperands(&p.src, visitor);
         },
 
@@ -732,8 +745,9 @@ pub fn getOperands(inst: *Inst, visitor: *OperandVisitor) void {
         // SSE/XMM operations
         //=====================================================================
         .xmm_rm_r => |*p| {
-            visitor.xmmReuseDef(&p.dst, 0);
-            xmmMemOperands(&p.src, visitor);
+            visitor.xmmEarlyDef(&p.dst);
+            visitor.xmmUse(&p.src1);
+            xmmMemOperands(&p.src2, visitor);
         },
         .xmm_rm_r_evex => |*p| {
             visitor.xmmDef(&p.dst);
@@ -861,7 +875,10 @@ pub fn getOperands(inst: *Inst, visitor: *OperandVisitor) void {
         .xmm_cmove => |*p| {
             visitor.xmmUse(&p.consequent);
             visitor.xmmUse(&p.alternative);
-            visitor.xmmDef(&p.dst);
+            // Early def: dst must not overlap cons or alt, since the
+            // pseudo-instruction moves alt→dst before conditionally
+            // moving cons→dst.
+            visitor.xmmEarlyDef(&p.dst);
         },
         .stack_probe_loop => |*p| {
             visitor.gprDef(&p.tmp);

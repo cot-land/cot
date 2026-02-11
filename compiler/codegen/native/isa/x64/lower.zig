@@ -876,22 +876,13 @@ pub const X64LowerBackend = struct {
         const dst_reg = dst.onlyReg() orelse return null;
         const dst_gpr = WritableGpr.fromReg(Gpr.unwrapNew(dst_reg.toReg()));
 
-        // MOV src to dst (shift operates in-place)
-        ctx.emit(Inst{
-            .mov_r_r = .{
-                .size = size,
-                .src = src_gpr,
-                .dst = dst_gpr,
-            },
-        }) catch return null;
-
-        // Shift by CL - shift_amt vreg is constrained to RCX by regalloc.
-        // Port of Cranelift's x64 shift lowering pattern.
+        // Shift by CL - 3-operand: emit handles mov value→dst.
         ctx.emit(Inst{
             .shift_r = .{
                 .size = size,
                 .kind = kind,
                 .shift_by = .cl,
+                .value = src_gpr,
                 .dst = dst_gpr,
                 .src = shift_gpr,
             },
@@ -1113,19 +1104,56 @@ pub const X64LowerBackend = struct {
 
     fn lowerFneg(_: *const Self, ctx: *LowerCtx, ir_inst: ClifInst) ?InstOutput {
         const ty = ctx.outputTy(ir_inst, 0);
+        const is_f32 = ty.bytes() == 4;
         const src = ctx.putInputInRegs(ir_inst, 0);
-        const dst = ctx.allocTmp(ty) catch return null;
 
         const src_reg = src.onlyReg() orelse return null;
-        const dst_reg = dst.onlyReg() orelse return null;
-        const op: SseOpcode = if (ty.bytes() == 4) .xorps else .xorpd;
-        const dst_xmm = WritableXmm.fromReg(Xmm.unwrapNew(dst_reg.toReg()));
+        const src_xmm = Xmm.unwrapNew(src_reg);
 
-        // XOR with sign bit mask
+        // Cranelift pattern: fneg = xorps/xorpd src, sign_mask
+        // Sign mask: 0x80000000 (f32) or 0x8000000000000000 (f64)
+        const sign_bits: u64 = if (is_f32) 0x80000000 else 0x8000000000000000;
+
+        // Step 1: Load sign mask bits into GPR
+        const gpr_size: OperandSize = if (is_f32) .size32 else .size64;
+        const gpr_ty = if (is_f32) ClifType.I32 else ClifType.I64;
+        const gpr_tmp = ctx.allocTmp(gpr_ty) catch return null;
+        const gpr_reg = gpr_tmp.onlyReg() orelse return null;
+        const gpr = WritableGpr.fromReg(Gpr.unwrapNew(gpr_reg.toReg()));
+
+        ctx.emit(Inst{
+            .imm = .{
+                .dst_size = gpr_size,
+                .simm64 = sign_bits,
+                .dst = gpr,
+            },
+        }) catch return null;
+
+        // Step 2: Move GPR to XMM
+        const mask_tmp = ctx.allocTmp(ty) catch return null;
+        const mask_reg = mask_tmp.onlyReg() orelse return null;
+        const mask_xmm = WritableXmm.fromReg(Xmm.unwrapNew(mask_reg.toReg()));
+
+        ctx.emit(Inst{
+            .gpr_to_xmm = .{
+                .op = if (is_f32) .movd else .movq,
+                .src = GprMem{ .inner = RegMem{ .reg = gpr.toReg().toReg() } },
+                .src_size = gpr_size,
+                .dst = mask_xmm,
+            },
+        }) catch return null;
+
+        // Step 3: XOR src with sign mask
+        const dst = ctx.allocTmp(ty) catch return null;
+        const dst_reg = dst.onlyReg() orelse return null;
+        const dst_xmm = WritableXmm.fromReg(Xmm.unwrapNew(dst_reg.toReg()));
+        const op: SseOpcode = if (is_f32) .xorps else .xorpd;
+
         ctx.emit(Inst{
             .xmm_rm_r = .{
                 .op = op,
-                .src = XmmMem{ .inner = RegMem{ .reg = src_reg } },
+                .src1 = src_xmm,
+                .src2 = XmmMem{ .inner = RegMem{ .reg = mask_reg.toReg() } },
                 .dst = dst_xmm,
             },
         }) catch return null;
@@ -1135,22 +1163,58 @@ pub const X64LowerBackend = struct {
         return output;
     }
 
-    fn lowerFabs(self: *const Self, ctx: *LowerCtx, ir_inst: ClifInst) ?InstOutput {
-        _ = self;
+    fn lowerFabs(_: *const Self, ctx: *LowerCtx, ir_inst: ClifInst) ?InstOutput {
         const ty = ctx.outputTy(ir_inst, 0);
+        const is_f32 = ty.bytes() == 4;
         const src = ctx.putInputInRegs(ir_inst, 0);
-        const dst = ctx.allocTmp(ty) catch return null;
 
         const src_reg = src.onlyReg() orelse return null;
-        const dst_reg = dst.onlyReg() orelse return null;
-        const op: SseOpcode = if (ty.bytes() == 4) .andps else .andpd;
-        const dst_xmm = WritableXmm.fromReg(Xmm.unwrapNew(dst_reg.toReg()));
+        const src_xmm = Xmm.unwrapNew(src_reg);
 
-        // AND with abs mask (clear sign bit)
+        // Cranelift pattern: fabs = andps/andpd src, abs_mask
+        // Abs mask: 0x7FFFFFFF (f32) or 0x7FFFFFFFFFFFFFFF (f64)
+        const abs_bits: u64 = if (is_f32) 0x7FFFFFFF else 0x7FFFFFFFFFFFFFFF;
+
+        // Step 1: Load abs mask bits into GPR
+        const gpr_size: OperandSize = if (is_f32) .size32 else .size64;
+        const gpr_ty = if (is_f32) ClifType.I32 else ClifType.I64;
+        const gpr_tmp = ctx.allocTmp(gpr_ty) catch return null;
+        const gpr_reg = gpr_tmp.onlyReg() orelse return null;
+        const gpr = WritableGpr.fromReg(Gpr.unwrapNew(gpr_reg.toReg()));
+
+        ctx.emit(Inst{
+            .imm = .{
+                .dst_size = gpr_size,
+                .simm64 = abs_bits,
+                .dst = gpr,
+            },
+        }) catch return null;
+
+        // Step 2: Move GPR to XMM
+        const mask_tmp = ctx.allocTmp(ty) catch return null;
+        const mask_reg = mask_tmp.onlyReg() orelse return null;
+        const mask_xmm = WritableXmm.fromReg(Xmm.unwrapNew(mask_reg.toReg()));
+
+        ctx.emit(Inst{
+            .gpr_to_xmm = .{
+                .op = if (is_f32) .movd else .movq,
+                .src = GprMem{ .inner = RegMem{ .reg = gpr.toReg().toReg() } },
+                .src_size = gpr_size,
+                .dst = mask_xmm,
+            },
+        }) catch return null;
+
+        // Step 3: AND src with abs mask
+        const dst = ctx.allocTmp(ty) catch return null;
+        const dst_reg = dst.onlyReg() orelse return null;
+        const dst_xmm = WritableXmm.fromReg(Xmm.unwrapNew(dst_reg.toReg()));
+        const op: SseOpcode = if (is_f32) .andps else .andpd;
+
         ctx.emit(Inst{
             .xmm_rm_r = .{
                 .op = op,
-                .src = XmmMem{ .inner = RegMem{ .reg = src_reg } },
+                .src1 = src_xmm,
+                .src2 = XmmMem{ .inner = RegMem{ .reg = mask_reg.toReg() } },
                 .dst = dst_xmm,
             },
         }) catch return null;
@@ -1220,7 +1284,30 @@ pub const X64LowerBackend = struct {
         const op: SseOpcode = if (ty.bytes() == 4) .ucomiss else .ucomisd;
         const lhs_xmm = Xmm.unwrapNew(lhs_reg);
 
-        // UCOMISS/UCOMISD
+        // Get FloatCC from instruction data and map to x64 CC
+        const inst_data = ctx.data(ir_inst);
+        const floatcc = inst_data.getFloatCC() orelse return null;
+        const cc = ccFromFloatCC(floatcc);
+
+        // Allocate result
+        const dst = ctx.allocTmp(ClifType.I8) catch return null;
+        const dst_reg = dst.onlyReg() orelse return null;
+        const dst_gpr = WritableGpr.fromReg(Gpr.unwrapNew(dst_reg.toReg()));
+
+        // Zero result reg BEFORE compare (xor clobbers flags!)
+        ctx.emit(Inst{
+            .imm = .{
+                .dst_size = .size32,
+                .simm64 = 0,
+                .dst = dst_gpr,
+            },
+        }) catch return null;
+
+        // UCOMISS/UCOMISD sets flags: UCOMISD lhs, rhs
+        // lhs > rhs: CF=0, ZF=0, PF=0
+        // lhs < rhs: CF=1, ZF=0, PF=0
+        // lhs == rhs: CF=0, ZF=1, PF=0
+        // unordered (NaN): CF=1, ZF=1, PF=1
         ctx.emit(Inst{
             .xmm_cmp_rm_r = .{
                 .op = op,
@@ -1229,15 +1316,10 @@ pub const X64LowerBackend = struct {
             },
         }) catch return null;
 
-        // Allocate result
-        const dst = ctx.allocTmp(ClifType.I8) catch return null;
-        const dst_reg = dst.onlyReg() orelse return null;
-        const dst_gpr = WritableGpr.fromReg(Gpr.unwrapNew(dst_reg.toReg()));
-
         // SETCC
         ctx.emit(Inst{
             .setcc = .{
-                .cc = .z, // Placeholder
+                .cc = cc,
                 .dst = dst_gpr,
             },
         }) catch return null;
@@ -1690,9 +1772,6 @@ pub const X64LowerBackend = struct {
         const alt_reg = alternative.onlyReg() orelse return null;
         const dst_reg = dst.onlyReg() orelse return null;
         const cond_gpr = Gpr.unwrapNew(cond_reg);
-        const cons_gpr = Gpr.unwrapNew(cons_reg);
-        const alt_gpr = Gpr.unwrapNew(alt_reg);
-        const dst_gpr = WritableGpr.fromReg(Gpr.unwrapNew(dst_reg.toReg()));
 
         // TEST condition, condition - sets ZF based on condition value
         ctx.emit(Inst{
@@ -1703,24 +1782,38 @@ pub const X64LowerBackend = struct {
             },
         }) catch return null;
 
-        // MOV alternative, dst - prepare default value
-        ctx.emit(Inst{
-            .mov_r_r = .{
-                .size = operandSizeFromType(dst_ty),
-                .src = alt_gpr,
-                .dst = dst_gpr,
-            },
-        }) catch return null;
+        // Float types use xmm_cmove (branch-based), integer types use cmov.
+        // Ported from ARM64's fcsel/csel split in lowerSelect.
+        if (dst_ty.isFloat()) {
+            const cons_xmm = Xmm.unwrapNew(cons_reg);
+            const alt_xmm = Xmm.unwrapNew(alt_reg);
+            const dst_xmm = WritableXmm.fromReg(Xmm.unwrapNew(dst_reg.toReg()));
 
-        // CMOVNZ consequent, dst - if condition != 0, use consequent
-        ctx.emit(Inst{
-            .cmove = .{
-                .size = operandSizeFromType(dst_ty),
-                .cc = .nz, // CMOVNZ: move if ZF=0 (i.e., condition != 0)
-                .src = GprMem{ .inner = RegMem{ .reg = cons_gpr.toReg() } },
-                .dst = dst_gpr,
-            },
-        }) catch return null;
+            ctx.emit(Inst{
+                .xmm_cmove = .{
+                    .ty = dst_ty,
+                    .cc = .nz, // NZ: condition != 0 → use consequent
+                    .consequent = cons_xmm,
+                    .alternative = alt_xmm,
+                    .dst = dst_xmm,
+                },
+            }) catch return null;
+        } else {
+            const cons_gpr = Gpr.unwrapNew(cons_reg);
+            const alt_gpr = Gpr.unwrapNew(alt_reg);
+            const dst_gpr = WritableGpr.fromReg(Gpr.unwrapNew(dst_reg.toReg()));
+
+            // CMOVNZ: 3-operand, emit handles mov alt→dst then cmov src→dst.
+            ctx.emit(Inst{
+                .cmove = .{
+                    .size = operandSizeFromType(dst_ty),
+                    .cc = .nz, // CMOVNZ: move if ZF=0 (i.e., condition != 0)
+                    .src = GprMem{ .inner = RegMem{ .reg = cons_gpr.toReg() } },
+                    .alt = alt_gpr,
+                    .dst = dst_gpr,
+                },
+            }) catch return null;
+        }
 
         var output = InstOutput{};
         output.append(ValueRegs(Reg).one(dst_reg.toReg())) catch return null;
@@ -2377,20 +2470,13 @@ pub const X64LowerBackend = struct {
         const op = if (ty.bytes() == 4) op32 else op64;
         const dst_xmm = WritableXmm.fromReg(Xmm.unwrapNew(dst_reg.toReg()));
 
-        // For SSE, we need dst = lhs first
-        ctx.emit(Inst{
-            .xmm_unary_rm_r = .{
-                .op = if (ty.bytes() == 4) .movss else .movsd,
-                .src = XmmMem{ .inner = RegMem{ .reg = lhs_reg } },
-                .dst = dst_xmm,
-            },
-        }) catch return null;
-
-        // OP rhs, dst
+        // SSE binary: 3-operand, emit handles movss/movsd lhs→dst.
+        const lhs_xmm = Xmm.unwrapNew(lhs_reg);
         ctx.emit(Inst{
             .xmm_rm_r = .{
                 .op = op,
-                .src = XmmMem{ .inner = RegMem{ .reg = rhs_reg } },
+                .src1 = lhs_xmm,
+                .src2 = XmmMem{ .inner = RegMem{ .reg = rhs_reg } },
                 .dst = dst_xmm,
             },
         }) catch return null;
@@ -2429,6 +2515,27 @@ pub fn ccFromIntCC(cc: IntCC) CC {
         .uge => .nb,
         .ugt => .nbe,
         .ule => .be,
+    };
+}
+
+/// Convert CLIF FloatCC to x64 condition code for UCOMISD/UCOMISS.
+/// UCOMISD lhs, rhs sets: CF=1 if lhs<rhs, ZF=1 if lhs==rhs, PF=1 if unordered.
+pub fn ccFromFloatCC(cc: FloatCC) CC {
+    return switch (cc) {
+        .eq => .z, // ZF=1
+        .ne => .nz, // ZF=0
+        .lt => .b, // CF=1 (below)
+        .le => .be, // CF=1 or ZF=1 (below or equal)
+        .gt => .nbe, // CF=0 and ZF=0 (above)
+        .ge => .nb, // CF=0 (not below)
+        .ord => .np, // PF=0 (not parity = ordered)
+        .uno => .p, // PF=1 (parity = unordered)
+        .one => .nz, // not equal (ordered), best approximation
+        .ueq => .z, // equal (unordered), best approximation
+        .ult => .b, // unordered or less than
+        .ule => .be, // unordered or less than or equal
+        .ugt => .nbe, // unordered or greater than
+        .uge => .nb, // unordered or greater than or equal
     };
 }
 

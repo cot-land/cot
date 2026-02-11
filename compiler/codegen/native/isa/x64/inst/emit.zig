@@ -1196,9 +1196,21 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
         //---------------------------------------------------------------------
         .shift_r => |shift| {
             const dst_enc = shift.dst.toReg().hwEnc();
+            const value_enc = shift.value.hwEnc();
             const size = shift.size;
             const kind = shift.kind;
 
+            // Step 1: If value != dst, emit MOV value → dst
+            if (value_enc != dst_enc) {
+                if (size == .size16) try sink.put1(0x66);
+                const mov_rex = RexPrefix.twoOp(value_enc, dst_enc, size == .size64, size == .size8);
+                try mov_rex.encode(sink);
+                const mov_opcode: u8 = if (size == .size8) 0x88 else 0x89;
+                try sink.put1(mov_opcode);
+                try emitModrmReg(sink, value_enc, dst_enc);
+            }
+
+            // Step 2: Emit the shift operation
             // ShiftKind encodes the opcode extension directly
             const opcode_ext: u8 = kind.enc();
 
@@ -1584,8 +1596,19 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
         //---------------------------------------------------------------------
         .cmove => |cmov| {
             const dst_enc = cmov.dst.toReg().hwEnc();
+            const alt_enc = cmov.alt.hwEnc();
             const size = cmov.size;
 
+            // Step 1: If alt != dst, emit MOV alt → dst
+            if (alt_enc != dst_enc) {
+                if (size == .size16) try sink.put1(0x66);
+                const mov_rex = RexPrefix.twoOp(alt_enc, dst_enc, size == .size64, false);
+                try mov_rex.encode(sink);
+                try sink.put1(0x89);
+                try emitModrmReg(sink, alt_enc, dst_enc);
+            }
+
+            // Step 2: CMOVcc src → dst (conditional overwrite)
             if (size == .size16) try sink.put1(0x66);
 
             switch (cmov.src.inner) {
@@ -1780,15 +1803,39 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
         // Ported from Cranelift's cranelift-assembler-x64
         //---------------------------------------------------------------------
         .xmm_rm_r => |xmm| {
-            // SSE/AVX binary operation: dst = op(dst, src)
+            // SSE/AVX binary operation: dst = op(src1, src2), 3-operand form
             const dst_enc = xmm.dst.toReg().hwEnc();
+            const src1_enc = xmm.src1.hwEnc();
+
+            // Step 1: If src1 != dst, emit MOVSS/MOVSD src1 → dst
+            if (src1_enc != dst_enc) {
+                // Determine move op based on the SSE operation's type
+                const is_pd = switch (xmm.op) {
+                    .addsd, .subsd, .mulsd, .divsd, .minsd, .maxsd, .xorpd, .andpd, .orpd, .andnpd => true,
+                    else => false,
+                };
+                if (is_pd) {
+                    // MOVSD: F2 0F 10 /r
+                    try sink.put1(0xF2);
+                } else {
+                    // MOVSS: F3 0F 10 /r (also used for xorps, andps, etc.)
+                    try sink.put1(0xF3);
+                }
+                const mov_rex = RexPrefix.twoOp(dst_enc, src1_enc, false, false);
+                try mov_rex.encode(sink);
+                try sink.put1(0x0F);
+                try sink.put1(0x10);
+                try sink.put1(encodeModrm(0b11, dst_enc & 7, src1_enc & 7));
+            }
+
+            // Step 2: Emit the SSE operation: OP src2, dst
             const prefix = sseOpcodePrefix(xmm.op);
             const opcode = sseOpcodeBytes(xmm.op);
 
             // Emit prefix if needed (0x66, 0xF3, or 0xF2)
             if (prefix) |p| try sink.put1(p);
 
-            switch (xmm.src.inner) {
+            switch (xmm.src2.inner) {
                 .reg => |r| {
                     const src_enc = r.hwEnc();
                     // REX prefix if needed
@@ -1851,10 +1898,11 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
 
         .xmm_mov_r_m => |xmm| {
             // Store XMM register to memory: [mem] = xmm
+            // MOVSS store = F3 0F 11 /r, MOVSD store = F2 0F 11 /r
+            // Note: sseOpcodeBytes returns 0x10 (load opcode); store is 0x11.
             const src_enc = xmm.src.hwEnc();
             const finalized = memFinalize(xmm.dst, state);
             const prefix = sseOpcodePrefix(xmm.op);
-            const opcode = sseOpcodeBytes(xmm.op);
 
             if (prefix) |p| try sink.put1(p);
 
@@ -1866,7 +1914,7 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             const rex = RexPrefix.memOp(src_enc, base_enc, false, false);
             try rex.encode(sink);
             try sink.put1(0x0F);
-            for (opcode) |b| try sink.put1(b);
+            try sink.put1(0x11); // Store opcode (0x10 + 1)
             try emitModrmSibDisp(sink, src_enc, finalized.amode, 0, null);
         },
 
@@ -1892,32 +1940,64 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
         },
 
         .xmm_to_gpr => |xmm| {
-            // MOVD/MOVQ xmm -> gpr
             const src_enc = xmm.src.hwEnc();
             const dst_enc = xmm.dst.toReg().hwEnc();
             const is_64bit = xmm.dst_size == .size64;
-            // 0x66 prefix for MOVD/MOVQ
-            try sink.put1(0x66);
-            const rex = RexPrefix.twoOp(src_enc, dst_enc, is_64bit, false);
-            try rex.encode(sink);
-            try sink.put1(0x0F);
-            try sink.put1(0x7E); // MOVD/MOVQ opcode
-            try sink.put1(encodeModrm(0b11, src_enc & 7, dst_enc & 7));
+
+            switch (xmm.op) {
+                .cvttsd2si => {
+                    // CVTTSD2SI r64, xmm: F2 REX.W 0F 2C /r
+                    try sink.put1(0xF2);
+                    const rex = RexPrefix.twoOp(dst_enc, src_enc, is_64bit, false);
+                    try rex.encode(sink);
+                    try sink.put1(0x0F);
+                    try sink.put1(0x2C);
+                    try sink.put1(encodeModrm(0b11, dst_enc & 7, src_enc & 7));
+                },
+                .cvttss2si => {
+                    // CVTTSS2SI r64, xmm: F3 REX.W 0F 2C /r
+                    try sink.put1(0xF3);
+                    const rex = RexPrefix.twoOp(dst_enc, src_enc, is_64bit, false);
+                    try rex.encode(sink);
+                    try sink.put1(0x0F);
+                    try sink.put1(0x2C);
+                    try sink.put1(encodeModrm(0b11, dst_enc & 7, src_enc & 7));
+                },
+                else => {
+                    // MOVD/MOVQ xmm -> gpr: 66 [REX.W] 0F 7E /r
+                    try sink.put1(0x66);
+                    const rex = RexPrefix.twoOp(src_enc, dst_enc, is_64bit, false);
+                    try rex.encode(sink);
+                    try sink.put1(0x0F);
+                    try sink.put1(0x7E);
+                    try sink.put1(encodeModrm(0b11, src_enc & 7, dst_enc & 7));
+                },
+            }
         },
 
         .gpr_to_xmm => |xmm| {
-            // MOVD/MOVQ gpr -> xmm
             const dst_enc = xmm.dst.toReg().hwEnc();
             const is_64bit = xmm.src_size == .size64;
-            // 0x66 prefix for MOVD/MOVQ
-            try sink.put1(0x66);
+
+            // Determine prefix and opcode based on SSE operation type
+            const prefix: u8 = switch (xmm.op) {
+                .cvtsi2sd => 0xF2,
+                .cvtsi2ss => 0xF3,
+                else => 0x66, // MOVD/MOVQ
+            };
+            const opcode: u8 = switch (xmm.op) {
+                .cvtsi2sd, .cvtsi2ss => 0x2A,
+                else => 0x6E, // MOVD/MOVQ
+            };
+
+            try sink.put1(prefix);
             switch (xmm.src.inner) {
                 .reg => |r| {
                     const src_enc = r.hwEnc();
                     const rex = RexPrefix.twoOp(dst_enc, src_enc, is_64bit, false);
                     try rex.encode(sink);
                     try sink.put1(0x0F);
-                    try sink.put1(0x6E); // MOVD/MOVQ opcode (gpr->xmm)
+                    try sink.put1(opcode);
                     try sink.put1(encodeModrm(0b11, dst_enc & 7, src_enc & 7));
                 },
                 .mem => |samode| {
@@ -1930,7 +2010,7 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
                     const rex = RexPrefix.memOp(dst_enc, base_enc, is_64bit, false);
                     try rex.encode(sink);
                     try sink.put1(0x0F);
-                    try sink.put1(0x6E);
+                    try sink.put1(opcode);
                     try emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
                 },
             }
@@ -1969,9 +2049,86 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
             }
         },
 
-        .xmm_rm_r_evex, .xmm_cmp_imm, .xmm_round => {
+        .xmm_rm_r_evex, .xmm_cmp_imm => {
             // EVEX-encoded and advanced SSE instructions - deferred
             unreachable;
+        },
+
+        .xmm_round => |round| {
+            // SSE4.1 roundss/roundsd: 66 0F 3A 0A/0B /r imm8
+            const dst_enc = round.dst.toReg().hwEnc();
+            const prefix = sseOpcodePrefix(round.op);
+            const opcode = sseOpcodeBytes(round.op);
+
+            if (prefix) |p| try sink.put1(p);
+
+            switch (round.src.inner) {
+                .reg => |r| {
+                    const src_enc = r.hwEnc();
+                    const rex = RexPrefix.twoOp(dst_enc, src_enc, false, false);
+                    try rex.encode(sink);
+                    try sink.put1(0x0F);
+                    for (opcode) |b| try sink.put1(b);
+                    try sink.put1(encodeModrm(0b11, dst_enc & 7, src_enc & 7));
+                    try sink.put1(round.imm.encode());
+                },
+                .mem => |samode| {
+                    const finalized = memFinalize(samode, state);
+                    const base_enc: u8 = switch (finalized.amode) {
+                        .imm_reg => |m| m.base.hwEnc(),
+                        .imm_reg_reg_shift => |m| m.base.hwEnc(),
+                        .rip_relative => 0,
+                    };
+                    const rex = RexPrefix.memOp(dst_enc, base_enc, false, false);
+                    try rex.encode(sink);
+                    try sink.put1(0x0F);
+                    for (opcode) |b| try sink.put1(b);
+                    try emitModrmSibDisp(sink, dst_enc, finalized.amode, 0, null);
+                    try sink.put1(round.imm.encode());
+                },
+            }
+        },
+
+        //---------------------------------------------------------------------
+        // XMM conditional move (pseudo-instruction)
+        // Emits: movss/movsd alt→dst; jcc !cc, skip; movss/movsd cons→dst; skip:
+        //---------------------------------------------------------------------
+        .xmm_cmove => |xcm| {
+            const dst_enc = xcm.dst.toReg().hwEnc();
+            const alt_enc = xcm.alternative.hwEnc();
+            const cons_enc = xcm.consequent.hwEnc();
+            const is_64bit = xcm.ty.bytes() == 8;
+
+            // Step 1: movss/movsd alternative → dst
+            if (alt_enc != dst_enc) {
+                try sink.put1(if (is_64bit) @as(u8, 0xF2) else 0xF3);
+                const rex1 = RexPrefix.twoOp(dst_enc, alt_enc, false, false);
+                try rex1.encode(sink);
+                try sink.put1(0x0F);
+                try sink.put1(0x10);
+                try sink.put1(encodeModrm(0b11, dst_enc & 7, alt_enc & 7));
+            }
+
+            // Step 2: Compute size of the consequent mov (to skip over it)
+            // movss/movsd reg,reg: prefix(1) + [REX(1)] + 0F(1) + 10(1) + modrm(1) = 4 or 5 bytes
+            const needs_rex = (cons_enc >= 8 or dst_enc >= 8);
+            const mov_size: u8 = if (needs_rex) 5 else 4;
+
+            // Step 3: jcc !cc, skip (short jump, 2 bytes: 7x rel8)
+            const inv_cc = xcm.cc.invert();
+            try sink.put1(0x70 + inv_cc.getEnc());
+            try sink.put1(mov_size); // rel8 = size of the next mov instruction
+
+            // Step 4: movss/movsd consequent → dst
+            if (true) { // always emit even if cons_enc == dst_enc (jump skips it when not needed)
+                try sink.put1(if (is_64bit) @as(u8, 0xF2) else 0xF3);
+                const rex2 = RexPrefix.twoOp(dst_enc, cons_enc, false, false);
+                try rex2.encode(sink);
+                try sink.put1(0x0F);
+                try sink.put1(0x10);
+                try sink.put1(encodeModrm(0b11, dst_enc & 7, cons_enc & 7));
+            }
+            // skip: (fall through)
         },
 
         //---------------------------------------------------------------------
@@ -2321,7 +2478,6 @@ pub fn emit(inst: *const Inst, sink: *MachBuffer, info: *const EmitInfo, state: 
         .return_call_unknown,
         .mov_from_preg,
         .mov_to_preg,
-        .xmm_cmove,
         .stack_probe_loop,
         .stack_switch_basic,
         .unwind,
@@ -2418,13 +2574,13 @@ fn sseOpcodePrefix(op: SseOpcode) ?u8 {
         .addps, .subps, .mulps, .divps, .maxps, .minps, .movaps, .movups, .sqrtps, .rsqrtps, .rcpps, .andps, .andnps, .orps, .xorps, .cmpps, .shufps => null,
 
         // 0x66 prefix (packed double and integer SIMD)
-        .addpd, .subpd, .mulpd, .divpd, .maxpd, .minpd, .movapd, .movupd, .sqrtpd, .andpd, .andnpd, .orpd, .xorpd, .cmppd, .shufpd, .addsd, .subsd, .mulsd, .divsd, .maxsd, .minsd, .sqrtsd, .cmpsd, .comisd, .ucomisd, .cvtss2sd, .cvtsd2ss, .cvtdq2pd, .cvtpd2dq, .cvttpd2dq, .cvtdq2ps, .cvtps2dq, .cvttps2dq, .movdqa, .movdqu, .pand, .pandn, .por, .pxor, .paddq, .psubq, .pmullw, .pmulhw, .pmulhuw, .pmuludq, .pmulld, .paddb, .paddw, .paddd, .psubb, .psubw, .psubd, .pcmpeqb, .pcmpeqw, .pcmpeqd, .pcmpeqq, .pcmpgtb, .pcmpgtw, .pcmpgtd, .pcmpgtq, .psllw, .pslld, .psllq, .psrlw, .psrld, .psrlq, .psraw, .psrad, .pshufd, .punpcklbw, .punpcklwd, .punpckldq, .punpcklqdq, .punpckhbw, .punpckhwd, .punpckhdq, .punpckhqdq, .haddpd, .hsubpd, .phaddd, .phaddw, .phsubd, .phsubw, .movmskpd, .pmovmskb, .pblendw, .blendpd, .pblendvb, .blendvpd, .insertps, .pinsrb, .pinsrw, .pinsrd, .pinsrq, .extractps, .pextrb, .pextrw, .pextrd, .pextrq, .movd, .movq => 0x66,
+        .addpd, .subpd, .mulpd, .divpd, .maxpd, .minpd, .movapd, .movupd, .sqrtpd, .andpd, .andnpd, .orpd, .xorpd, .cmppd, .shufpd, .comisd, .ucomisd, .cvtss2sd, .cvtsd2ss, .cvtdq2pd, .cvtpd2dq, .cvttpd2dq, .cvtdq2ps, .cvtps2dq, .cvttps2dq, .movdqa, .movdqu, .pand, .pandn, .por, .pxor, .paddq, .psubq, .pmullw, .pmulhw, .pmulhuw, .pmuludq, .pmulld, .paddb, .paddw, .paddd, .psubb, .psubw, .psubd, .pcmpeqb, .pcmpeqw, .pcmpeqd, .pcmpeqq, .pcmpgtb, .pcmpgtw, .pcmpgtd, .pcmpgtq, .psllw, .pslld, .psllq, .psrlw, .psrld, .psrlq, .psraw, .psrad, .pshufd, .punpcklbw, .punpcklwd, .punpckldq, .punpcklqdq, .punpckhbw, .punpckhwd, .punpckhdq, .punpckhqdq, .haddpd, .hsubpd, .phaddd, .phaddw, .phsubd, .phsubw, .movmskpd, .pmovmskb, .pblendw, .blendpd, .pblendvb, .blendvpd, .insertps, .pinsrb, .pinsrw, .pinsrd, .pinsrq, .extractps, .pextrb, .pextrw, .pextrd, .pextrq, .movd, .movq => 0x66,
 
         // 0xF3 prefix (scalar single)
         .addss, .subss, .mulss, .divss, .maxss, .minss, .sqrtss, .rsqrtss, .rcpss, .cmpss, .comiss, .ucomiss, .cvtsi2ss, .cvtss2si, .cvttss2si, .movss, .pshufhw => 0xF3,
 
         // 0xF2 prefix (scalar double)
-        .cvtsi2sd, .cvtsd2si, .cvttsd2si, .movsd, .haddps, .hsubps, .pshuflw => 0xF2,
+        .addsd, .subsd, .mulsd, .divsd, .maxsd, .minsd, .sqrtsd, .cmpsd, .cvtsi2sd, .cvtsd2si, .cvttsd2si, .movsd, .haddps, .hsubps, .pshuflw => 0xF2,
 
         // Default no prefix
         .movlps, .movlpd, .movhps, .movhpd, .movmskps, .blendps, .blendvps => null,
@@ -2569,7 +2725,8 @@ fn sseOpcodeBytes(op: SseOpcode) []const u8 {
         .pextrq => &[_]u8{ 0x3A, 0x16 },
 
         // Rounding (SSE4.1)
-        .roundss, .roundsd => &[_]u8{ 0x3A, 0x0A },
+        .roundss => &[_]u8{ 0x3A, 0x0A },
+        .roundsd => &[_]u8{ 0x3A, 0x0B },
         .roundps, .roundpd => &[_]u8{ 0x3A, 0x08 },
 
         // Testing (SSE4.1)
