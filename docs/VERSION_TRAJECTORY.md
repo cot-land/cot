@@ -458,30 +458,21 @@ Based on this audit, here are the highest-impact gaps to close, ordered by value
 
 ## Cot's Planned Trajectory
 
-### 0.3 → 0.4: Make It Pleasant to Use
+### 0.3 → 0.4: The Deno-Alternative Release
 
 **Zig parallel: 0.3 → 0.4 (6 months)**
-Zig added `zig cc`, SIMD, bundled libc. Cot focuses on closing the highest-impact gaps identified in the Zig 0.4 audit above. Goal: raise mission-adjusted coverage from ~53% to ~70%.
+Zig added `zig cc`, SIMD, bundled libc. Cot positions itself as a compiled alternative to Deno — everything built-in (formatter, test runner, LSP, HTTP), but compiling to native binaries with zero runtime overhead. Goal: raise mission-adjusted coverage from ~57% to ~75%.
 
-**Already done (completed in late 0.3):** `std/fs`, `std/os`, `std/time`, `std/random`, `Set(T)`, string interpolation, comptime target builtins, comptime blocks, `@compileError`, `std/string` (~25 functions + StringBuilder), `std/math` (builtins + stdlib), `std/json` (parser + encoder), `std/sort`, `--target=wasm32-wasi`, high-level stdlib APIs (readFile, writeFile, arg, environ).
+**Completed in 0.3:** `std/fs`, `std/os`, `std/time`, `std/random`, `Set(T)`, string interpolation, comptime target builtins, comptime blocks, `@compileError`, `std/string` (~25 functions + StringBuilder), `std/math` (builtins + stdlib), `std/json` (parser + encoder), `std/sort`, `--target=wasm32-wasi`, high-level stdlib APIs, MCP server (in Cot), buffered I/O, WasmGC prototype, `bool NOT` fix, CI/CD pipeline.
 
-| Priority | Feature | Notes | Status |
-|:--------:|---------|-------|--------|
-| 1 | ~~String methods~~ | ~25 functions in `std/string` | **Done** |
-| 2 | ~~`std/math`~~ | @abs/@ceil/@floor/@trunc/@round/@sqrt + stdlib | **Done** |
-| 3 | ~~`std/json`~~ | Recursive descent parser + encoder | **Done** |
-| 4 | ~~`std/sort`~~ | Insertion sort for List(T) | **Done** |
-| 5 | `cot fmt` | Auto-formatter (Zig had this at 0.3) | Not started |
-| 6 | `errdefer` | Zig's most elegant cleanup pattern | Not started |
-| 7 | ~~StringBuilder~~ | In `std/string` | **Done** |
-| 8 | Multiple return values | `fn divmod(a, b: i64) (i64, i64)` | Not started |
-| 9 | `if (optional) \|val\|` syntax | Zig's ergonomic optional unwrap | Not started |
-| 10 | `for key, value in map` | Iterator protocol | Not started |
-| 11 | Named error sets | `error{NotFound, PermissionDenied}` | Not started |
-| 12 | `switch` range prongs | `1...10 =>` | Not started |
-| 13 | Improved error messages | Source locations, underlines, suggestions | Not started |
-| 14 | LSP: autocomplete | The biggest missing IDE feature | Not started |
-| 15 | Test filtering by name | Development productivity | Not started |
+**0.4 plan — see `ROADMAP_1_0.md` for the full detailed plan with 4 waves:**
+
+| Wave | Focus | Key Items |
+|:----:|-------|-----------|
+| 1 | Language completeness | `errdefer`, multiple return values, `if (opt) \|val\|`, iterator protocol, named error sets, switch ranges, labeled blocks |
+| 2 | Developer experience | `cot fmt`, rich error messages, test filtering, LSP autocomplete/rename/references |
+| 3 | Project system | `cot.toml`, `cot init`, `std/http`, `std/url`, `std/encoding` |
+| 4 | Ecosystem polish | Tree-sitter grammar, `cot check`, `cot lint` (basic), improved test output |
 
 ### 0.5: Make It Production-Capable
 
@@ -643,7 +634,7 @@ Update this section as versions ship:
 | 0.1 | — | Dec 2025 | First working compiler | Done |
 | 0.2 | — | Jan 2026 | Generics, closures, native AOT | Done |
 | 0.3 | — | Feb 2026 | CLI, LSP, stdlib, traits, tests | Done |
-| 0.4 | TBD | — | Formatter, file I/O, better errors | Planned |
+| 0.4 | TBD | — | Deno-alternative: fmt, http, errdefer, project system | Planned |
 | 0.5 | TBD | — | Async, web framework | Planned |
 | 0.6 | TBD | — | Package manager, cross-compilation | Planned |
 | 0.7 | TBD | — | Expanded stdlib, framework v1 | Planned |

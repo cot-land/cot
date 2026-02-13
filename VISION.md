@@ -248,7 +248,7 @@ See [docs/ROADMAP_1_0.md](docs/ROADMAP_1_0.md) for the detailed roadmap.
 | Version | Theme | Key Deliverables |
 |---------|-------|-----------------|
 | 0.3 | Make the language real | All language features, stdlib, I/O |
-| 0.4 | Make it pleasant to use | LSP, formatter, test runner, error messages |
+| 0.4 | Deno alternative | Formatter, HTTP server, errdefer, project system, LSP autocomplete |
 | 0.5 | Make it production-capable | Async, concurrency, web framework |
 | 0.6+ | Make it community-ready | Package manager, registry, cot.land |
 | 1.0 | Public release | Stable syntax, documentation, ecosystem |

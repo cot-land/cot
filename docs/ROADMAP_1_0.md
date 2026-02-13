@@ -220,33 +220,120 @@ Zig is 10+ years of development and still on 0.15. Each version represents a mea
 - ~~`std/json`~~ — **Done** — recursive descent parser + StringBuilder-based encoder, ported from Go encoding/json
 - ~~`std/sort`~~ — **Done** — insertion sort + reverse for List(T)
 - ~~Comptime Tier 2~~ — **Done** — `comptime { }` blocks, `@compileError`, dead branch elimination, local const propagation
-- `for key, value in map` — iterator protocol
-- Multiple return values — `fn divmod(a, b: i64) (i64, i64)`
-- `weak` references — ARC cycle breaker
-- `std/fmt` — string formatting (partially covered by string interpolation + StringBuilder)
-- `std/dom` — browser DOM API
+**Carried to 0.4:**
+- `for key, value in map` — iterator protocol → 0.4 Wave 1
+- Multiple return values — `fn divmod(a, b: i64) (i64, i64)` → 0.4 Wave 1
+- `std/fmt` — partially covered by string interpolation + StringBuilder
+
+**Carried to 0.5+:**
+- `weak` references — ARC cycle breaker → 0.5
+- `std/dom` — browser DOM API → 0.5 (web framework)
 
 **I/O implementation:** I/O functions are defined using the WASI interface design. The compiler emits:
 - Native: libc calls (`read()`, `write()`, `socket()`) linked at compile time
 - Browser Wasm: Web API imports (fetch, DOM) via import section
 - WASI Wasm: WASI imports consumed by WASI-compatible runtimes
 
-### 0.4: Make It Pleasant to Use
+### 0.4: Make It Pleasant to Use — The Deno-Alternative Release
 
-- Error messages with source locations, underlines, suggestions
-- LSP server enhancements (autocomplete, rename, references)
-- `cot fmt` — auto-formatter
-- Syntax highlighting (VS Code, tree-sitter)
-- Build system with project manifest (cot.toml)
+**Theme:** Cot becomes a credible alternative to Deno for building CLI tools, web servers, and full-stack applications. Like Deno, everything is built-in: formatter, test runner, LSP, and standard library. Unlike Deno, Cot compiles to native binaries with zero runtime overhead.
+
+**What shipping 0.4 means:** A developer can `cot build`, `cot test`, `cot fmt`, and `cot run` a real project — with good error messages, editor support, and enough language features to write non-trivial programs comfortably.
+
+#### Wave 1: Language Completeness (unblock real programs)
+
+| # | Feature | Description | Reference |
+|---|---------|-------------|-----------|
+| 1 | `errdefer` | Execute cleanup only on error return — Zig's most elegant resource pattern. Critical for file handles, network connections, partial initialization. | Zig `errdefer` semantics |
+| 2 | Multiple return values | `fn divmod(a, b: i64) (i64, i64)` — needed for APIs that return (value, error_code), (quotient, remainder), etc. | Zig anonymous struct returns, Go multiple returns |
+| 3 | `if (optional) \|val\|` unwrap | `if user.email \|email\| { send(email) }` — ergonomic optional handling without explicit null checks. | Zig `if (opt) \|val\|` |
+| 4 | `for key, value in map` | Iterator protocol for Map, enabling `for k, v in headers { ... }`. Requires iterator trait or protocol. | Go `for k, v := range m`, Zig `for` over iterators |
+| 5 | Named error sets | `error{NotFound, PermissionDenied, Timeout}` — enables pattern matching on errors, better error messages. | Zig named error sets |
+| 6 | `switch` range prongs | `1..10 => "digit"` — common pattern matching need for parsers, validators, classifiers. | Zig `'a'...'z'` range prongs |
+| 7 | Labeled blocks / labeled continue | `break :label val` from blocks, `continue :outer` in nested loops. | Zig labeled blocks |
+
+#### Wave 2: Developer Experience (make it pleasant)
+
+| # | Feature | Description | Reference |
+|---|---------|-------------|-----------|
+| 8 | `cot fmt` | Auto-formatter — table stakes for modern languages. Zig had `zig fmt` at 0.3, Go ships `gofmt`, Deno has `deno fmt`. Opinionated, zero-config. | `zig fmt`, `gofmt`, `deno fmt` |
+| 9 | Rich error messages | Source locations with line/column, underline the error span, suggest fixes. Current errors are functional but bare. | Rust `rustc` error format, Zig error notes |
+| 10 | Test filtering | `cot test file.cot --filter "json"` — run only matching tests. Essential for fast iteration during development. | `zig build test --filter`, `deno test --filter` |
+| 11 | LSP: autocomplete | The biggest missing IDE feature. Complete struct fields, method names, function parameters, imports. | ZLS completion, rust-analyzer |
+| 12 | LSP: rename symbol | Rename a variable/function across all references. | ZLS rename |
+| 13 | LSP: find references | Show all usages of a symbol. | ZLS references |
+
+#### Wave 3: Project System (make it real)
+
+| # | Feature | Description | Reference |
+|---|---------|-------------|-----------|
+| 14 | `cot.toml` project manifest | Project name, version, dependencies (local paths for now), build targets, test config. | `deno.json`, Zig `build.zig.zon`, Cargo.toml |
+| 15 | `cot init` | Create a new project with `cot.toml`, `src/main.cot`, `.gitignore`. | `deno init`, `cargo init` |
+| 16 | `std/http` | HTTP server and client — the minimum viable web story. `http.serve(":8080", handler)` for server, `http.get(url)` for client. | Deno `Deno.serve()`, Go `net/http` |
+| 17 | `std/url` | URL parsing — needed by HTTP. | Go `net/url` |
+| 18 | `std/encoding` | Base64 encode/decode, hex encode/decode. | Deno `std/encoding`, Go `encoding/` |
+
+#### Wave 4: Ecosystem Polish
+
+| # | Feature | Description | Reference |
+|---|---------|-------------|-----------|
+| 19 | Tree-sitter grammar | Enables syntax highlighting in any editor (Neovim, Helix, Zed, GitHub). | Zig tree-sitter-zig |
+| 20 | `cot check` | Type-check without compiling — fast feedback loop. | `zig build check`, `deno check` |
+| 21 | `cot lint` (basic) | Unused variables, unreachable code, shadowing warnings. | `deno lint`, `zig` warnings |
+| 22 | Improved `cot test` output | Colors, timing per test, `--verbose` flag, failure diffs. | Deno test output, Zig test output |
+
+#### Deno Feature Parity Comparison
+
+| Deno Feature | Cot 0.3.1 | Cot 0.4 Target |
+|--------------|-----------|----------------|
+| `deno run` | `cot run` | `cot run` |
+| `deno test` | `cot test` | `cot test --filter` |
+| `deno fmt` | Missing | `cot fmt` |
+| `deno lint` | Missing | `cot lint` (basic) |
+| `deno check` | Missing | `cot check` |
+| `deno init` | Missing | `cot init` |
+| `deno.json` | Missing | `cot.toml` |
+| Built-in HTTP server | Missing | `std/http` |
+| LSP | 5 features | + autocomplete, rename, references |
+| TypeScript types | Cot types (stronger) | Same |
+| Single binary | `cot` binary | Same |
+| Edge deploy | `--target=wasm32-wasi` | Same |
+
+**What Cot has that Deno doesn't:**
+- AOT compilation to native binary (no V8 runtime, no cold starts)
+- ARC memory management (no GC pauses)
+- Wasm as first-class browser target (not just server-side)
+- ARM64/x64 native output from the same source
+- MCP server for AI-assisted development (already built in Cot itself)
+
+#### 0.4 Success Criteria
+
+A developer should be able to:
+1. `cot init myapp` → scaffold a project
+2. Write an HTTP server that serves JSON API endpoints
+3. `cot fmt` → auto-format their code
+4. `cot test --filter "api"` → run targeted tests
+5. `cot build` → get a native binary with zero dependencies
+6. Get autocomplete in their editor for struct fields and methods
+7. See clear, helpful error messages when code is wrong
+
+#### Estimated Scope
+
+- ~22 features across 4 waves
+- Wave 1 (language) and Wave 2 (DX) are critical — ship these first
+- Wave 3 (project system) makes Cot usable for real projects
+- Wave 4 (polish) can slip to 0.4.x patches
 
 ### 0.5: Make It Production-Capable
 
 - `async fn` / `await` — language-level async
 - Native event loop (epoll/kqueue)
 - Browser async (JS Promise interop)
-- `std/net` — TCP/HTTP server and client
+- `std/net` — TCP/UDP sockets
 - IR split (`lower_clif.zig`) if needed for async on native
 - Web framework prototype (the @server/@client story)
+- `std/crypto` — hash functions, HMAC
+- Database driver (`std/sql` or `std/db`)
 
 ### 0.6+: Make It Community-Ready
 
@@ -281,100 +368,34 @@ Zig is 10+ years of development and still on 0.15. Each version represents a mea
 
 ---
 
-## Dogfooding: MCP Server in Cot
+## Dogfooding: MCP Server in Cot (COMPLETE)
 
-### The Goal
+The MCP server was the first real program written in Cot — proving the language can build useful tools.
 
-Write a Model Context Protocol (MCP) server **in Cot itself** — a stdio-based tool that Claude Code connects to for Cot syntax validation, type checking, and language reference. This is the first real dogfooding exercise: if Cot can't write a useful tool for its own development, it's not ready for users.
+**Location:** `mcp/cot-mcp.cot` (~380 lines, single file)
+**Config:** `.mcp.json` at repo root
+**Build:** `cot build mcp/cot-mcp.cot -o cot-mcp`
+**Protocol:** JSON-RPC 2.0 over stdio, newline-delimited
 
-### Why MCP
+### What It Provides
 
-MCP (Model Context Protocol) is the standard for extending AI coding assistants. An MCP server for Cot would:
-- **Validate syntax** before committing — no more `let` vs `var` mistakes
-- **Expose language reference** — Claude queries the server instead of guessing syntax
-- **Type check code** — catch errors without running `zig build test`
-- **Provide stdlib docs** — function signatures and examples on demand
+Three tools available to Claude Code:
+1. **`get_syntax_reference`** — Complete Cot language syntax reference
+2. **`get_stdlib_docs`** — Function signatures for any stdlib module (json, string, fs, io, list, map, os, time, random, sort, set, math)
+3. **`get_project_info`** — Build/test commands and project structure
 
-The server communicates via JSON-RPC over stdin/stdout — a protocol Cot can handle once `std/json` exists.
+### What It Uses
 
-### What Already Works
+- `std/json` — parse JSON-RPC requests, encode responses
+- `std/string` — StringBuilder for building tool text
+- `std/io` — BufferedReader/Writer for efficient stdio
+- Error unions, generics, closures — real language features in production
 
-| Capability | Status | Notes |
-|-----------|--------|-------|
-| Stdin/stdout I/O | **Done** | `@fd_read`/`@fd_write`, `File` struct, `stdin()`/`stdout()` |
-| Error handling | **Done** | Error unions, try/catch, error propagation |
-| Data structures | **Done** | `List(T)`, `Map(K,V)`, `Set(T)` — all production-quality |
-| Process args/env | **Done** | `std/os` — read CLI args, environment variables |
-| Memory management | **Done** | ARC, defer, `new`/`@alloc`/`@dealloc` |
-| Generics + traits | **Done** | Monomorphized dispatch for tool routing |
-| File I/O | **Done** | `std/fs` — openFile, read, write, seek, close |
+### Success
 
-### What's Missing (Blockers)
+A fresh Claude Code session can write valid Cot code on the first attempt, look up any syntax without guessing, and get stdlib function signatures on demand. The MCP server is actively used during Cot development itself.
 
-| Feature | Blocker Level | Needed For | Status |
-|---------|--------------|------------|--------|
-| ~~**`std/json`**~~ | ~~Critical~~ | MCP uses JSON-RPC — must parse and serialize JSON | **Done** |
-| ~~**String methods**~~ | ~~Critical~~ | Parsing `Content-Length:` headers, splitting on `\n`, trimming whitespace | **Done** |
-| ~~**StringBuilder**~~ | ~~High~~ | Building JSON responses efficiently | **Done** |
-| ~~**String iteration**~~ | ~~High~~ | Walking input character-by-character for JSON parsing | **Done** (charAt, @intToPtr) |
-| **Buffered I/O** | **Medium** | Each `@fd_read` is a raw syscall — need line-buffered stdin reading | Not started |
-
-All critical blockers for the MCP server are now resolved. Only buffered I/O remains as a nice-to-have.
-
-### What's Not Needed (stdio transport only)
-
-| Feature | Status | Why not needed |
-|---------|--------|---------------|
-| TCP sockets (`std/net`) | Not started (0.5) | MCP stdio transport uses stdin/stdout, no network |
-| HTTP parsing | Not started (0.5) | SSE/HTTP transport is optional, stdio is primary |
-| Async/await | Not started (0.5) | Single-threaded request/response loop is fine |
-| Multi-file modules | Not started (0.6) | Can write in a single file initially |
-
-### Implementation Path
-
-**Phase 1 — Prerequisites (COMPLETE):**
-1. ~~`std/json`~~ — **Done** — recursive descent parser + encoder (ported from Go encoding/json)
-2. ~~String methods~~ — **Done** — `std/string` with ~25 functions
-3. ~~`StringBuilder`~~ — **Done** — in `std/string` with append/appendByte/appendInt/toString
-
-**Phase 2 — Minimal MCP server (READY TO START):**
-1. Read JSON-RPC messages from stdin (parse `Content-Length:` header + JSON body)
-2. Route `initialize`, `tools/list`, `tools/call` methods
-3. Implement `validate_syntax` tool — shell out to `cot check --stdin`
-4. Implement `get_syntax_reference` tool — return embedded docs
-5. Write JSON-RPC responses to stdout
-
-**Phase 3 — Full language tools:**
-1. `check_types` — run checker, return diagnostics
-2. `format_code` — auto-format Cot source
-3. `suggest_fix` — common error → fix mapping
-4. `get_stdlib_docs` — query function signatures
-
-### Configuration
-
-Once built, the MCP server is registered via `.mcp.json` at the repo root:
-
-```json
-{
-  "mcpServers": {
-    "cot-tools": {
-      "type": "stdio",
-      "command": "./zig-out/bin/cot-mcp"
-    }
-  }
-}
-```
-
-Or added per-machine: `claude mcp add --transport stdio cot-tools -- ./zig-out/bin/cot-mcp`
-
-### Success Criteria
-
-The MCP server is "done" when a fresh Claude Code session can:
-1. Write valid Cot code on the first attempt (validated by the MCP server)
-2. Look up any Cot syntax without guessing wrong
-3. Get meaningful error explanations when code fails to compile
-
-This is the first program where Cot proves it can build a real, useful tool — and the tool makes Cot development itself faster.
+All three success criteria met: Claude Code writes valid Cot on first attempt, looks up syntax without guessing, and gets stdlib function signatures on demand.
 
 ---
 
@@ -393,14 +414,16 @@ These don't need answers now, but should be resolved before 1.0:
 
 ## Summary
 
-Cot 0.3 has built the hard infrastructure — a complete compiler pipeline with dual-target output, ARC memory management, generics, closures, and hundreds of passing tests. The road to 1.0:
+Cot 0.3 built the hard infrastructure — a complete compiler pipeline with dual-target output, ARC memory management, generics, closures, and 900+ passing tests. Zero known issues remain. The MCP server (written in Cot) proves the language works for real tools.
 
-1. **0.3:** Language features, type system, stdlib, I/O — make Cot a real language
-2. **0.4:** Developer experience — make it pleasant to use
+The road to 1.0:
+
+1. **0.3 (COMPLETE):** Language features, type system, stdlib, I/O, MCP server — Cot is a real language
+2. **0.4 (NEXT):** The Deno-alternative release — formatter, HTTP, errdefer, project system, LSP autocomplete
 3. **0.5:** Async, concurrency, web framework — make it production-capable
 4. **0.6+:** Ecosystem, package manager — make it community-ready
 5. **1.0:** Polish, docs, stability — make it public
 
-The Wasm-as-IR architecture works for everything through 0.4. The IR split happens in 0.5 only if async demands it. That's a future concern.
+The Wasm-as-IR architecture works for everything through 0.4. The IR split happens in 0.5 only if async demands it.
 
-**The compiler is ready. Now build the language around it.**
+**0.4's goal: a developer can build a real project with `cot init`, `cot fmt`, `cot test`, and `cot build` — with good errors, autocomplete, and an HTTP server in the stdlib. Like Deno, but compiled to native.**
