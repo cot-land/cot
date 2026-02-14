@@ -271,7 +271,7 @@ All six features shipped in `531415f`.
 | 12 | LSP: rename symbol | **DONE** | `531415f` — WorkspaceEdit via references |
 | 13 | LSP: find references | **DONE** | `531415f` — AST walk collecting identifier matches |
 
-#### Wave 3: Compiler Maturity + Project System (current work)
+#### Wave 3: Compiler Maturity + Project System — DONE
 
 Combines compiler-internal improvements (Wasm codegen cleanup) with user-facing project infrastructure. The Wasm work makes the compiler more correct and eliminates workarounds before building new stdlib modules on top.
 
@@ -291,17 +291,17 @@ Combines compiler-internal improvements (Wasm codegen cleanup) with user-facing 
 | 18 | `std/http` | **DONE** — TCP sockets (`@net_socket`, `@net_bind`, `@net_listen`, `@net_accept`, `@net_connect`, `@net_set_reuse_addr`), sockaddr_in construction, HTTP response builder. ARM64+x64 native overrides. 11 tests. | Go `net/http`, POSIX sockets |
 | 19 | `std/url` | **DONE** — URL parsing (scheme, host, port, path, query, fragment). Heap-allocated pattern. 13 tests. | Go `net/url` |
 | 20 | `std/encoding` | **DONE** — Base64 encode/decode, hex encode/decode, URL-safe base64. 26 tests. | Deno `std/encoding`, Go `encoding/` |
+| 21 | Cross-file LSP intelligence | **DONE** — Goto-definition, find-references, and completions work across imported files. LSP resolves symbols from dependencies. | ZLS, rust-analyzer |
+| 22 | `@safe` mode | **DONE** — Opt-in `@safe` file annotation enables C#/TS-friendly extensions: colon struct init, field shorthand, implicit self, constructor sugar (`new Type(args...)`), auto pointer wrapping. All gated — zero impact on base language. 22 tests. | C#, TypeScript |
 
-**Why multi-value cleanup belongs here:** `std/http` will return strings and structs heavily. The `compound_len_locals` workaround has caused 5+ bugs already (see MEMORY.md items 12, 14, 17). Cleaning it up before building more stdlib on top prevents a class of compound-return regressions.
-
-#### Wave 4: Ecosystem Polish
+#### Wave 4: Ecosystem Polish (current work)
 
 | # | Feature | Description | Reference |
 |---|---------|-------------|-----------|
-| 21 | Tree-sitter grammar | Enables syntax highlighting in any editor (Neovim, Helix, Zed, GitHub). | Zig tree-sitter-zig |
-| 22 | `cot check` | Type-check without compiling — fast feedback loop. | `zig build check`, `deno check` |
-| 23 | `cot lint` (basic) | Unused variables, unreachable code, shadowing warnings. | `deno lint`, `zig` warnings |
-| 24 | Improved `cot test` output | Colors, timing per test, `--verbose` flag, failure diffs. | Deno test output, Zig test output |
+| 23 | Tree-sitter grammar | Enables syntax highlighting in any editor (Neovim, Helix, Zed, GitHub). | Zig tree-sitter-zig |
+| 24 | `cot check` | Type-check without compiling — fast feedback loop. | `zig build check`, `deno check` |
+| 25 | `cot lint` (basic) | Unused variables, unreachable code, shadowing warnings. | `deno lint`, `zig` warnings |
+| 26 | Improved `cot test` output | Colors, timing per test, `--verbose` flag, failure diffs. | Deno test output, Zig test output |
 
 #### Deferred Wasm Work (post-0.4)
 
@@ -325,7 +325,7 @@ These Wasm upgrades are tracked in `docs/WASM_UPGRADE_PLAN.md` but aren't needed
 | `deno init` | `cot init` | Done |
 | `deno.json` | `cot.json` | Done |
 | Built-in HTTP server | `std/http` | Done |
-| LSP | autocomplete, rename, references | Done |
+| LSP | autocomplete, rename, references, cross-file | Done |
 | TypeScript types | Cot types (stronger) | Done |
 | Single binary | `cot` binary | Done |
 | Edge deploy | `--target=wasm32-wasi` | Done |
@@ -352,7 +352,7 @@ A developer should be able to:
 
 - **Wave 1 (language):** 7/7 done
 - **Wave 2 (DX):** 6/6 done
-- **Wave 3 (maturity + project system):** 6/7 done (multi-value cleanup deferred)
+- **Wave 3 (maturity + project system + DX):** 8/9 done (multi-value cleanup deferred)
 - **Wave 4 (polish):** 0/4 — can slip to 0.4.x patches
 
 ### 0.5: Make It Production-Capable
@@ -450,7 +450,7 @@ Cot 0.3 built the hard infrastructure — a complete compiler pipeline with dual
 The road to 1.0:
 
 1. **0.3 (COMPLETE):** Language features, type system, stdlib, I/O, MCP server — Cot is a real language
-2. **0.4 (IN PROGRESS):** Waves 1-3 done (language + DX + project system). Remaining: ecosystem polish (Wave 4)
+2. **0.4 (IN PROGRESS):** Waves 1-3 done (language + DX + project system + cross-file LSP + @safe mode). Remaining: ecosystem polish (Wave 4)
 3. **0.5:** Async, concurrency, WasmGC completion, web framework — make it production-capable
 4. **0.6+:** Ecosystem, package manager — make it community-ready
 5. **1.0:** Polish, docs, stability — make it public
