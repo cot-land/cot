@@ -220,10 +220,12 @@ Zig is 10+ years of development and still on 0.15. Each version represents a mea
 - ~~`std/json`~~ — **Done** — recursive descent parser + StringBuilder-based encoder, ported from Go encoding/json
 - ~~`std/sort`~~ — **Done** — insertion sort + reverse for List(T)
 - ~~Comptime Tier 2~~ — **Done** — `comptime { }` blocks, `@compileError`, dead branch elimination, local const propagation
-**Carried to 0.4:**
-- `for key, value in map` — iterator protocol → 0.4 Wave 1
-- Multiple return values — `fn divmod(a, b: i64) (i64, i64)` → 0.4 Wave 1
+**Carried to 0.4 (now done):**
+- ~~`for key, value in map`~~ — **Done** — iterator protocol, shipped in Wave 1 (`0c5914e`)
 - `std/fmt` — partially covered by string interpolation + StringBuilder
+
+**Carried to 0.4 (remaining):**
+- Multiple return values — `fn divmod(a, b: i64) (i64, i64)` — deferred, not blocking current programs
 
 **Carried to 0.5+:**
 - `weak` references — ARC cycle breaker → 0.5
@@ -238,66 +240,95 @@ Zig is 10+ years of development and still on 0.15. Each version represents a mea
 
 **Theme:** Cot becomes a credible alternative to Deno for building CLI tools, web servers, and full-stack applications. Like Deno, everything is built-in: formatter, test runner, LSP, and standard library. Unlike Deno, Cot compiles to native binaries with zero runtime overhead.
 
-**What shipping 0.4 means:** A developer can `cot build`, `cot test`, `cot fmt`, and `cot run` a real project — with good error messages, editor support, and enough language features to write non-trivial programs comfortably.
+**Philosophy:** The version number is arbitrary. The goal is features and maturity — each wave makes Cot more capable and more correct. We ship 0.4 when the work is done, not on a deadline.
 
-#### Wave 1: Language Completeness (unblock real programs)
+#### Wave 1: Language Completeness — DONE
+
+All seven features shipped in `0c5914e` and `531415f`.
+
+| # | Feature | Status | Commit |
+|---|---------|--------|--------|
+| 1 | `errdefer` | **DONE** | `0c5914e` — Zig AstGen pattern, LIFO ordering with mixed defer/errdefer |
+| 2 | `if (optional) \|val\|` unwrap | **DONE** | `0c5914e` — Zig payload capture syntax, reuses catch capture infra |
+| 3 | `for key, value in map` | **DONE** | `0c5914e` — Go range pattern, hash table iteration over occupied slots |
+| 4 | Named error set switch | **DONE** | `0c5914e` — `catch \|err\| switch (err) { error.X => ... }` with global variant table |
+| 5 | `switch` range prongs | **DONE** | Pre-existing — `1..10 => "digit"`, formatter fixed in `531415f` |
+| 6 | Labeled blocks / labeled continue | **DONE** | `0c5914e` — `break :outer` / `continue :outer` in nested loops |
+| 7 | Require parens for if/while | **DONE** | `531415f` — Zig pattern, disambiguates `\|` (bitwise OR) from `\|val\|` (capture) |
+
+**Carried forward:** Multiple return values (`fn divmod(a, b: i64) (i64, i64)`) — deferred, not critical for current programs.
+
+#### Wave 2: Developer Experience — DONE
+
+All six features shipped in `531415f`.
+
+| # | Feature | Status | Commit |
+|---|---------|--------|--------|
+| 8 | `cot fmt` | **DONE** | `531415f` — AST-based formatter with comment interleaving (Go gofmt pattern) |
+| 9 | Rich error messages | **DONE** | `531415f` — span underlines (`^~~~`) with ANSI color on TTY |
+| 10 | Test filtering | **DONE** | `531415f` — `cot test file.cot --filter="name"` (Zig --test-filter pattern) |
+| 11 | LSP: autocomplete | **DONE** | `531415f` — builtins, scope symbols, keywords |
+| 12 | LSP: rename symbol | **DONE** | `531415f` — WorkspaceEdit via references |
+| 13 | LSP: find references | **DONE** | `531415f` — AST walk collecting identifier matches |
+
+#### Wave 3: Compiler Maturity + Project System (current work)
+
+Combines compiler-internal improvements (Wasm codegen cleanup) with user-facing project infrastructure. The Wasm work makes the compiler more correct and eliminates workarounds before building new stdlib modules on top.
+
+**Compiler internals (from WASM_UPGRADE_PLAN):**
+
+| # | Feature | Description | Risk | Effort | Reference |
+|---|---------|-------------|------|--------|-----------|
+| 14 | `memory.fill` wiring | Opcode defined but never emitted. Wire into zero-init paths (`@alloc`, struct default init). Pure perf win. | Low | Hours | Go `cmd/compile/internal/wasm` |
+| 15 | Multi-value return cleanup | Remove `compound_len_locals` workaround in `gen.zig`. Compound returns (string ptr+len) should use Wasm multi-value natively. Eliminates 5+ special-case code paths that are a recurring source of bugs. | High | 2-3 days | Wasm multi-value spec |
+
+**User-facing features:**
 
 | # | Feature | Description | Reference |
 |---|---------|-------------|-----------|
-| 1 | `errdefer` | Execute cleanup only on error return — Zig's most elegant resource pattern. Critical for file handles, network connections, partial initialization. | Zig `errdefer` semantics |
-| 2 | Multiple return values | `fn divmod(a, b: i64) (i64, i64)` — needed for APIs that return (value, error_code), (quotient, remainder), etc. | Zig anonymous struct returns, Go multiple returns |
-| 3 | `if (optional) \|val\|` unwrap | `if user.email \|email\| { send(email) }` — ergonomic optional handling without explicit null checks. | Zig `if (opt) \|val\|` |
-| 4 | `for key, value in map` | Iterator protocol for Map, enabling `for k, v in headers { ... }`. Requires iterator trait or protocol. | Go `for k, v := range m`, Zig `for` over iterators |
-| 5 | Named error sets | `error{NotFound, PermissionDenied, Timeout}` — enables pattern matching on errors, better error messages. | Zig named error sets |
-| 6 | `switch` range prongs | `1..10 => "digit"` — common pattern matching need for parsers, validators, classifiers. | Zig `'a'...'z'` range prongs |
-| 7 | Labeled blocks / labeled continue | `break :label val` from blocks, `continue :outer` in nested loops. | Zig labeled blocks |
+| 16 | `cot.toml` project manifest | Project name, version, dependencies (local paths for now), build targets, test config. | `deno.json`, Zig `build.zig.zon`, Cargo.toml |
+| 17 | `cot init` | Create a new project with `cot.toml`, `src/main.cot`, `.gitignore`. | `deno init`, `cargo init` |
+| 18 | `std/http` | HTTP server and client — the minimum viable web story. `http.serve(":8080", handler)` for server, `http.get(url)` for client. | Deno `Deno.serve()`, Go `net/http` |
+| 19 | `std/url` | URL parsing — needed by HTTP. | Go `net/url` |
+| 20 | `std/encoding` | Base64 encode/decode, hex encode/decode. | Deno `std/encoding`, Go `encoding/` |
 
-#### Wave 2: Developer Experience (make it pleasant)
-
-| # | Feature | Description | Reference |
-|---|---------|-------------|-----------|
-| 8 | `cot fmt` | Auto-formatter — table stakes for modern languages. Zig had `zig fmt` at 0.3, Go ships `gofmt`, Deno has `deno fmt`. Opinionated, zero-config. | `zig fmt`, `gofmt`, `deno fmt` |
-| 9 | Rich error messages | Source locations with line/column, underline the error span, suggest fixes. Current errors are functional but bare. | Rust `rustc` error format, Zig error notes |
-| 10 | Test filtering | `cot test file.cot --filter "json"` — run only matching tests. Essential for fast iteration during development. | `zig build test --filter`, `deno test --filter` |
-| 11 | LSP: autocomplete | The biggest missing IDE feature. Complete struct fields, method names, function parameters, imports. | ZLS completion, rust-analyzer |
-| 12 | LSP: rename symbol | Rename a variable/function across all references. | ZLS rename |
-| 13 | LSP: find references | Show all usages of a symbol. | ZLS references |
-
-#### Wave 3: Project System (make it real)
-
-| # | Feature | Description | Reference |
-|---|---------|-------------|-----------|
-| 14 | `cot.toml` project manifest | Project name, version, dependencies (local paths for now), build targets, test config. | `deno.json`, Zig `build.zig.zon`, Cargo.toml |
-| 15 | `cot init` | Create a new project with `cot.toml`, `src/main.cot`, `.gitignore`. | `deno init`, `cargo init` |
-| 16 | `std/http` | HTTP server and client — the minimum viable web story. `http.serve(":8080", handler)` for server, `http.get(url)` for client. | Deno `Deno.serve()`, Go `net/http` |
-| 17 | `std/url` | URL parsing — needed by HTTP. | Go `net/url` |
-| 18 | `std/encoding` | Base64 encode/decode, hex encode/decode. | Deno `std/encoding`, Go `encoding/` |
+**Why multi-value cleanup belongs here:** `std/http` will return strings and structs heavily. The `compound_len_locals` workaround has caused 5+ bugs already (see MEMORY.md items 12, 14, 17). Cleaning it up before building more stdlib on top prevents a class of compound-return regressions.
 
 #### Wave 4: Ecosystem Polish
 
 | # | Feature | Description | Reference |
 |---|---------|-------------|-----------|
-| 19 | Tree-sitter grammar | Enables syntax highlighting in any editor (Neovim, Helix, Zed, GitHub). | Zig tree-sitter-zig |
-| 20 | `cot check` | Type-check without compiling — fast feedback loop. | `zig build check`, `deno check` |
-| 21 | `cot lint` (basic) | Unused variables, unreachable code, shadowing warnings. | `deno lint`, `zig` warnings |
-| 22 | Improved `cot test` output | Colors, timing per test, `--verbose` flag, failure diffs. | Deno test output, Zig test output |
+| 21 | Tree-sitter grammar | Enables syntax highlighting in any editor (Neovim, Helix, Zed, GitHub). | Zig tree-sitter-zig |
+| 22 | `cot check` | Type-check without compiling — fast feedback loop. | `zig build check`, `deno check` |
+| 23 | `cot lint` (basic) | Unused variables, unreachable code, shadowing warnings. | `deno lint`, `zig` warnings |
+| 24 | Improved `cot test` output | Colors, timing per test, `--verbose` flag, failure diffs. | Deno test output, Zig test output |
+
+#### Deferred Wasm Work (post-0.4)
+
+These Wasm upgrades are tracked in `docs/WASM_UPGRADE_PLAN.md` but aren't needed for 0.4. They improve performance or enable future features, not current ones.
+
+| Feature | Why deferred | Target |
+|---------|-------------|--------|
+| WasmGC arrays + nested structs | Only matters for `--target=wasm32-gc` (browser story, 0.5+) | 0.5 |
+| `call_ref` typed function refs | `call_indirect` works fine, `call_ref` is a perf optimization | 0.5 |
+| `throw`/`try_table` exceptions | ABI-breaking, 1-2 weeks, highest risk. Current error unions work. Enables reliable defer-across-calls when needed. | 0.5 |
 
 #### Deno Feature Parity Comparison
 
-| Deno Feature | Cot 0.3.1 | Cot 0.4 Target |
-|--------------|-----------|----------------|
-| `deno run` | `cot run` | `cot run` |
-| `deno test` | `cot test` | `cot test --filter` |
-| `deno fmt` | Missing | `cot fmt` |
-| `deno lint` | Missing | `cot lint` (basic) |
-| `deno check` | Missing | `cot check` |
-| `deno init` | Missing | `cot init` |
-| `deno.json` | Missing | `cot.toml` |
-| Built-in HTTP server | Missing | `std/http` |
-| LSP | 5 features | + autocomplete, rename, references |
-| TypeScript types | Cot types (stronger) | Same |
-| Single binary | `cot` binary | Same |
-| Edge deploy | `--target=wasm32-wasi` | Same |
+| Deno Feature | Cot Status | Notes |
+|--------------|-----------|-------|
+| `deno run` | `cot run` | Done |
+| `deno test` | `cot test --filter` | Done |
+| `deno fmt` | `cot fmt` | Done |
+| `deno lint` | — | Wave 4 |
+| `deno check` | — | Wave 4 |
+| `deno init` | — | Wave 3 |
+| `deno.json` | — | Wave 3 (`cot.toml`) |
+| Built-in HTTP server | — | Wave 3 (`std/http`) |
+| LSP | autocomplete, rename, references | Done |
+| TypeScript types | Cot types (stronger) | Done |
+| Single binary | `cot` binary | Done |
+| Edge deploy | `--target=wasm32-wasi` | Done |
 
 **What Cot has that Deno doesn't:**
 - AOT compilation to native binary (no V8 runtime, no cold starts)
@@ -317,12 +348,12 @@ A developer should be able to:
 6. Get autocomplete in their editor for struct fields and methods
 7. See clear, helpful error messages when code is wrong
 
-#### Estimated Scope
+#### Progress
 
-- ~22 features across 4 waves
-- Wave 1 (language) and Wave 2 (DX) are critical — ship these first
-- Wave 3 (project system) makes Cot usable for real projects
-- Wave 4 (polish) can slip to 0.4.x patches
+- **Wave 1 (language):** 7/7 done
+- **Wave 2 (DX):** 6/6 done
+- **Wave 3 (maturity + project system):** 0/7 — current focus
+- **Wave 4 (polish):** 0/4 — can slip to 0.4.x patches
 
 ### 0.5: Make It Production-Capable
 
@@ -414,16 +445,16 @@ These don't need answers now, but should be resolved before 1.0:
 
 ## Summary
 
-Cot 0.3 built the hard infrastructure — a complete compiler pipeline with dual-target output, ARC memory management, generics, closures, and 900+ passing tests. Zero known issues remain. The MCP server (written in Cot) proves the language works for real tools.
+Cot 0.3 built the hard infrastructure — a complete compiler pipeline with dual-target output, ARC memory management, generics, closures, and 900+ passing tests. The MCP server (written in Cot) proves the language works for real tools. 0.4 Waves 1-2 are done — the language has errdefer, if-optional, map iteration, labeled loops, a formatter, rich errors, test filtering, and LSP autocomplete/rename/references.
 
 The road to 1.0:
 
 1. **0.3 (COMPLETE):** Language features, type system, stdlib, I/O, MCP server — Cot is a real language
-2. **0.4 (NEXT):** The Deno-alternative release — formatter, HTTP, errdefer, project system, LSP autocomplete
-3. **0.5:** Async, concurrency, web framework — make it production-capable
+2. **0.4 (IN PROGRESS):** Waves 1-2 done (language + DX). Remaining: compiler maturity (multi-value cleanup), project system (`cot init`, `std/http`), ecosystem polish
+3. **0.5:** Async, concurrency, WasmGC completion, web framework — make it production-capable
 4. **0.6+:** Ecosystem, package manager — make it community-ready
 5. **1.0:** Polish, docs, stability — make it public
 
-The Wasm-as-IR architecture works for everything through 0.4. The IR split happens in 0.5 only if async demands it.
+The Wasm-as-IR architecture works for everything through 0.4. The IR split happens in 0.5 only if async demands it. Version numbers mark maturity milestones, not deadlines.
 
 **0.4's goal: a developer can build a real project with `cot init`, `cot fmt`, `cot test`, and `cot build` — with good errors, autocomplete, and an HTTP server in the stdlib. Like Deno, but compiled to native.**
