@@ -1447,13 +1447,13 @@ test "parser union declaration" {
 }
 
 test "parser if statement" {
-    _, const err, var arena = try testParse("fn foo() { if x == 1 { return 1 } else { return 2 } }");
+    _, const err, var arena = try testParse("fn foo() { if (x == 1) { return 1 } else { return 2 } }");
     defer arena.deinit();
     try std.testing.expect(!err.hasErrors());
 }
 
 test "parser while loop" {
-    _, const err, var arena = try testParse("fn foo() { var i = 0; while i < 10 { i = i + 1 } }");
+    _, const err, var arena = try testParse("fn foo() { var i = 0; while (i < 10) { i = i + 1 } }");
     defer arena.deinit();
     try std.testing.expect(!err.hasErrors());
 }

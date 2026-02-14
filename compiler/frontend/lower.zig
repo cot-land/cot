@@ -4795,7 +4795,7 @@ test "E2E: if-else statement" {
     const allocator = std.testing.allocator;
     const code =
         \\fn max(a: i64, b: i64) i64 {
-        \\    if a > b {
+        \\    if (a > b) {
         \\        return a
         \\    } else {
         \\        return b
@@ -4828,7 +4828,7 @@ test "E2E: while loop" {
         \\fn sum_to(n: i64) i64 {
         \\    var total = 0
         \\    var i = 0
-        \\    while i < n {
+        \\    while (i < n) {
         \\        total = total + i
         \\        i = i + 1
         \\    }
@@ -4947,10 +4947,10 @@ test "E2E: nested if statements" {
     const allocator = std.testing.allocator;
     const code =
         \\fn classify(x: i64) i64 {
-        \\    if x < 0 {
+        \\    if (x < 0) {
         \\        return -1
         \\    } else {
-        \\        if x > 0 {
+        \\        if (x > 0) {
         \\            return 1
         \\        } else {
         \\            return 0
@@ -4976,7 +4976,7 @@ test "E2E: recursive function" {
     const allocator = std.testing.allocator;
     const code =
         \\fn factorial(n: i64) i64 {
-        \\    if n <= 1 {
+        \\    if (n <= 1) {
         \\        return 1
         \\    } else {
         \\        return n * factorial(n - 1)

@@ -271,7 +271,7 @@ test "compile void function" {
 test "M6: if statement" {
     const code =
         \\fn max(a: int, b: int) int {
-        \\    if a > b {
+        \\    if (a > b) {
         \\        return a;
         \\    } else {
         \\        return b;
@@ -292,8 +292,8 @@ test "M6: if statement" {
 test "M6: simple conditional return" {
     const code =
         \\fn sign(x: int) int {
-        \\    if x > 0 { return 1; }
-        \\    if x < 0 { return -1; }
+        \\    if (x > 0) { return 1; }
+        \\    if (x < 0) { return -1; }
         \\    return 0;
         \\}
     ;
@@ -310,7 +310,7 @@ test "M7: simple while loop" {
         \\fn sum_to(n: int) int {
         \\    let i = 0;
         \\    let total = 0;
-        \\    while i < n {
+        \\    while (i < n) {
         \\        i = i + 1;
         \\        total = total + i;
         \\    }
@@ -352,7 +352,7 @@ test "M8: function calls between functions" {
 test "M8: recursive function call" {
     const code =
         \\fn factorial(n: int) int {
-        \\    if n <= 1 { return 1; }
+        \\    if (n <= 1) { return 1; }
         \\    return n * factorial(n - 1);
         \\}
     ;
@@ -373,9 +373,9 @@ test "P1.1: break in while loop" {
         \\fn find_threshold(limit: int) int {
         \\    var i = 0;
         \\    var sum = 0;
-        \\    while i < 100 {
+        \\    while (i < 100) {
         \\        sum = sum + i;
-        \\        if sum > limit {
+        \\        if (sum > limit) {
         \\            break;
         \\        }
         \\        i = i + 1;
@@ -397,11 +397,11 @@ test "P1.1: break in nested loops" {
         \\fn nested_break() int {
         \\    var count = 0;
         \\    var i = 0;
-        \\    while i < 10 {
+        \\    while (i < 10) {
         \\        var j = 0;
-        \\        while j < 10 {
+        \\        while (j < 10) {
         \\            count = count + 1;
-        \\            if j > 3 {
+        \\            if (j > 3) {
         \\                break;
         \\            }
         \\            j = j + 1;
@@ -424,9 +424,9 @@ test "P1.2: continue in while loop" {
         \\fn sum_odd(n: int) int {
         \\    var i = 0;
         \\    var sum = 0;
-        \\    while i < n {
+        \\    while (i < n) {
         \\        i = i + 1;
-        \\        if i % 2 == 0 {
+        \\        if (i % 2 == 0) {
         \\            continue;
         \\        }
         \\        sum = sum + i;
@@ -448,12 +448,12 @@ test "P1.2: continue in nested loops" {
         \\fn skip_evens() int {
         \\    var total = 0;
         \\    var i = 0;
-        \\    while i < 5 {
+        \\    while (i < 5) {
         \\        i = i + 1;
         \\        var j = 0;
-        \\        while j < 5 {
+        \\        while (j < 5) {
         \\            j = j + 1;
-        \\            if j % 2 == 0 {
+        \\            if (j % 2 == 0) {
         \\                continue;
         \\            }
         \\            total = total + 1;
@@ -549,7 +549,7 @@ test "P3.3: float arithmetic" {
 test "P3.3: float comparison" {
     const code =
         \\fn max_float(a: float, b: float) float {
-        \\    if a > b {
+        \\    if (a > b) {
         \\        return a;
         \\    }
         \\    return b;
@@ -644,11 +644,11 @@ test "wasm e2e: union with payload" {
         \\union Result { Ok: i64, Err: i32 }
         \\fn main() i64 {
         \\    let r: Result = Result.Ok(42)
-        \\    if r.tag != 0 { return 1 }
+        \\    if (r.tag != 0) { return 1 }
         \\    let val = r.Ok
-        \\    if val != 42 { return 2 }
+        \\    if (val != 42) { return 2 }
         \\    let e: Result = Result.Err(99)
-        \\    if e.tag != 1 { return 3 }
+        \\    if (e.tag != 1) { return 3 }
         \\    return 0
         \\}
     ;
@@ -665,11 +665,11 @@ test "wasm e2e: union mixed payload and unit variants" {
         \\union Event { Click: i64, Hover, KeyPress: i64 }
         \\fn main() i64 {
         \\    let e1: Event = Event.Hover
-        \\    if e1.tag != 1 { return 1 }
+        \\    if (e1.tag != 1) { return 1 }
         \\    let e2: Event = Event.Click(100)
-        \\    if e2.tag != 0 { return 2 }
+        \\    if (e2.tag != 0) { return 2 }
         \\    let clicks = e2.Click
-        \\    if clicks != 100 { return 3 }
+        \\    if (clicks != 100) { return 3 }
         \\    return 0
         \\}
     ;
@@ -705,14 +705,14 @@ test "wasm e2e: error union catch" {
     const code =
         \\const MyError = error { Fail, NotFound }
         \\fn mayFail(x: i64) MyError!i64 {
-        \\    if x < 0 { return error.Fail }
+        \\    if (x < 0) { return error.Fail }
         \\    return x * 2
         \\}
         \\fn main() i64 {
         \\    let result = mayFail(-1) catch 99
-        \\    if result != 99 { return 1 }
+        \\    if (result != 99) { return 1 }
         \\    let success = mayFail(5) catch 99
-        \\    if success != 10 { return 2 }
+        \\    if (success != 10) { return 2 }
         \\    return 0
         \\}
     ;
@@ -734,7 +734,7 @@ test "wasm e2e: error union try propagation" {
         \\}
         \\fn main() i64 {
         \\    let result = outer() catch 42
-        \\    if result != 42 { return 1 }
+        \\    if (result != 42) { return 1 }
         \\    return 0
         \\}
     ;
@@ -786,10 +786,10 @@ test "wasm e2e: defer with loop break" {
         \\fn main() i64 {
         \\    var sum: i64 = 0
         \\    var i: i64 = 0
-        \\    while i < 5 {
+        \\    while (i < 5) {
         \\        defer sum = sum + 1
         \\        i = i + 1
-        \\        if i == 3 { break }
+        \\        if (i == 3) { break }
         \\    }
         \\    return sum
         \\}
@@ -1022,7 +1022,7 @@ test "wasm e2e: closure passed to function" {
 test "wasm e2e: generic function basic" {
     const code =
         \\fn max(T)(a: T, b: T) T {
-        \\    if a > b { return a }
+        \\    if (a > b) { return a }
         \\    return b
         \\}
         \\fn main() i64 {
@@ -1349,11 +1349,11 @@ test "wasm e2e: list basic" {
         \\    capacity: i64,
         \\}
         \\fn List_ensureCapacity(T)(self: *List(T), needed: i64) void {
-        \\    if self.capacity >= needed { return }
+        \\    if (self.capacity >= needed) { return }
         \\    var new_cap: i64 = 8
-        \\    if self.capacity > 0 { new_cap = self.capacity * 2 }
+        \\    if (self.capacity > 0) { new_cap = self.capacity * 2 }
         \\    let bytes = new_cap * @sizeOf(T)
-        \\    if self.capacity == 0 {
+        \\    if (self.capacity == 0) {
         \\        self.items = @alloc(bytes)
         \\    } else {
         \\        self.items = @realloc(self.items, bytes)
@@ -1399,11 +1399,11 @@ test "wasm e2e: list growth" {
         \\    capacity: i64,
         \\}
         \\fn List_ensureCapacity(T)(self: *List(T), needed: i64) void {
-        \\    if self.capacity >= needed { return }
+        \\    if (self.capacity >= needed) { return }
         \\    var new_cap: i64 = 8
-        \\    if self.capacity > 0 { new_cap = self.capacity * 2 }
+        \\    if (self.capacity > 0) { new_cap = self.capacity * 2 }
         \\    let bytes = new_cap * @sizeOf(T)
-        \\    if self.capacity == 0 {
+        \\    if (self.capacity == 0) {
         \\        self.items = @alloc(bytes)
         \\    } else {
         \\        self.items = @realloc(self.items, bytes)
@@ -1426,7 +1426,7 @@ test "wasm e2e: list growth" {
         \\    list.count = 0
         \\    list.capacity = 0
         \\    var i: i64 = 0
-        \\    while i < 20 {
+        \\    while (i < 20) {
         \\        List_append(i64)(&list, i)
         \\        i = i + 1
         \\    }
@@ -1450,11 +1450,11 @@ test "wasm e2e: list pop" {
         \\    capacity: i64,
         \\}
         \\fn List_ensureCapacity(T)(self: *List(T), needed: i64) void {
-        \\    if self.capacity >= needed { return }
+        \\    if (self.capacity >= needed) { return }
         \\    var new_cap: i64 = 8
-        \\    if self.capacity > 0 { new_cap = self.capacity * 2 }
+        \\    if (self.capacity > 0) { new_cap = self.capacity * 2 }
         \\    let bytes = new_cap * @sizeOf(T)
-        \\    if self.capacity == 0 {
+        \\    if (self.capacity == 0) {
         \\        self.items = @alloc(bytes)
         \\    } else {
         \\        self.items = @realloc(self.items, bytes)
@@ -1503,11 +1503,11 @@ test "wasm e2e: list set" {
         \\    capacity: i64,
         \\}
         \\fn List_ensureCapacity(T)(self: *List(T), needed: i64) void {
-        \\    if self.capacity >= needed { return }
+        \\    if (self.capacity >= needed) { return }
         \\    var new_cap: i64 = 8
-        \\    if self.capacity > 0 { new_cap = self.capacity * 2 }
+        \\    if (self.capacity > 0) { new_cap = self.capacity * 2 }
         \\    let bytes = new_cap * @sizeOf(T)
-        \\    if self.capacity == 0 {
+        \\    if (self.capacity == 0) {
         \\        self.items = @alloc(bytes)
         \\    } else {
         \\        self.items = @realloc(self.items, bytes)
@@ -1555,11 +1555,11 @@ test "wasm e2e: list multi type" {
         \\    capacity: i64,
         \\}
         \\fn List_ensureCapacity(T)(self: *List(T), needed: i64) void {
-        \\    if self.capacity >= needed { return }
+        \\    if (self.capacity >= needed) { return }
         \\    var new_cap: i64 = 8
-        \\    if self.capacity > 0 { new_cap = self.capacity * 2 }
+        \\    if (self.capacity > 0) { new_cap = self.capacity * 2 }
         \\    let bytes = new_cap * @sizeOf(T)
-        \\    if self.capacity == 0 {
+        \\    if (self.capacity == 0) {
         \\        self.items = @alloc(bytes)
         \\    } else {
         \\        self.items = @realloc(self.items, bytes)
@@ -1612,11 +1612,11 @@ test "wasm e2e: list impl basic" {
         \\}
         \\impl List(T) {
         \\    fn ensureCapacity(self: *List(T), needed: i64) void {
-        \\        if self.capacity >= needed { return }
+        \\        if (self.capacity >= needed) { return }
         \\        var new_cap: i64 = 8
-        \\        if self.capacity > 0 { new_cap = self.capacity * 2 }
+        \\        if (self.capacity > 0) { new_cap = self.capacity * 2 }
         \\        let bytes = new_cap * @sizeOf(T)
-        \\        if self.capacity == 0 {
+        \\        if (self.capacity == 0) {
         \\            self.items = @alloc(bytes)
         \\        } else {
         \\            self.items = @realloc(self.items, bytes)
@@ -1664,11 +1664,11 @@ test "wasm e2e: list impl growth" {
         \\}
         \\impl List(T) {
         \\    fn ensureCapacity(self: *List(T), needed: i64) void {
-        \\        if self.capacity >= needed { return }
+        \\        if (self.capacity >= needed) { return }
         \\        var new_cap: i64 = 8
-        \\        if self.capacity > 0 { new_cap = self.capacity * 2 }
+        \\        if (self.capacity > 0) { new_cap = self.capacity * 2 }
         \\        let bytes = new_cap * @sizeOf(T)
-        \\        if self.capacity == 0 {
+        \\        if (self.capacity == 0) {
         \\            self.items = @alloc(bytes)
         \\        } else {
         \\            self.items = @realloc(self.items, bytes)
@@ -1692,7 +1692,7 @@ test "wasm e2e: list impl growth" {
         \\    list.count = 0
         \\    list.capacity = 0
         \\    var i: i64 = 0
-        \\    while i < 20 {
+        \\    while (i < 20) {
         \\        list.append(i)
         \\        i = i + 1
         \\    }
@@ -1717,11 +1717,11 @@ test "wasm e2e: list impl pop" {
         \\}
         \\impl List(T) {
         \\    fn ensureCapacity(self: *List(T), needed: i64) void {
-        \\        if self.capacity >= needed { return }
+        \\        if (self.capacity >= needed) { return }
         \\        var new_cap: i64 = 8
-        \\        if self.capacity > 0 { new_cap = self.capacity * 2 }
+        \\        if (self.capacity > 0) { new_cap = self.capacity * 2 }
         \\        let bytes = new_cap * @sizeOf(T)
-        \\        if self.capacity == 0 {
+        \\        if (self.capacity == 0) {
         \\            self.items = @alloc(bytes)
         \\        } else {
         \\            self.items = @realloc(self.items, bytes)
@@ -1772,11 +1772,11 @@ test "wasm e2e: list impl set" {
         \\}
         \\impl List(T) {
         \\    fn ensureCapacity(self: *List(T), needed: i64) void {
-        \\        if self.capacity >= needed { return }
+        \\        if (self.capacity >= needed) { return }
         \\        var new_cap: i64 = 8
-        \\        if self.capacity > 0 { new_cap = self.capacity * 2 }
+        \\        if (self.capacity > 0) { new_cap = self.capacity * 2 }
         \\        let bytes = new_cap * @sizeOf(T)
-        \\        if self.capacity == 0 {
+        \\        if (self.capacity == 0) {
         \\            self.items = @alloc(bytes)
         \\        } else {
         \\            self.items = @realloc(self.items, bytes)
@@ -1826,11 +1826,11 @@ test "wasm e2e: list impl multi type" {
         \\}
         \\impl List(T) {
         \\    fn ensureCapacity(self: *List(T), needed: i64) void {
-        \\        if self.capacity >= needed { return }
+        \\        if (self.capacity >= needed) { return }
         \\        var new_cap: i64 = 8
-        \\        if self.capacity > 0 { new_cap = self.capacity * 2 }
+        \\        if (self.capacity > 0) { new_cap = self.capacity * 2 }
         \\        let bytes = new_cap * @sizeOf(T)
-        \\        if self.capacity == 0 {
+        \\        if (self.capacity == 0) {
         \\            self.items = @alloc(bytes)
         \\        } else {
         \\            self.items = @realloc(self.items, bytes)
@@ -2096,9 +2096,9 @@ test "wasm e2e: memcpy basic" {
         \\    let d0 = @intToPtr(*i64, dst)
         \\    let d1 = @intToPtr(*i64, dst + 8)
         \\    let d2 = @intToPtr(*i64, dst + 16)
-        \\    if d0.* != 10 { return 1 }
-        \\    if d1.* != 20 { return 2 }
-        \\    if d2.* != 30 { return 3 }
+        \\    if (d0.* != 10) { return 1 }
+        \\    if (d1.* != 20) { return 2 }
+        \\    if (d2.* != 30) { return 3 }
         \\    @dealloc(src)
         \\    @dealloc(dst)
         \\    return 0
@@ -2117,7 +2117,7 @@ test "wasm e2e: memcpy zero length" {
         \\    let buf = @alloc(8)
         \\    @intToPtr(*i64, buf).* = 42
         \\    @memcpy(buf, buf, 0)
-        \\    if @intToPtr(*i64, buf).* != 42 { return 1 }
+        \\    if (@intToPtr(*i64, buf).* != 42) { return 1 }
         \\    @dealloc(buf)
         \\    return 0
         \\}
@@ -2153,7 +2153,7 @@ test "wasm e2e: slice param iteration" {
         \\fn sum(items: []i64) i64 {
         \\    var total: i64 = 0
         \\    var i: i64 = 0
-        \\    while i < items.len {
+        \\    while (i < items.len) {
         \\        total = total + items[i]
         \\        i = i + 1
         \\    }
@@ -2176,7 +2176,7 @@ test "wasm e2e: trap conditional" {
     const code =
         \\fn main() i64 {
         \\    let x: i64 = 42
-        \\    if x == 0 { @trap() }
+        \\    if (x == 0) { @trap() }
         \\    return 0
         \\}
     ;
@@ -2296,8 +2296,8 @@ test "wasm e2e: trait self type" {
         \\struct Point { x: i64, y: i64 }
         \\impl Eq for Point {
         \\    fn eq(self: *Point, other: *Point) i64 {
-        \\        if self.x == other.x {
-        \\            if self.y == other.y {
+        \\        if (self.x == other.x) {
+        \\            if (self.y == other.y) {
         \\                return 1
         \\            }
         \\        }
@@ -2371,15 +2371,15 @@ test "wasm e2e: trait bound basic" {
         \\}
         \\impl Comparable for i64 {
         \\    fn cmp(self: *i64, other: *i64) i64 {
-        \\        if self.* > other.* { return 1 }
-        \\        if self.* < other.* { return 0 - 1 }
+        \\        if (self.* > other.*) { return 1 }
+        \\        if (self.* < other.*) { return 0 - 1 }
         \\        return 0
         \\    }
         \\}
         \\fn max(T)(a: T, b: T) T where T: Comparable {
         \\    var x = a
         \\    var y = b
-        \\    if x.cmp(&y) > 0 { return a }
+        \\    if (x.cmp(&y) > 0) { return a }
         \\    return b
         \\}
         \\fn main() i64 {
@@ -2608,21 +2608,21 @@ test "wasm e2e: list bounds checking" {
         \\}
         \\impl List(T) {
         \\    fn ensureCapacity(self: *List(T), needed: i64) void {
-        \\        if self.capacity >= needed { return }
+        \\        if (self.capacity >= needed) { return }
         \\        var new_cap = self.capacity
         \\        var double_cap = new_cap + new_cap
-        \\        if needed > double_cap {
+        \\        if (needed > double_cap) {
         \\            new_cap = needed
-        \\        } else if self.capacity < 256 {
+        \\        } else if (self.capacity < 256) {
         \\            new_cap = double_cap
         \\        } else {
-        \\            while new_cap < needed {
+        \\            while (new_cap < needed) {
         \\                new_cap = new_cap + (new_cap + 768) / 4
         \\            }
         \\        }
-        \\        if new_cap < 8 { new_cap = 8 }
+        \\        if (new_cap < 8) { new_cap = 8 }
         \\        let bytes = new_cap * @sizeOf(T)
-        \\        if self.capacity == 0 {
+        \\        if (self.capacity == 0) {
         \\            self.items = @alloc(bytes)
         \\        } else {
         \\            self.items = @realloc(self.items, bytes)
@@ -2636,19 +2636,19 @@ test "wasm e2e: list bounds checking" {
         \\        self.count = self.count + 1
         \\    }
         \\    fn get(self: *List(T), index: i64) T {
-        \\        if index < 0 { @trap() }
-        \\        if index >= self.count { @trap() }
+        \\        if (index < 0) { @trap() }
+        \\        if (index >= self.count) { @trap() }
         \\        let ptr = @intToPtr(*T, self.items + index * @sizeOf(T))
         \\        return ptr.*
         \\    }
         \\    fn set(self: *List(T), index: i64, value: T) void {
-        \\        if index < 0 { @trap() }
-        \\        if index >= self.count { @trap() }
+        \\        if (index < 0) { @trap() }
+        \\        if (index >= self.count) { @trap() }
         \\        let ptr = @intToPtr(*T, self.items + index * @sizeOf(T))
         \\        ptr.* = value
         \\    }
         \\    fn free(self: *List(T)) void {
-        \\        if self.capacity > 0 {
+        \\        if (self.capacity > 0) {
         \\            @dealloc(self.items)
         \\        }
         \\        self.items = 0
@@ -2664,7 +2664,7 @@ test "wasm e2e: list bounds checking" {
         \\    list.set(0, 99)
         \\    let v = list.get(0)
         \\    list.free()
-        \\    if v != 99 { return 1 }
+        \\    if (v != 99) { return 1 }
         \\    return 0
         \\}
     ;
@@ -2684,21 +2684,21 @@ test "wasm e2e: list insert remove" {
         \\}
         \\impl List(T) {
         \\    fn ensureCapacity(self: *List(T), needed: i64) void {
-        \\        if self.capacity >= needed { return }
+        \\        if (self.capacity >= needed) { return }
         \\        var new_cap = self.capacity
         \\        var double_cap = new_cap + new_cap
-        \\        if needed > double_cap {
+        \\        if (needed > double_cap) {
         \\            new_cap = needed
-        \\        } else if self.capacity < 256 {
+        \\        } else if (self.capacity < 256) {
         \\            new_cap = double_cap
         \\        } else {
-        \\            while new_cap < needed {
+        \\            while (new_cap < needed) {
         \\                new_cap = new_cap + (new_cap + 768) / 4
         \\            }
         \\        }
-        \\        if new_cap < 8 { new_cap = 8 }
+        \\        if (new_cap < 8) { new_cap = 8 }
         \\        let bytes = new_cap * @sizeOf(T)
-        \\        if self.capacity == 0 {
+        \\        if (self.capacity == 0) {
         \\            self.items = @alloc(bytes)
         \\        } else {
         \\            self.items = @realloc(self.items, bytes)
@@ -2712,16 +2712,16 @@ test "wasm e2e: list insert remove" {
         \\        self.count = self.count + 1
         \\    }
         \\    fn get(self: *List(T), index: i64) T {
-        \\        if index < 0 { @trap() }
-        \\        if index >= self.count { @trap() }
+        \\        if (index < 0) { @trap() }
+        \\        if (index >= self.count) { @trap() }
         \\        let ptr = @intToPtr(*T, self.items + index * @sizeOf(T))
         \\        return ptr.*
         \\    }
         \\    fn insert(self: *List(T), index: i64, value: T) void {
-        \\        if index < 0 { @trap() }
-        \\        if index > self.count { @trap() }
+        \\        if (index < 0) { @trap() }
+        \\        if (index > self.count) { @trap() }
         \\        self.ensureCapacity(self.count + 1)
-        \\        if index < self.count {
+        \\        if (index < self.count) {
         \\            let src = self.items + index * @sizeOf(T)
         \\            let dst = src + @sizeOf(T)
         \\            let bytes = (self.count - index) * @sizeOf(T)
@@ -2732,11 +2732,11 @@ test "wasm e2e: list insert remove" {
         \\        self.count = self.count + 1
         \\    }
         \\    fn orderedRemove(self: *List(T), index: i64) T {
-        \\        if index < 0 { @trap() }
-        \\        if index >= self.count { @trap() }
+        \\        if (index < 0) { @trap() }
+        \\        if (index >= self.count) { @trap() }
         \\        let ptr = @intToPtr(*T, self.items + index * @sizeOf(T))
         \\        let value = ptr.*
-        \\        if index < self.count - 1 {
+        \\        if (index < self.count - 1) {
         \\            let dst = self.items + index * @sizeOf(T)
         \\            let src = dst + @sizeOf(T)
         \\            let bytes = (self.count - index - 1) * @sizeOf(T)
@@ -2746,7 +2746,7 @@ test "wasm e2e: list insert remove" {
         \\        return value
         \\    }
         \\    fn free(self: *List(T)) void {
-        \\        if self.capacity > 0 {
+        \\        if (self.capacity > 0) {
         \\            @dealloc(self.items)
         \\        }
         \\        self.items = 0
@@ -2759,12 +2759,12 @@ test "wasm e2e: list insert remove" {
         \\    list.append(10)
         \\    list.append(30)
         \\    list.insert(1, 20)
-        \\    if list.get(0) != 10 { return 1 }
-        \\    if list.get(1) != 20 { return 2 }
-        \\    if list.get(2) != 30 { return 3 }
+        \\    if (list.get(0) != 10) { return 1 }
+        \\    if (list.get(1) != 20) { return 2 }
+        \\    if (list.get(2) != 30) { return 3 }
         \\    let removed = list.orderedRemove(0)
-        \\    if removed != 10 { return 4 }
-        \\    if list.count != 2 { return 5 }
+        \\    if (removed != 10) { return 4 }
+        \\    if (list.count != 2) { return 5 }
         \\    list.free()
         \\    return 0
         \\}
@@ -2785,21 +2785,21 @@ test "wasm e2e: list reverse clone" {
         \\}
         \\impl List(T) {
         \\    fn ensureCapacity(self: *List(T), needed: i64) void {
-        \\        if self.capacity >= needed { return }
+        \\        if (self.capacity >= needed) { return }
         \\        var new_cap = self.capacity
         \\        var double_cap = new_cap + new_cap
-        \\        if needed > double_cap {
+        \\        if (needed > double_cap) {
         \\            new_cap = needed
-        \\        } else if self.capacity < 256 {
+        \\        } else if (self.capacity < 256) {
         \\            new_cap = double_cap
         \\        } else {
-        \\            while new_cap < needed {
+        \\            while (new_cap < needed) {
         \\                new_cap = new_cap + (new_cap + 768) / 4
         \\            }
         \\        }
-        \\        if new_cap < 8 { new_cap = 8 }
+        \\        if (new_cap < 8) { new_cap = 8 }
         \\        let bytes = new_cap * @sizeOf(T)
-        \\        if self.capacity == 0 {
+        \\        if (self.capacity == 0) {
         \\            self.items = @alloc(bytes)
         \\        } else {
         \\            self.items = @realloc(self.items, bytes)
@@ -2813,21 +2813,21 @@ test "wasm e2e: list reverse clone" {
         \\        self.count = self.count + 1
         \\    }
         \\    fn get(self: *List(T), index: i64) T {
-        \\        if index < 0 { @trap() }
-        \\        if index >= self.count { @trap() }
+        \\        if (index < 0) { @trap() }
+        \\        if (index >= self.count) { @trap() }
         \\        let ptr = @intToPtr(*T, self.items + index * @sizeOf(T))
         \\        return ptr.*
         \\    }
         \\    fn set(self: *List(T), index: i64, value: T) void {
-        \\        if index < 0 { @trap() }
-        \\        if index >= self.count { @trap() }
+        \\        if (index < 0) { @trap() }
+        \\        if (index >= self.count) { @trap() }
         \\        let ptr = @intToPtr(*T, self.items + index * @sizeOf(T))
         \\        ptr.* = value
         \\    }
         \\    fn reverse(self: *List(T)) void {
         \\        var i: i64 = 0
         \\        var j: i64 = self.count - 1
-        \\        while i < j {
+        \\        while (i < j) {
         \\            let pi = @intToPtr(*T, self.items + i * @sizeOf(T))
         \\            let pj = @intToPtr(*T, self.items + j * @sizeOf(T))
         \\            let tmp = pi.*
@@ -2839,7 +2839,7 @@ test "wasm e2e: list reverse clone" {
         \\    }
         \\    fn clone(self: *List(T)) List(T) {
         \\        var new_list: List(T) = .{}
-        \\        if self.count > 0 {
+        \\        if (self.count > 0) {
         \\            let bytes = self.count * @sizeOf(T)
         \\            new_list.items = @alloc(bytes)
         \\            @memcpy(new_list.items, self.items, bytes)
@@ -2849,7 +2849,7 @@ test "wasm e2e: list reverse clone" {
         \\        return new_list
         \\    }
         \\    fn free(self: *List(T)) void {
-        \\        if self.capacity > 0 {
+        \\        if (self.capacity > 0) {
         \\            @dealloc(self.items)
         \\        }
         \\        self.items = 0
@@ -2863,11 +2863,11 @@ test "wasm e2e: list reverse clone" {
         \\    list.append(2)
         \\    list.append(3)
         \\    list.reverse()
-        \\    if list.get(0) != 3 { return 1 }
-        \\    if list.get(2) != 1 { return 2 }
+        \\    if (list.get(0) != 3) { return 1 }
+        \\    if (list.get(2) != 1) { return 2 }
         \\    var copy = list.clone()
         \\    list.set(0, 99)
-        \\    if copy.get(0) != 3 { return 3 }
+        \\    if (copy.get(0) != 3) { return 3 }
         \\    list.free()
         \\    copy.free()
         \\    return 0
@@ -2889,21 +2889,21 @@ test "wasm e2e: list search equal" {
         \\}
         \\impl List(T) {
         \\    fn ensureCapacity(self: *List(T), needed: i64) void {
-        \\        if self.capacity >= needed { return }
+        \\        if (self.capacity >= needed) { return }
         \\        var new_cap = self.capacity
         \\        var double_cap = new_cap + new_cap
-        \\        if needed > double_cap {
+        \\        if (needed > double_cap) {
         \\            new_cap = needed
-        \\        } else if self.capacity < 256 {
+        \\        } else if (self.capacity < 256) {
         \\            new_cap = double_cap
         \\        } else {
-        \\            while new_cap < needed {
+        \\            while (new_cap < needed) {
         \\                new_cap = new_cap + (new_cap + 768) / 4
         \\            }
         \\        }
-        \\        if new_cap < 8 { new_cap = 8 }
+        \\        if (new_cap < 8) { new_cap = 8 }
         \\        let bytes = new_cap * @sizeOf(T)
-        \\        if self.capacity == 0 {
+        \\        if (self.capacity == 0) {
         \\            self.items = @alloc(bytes)
         \\        } else {
         \\            self.items = @realloc(self.items, bytes)
@@ -2918,30 +2918,30 @@ test "wasm e2e: list search equal" {
         \\    }
         \\    fn indexOf(self: *List(T), value: T) i64 {
         \\        var i: i64 = 0
-        \\        while i < self.count {
+        \\        while (i < self.count) {
         \\            let ptr = @intToPtr(*T, self.items + i * @sizeOf(T))
-        \\            if ptr.* == value { return i }
+        \\            if (ptr.* == value) { return i }
         \\            i = i + 1
         \\        }
         \\        return 0 - 1
         \\    }
         \\    fn contains(self: *List(T), value: T) i64 {
-        \\        if self.indexOf(value) >= 0 { return 1 }
+        \\        if (self.indexOf(value) >= 0) { return 1 }
         \\        return 0
         \\    }
         \\    fn equal(self: *List(T), other: *List(T)) i64 {
-        \\        if self.count != other.count { return 0 }
+        \\        if (self.count != other.count) { return 0 }
         \\        var i: i64 = 0
-        \\        while i < self.count {
+        \\        while (i < self.count) {
         \\            let pa = @intToPtr(*T, self.items + i * @sizeOf(T))
         \\            let pb = @intToPtr(*T, other.items + i * @sizeOf(T))
-        \\            if pa.* != pb.* { return 0 }
+        \\            if (pa.* != pb.*) { return 0 }
         \\            i = i + 1
         \\        }
         \\        return 1
         \\    }
         \\    fn free(self: *List(T)) void {
-        \\        if self.capacity > 0 { @dealloc(self.items) }
+        \\        if (self.capacity > 0) { @dealloc(self.items) }
         \\        self.items = 0
         \\        self.count = 0
         \\        self.capacity = 0
@@ -2952,14 +2952,14 @@ test "wasm e2e: list search equal" {
         \\    a.append(10)
         \\    a.append(20)
         \\    a.append(30)
-        \\    if a.contains(20) != 1 { return 1 }
-        \\    if a.contains(99) != 0 { return 2 }
-        \\    if a.indexOf(30) != 2 { return 3 }
+        \\    if (a.contains(20) != 1) { return 1 }
+        \\    if (a.contains(99) != 0) { return 2 }
+        \\    if (a.indexOf(30) != 2) { return 3 }
         \\    var b: List(i64) = .{}
         \\    b.append(10)
         \\    b.append(20)
         \\    b.append(30)
-        \\    if a.equal(&b) != 1 { return 4 }
+        \\    if (a.equal(&b) != 1) { return 4 }
         \\    a.free()
         \\    b.free()
         \\    return 0
@@ -2981,21 +2981,21 @@ test "wasm e2e: list bulk ops compact" {
         \\}
         \\impl List(T) {
         \\    fn ensureCapacity(self: *List(T), needed: i64) void {
-        \\        if self.capacity >= needed { return }
+        \\        if (self.capacity >= needed) { return }
         \\        var new_cap = self.capacity
         \\        var double_cap = new_cap + new_cap
-        \\        if needed > double_cap {
+        \\        if (needed > double_cap) {
         \\            new_cap = needed
-        \\        } else if self.capacity < 256 {
+        \\        } else if (self.capacity < 256) {
         \\            new_cap = double_cap
         \\        } else {
-        \\            while new_cap < needed {
+        \\            while (new_cap < needed) {
         \\                new_cap = new_cap + (new_cap + 768) / 4
         \\            }
         \\        }
-        \\        if new_cap < 8 { new_cap = 8 }
+        \\        if (new_cap < 8) { new_cap = 8 }
         \\        let bytes = new_cap * @sizeOf(T)
-        \\        if self.capacity == 0 {
+        \\        if (self.capacity == 0) {
         \\            self.items = @alloc(bytes)
         \\        } else {
         \\            self.items = @realloc(self.items, bytes)
@@ -3009,15 +3009,15 @@ test "wasm e2e: list bulk ops compact" {
         \\        self.count = self.count + 1
         \\    }
         \\    fn get(self: *List(T), index: i64) T {
-        \\        if index < 0 { @trap() }
-        \\        if index >= self.count { @trap() }
+        \\        if (index < 0) { @trap() }
+        \\        if (index >= self.count) { @trap() }
         \\        let ptr = @intToPtr(*T, self.items + index * @sizeOf(T))
         \\        return ptr.*
         \\    }
         \\    fn appendNTimes(self: *List(T), value: T, n: i64) void {
         \\        self.ensureCapacity(self.count + n)
         \\        var i: i64 = 0
-        \\        while i < n {
+        \\        while (i < n) {
         \\            let ptr = @intToPtr(*T, self.items + self.count * @sizeOf(T))
         \\            ptr.* = value
         \\            self.count = self.count + 1
@@ -3025,12 +3025,12 @@ test "wasm e2e: list bulk ops compact" {
         \\        }
         \\    }
         \\    fn deleteRange(self: *List(T), start: i64, end: i64) void {
-        \\        if start < 0 { @trap() }
-        \\        if end > self.count { @trap() }
-        \\        if start > end { @trap() }
+        \\        if (start < 0) { @trap() }
+        \\        if (end > self.count) { @trap() }
+        \\        if (start > end) { @trap() }
         \\        let removed = end - start
-        \\        if removed == 0 { return }
-        \\        if end < self.count {
+        \\        if (removed == 0) { return }
+        \\        if (end < self.count) {
         \\            let src = self.items + end * @sizeOf(T)
         \\            let dst = self.items + start * @sizeOf(T)
         \\            let bytes = (self.count - end) * @sizeOf(T)
@@ -3039,14 +3039,14 @@ test "wasm e2e: list bulk ops compact" {
         \\        self.count = self.count - removed
         \\    }
         \\    fn compact(self: *List(T)) void {
-        \\        if self.count < 2 { return }
+        \\        if (self.count < 2) { return }
         \\        var write: i64 = 1
         \\        var read: i64 = 1
-        \\        while read < self.count {
+        \\        while (read < self.count) {
         \\            let curr = @intToPtr(*T, self.items + read * @sizeOf(T))
         \\            let prev = @intToPtr(*T, self.items + (write - 1) * @sizeOf(T))
-        \\            if curr.* != prev.* {
-        \\                if write != read {
+        \\            if (curr.* != prev.*) {
+        \\                if (write != read) {
         \\                    let dst = @intToPtr(*T, self.items + write * @sizeOf(T))
         \\                    dst.* = curr.*
         \\                }
@@ -3057,7 +3057,7 @@ test "wasm e2e: list bulk ops compact" {
         \\        self.count = write
         \\    }
         \\    fn free(self: *List(T)) void {
-        \\        if self.capacity > 0 { @dealloc(self.items) }
+        \\        if (self.capacity > 0) { @dealloc(self.items) }
         \\        self.items = 0
         \\        self.count = 0
         \\        self.capacity = 0
@@ -3066,9 +3066,9 @@ test "wasm e2e: list bulk ops compact" {
         \\fn main() i64 {
         \\    var list: List(i64) = .{}
         \\    list.appendNTimes(0, 5)
-        \\    if list.count != 5 { return 1 }
+        \\    if (list.count != 5) { return 1 }
         \\    list.deleteRange(1, 3)
-        \\    if list.count != 3 { return 2 }
+        \\    if (list.count != 3) { return 2 }
         \\    list.free()
         \\    var d: List(i64) = .{}
         \\    d.append(1)
@@ -3077,10 +3077,10 @@ test "wasm e2e: list bulk ops compact" {
         \\    d.append(2)
         \\    d.append(3)
         \\    d.compact()
-        \\    if d.count != 3 { return 3 }
-        \\    if d.get(0) != 1 { return 4 }
-        \\    if d.get(1) != 2 { return 5 }
-        \\    if d.get(2) != 3 { return 6 }
+        \\    if (d.count != 3) { return 3 }
+        \\    if (d.get(0) != 1) { return 4 }
+        \\    if (d.get(1) != 2) { return 5 }
+        \\    if (d.get(2) != 3) { return 6 }
         \\    d.free()
         \\    return 0
         \\}

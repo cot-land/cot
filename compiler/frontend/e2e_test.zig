@@ -150,12 +150,12 @@ test "e2e: all arithmetic ops" {
 test "e2e: comparison ops" {
     var result = try runPipeline(std.testing.allocator,
         \\fn cmp(a: i64, b: i64) bool {
-        \\    if a == b { return true }
-        \\    if a != b { return true }
-        \\    if a < b { return true }
-        \\    if a <= b { return true }
-        \\    if a > b { return true }
-        \\    if a >= b { return true }
+        \\    if (a == b) { return true }
+        \\    if (a != b) { return true }
+        \\    if (a < b) { return true }
+        \\    if (a <= b) { return true }
+        \\    if (a > b) { return true }
+        \\    if (a >= b) { return true }
         \\    return false
         \\}
     );
@@ -183,7 +183,7 @@ test "e2e: unary ops" {
         \\fn unary(a: i64, b: bool) i64 {
         \\    var x = -a
         \\    var y = !b
-        \\    if y { return x }
+        \\    if (y) { return x }
         \\    return 0
         \\}
     );
@@ -198,7 +198,7 @@ test "e2e: unary ops" {
 test "e2e: if-else" {
     var result = try runPipeline(std.testing.allocator,
         \\fn max(a: i64, b: i64) i64 {
-        \\    if a > b {
+        \\    if (a > b) {
         \\        return a
         \\    } else {
         \\        return b
@@ -215,10 +215,10 @@ test "e2e: if-else" {
 test "e2e: nested if" {
     var result = try runPipeline(std.testing.allocator,
         \\fn classify(x: i64) i64 {
-        \\    if x < 0 {
+        \\    if (x < 0) {
         \\        return 0 - 1
         \\    } else {
-        \\        if x > 0 {
+        \\        if (x > 0) {
         \\            return 1
         \\        } else {
         \\            return 0
@@ -235,7 +235,7 @@ test "e2e: while loop" {
         \\fn sum_to(n: i64) i64 {
         \\    var total = 0
         \\    var i = 1
-        \\    while i <= n {
+        \\    while (i <= n) {
         \\        total = total + i
         \\        i = i + 1
         \\    }
@@ -250,8 +250,8 @@ test "e2e: while with break" {
     var result = try runPipeline(std.testing.allocator,
         \\fn find_first_even(n: i64) i64 {
         \\    var i = 1
-        \\    while i <= n {
-        \\        if i % 2 == 0 {
+        \\    while (i <= n) {
+        \\        if (i % 2 == 0) {
         \\            return i
         \\        }
         \\        i = i + 1
@@ -266,8 +266,8 @@ test "e2e: while with break" {
 test "e2e: logical and/or" {
     var result = try runPipeline(std.testing.allocator,
         \\fn logic(a: bool, b: bool) bool {
-        \\    if a and b { return true }
-        \\    if a or b { return true }
+        \\    if (a and b) { return true }
+        \\    if (a or b) { return true }
         \\    return false
         \\}
     );
@@ -323,7 +323,7 @@ test "e2e: function call" {
 test "e2e: recursive function" {
     var result = try runPipeline(std.testing.allocator,
         \\fn factorial(n: i64) i64 {
-        \\    if n <= 1 { return 1 }
+        \\    if (n <= 1) { return 1 }
         \\    return n * factorial(n - 1)
         \\}
     );
@@ -458,7 +458,7 @@ test "e2e: array indexing" {
 test "e2e: fibonacci" {
     var result = try runPipeline(std.testing.allocator,
         \\fn fib(n: i64) i64 {
-        \\    if n <= 1 { return n }
+        \\    if (n <= 1) { return n }
         \\    return fib(n - 1) + fib(n - 2)
         \\}
     );
@@ -471,7 +471,7 @@ test "e2e: gcd" {
         \\fn gcd(a_in: i64, b_in: i64) i64 {
         \\    var a = a_in
         \\    var b = b_in
-        \\    while b != 0 {
+        \\    while (b != 0) {
         \\        var t = b
         \\        b = a % b
         \\        a = t
@@ -493,8 +493,8 @@ test "e2e: div_rem (from parity)" {
         \\    var quot: i64 = 0
         \\    var rem: i64 = 0
         \\    div_rem(17, 5, &quot, &rem)
-        \\    if quot == 3 {
-        \\        if rem == 2 { return 0 }
+        \\    if (quot == 3) {
+        \\        if (rem == 2) { return 0 }
         \\    }
         \\    return 1
         \\}
@@ -509,9 +509,9 @@ test "e2e: nested loops" {
         \\fn nested() i64 {
         \\    var sum = 0
         \\    var i = 0
-        \\    while i < 3 {
+        \\    while (i < 3) {
         \\        var j = 0
-        \\        while j < 3 {
+        \\        while (j < 3) {
         \\            sum = sum + 1
         \\            j = j + 1
         \\        }
@@ -528,10 +528,10 @@ test "e2e: complex control flow" {
     var result = try runPipeline(std.testing.allocator,
         \\fn complex(x: i64) i64 {
         \\    var result = 0
-        \\    if x > 0 {
+        \\    if (x > 0) {
         \\        var i = 0
-        \\        while i < x {
-        \\            if i % 2 == 0 {
+        \\        while (i < x) {
+        \\            if (i % 2 == 0) {
         \\                result = result + i
         \\            } else {
         \\                result = result - i

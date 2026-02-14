@@ -158,7 +158,7 @@ test "integration: if statement" {
 
     const code =
         \\fn max(a: i64, b: i64) i64 {
-        \\    if a > b {
+        \\    if (a > b) {
         \\        return a
         \\    } else {
         \\        return b
@@ -181,7 +181,7 @@ test "integration: while loop" {
         \\fn sum_to(n: i64) i64 {
         \\    var total = 0
         \\    var i = 0
-        \\    while i <= n {
+        \\    while (i <= n) {
         \\        total = total + i
         \\        i = i + 1
         \\    }
