@@ -1,437 +1,225 @@
-# Wasm Upgrade Plan: Making Cot a True Wasm-First Language
+# Wasm Upgrade Plan: Cot 0.4 Execution Plan
 
-**Purpose:** Concrete task list for upgrading Cot's Wasm output from 1.0 to modern 2.0/3.0. Every high-priority feature here is already shipping in all browsers.
+**Purpose:** Accurate status of Wasm feature adoption + concrete execution plan for remaining work toward Cot 0.4.
 
-**Last updated:** February 2026
-
----
-
-## Current State
-
-Cot emits **Wasm 1.0** with cherry-picked 2.0 features (sign extension ops, reference types for tables). All Wasm 3.0 features are absent. This means:
-
-- `@memcpy` compiles to a **word-by-word copy loop** (gen.zig:998-1013) instead of native `memory.copy`
-- Closures use **`call_indirect` + table** instead of typed `call_ref`
-- Deep recursion **stack overflows** — no `return_call` tail calls
-- Error propagation generates **branch-per-call-site** — no `try_table`/`throw`
-- Compound returns (string ptr+len) use a **complex local-decomposition workaround** with 5+ special cases
-- `tail_call` SSA op exists but is **stubbed out**: `lower_wasm.zig:347` says `"Wasm has no tail call (yet)"`
+**Version:** Cot 0.3.1 | **Updated:** February 2026
 
 ---
 
-## Task List
+## 1. Current State (Audited)
 
-### Wave 1: Wasm 2.0 Quick Wins (hours of work, immediate value)
+Cot emits Wasm 1.0 with cherry-picked 2.0 and 3.0 features. The following table reflects what's actually implemented and shipping, verified against the codebase.
 
-These features are universally supported and require minimal code changes.
+| Feature | Status | Evidence |
+|---------|--------|----------|
+| `memory.copy` (0xFC 0x0A) | **DONE** | `gen.zig:1076-1087` — `.wasm_lowered_move` emits `memory_copy` directly (no loop) |
+| `trunc_sat` (0xFC 0x00-07) | **DONE** | `constants.zig:393-401` — all 8 variants defined; `gen.zig:1054-1062` emits for float→int |
+| Data count section (§12) | **DONE** | `link.zig:562-570` — conditional emission when data segments exist |
+| `return_call` (0x12) tail calls | **DONE** | `lower_wasm.zig:353` maps `tail_call => .wasm_return_call`; peephole optimizer at lines 368-398 converts `call+return` patterns; `gen.zig:859-883` emits opcode 0x12 |
+| Multi-value function types | **PARTIAL** | Types declared correctly in `link.zig`; compound returns (string ptr+len) use `compound_len_locals` workaround (`gen.zig:99-102`) with 5+ special cases |
+| WasmGC struct ops | **~85% DONE** | `struct.new` (0xFB 0x00), `struct.get` (0xFB 0x02), `struct.set` (0xFB 0x05) all working; 12 tests in `test/e2e/wasmgc.cot`; missing: arrays, nested structs |
+| `memory.fill` (0xFC 0x0B) | **DEFINED** | Opcode in `constants.zig:407`, decoded in `decoder.zig:827`, but never emitted by gen.zig |
+| `call_indirect` (0x11) closures | **DONE** | `gen.zig:908-949` — closure calls with CTXT global + plain indirect calls; 4 E2E tests passing |
 
-#### Task 1.1: Replace memcpy loop with `memory.copy`
+### What Changed Since the Original Plan
 
-**Impact:** 5-10x faster memcpy — affects every List grow, Map rehash, string copy, struct clone.
+The original document (Feb 2026) listed Waves 1-2 as TODO. In fact:
 
-**Current code** (`gen.zig:998-1013`):
-```zig
-.wasm_lowered_move => {
-    const size: i32 = @intCast(v.aux_int);
-    const num_words: u32 = @intCast(@divTrunc(size + 7, 8));
-    var word_i: u32 = 0;
-    while (word_i < num_words) : (word_i += 1) {  // LOOP — one i64 load/store per iteration
-        ...
-        const ld = try self.builder.append(.i64_load);
-        ...
-        const st = try self.builder.append(.i64_store);
-    }
-},
-```
-
-**Target code:**
-```zig
-.wasm_lowered_move => {
-    const size: i32 = @intCast(v.aux_int);
-    try self.getValue64(v.args[0]); // dest
-    _ = try self.builder.append(.i32_wrap_i64);
-    try self.getValue64(v.args[1]); // src
-    _ = try self.builder.append(.i32_wrap_i64);
-    // Push size as i32
-    const c = try self.builder.append(.i32_const);
-    c.from = prog_mod.constAddr(size);
-    // memory.copy: dest src size → (copies size bytes from src to dest)
-    _ = try self.builder.append(.memory_copy);
-},
-```
-
-**Files to change:**
-| File | Change |
-|------|--------|
-| `wasm_opcodes.zig:306` | Add `FC_MEMORY_FILL: u8 = 0x0B` (copy already defined) |
-| `gen.zig:998-1013` | Replace loop with `memory.copy` emission |
-| `assemble.zig` | Add `.memory_copy` encoding: `0xFC`, LEB128(0x0A), `0x00`, `0x00` |
-| `constants.zig` (or instruction enum) | Add `.memory_copy`, `.memory_fill` instruction variants |
-
-**Verification:** Run `./test/run_all.sh` — all memcpy-dependent tests (list, map, set, string) must pass.
+- **Wave 1 (memory.copy, trunc_sat, data count):** All complete. `memory.copy` replaced the word-by-word loop. `trunc_sat` provides safe float→int. Data count section emits when needed.
+- **Wave 2 (tail calls):** Complete with a peephole optimizer that automatically converts `call+return` to `return_call`. The original claim that `lower_wasm.zig:347` said "Wasm has no tail call (yet)" is outdated — it now maps directly to `wasm_return_call`.
+- **WasmGC:** Not in the original plan at all, but substantially implemented (dual memory model decided and working).
 
 ---
 
-#### Task 1.2: Add `memory.fill` for zero-initialization
+## 2. Architecture Decision: Dual Memory Model
 
-**Impact:** Faster zero-init for `@alloc` and struct initialization.
+Cot uses a **dual memory model** — different memory management per target:
 
-**Files to change:**
-| File | Change |
-|------|--------|
-| `wasm_opcodes.zig` | Confirm `FC_MEMORY_FILL = 0x0B` added in 1.1 |
-| `gen.zig` | Where zero-init loops exist (or where `@alloc` zeroes memory), emit `memory.fill` |
-| `assemble.zig` | Add `.memory_fill` encoding: `0xFC`, LEB128(0x0B), `0x00` |
-| `arc.zig` | If allocator does manual zero-fill, replace with `memory.fill` call |
+| Target | Flag | Memory Model | Struct Representation |
+|--------|------|-------------|----------------------|
+| **Wasm** | `--target=wasm32-gc` | **WasmGC** — browser GC manages struct lifetime | GC objects (`struct.new`, `struct.get`, `struct.set`) |
+| **Native** | default | **ARC** — retain/release with unified cleanup stack | Linear memory with deterministic destruction |
+| **Both** | — | **Linear memory** for raw allocations (`@alloc`), strings, slices | Pointer + length decomposition at ABI boundary |
 
----
+**Rationale:** Browser engines already have a high-performance GC. Shipping ARC to the browser adds overhead for no benefit. Conversely, native executables benefit from deterministic destruction without GC pauses.
 
-#### Task 1.3: Add non-trapping float-to-int conversions
+**Precedent:** Kotlin/Wasm uses the same dual approach — WasmGC for objects on browser, native GC (or manual) on other targets.
 
-**Impact:** Safe float casts — no unexpected traps on NaN/infinity.
-
-**Current:** `i64.trunc_f64_s` (0xAE) traps on out-of-range values.
-**Target:** `i64.trunc_sat_f64_s` (0xFC 0x06) saturates instead.
-
-**Files to change:**
-| File | Change |
-|------|--------|
-| `wasm_opcodes.zig` | Add `FC_I32_TRUNC_SAT_F32_S = 0x00` through `FC_I64_TRUNC_SAT_F64_U = 0x07` |
-| `gen.zig` | Where float-to-int ops are emitted, use `trunc_sat` variants |
-| `assemble.zig` | Add encoding for `0xFC 0x00` through `0xFC 0x07` |
-| `decoder.zig` | Add decoding for the new opcodes (native pipeline) |
+**Implementation:**
+- `target.zig`: `gc` field, `isWasmGC()` method
+- `link.zig`: GC struct types (0x5F) at indices 0..N-1, func types offset by N
+- `gen.zig:1001-1037`: `wasm_gc_struct_new`, `wasm_gc_struct_get`, `wasm_gc_struct_set`
+- GC ref locals initialized with `struct.new_default` (0xFB 0x01) at function entry, before dispatch loop
 
 ---
 
-#### Task 1.4: Emit data count section
+## 3. Remaining Execution Plan for 0.4
 
-**Impact:** Spec compliance — required for single-pass validation.
+Five phases, ordered by complexity and dependency. Phases 1-2 are quick wins; Phase 3 eliminates tech debt; Phases 4-5 are advanced Wasm 3.0 adoption.
 
-**Current:** `link.zig` emits sections 1-11 but skips 12 (data count). The enum `Section.data_count = 12` is defined but never emitted.
+### Phase 1: WasmGC Completion (struct + array operations)
 
-**Files to change:**
-| File | Change |
-|------|--------|
-| `link.zig` | After function section, before code section, emit data count section with the number of data segments |
+**Goal:** Complete WasmGC so all Cot types (not just flat structs) work on `--target=wasm32-gc`.
 
----
+**Current gap:** `struct.new`/`get`/`set` work for flat structs. Missing: GC arrays for `List(T)` and `[]T`, nested structs (struct fields referencing other GC structs).
 
-### Wave 2: Wasm 3.0 Tail Calls (1-2 days, prevents stack overflow)
+| Task | Files | Details |
+|------|-------|---------|
+| `array.new` / `array.get` / `array.set` / `array.len` | `constants.zig`, `gen.zig`, `link.zig` | GC arrays for List(T) backing storage. Opcodes: 0xFB 0x06 (`array.new`), 0xFB 0x0B (`array.get`), 0xFB 0x0E (`array.set`), 0xFB 0x0F (`array.len`) |
+| Nested struct support | `gen.zig`, `link.zig` | Struct fields with `(ref null $typeidx)` — struct.get returns a ref, not i64 |
+| GC-aware method dispatch | `lower.zig`, `gen.zig` | Method receivers: pass ref directly, don't `emitAddrLocal` (partially done) |
 
-#### Task 2.1: Add `return_call` opcode
+**Reference:** Kotlin/Wasm array lowering, wasmtime GC test suite (`tests/misc_testsuite/gc/`).
 
-**Files to change:**
-| File | Change |
-|------|--------|
-| `wasm_opcodes.zig` | Add `return_call: u8 = 0x12`, `return_call_indirect: u8 = 0x13` |
+**Verification:** Extend `test/e2e/wasmgc.cot` with array creation, access, List(T) operations, nested struct tests. Run with `--target=wasm32-gc` via wasmtime.
 
 ---
 
-#### Task 2.2: Add `wasm_return_call` SSA op
+### Phase 2: `memory.fill` Wiring (quick win)
 
-**Current:** `op.zig:74` has `tail_call` but `lower_wasm.zig:347` maps it to `null`.
+**Goal:** Use `memory.fill` (0xFC 0x0B) for zero-initialization instead of manual loops.
 
-**Files to change:**
-| File | Change |
-|------|--------|
-| `op.zig` | Add `wasm_return_call` alongside existing `wasm_call` (line ~200) |
-| `lower_wasm.zig:347` | Change `tail_call => null` to `tail_call => .wasm_return_call` |
+**Current state:** Opcode defined in `constants.zig:407`, decoded in `decoder.zig:827`, but never emitted. Zero-init paths in `arc.zig` (allocator) and struct default init don't use it.
 
----
+| Task | Files | Details |
+|------|-------|---------|
+| Wire `memory.fill` into zero-init | `gen.zig`, `arc.zig` | Where `@alloc` zeroes memory or structs are default-initialized, emit `memory.fill` (dest, 0x00, size) instead of loop |
+| Add SSA→Wasm lowering | `lower_wasm.zig` | Map zero/fill ops to `wasm_lowered_fill` → emit `memory.fill` |
 
-#### Task 2.3: Detect tail position in the frontend
-
-A call is in tail position when:
-1. It's the last expression in a `return` statement
-2. No `defer` statements are active in the current scope
-3. No ARC releases are pending (no owned objects to release)
-
-**Files to change:**
-| File | Change |
-|------|--------|
-| `lower.zig` | In `lowerReturn()` (or equivalent), check if return value is a call. If so and no defer/ARC pending, emit `tail_call` SSA op instead of `call` + `ret` |
-
-**Detection pseudocode:**
-```
-if return_expr is Call and
-   active_defers.len == 0 and
-   arc_cleanup_stack.len == 0:
-    emit SSA tail_call
-else:
-    emit SSA call + ret
-```
+**Verification:** `./test/run_all.sh` — all allocation-heavy tests (list, map, set, json) must pass.
 
 ---
 
-#### Task 2.4: Emit `return_call` in Wasm codegen
+### Phase 3: Multi-Value Return Cleanup (eliminate compound workarounds)
 
-**Files to change:**
-| File | Change |
-|------|--------|
-| `gen.zig` | Add `wasm_return_call` handler: push args, emit `0x12` with func index (no `aret` needed) |
-| `assemble.zig` | Add `.return_call` encoding: `0x12 funcidx:u32` |
+**Goal:** Remove `compound_len_locals` workaround. Compound returns (string ptr+len) should use Wasm multi-value returns natively.
 
----
+**Current state:** Functions returning `string` already declare multi-result types in `link.zig`. But `gen.zig` uses a `compound_len_locals` map (`gen.zig:99-102`) to store the second return value in a separate local, with 5+ special-case code paths:
+- `gen.zig:1190-1206` — call sites: pop len to separate local
+- `gen.zig:366-379` — `string_ptr`/`string_len` extraction ops
+- `gen.zig:224-233` — return handler: push both from locals
+- Return value materialization for nested calls
 
-#### Task 2.5: Parse and decode `return_call` in native pipeline
+| Task | Files | Details |
+|------|-------|---------|
+| Remove `compound_len_locals` map | `gen.zig` | Both return values stay on Wasm stack; callers destructure with `local.set` pairs |
+| Simplify `.ret` handler | `gen.zig:202-233` | Push N values for N-return function, emit `aret`. No special cases. |
+| Remove extraction op special cases | `gen.zig:354-379` | `string_ptr`/`string_len` become standard stack operations |
+| Update native pipeline | `driver.zig`, `ssa_builder.zig` | Verify multi-return decoding/translation handles clean multi-value |
 
-**Files to change:**
-| File | Change |
-|------|--------|
-| `wasm_parser.zig` | Parse opcode `0x12` (read funcidx) |
-| `decoder.zig` | Decode `0x12` → emit CLIF tail call |
-| `translator.zig` | Translate to CLIF `return_call` instruction |
-| ARM64 backend | `RetCall` instruction already defined at `aarch64/inst/mod.zig:1702` — wire it up |
-| x64 backend | `return_call_known`/`return_call_unknown` defined at `x64/inst/mod.zig:669-675` — wire up |
+**Risk:** HIGH — 5 special cases in gen.zig, each a potential regression. All stdlib modules (string, json, fs) exercise compound returns.
 
-**Verification:** Write recursive test that overflows without tail calls, passes with them:
-```cot
-fn countDown(n: i64) i64 {
-    if n == 0 { return 0 }
-    return countDown(n - 1)  // tail call — should handle n=1000000
-}
-test "deep tail recursion" {
-    @assert_eq(countDown(1000000), 0)
-}
-```
+**Verification:** Full test suite — `cot test test/e2e/features.cot` (native + wasm32), all stdlib tests, `./test/run_all.sh`.
 
 ---
 
-### Wave 3: Wasm 3.0 Typed Function References (3-4 days, faster closures)
+### Phase 4: `call_ref` for Closures (Wasm 3.0 typed function references)
 
-#### Task 3.1: Add typed ref opcodes
+**Goal:** Replace `call_indirect` + function table with `call_ref` (0x14) — direct typed call, no table overhead.
 
-**Files to change:**
-| File | Change |
-|------|--------|
-| `wasm_opcodes.zig` | Add `call_ref = 0x14`, `ref_as_non_null = 0xD4`, `br_on_null = 0xD5`, `br_on_non_null = 0xD6`, `ref_eq = 0xD3` |
+**Current state:** Closures use `call_indirect` (0x11) with a function table and CTXT global (`gen.zig:908-949`). This requires:
+1. Function table in element section
+2. Runtime type check on every indirect call
+3. `i32_wrap_i64` to convert table index
 
----
+`call_ref` eliminates the table entirely — closures carry a typed function reference.
 
-#### Task 3.2: Extend type section for function reference types
+| Task | Files | Details |
+|------|-------|---------|
+| Add `call_ref` opcode | `constants.zig` | `call_ref = 0x14`, `ref.func`, `ref_as_non_null` (0xD4) |
+| Extend type section | `link.zig` | Emit `(ref $fn_type)` for each closure signature |
+| Replace closure codegen | `gen.zig:908-931` | `call_indirect` → `call_ref`; closure creation: `ref.func` instead of table index |
+| Parse/decode in native pipeline | `wasm_parser.zig`, `decoder.zig`, `translator.zig` | Decode 0x14, translate to CLIF indirect call |
 
-Currently the type section only declares function signatures. Typed refs require the type section to also declare reference types that closures can use.
+**Reference:** wasmtime `cranelift/src/translate/` — `call_ref` handling in `translate_operator.rs`.
 
-**Files to change:**
-| File | Change |
-|------|--------|
-| `link.zig` | In type section emission, also emit `(ref $fn_type)` types for each closure signature used in the program |
-
----
-
-#### Task 3.3: Change closure codegen to use `call_ref`
-
-**Current** (`gen.zig:870-911`):
-```zig
-.wasm_lowered_closure_call => {
-    // ... push args ...
-    try self.getValue64(args[0]);        // table index
-    _ = try self.builder.append(.i32_wrap_i64);
-    const p = try self.builder.append(.call_indirect);  // table lookup + type check
-    p.to = prog_mod.constAddr(v.aux_int);
-},
-```
-
-**Target:**
-```zig
-.wasm_lowered_closure_call => {
-    // ... push args ...
-    // Push typed function reference (not table index)
-    try self.getValue64(args[0]);        // (ref $fn_type) — no i32 wrap needed
-    const p = try self.builder.append(.call_ref);        // direct call, no table
-    p.to = prog_mod.constAddr(v.aux_int);  // type index
-},
-```
-
-**Files to change:**
-| File | Change |
-|------|--------|
-| `gen.zig:870-911` | Replace `call_indirect` with `call_ref` for closure calls |
-| `gen.zig` | Where closures are created, emit `ref.func` instead of storing table index |
-| `link.zig` | Programs using only closures (no `call_indirect` for other purposes) can skip table emission |
-| `assemble.zig` | Add `.call_ref` encoding: `0x14 typeidx:u32` |
+**Verification:** Closure tests in `test/e2e/features.cot` (4 tests: no-capture, single/multi-capture, passed-as-arg). Both native and wasm32 targets.
 
 ---
 
-#### Task 3.4: Parse/decode `call_ref` in native pipeline
+### Phase 5: Exception Handling (Wasm 3.0, highest complexity)
 
-**Files to change:**
-| File | Change |
-|------|--------|
-| `wasm_parser.zig` | Parse `0x14` (read typeidx) |
-| `decoder.zig` | Decode `0x14` → CLIF indirect call |
-| `translator.zig` | Translate `call_ref` to CLIF call instruction |
+**Goal:** Use Wasm 3.0 exceptions (`throw`/`try_table`) for error propagation and reliable `defer` across call boundaries.
 
----
+**Current state:** Error returns construct an error union struct (tag + value) and return it. Callers check the tag with `br_if`. `defer` runs at function exit via explicit calls before `return` — if a called function traps, defer doesn't run.
 
-### Wave 4: Multi-Value Returns (2-3 days, eliminate compound return bugs)
+**Design:** Single generic `$cot_error` tag with `(error_set_id: i32, error_value: i32)` payload. Matches Go/Zig's "errors are values" philosophy. One tag is simpler than per-error-set tags and sufficient for Cot's error model.
 
-#### Task 4.1: Emit multi-result function types
+| Task | Files | Details |
+|------|-------|---------|
+| Add exception opcodes | `constants.zig` | `throw` (0x08), `throw_ref` (0x0A), `try_table` (0x1F) |
+| Add tag section | `link.zig` | Section 13 after global section, before export section |
+| Error return → `throw` | `lower.zig`, `gen.zig` | On error path, emit `throw $cot_error` instead of struct construction + return |
+| `try` expr → `try_table` | `lower.zig`, `gen.zig` | Wrap call in `try_table (catch $cot_error $handler)`, success value stays on stack |
+| Defer-across-calls | `lower.zig`, `gen.zig` | Functions with `defer`: body wrapped in `try_table (catch_all_ref $cleanup)`, cleanup runs defers then `throw_ref` to re-propagate |
+| Native pipeline | `wasm_parser.zig`, `decoder.zig`, `translator.zig` | Decode new opcodes, translate to CLIF exception handling |
 
-**Current:** Functions returning `string` declare `(result i64)` — single return. The second value (len) is stored to a separate local via `compound_len_locals`.
+**Impact:** Rewrites error return ABI. Every function returning `error!T` changes calling convention. Touches entire pipeline.
 
-**Target:** Functions returning `string` declare `(result i64 i64)` — two returns. Both values stay on the Wasm stack.
+**Risk:** HIGHEST — ABI change affects all error-returning functions, stdlib error paths, and the native pipeline.
 
-**Files to change:**
-| File | Change |
-|------|--------|
-| `link.zig` | When building function types, detect compound return types and emit `(result i64 i64)` |
-| `driver.zig` | Function type declarations: change compound returns from 1 to 2 results |
+**Reference:** Go error handling → Wasm exception mapping. wasmtime EH tests (`tests/misc_testsuite/exception-handling/`).
 
----
-
-#### Task 4.2: Simplify return value emission
-
-**Current** (`gen.zig:202-226`): Three separate code paths for return depending on whether the return value is `string_make`, a call result with `compound_len_locals`, or a simple value.
-
-**Target:** For multi-value returns, just push both values and emit `return`. No special cases.
-
-**Files to change:**
-| File | Change |
-|------|--------|
-| `gen.zig:202-226` | Simplify `.ret` handler — push N values for N-return function, emit `aret` |
-| `gen.zig:92-95` | Remove `compound_len_locals` map entirely |
-| `gen.zig:354-367` | Remove `string_ptr`/`string_len` special-case extraction — values are already on stack |
-| `gen.zig:1112-1127` | Remove compound return storage workaround — caller gets both values on stack |
+**Verification:** Error handling tests, defer tests, stdlib error paths (fs, json). Both native and wasm32.
 
 ---
 
-#### Task 4.3: Update native pipeline for multi-value
+## 4. Post-0.4 Tracking
 
-**Files to change:**
-| File | Change |
-|------|--------|
-| `wasm_parser.zig` | Already handles multi-return types — verify |
-| `decoder.zig` | Verify multi-return decoding works |
-| `translator.zig` | Verify `translateCall` handles multi-return |
-| `driver.zig` | Update function type registration for compound returns |
-| `ssa_builder.zig` | Simplify compound return handling (currently has special decomposition logic) |
+Features to track but not implement until their target version.
 
----
+| Feature | Target | Wasm Status | Cot Use Case |
+|---------|--------|-------------|--------------|
+| Threads/atomics | 0.5 | Shipping all browsers (Phase 4) | Multi-threaded server, atomic ARC refcount |
+| Stack switching | 0.5 | Phase 3, ~2026-2027 | `async fn` / `await` on Wasm target |
+| Component model | 0.6 | Active dev (WASI 0.3) | Cross-language module interop, package system |
+| Memory64 | 0.7+ | Shipping (no Safari) | >4GB server workloads |
+| Branch hinting | 0.7+ | Standardized (Phase 5) | Cold-path optimization (`@branchHint`) |
+| Wide arithmetic | 0.7+ | Phase 3 | BigInt, crypto 128-bit intermediates |
 
-### Wave 5: Wasm 3.0 Exception Handling (1-2 weeks, reliable defer + zero-cost errors)
-
-This is the most complex wave. Consider implementing after waves 1-4 are stable.
-
-#### Task 5.1: Add exception opcodes and tag section
-
-**Files to change:**
-| File | Change |
-|------|--------|
-| `wasm_opcodes.zig` | Add `throw = 0x08`, `throw_ref = 0x0A`, `try_table = 0x1F`. Add `Section.tag = 13` |
-| `link.zig` | Emit tag section (ID 13) after global section, before export section |
+**Architecture note:** The current Wasm-as-IR pipeline (Cot → SSA → Wasm → {browser | AOT native via CLIF}) works for all features through 0.4. Only **stack switching** (async) may force an IR split (`lower_clif.zig`: SSA → CLIF directly), since stack switching is post-Wasm-3.0 and may not be expressible through Wasm bytecode. This split is anticipated for 0.5.
 
 ---
 
-#### Task 5.2: Define error tags
+## 5. Reference Traceability
 
-Each Cot error set (`FsError`, `ParseError`, etc.) maps to a Wasm exception tag. The tag carries the error value as payload.
+Every feature traced to its reference implementation.
 
-**Design decision needed:** One tag per error set, or one generic "Cot error" tag?
-
-- **One tag per error set:** More precise catch handlers, matches Cot's type system
-- **One generic tag:** Simpler implementation, matches Go/Zig's "errors are values" philosophy
-
-**Recommendation:** Start with one generic tag carrying `(error_set_id: i32, error_value: i32)`. Refine later.
-
----
-
-#### Task 5.3: Emit `throw` for error returns
-
-**Current:** Functions returning `FsError!i64` construct an error union struct (tag + value) and `return` it. Caller checks the tag with `br_if`.
-
-**Target:** On error, emit `throw $cot_error` with the error value. On success, just return the value directly (no tag, no union struct).
-
-**Impact on the entire pipeline:**
-| File | Change |
-|------|--------|
-| `lower.zig` | Error return → emit `throw` SSA op instead of struct construction |
-| `gen.zig` | `throw` → Wasm `throw` opcode (0x08) |
-| `link.zig` | Declare tag in tag section |
-
----
-
-#### Task 5.4: Emit `try_table` for `try` expressions
-
-**Current:** `try expr` → call, check tag, branch to error handler.
-
-**Target:** `try expr` → wrap call in `try_table`, catch clause branches to error handler.
-
-```wasm
-;; Current: try openFile("foo.txt")
-call $openFile        ;; returns error union (tag, value)
-local.tee $result
-i32.load offset=0     ;; load tag
-i32.const 0
-i32.ne
-br_if $error_handler  ;; branch if error
-
-;; Target:
-try_table (catch $cot_error $error_handler)
-  call $openFile      ;; throws on error, returns plain value on success
-end
-;; if we get here, success — value is on stack
-```
-
----
-
-#### Task 5.5: Wrap defer-containing functions in `try_table`
-
-**Current:** `defer cleanup()` runs at function exit via explicit call before `return`. If a called function traps, defer doesn't run.
-
-**Target:** Function body wrapped in `try_table (catch_all $defer_cleanup)`. If ANY exception propagates through, the catch clause runs defers then re-throws with `throw_ref`.
-
-```wasm
-;; Function with defer:
-try_table (catch_all_ref $cleanup)
-  ;; ... function body ...
-  ;; normal exit: run defers, return
-  call $cleanup
-  return
-end
-$cleanup:
-  ;; exception path: run defers, re-throw
-  call $cleanup
-  throw_ref
-```
-
----
-
-### Wave 6: Post-3.0 Features (track, don't implement yet)
-
-These features are either not shipping in all browsers or are still being standardized. Track them but don't invest implementation time yet.
-
-| Feature | Status | When to Implement | Cot Use Case |
-|---------|--------|-------------------|--------------|
-| **Threads/atomics** | Shipping all browsers | When adding concurrency (0.5) | Multi-threaded server, atomic ARC |
-| **Stack switching** | Phase 3, ~2026-2027 | When adding async (0.5) | `async fn` on Wasm target |
-| **Component model** | Active dev, WASI 0.3 | When adding packages (0.6) | Cross-language module interop |
-| **Branch hinting** | Standardized | After waves 1-5 | Cold-path optimization |
-| **Wide arithmetic** | Phase 3 | When adding BigInt/crypto | 128-bit intermediates |
-| **Memory64** | Shipping (no Safari) | When targeting >4GB servers | Remove i32 narrowing |
+| Feature | Reference | Location |
+|---------|-----------|----------|
+| `memory.copy` / `memory.fill` | Go `cmd/compile/internal/wasm` | `references/go/src/cmd/internal/obj/wasm/wasmobj.go` |
+| `trunc_sat` | Go Wasm codegen | `references/go/src/cmd/compile/internal/wasm/` |
+| `return_call` tail calls | Go SSA → Wasm lowering | `references/go/src/cmd/compile/internal/ssa/rewriteWasm.go` |
+| `call_ref` typed refs | wasmtime Cranelift translate | `references/wasmtime/crates/cranelift/src/translate/` |
+| WasmGC struct/array ops | Kotlin/Wasm + wasmtime GC tests | `references/wasmtime/tests/misc_testsuite/gc/` |
+| Exception handling (`throw`/`try_table`) | wasmtime EH tests + Go error model | `references/wasmtime/tests/misc_testsuite/exception-handling/` |
+| CLIF → ARM64 lowering | Cranelift aarch64 backend | `references/wasmtime/cranelift/codegen/src/isa/aarch64/` |
+| CLIF → x64 lowering | Cranelift x64 backend | `references/wasmtime/cranelift/codegen/src/isa/x64/` |
+| Error semantics | Zig error unions, `errdefer` | Zig language reference |
+| Dual memory model | Kotlin/Wasm (WasmGC + linear) | Kotlin/Wasm documentation |
 
 ---
 
 ## Summary
 
-| Wave | Features | Effort | Impact |
-|------|----------|--------|--------|
-| **1** | `memory.copy`/`fill`, `trunc_sat`, data count | 1 day | Performance, safety, compliance |
-| **2** | `return_call` tail calls | 1-2 days | No stack overflow on recursion |
-| **3** | `call_ref` typed function references | 3-4 days | Faster closures, no table overhead |
-| **4** | Multi-value returns | 2-3 days | Eliminate compound return bugs |
-| **5** | `try_table`/`throw` exception handling | 1-2 weeks | Reliable defer, zero-cost errors |
-| **6** | Post-3.0 features | Track only | Future waves |
+| Phase | Features | Status | Risk | Effort |
+|-------|----------|--------|------|--------|
+| **1** | WasmGC arrays + nested structs | Remaining | Medium | 3-4 days |
+| **2** | `memory.fill` wiring | Remaining | Low | Hours |
+| **3** | Multi-value return cleanup | Remaining | High | 2-3 days |
+| **4** | `call_ref` typed function refs | Remaining | Medium | 3-4 days |
+| **5** | `throw` / `try_table` exceptions | Remaining | Highest | 1-2 weeks |
 
-**Total for waves 1-4:** ~8-10 days of focused work
-**Total for wave 5:** ~1-2 weeks additional
+**Already complete:** `memory.copy`, `trunc_sat` (8 variants), data count section, `return_call` tail calls (with peephole optimizer), WasmGC struct ops (12 tests), closures via `call_indirect`.
 
-A Wasm-first language should use the latest Wasm features. Waves 1-4 bring Cot's Wasm output from 2019-era to 2025-era with roughly 2 weeks of work. This is the highest-ROI investment for the compiler before 1.0.
+**Phases 1-4 total:** ~9-11 days of focused work.
+**Phase 5 additional:** ~1-2 weeks (ABI-breaking change, full pipeline impact).
 
 ---
 
 ## Reference Documents
 
-- `docs/specs/WASM_2_0_REFERENCE.md` — Complete Wasm 2.0 feature reference
-- `docs/specs/WASM_3_0_REFERENCE.md` — Complete Wasm 3.0 feature reference with opcodes
+- `docs/specs/WASM_3_0_REFERENCE.md` — Wasm 3.0 opcodes and adoption priorities
 - `docs/specs/wasm-3.0-full.txt` — Full Wasm 3.0 specification (25K lines)
+- `docs/ROADMAP_1_0.md` — Road to 1.0, version trajectory, feature waves
+- `docs/PIPELINE_ARCHITECTURE.md` — Full compiler pipeline reference map
