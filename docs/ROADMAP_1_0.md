@@ -303,6 +303,19 @@ Combines compiler-internal improvements (Wasm codegen cleanup) with user-facing 
 | 25 | `cot lint` (basic) | Unused variables, unreachable code, shadowing warnings. | `deno lint`, `zig` warnings |
 | 26 | Improved `cot test` output | Colors, timing per test, `--verbose` flag, failure diffs. | Deno test output, Zig test output |
 
+#### Wave 5: Production Capabilities
+
+| # | Feature | Description | Reference |
+|---|---------|-------------|-----------|
+| 27 | `async fn` / `await` | Language-level async with target-specific lowering. | Zig async, JS async/await |
+| 28 | Native event loop | epoll (Linux) / kqueue (macOS) for non-blocking I/O. | Go netpoll, Tokio |
+| 29 | Browser async | JS Promise interop for `async fn` on `--target=wasm32`. | wasm-bindgen futures |
+| 30 | IR split (`lower_clif.zig`) | Direct SSA → CLIF path bypassing Wasm, if async demands it. | — |
+| 31 | `std/net` | TCP/UDP sockets with async support. | Go `net`, Deno `Deno.connect` |
+| 32 | `std/crypto` | Hash functions (SHA-256, BLAKE3), HMAC. | Go `crypto`, Deno `crypto` |
+| 33 | Database driver | `std/sql` or `std/db` — connect, query, parameterized statements. | Go `database/sql` |
+| 34 | Web framework prototype | The `@server`/`@client` story — shared types, auto boundary layer. | Next.js, SvelteKit |
+
 #### Deferred Wasm Work (post-0.4)
 
 These Wasm upgrades are tracked in `docs/WASM_UPGRADE_PLAN.md` but aren't needed for 0.4. They improve performance or enable future features, not current ones.
@@ -353,20 +366,10 @@ A developer should be able to:
 - **Wave 1 (language):** 7/7 done
 - **Wave 2 (DX):** 6/6 done
 - **Wave 3 (maturity + project system + DX):** 8/9 done (multi-value cleanup deferred)
-- **Wave 4 (polish):** 0/4 — can slip to 0.4.x patches
+- **Wave 4 (polish):** 0/4
+- **Wave 5 (production):** 0/8
 
-### 0.5: Make It Production-Capable
-
-- `async fn` / `await` — language-level async
-- Native event loop (epoll/kqueue)
-- Browser async (JS Promise interop)
-- `std/net` — TCP/UDP sockets
-- IR split (`lower_clif.zig`) if needed for async on native
-- Web framework prototype (the @server/@client story)
-- `std/crypto` — hash functions, HMAC
-- Database driver (`std/sql` or `std/db`)
-
-### 0.6+: Make It Community-Ready
+### 0.5: Make It Community-Ready
 
 - Package manager (`cot add`, `cot remove`, dependency resolution)
 - Package registry (cot.land)
@@ -450,11 +453,10 @@ Cot 0.3 built the hard infrastructure — a complete compiler pipeline with dual
 The road to 1.0:
 
 1. **0.3 (COMPLETE):** Language features, type system, stdlib, I/O, MCP server — Cot is a real language
-2. **0.4 (IN PROGRESS):** Waves 1-3 done (language + DX + project system + cross-file LSP + @safe mode). Remaining: ecosystem polish (Wave 4)
-3. **0.5:** Async, concurrency, WasmGC completion, web framework — make it production-capable
-4. **0.6+:** Ecosystem, package manager — make it community-ready
+2. **0.4 (IN PROGRESS):** Waves 1-3 done. Remaining: ecosystem polish (Wave 4) + production capabilities (Wave 5: async, event loop, crypto, DB, web framework)
+3. **0.5:** Ecosystem, package manager — make it community-ready
 5. **1.0:** Polish, docs, stability — make it public
 
 The Wasm-as-IR architecture works for everything through 0.4. The IR split happens in 0.5 only if async demands it. Version numbers mark maturity milestones, not deadlines.
 
-**0.4's goal: a developer can build a real project with `cot init`, `cot fmt`, `cot test`, and `cot build` — with good errors, autocomplete, and an HTTP server in the stdlib. Like Deno, but compiled to native.**
+**0.4's goal: a developer can build production applications — async web servers, database-backed APIs, full-stack apps with shared types — using `cot init`, `cot fmt`, `cot test`, and `cot build`. Like Deno, but compiled to native with zero runtime overhead.**
