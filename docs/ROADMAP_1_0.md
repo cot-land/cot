@@ -286,35 +286,69 @@ Combines compiler-internal improvements (Wasm codegen cleanup) with user-facing 
 
 #### Wave 4: Ecosystem Polish (current work)
 
+| # | Feature | Status | Description | Reference |
+|---|---------|--------|-------------|-----------|
+| 23 | Tree-sitter grammar | **DONE** | Syntax highlighting in any editor (Neovim, Helix, Zed, GitHub). Zero errors across all 62 Cot files. | Zig tree-sitter-zig |
+| 24 | `cot check` | | Type-check without compiling — fast feedback loop. | `zig build check`, `deno check` |
+| 25 | `cot lint` (basic) | | Unused variables, unreachable code, shadowing warnings. | `deno lint`, `zig` warnings |
+| 26 | Improved `cot test` output | | Colors, timing per test, `--verbose` flag, failure diffs. | Deno test output, Zig test output |
+| 27 | Watch mode (`--watch`) | | `cot run --watch`, `cot test --watch` — auto-restart on file changes. | `deno run --watch` |
+| 28 | `cot bench` | | `bench "name" { }` blocks with timing output, iterations, ns/op. | `deno bench`, Zig `@Timer` |
+| 29 | `cot task` | | Run tasks defined in `cot.json` — like npm scripts but built-in. | `deno task`, npm scripts |
+
+#### Wave 5: Language Maturity (ported from Zig)
+
+Language features that make Cot a more capable and ergonomic language, ported from Zig's proven designs.
+
 | # | Feature | Description | Reference |
 |---|---------|-------------|-----------|
-| 23 | Tree-sitter grammar | Enables syntax highlighting in any editor (Neovim, Helix, Zed, GitHub). | Zig tree-sitter-zig |
-| 24 | `cot check` | Type-check without compiling — fast feedback loop. | `zig build check`, `deno check` |
-| 25 | `cot lint` (basic) | Unused variables, unreachable code, shadowing warnings. | `deno lint`, `zig` warnings |
-| 26 | Improved `cot test` output | Colors, timing per test, `--verbose` flag, failure diffs. | Deno test output, Zig test output |
+| 30 | Destructuring | `const a, b = getTuple()` and `const a, b, c = getTriple()`. Essential ergonomics for tuples. | Zig 0.14 destructuring |
+| 31 | Inferred error sets (`!T`) | `fn read() ![]u8` — compiler tracks exact error set. No need to name it when callers just `try`. | Zig `!T` syntax |
+| 32 | `noreturn` type | Type for functions that never return (`@exit`, `@trap`, `unreachable`). Enables better dead code analysis. | Zig `noreturn` |
+| 33 | Doc comments (`///`) | Attach documentation to declarations. Required for `cot doc`. | Zig `///`, Rust `///` |
+| 34 | `cot doc` | Generate API documentation from doc comments. HTML output. | `deno doc`, `zig doc` |
+| 35 | `@embedFile("path")` | Compile-time file embedding — returns `string`. For templates, config, assets, SQL schemas. | Zig `@embedFile` |
+| 36 | `@TypeOf(expr)` | Get the type of any expression at comptime. Needed for type-level programming. | Zig `@TypeOf` |
+| 37 | `@hasField(T, "name")` | Comptime query: does struct T have this field? Enables generic serialization. | Zig `@hasField` |
+| 38 | `@field(value, "name")` | Access struct field by comptime string. Key enabler for JSON derive, ORM, reflection. | Zig `@field` |
+| 39 | `inline for` | Comptime loop unrolling — iterate struct fields at compile time. Combined with `@typeInfo`, enables derive-like patterns. | Zig `inline for` |
+| 40 | Runtime safety (debug mode) | Integer overflow, array bounds, null unwrap, unreachable — panic in debug builds, unchecked in release. `cot build --release` disables checks. | Zig ReleaseSafe |
+| 41 | Error set merge (`\|\|`) | `const AllErrors = FileError \|\| NetworkError` — compose error sets from multiple sources. | Zig error set merge |
 
-#### Wave 5: Production Capabilities
+#### Wave 6: Standard Library Expansion (ported from Deno)
+
+Batteries-included standard library matching Deno's breadth. Every module is pure Cot, tested on both native and Wasm.
+
+| # | Feature | Description | Reference |
+|---|---------|-------------|-----------|
+| 42 | `std/path` | `join`, `resolve`, `dirname`, `basename`, `extname`, `isAbsolute`, `relative`. Cross-platform (POSIX + Windows separators via comptime). | Deno `@std/path`, Go `path/filepath` |
+| 43 | `std/crypto` | SHA-256, SHA-512, BLAKE3, HMAC. Pure Cot implementation (no C deps). Essential for auth tokens, checksums. | Deno `@std/crypto`, Go `crypto/sha256` |
+| 44 | `std/regex` | Regular expression engine. NFA-based (Thompson's construction). `match`, `find`, `findAll`, `replace`, `split`. | Go `regexp`, Rust `regex` |
+| 45 | `std/fmt` | Format strings (`fmt("Hello, {}", name)`), ANSI colors (`red`, `bold`, `dim`), byte formatting (`formatBytes(1024)` → `"1 KB"`), duration formatting. | Deno `@std/fmt`, Go `fmt` |
+| 46 | `std/log` | Structured logging with levels (debug/info/warn/error). Configurable handlers (stdout, file). Timestamp + level prefix. | Deno `@std/log`, Go `log/slog` |
+| 47 | `std/dotenv` | Parse `.env` files into key-value pairs. `loadEnv()` reads `.env` and populates environment. | Deno `@std/dotenv` |
+| 48 | `std/cli` | Argument parsing: define flags (`--port=8080`), positional args, subcommands, auto-generated `--help`. | Deno `@std/cli`, Go `flag` |
+| 49 | `std/uuid` | UUID v4 generation (random-based). Uses `@random` builtin. | Deno `@std/uuid` |
+| 50 | `std/semver` | Parse, compare, and check semantic versions. `satisfies("1.2.3", ">=1.0.0")`. | Deno `@std/semver` |
+| 51 | `std/testing` | Enhanced test utilities: `assertContains`, `assertThrows`, snapshot testing, basic mocking. | Deno `@std/testing`, Zig testing |
+| 52 | `std/process` | Subprocess spawning: `exec("ls", ["-la"])` → output string. Pipe stdin/stdout. Exit code. | Deno `Deno.Command`, Go `os/exec` |
+
+#### Wave 5 (legacy): Production Capabilities
 
 | # | Feature | Status | Reference |
 |---|---------|--------|-----------|
-| 27 | `async fn` / `await` | **DONE** — Dual backend: Wasm state machine (Rust) + native eager eval (Zig). `try await` for error unions across await points. 18 tests. | Rust coroutine.rs, Zig async |
-| 28 | Native event loop | **DONE** — 9 builtins (kqueue/epoll/fcntl), `std/async` with platform-abstracted API, async I/O wrappers (asyncAccept/Read/Write/Connect). 14 tests. | Go netpoll, Zig Kqueue.zig |
-| 29 | Browser async | JS Promise interop for `async fn` on `--target=wasm32`. | wasm-bindgen futures |
-| 30 | IR split (`lower_clif.zig`) | **NOT NEEDED** — Async implemented within Wasm-first architecture. Deferred indefinitely. | — |
-| 31 | `std/net` | Partially done via `std/http` (TCP sockets) + `std/async` (async I/O). | Go `net`, Deno `Deno.connect` |
-| 32 | `std/crypto` | Hash functions (SHA-256, BLAKE3), HMAC. | Go `crypto`, Deno `crypto` |
-| 33 | Database driver | `std/sql` or `std/db` — connect, query, parameterized statements. | Go `database/sql` |
-| 34 | Web framework prototype | The `@server`/`@client` story — shared types, auto boundary layer. | Next.js, SvelteKit |
+| 53 | `async fn` / `await` | **DONE** — Dual backend: Wasm state machine (Rust) + native eager eval (Zig). `try await` for error unions across await points. 18 tests. | Rust coroutine.rs, Zig async |
+| 54 | Native event loop | **DONE** — 9 builtins (kqueue/epoll/fcntl), `std/async` with platform-abstracted API, async I/O wrappers (asyncAccept/Read/Write/Connect). 14 tests. | Go netpoll, Zig Kqueue.zig |
+| 55 | Browser async | JS Promise interop for `async fn` on `--target=wasm32`. | wasm-bindgen futures |
+| 56 | IR split (`lower_clif.zig`) | **NOT NEEDED** — Async implemented within Wasm-first architecture. Deferred indefinitely. | — |
 
 #### Deferred Wasm Work (post-0.4)
-
-These Wasm upgrades are tracked in `docs/WASM_UPGRADE_PLAN.md` but aren't needed for 0.4. They improve performance or enable future features, not current ones.
 
 | Feature | Why deferred | Target |
 |---------|-------------|--------|
 | WasmGC arrays + nested structs | Only matters for `--target=wasm32-gc` (browser story, 0.5+) | 0.5 |
 | `call_ref` typed function refs | `call_indirect` works fine, `call_ref` is a perf optimization | 0.5 |
-| `throw`/`try_table` exceptions | ABI-breaking, 1-2 weeks, highest risk. Current error unions work. Enables reliable defer-across-calls when needed. | 0.5 |
+| `throw`/`try_table` exceptions | ABI-breaking, 1-2 weeks, highest risk. Current error unions work. | 0.5 |
 
 #### Deno Feature Parity Comparison
 
@@ -325,13 +359,20 @@ These Wasm upgrades are tracked in `docs/WASM_UPGRADE_PLAN.md` but aren't needed
 | `deno fmt` | `cot fmt` | Done |
 | `deno lint` | — | Wave 4 |
 | `deno check` | — | Wave 4 |
+| `deno bench` | — | Wave 4 |
+| `deno doc` | — | Wave 5 |
 | `deno init` | `cot init` | Done |
+| `deno task` | — | Wave 4 |
 | `deno.json` | `cot.json` | Done |
-| Built-in HTTP server | `std/http` | Done |
+| `deno compile` | `cot build` | Done (native binary, no runtime) |
+| `deno serve` | `std/http` | Done |
 | LSP | autocomplete, rename, references, cross-file | Done |
-| TypeScript types | Cot types (stronger) | Done |
+| TypeScript types | Cot types (stronger, compiled) | Done |
 | Single binary | `cot` binary | Done |
 | Edge deploy | `--target=wasm32-wasi` | Done |
+| Watch mode | — | Wave 4 |
+| Permissions | — | 0.6 |
+| Test coverage | — | 0.5 |
 
 **What Cot has that Deno doesn't:**
 - AOT compilation to native binary (no V8 runtime, no cold starts)
@@ -339,42 +380,159 @@ These Wasm upgrades are tracked in `docs/WASM_UPGRADE_PLAN.md` but aren't needed
 - Wasm as first-class browser target (not just server-side)
 - ARM64/x64 native output from the same source
 - MCP server for AI-assisted development (already built in Cot itself)
+- No node_modules, no package.json, no transpilation step
+
+#### Zig Feature Parity Comparison
+
+| Zig Feature | Cot Status | Notes |
+|-------------|-----------|-------|
+| Structs + methods | Done | Cot has `impl` blocks |
+| Enums + tagged unions | Done | Zig pattern |
+| Optionals (`?T`) | Done | `??` (orelse), `.?`, if-unwrap |
+| Error unions (`!T`) | Partial | Named sets work. Inferred `!T` in Wave 5 |
+| `try` / `catch` / `errdefer` | Done | |
+| Generics (comptime T) | Done | Cot uses `fn(T)` syntax, monomorphized |
+| Traits / interfaces | Done | Cot has explicit `trait` keyword (Zig uses duck-typing) |
+| `defer` / `errdefer` LIFO | Done | |
+| Test blocks | Done | `test "name" { }` |
+| Slices `[]T` | Done | |
+| Comptime blocks | Done | Dead branch elimination, `@compileError` |
+| `@target_os()` / `@target_arch()` | Done | |
+| Labeled blocks / break / continue | Done | |
+| Switch with ranges | Done | |
+| `@sizeOf` / `@alignOf` / casts | Done | |
+| `@embedFile` | — | Wave 5 |
+| Destructuring | — | Wave 5 |
+| `@TypeOf` / `@hasField` / `@field` | — | Wave 5 |
+| `inline for` | — | Wave 5 |
+| Inferred error sets (`!T`) | — | Wave 5 |
+| Runtime safety (debug mode) | — | Wave 5 |
+| `noreturn` type | — | Wave 5 |
+| Doc comments (`///`) | — | Wave 5 |
+| Packed structs / bitfields | — | 0.5 |
+| Wrapping arithmetic (`+%`) | — | 0.5 |
+| SIMD vectors | — | 0.6+ |
+| Sentinel-terminated types | — | 0.6+ (FFI story) |
+| Async/await (removed from Zig) | Done | Cot has it, Zig removed it |
+| Closures | Done | Zig doesn't have closures |
+| String interpolation | Done | Zig doesn't have it |
+| ARC memory management | Done | Zig requires manual memory |
+| Traits (explicit) | Done | Zig uses duck-typing only |
 
 #### 0.4 Success Criteria
 
 A developer should be able to:
 1. `cot init myapp` → scaffold a project
-2. Write an HTTP server that serves JSON API endpoints
+2. Write an HTTP server that serves JSON API endpoints with `std/http`
 3. `cot fmt` → auto-format their code
 4. `cot test --filter "api"` → run targeted tests
 5. `cot build` → get a native binary with zero dependencies
-6. Get autocomplete in their editor for struct fields and methods
-7. See clear, helpful error messages when code is wrong
+6. `cot check` → fast type-checking without full compilation
+7. `cot lint` → catch unused variables and unreachable code
+8. `cot bench` → benchmark critical paths
+9. `cot doc` → generate API documentation
+10. Use `std/crypto` for auth tokens, `std/regex` for validation, `std/path` for file paths
+11. Get autocomplete, goto-def, and references across imported files
+12. See clear error messages with source spans and ANSI colors
+13. Write `--watch` during development for auto-restart
 
 #### Progress
 
 - **Wave 1 (language):** 7/7 done
 - **Wave 2 (DX):** 6/6 done
 - **Wave 3 (maturity + project system + DX):** 8/9 done (multi-value cleanup deferred)
-- **Wave 4 (polish):** 0/4
-- **Wave 5 (production):** 3/8 (async/await, event loop, IR split not needed)
+- **Wave 4 (ecosystem polish):** 1/7 (tree-sitter done)
+- **Wave 5 (language maturity — Zig ports):** 0/12
+- **Wave 6 (stdlib expansion — Deno ports):** 0/11
+- **Wave 5-legacy (production):** 2/4 (async/await, event loop done; browser async, IR split remaining)
+
+---
 
 ### 0.5: Make It Community-Ready
 
-- Package manager (`cot add`, `cot remove`, dependency resolution)
-- Package registry (cot.land)
-- Cot framework (the full-stack Next.js-style experience)
-- Cross-compilation
-- Multi-file module system
+The package manager + web framework release. Cot becomes something you can build real products with and share libraries.
+
+#### Language Features (ported from Zig)
+
+| Feature | Description | Reference |
+|---------|-------------|-----------|
+| Packed structs / bitfields | `packed struct { flags: u3, mode: u2 }` — bit-level layout, backed by integer. For binary protocols, network headers, flags. | Zig `packed struct` |
+| Wrapping/saturating arithmetic | `+%` (wrapping), `+\|` (saturating) — explicit overflow behavior. | Zig `+%`, `+\|` |
+| `for` multi-sequence | `for (a, b) \|x, y\|` — iterate multiple collections in lockstep. | Zig multi-object for |
+| `while` continue expression | `while (i < n) : (i += 1) { }` — elegant loop increment. | Zig while continue |
+| Non-exhaustive enums | `enum(u8) { A, B, _ }` — allows values outside the defined set. For forward-compatible protocols. | Zig non-exhaustive |
+| `weak` references | ARC cycle breaker. `weak var ref: ?*Node = null` — doesn't prevent deallocation. | Swift `weak` |
+
+#### Ecosystem
+
+| Feature | Description | Reference |
+|---------|-------------|-----------|
+| Package manager | `cot add <pkg>`, `cot remove <pkg>`, `cot publish`. Lockfile, dependency resolution, version constraints. | `deno add`, `cargo add` |
+| Package registry | cot.land — browse, search, publish packages. Integrity hashes. | jsr.io, crates.io |
+| Cross-compilation | `cot build --target=x86_64-linux`, `--target=aarch64-linux`. Emit native binary for different OS/arch. | Zig cross-compile, `deno compile --target` |
+| Test coverage | `cot coverage` — line/branch coverage, lcov output, HTML report. | `deno coverage` |
+| Signal handling | `@onSignal(SIGINT, handler)` — respond to OS signals. For graceful shutdown. | Deno `Deno.addSignalListener` |
+
+#### Framework & Database
+
+| Feature | Description | Reference |
+|---------|-------------|-----------|
+| `std/db` | Database driver — connect, query, parameterized statements. SQLite first, then Postgres. | Go `database/sql` |
+| `std/dom` | Browser DOM API for `--target=wasm32`. Element creation, event handling, attribute manipulation. | wasm-bindgen, Emscripten |
+| Web framework prototype | `@server`/`@client` annotations. Shared types across boundary. Auto-generated serialization + HTTP transport. File-based routing. | Next.js, Fresh, SvelteKit |
+| Browser async | JS Promise interop for `async fn` on `--target=wasm32`. | wasm-bindgen futures |
+
+#### More Standard Library
+
+| Feature | Description | Reference |
+|---------|-------------|-----------|
+| `std/csv` | CSV reading/writing with field quoting, custom delimiters. | Deno `@std/csv` |
+| `std/toml` | TOML parsing and serialization. For config files. | Deno `@std/toml` |
+| `std/streams` | Streaming data: `ReadableStream`, `WritableStream`, `TransformStream`, pipe, buffer. | Deno `@std/streams`, WHATWG Streams |
+| `std/net` | Higher-level networking: DNS resolution, TLS, connection pooling. | Go `net`, Deno `Deno.connect` |
+
+---
+
+### 0.6: Production Hardening
+
+The release where Cot becomes safe and observable enough for production services.
+
+| Feature | Description | Reference |
+|---------|-------------|-----------|
+| Spawn + channels | Go-style concurrency: `spawn { }` blocks, `Channel(T)` with send/recv/close, `select` statement. Work-stealing scheduler. See `docs/CONCURRENCY_DESIGN.md`. | Go goroutines/channels |
+| Atomic ARC | Thread-safe reference counting for concurrent programs. | Swift atomic refcounting |
+| Permission system | Sandboxed execution: `--allow-read`, `--allow-net`, `--allow-env`. Deny overrides. Config-based permissions in `cot.json`. | Deno permissions |
+| OpenTelemetry | Built-in tracing: auto-instrument HTTP servers, fetch calls. Export to OTLP collector. | Deno 2.2 OTel |
+| `std/sync` | `Mutex`, `RwLock`, `Atomic(T)`, `WaitGroup`, `Once` — low-level concurrency primitives. See `docs/CONCURRENCY_DESIGN.md`. | Go `sync`, Zig `std.Thread` |
+| SIMD vectors | `@Vector(N, T)` mapped to hardware SIMD. Element-wise arithmetic, `@shuffle`, `@reduce`. | Zig `@Vector` |
+| Sentinel-terminated types | `[:0]u8` for null-terminated strings, `[*:0]const u8` for C interop. Sentinel in the type. | Zig sentinel types |
+| Subprocess management | `Process.spawn("cmd", args)` — pipe stdin/stdout/stderr, wait, kill. | Deno `Deno.Command` |
+
+#### More Standard Library
+
+| Feature | Description |
+|---------|-------------|
+| `std/yaml` | YAML parsing and serialization |
+| `std/msgpack` | MessagePack binary encoding |
+| `std/tar` | Tar archive streaming (read/write) |
+| `std/html` | HTML entity escaping/unescaping |
+
+---
 
 ### 1.0: Public Release
 
-- Language specification (syntax frozen)
-- Language guide, tutorials, cookbook
-- Standard library API documentation
-- Example applications (TODO app, chat server, blog engine)
-- cot.dev website with interactive playground
-- Stability commitment (semver, deprecation policy)
+The stability release. Language syntax is frozen. Code that compiles today will compile tomorrow.
+
+| Feature | Description |
+|---------|-------------|
+| Language specification | Formal syntax and semantics document. Syntax frozen at 1.0. |
+| Language guide | Tutorial-style guide: from "Hello World" to building a web app. |
+| Standard library API docs | Complete documentation for every stdlib function. Generated via `cot doc`. |
+| Example applications | TODO app, chat server, blog engine, CLI tool — each demonstrating different Cot strengths. |
+| cot.dev website | Interactive playground (compile + run Cot in the browser). Package search. Docs. |
+| Stability commitment | Semver. Deprecation policy. Migration guides between versions. |
+| Backwards compatibility | 1.x releases add features but don't break existing code. |
+| `cot upgrade` | Self-update to latest version. |
 
 ---
 
@@ -386,9 +544,26 @@ A developer should be able to:
 | **Go** | Simplicity, concurrency | No browser target, GC, backend only |
 | **Rust** | Performance, safety | Complexity, learning curve, Wasm = afterthought |
 | **Swift** | ARC, developer experience | No Wasm, Apple-centric |
-| **Zig** | Performance, simplicity | Manual memory, no full-stack story |
+| **Zig** | Performance, simplicity | Manual memory, no closures, no full-stack story |
+| **Deno** | DX, TypeScript, batteries-included | V8 runtime overhead, GC, not truly compiled |
 
-**Cot's unique position:** The only language where server = native binary (no runtime), browser = Wasm (first-class), types and logic are shared across the boundary, and the framework handles compilation targets transparently.
+**Cot's unique position:** The only language where:
+- Server = native binary (no runtime, no cold starts)
+- Browser = Wasm (first-class target, same source)
+- Types and logic are shared across the client/server boundary
+- The framework handles compilation targets transparently
+- Memory is automatic (ARC) but predictable (no GC pauses)
+- Everything is built-in: fmt, lint, test, bench, doc, LSP — one binary
+
+**What Cot takes from each:**
+
+| Source | What we port | What we skip |
+|--------|-------------|-------------|
+| **Zig** | Comptime, error unions, defer, type reflection, runtime safety, test blocks, packed structs | Manual memory, no closures, no string interp, no async |
+| **Deno** | Built-in toolchain (fmt/lint/test/bench/doc), batteries-included stdlib, watch mode, permissions, web APIs | V8 runtime, JavaScript, npm baggage, node_modules |
+| **Go** | Spawn + channels, goroutine-style concurrency, simple error handling, fast compilation | GC, no generics (until recently), no Wasm browser target |
+| **Rust** | Trait system (simplified), pattern matching, error propagation (`try`), ARC model | Borrow checker complexity, lifetime annotations, steep learning curve |
+| **Swift** | ARC semantics, optional handling, clean syntax | Apple lock-in, no Wasm, heavyweight runtime |
 
 ---
 
@@ -417,8 +592,6 @@ Three tools available to Claude Code:
 
 ### Success
 
-A fresh Claude Code session can write valid Cot code on the first attempt, look up any syntax without guessing, and get stdlib function signatures on demand. The MCP server is actively used during Cot development itself.
-
 All three success criteria met: Claude Code writes valid Cot on first attempt, looks up syntax without guessing, and gets stdlib function signatures on demand.
 
 ---
@@ -427,26 +600,27 @@ All three success criteria met: Claude Code writes valid Cot on first attempt, l
 
 These don't need answers now, but should be resolved before 1.0:
 
-1. ~~**Async model:**~~ **Answered** — async/await (JS/Rust-style syntax) with dual backend: Wasm uses Rust-style state machines, native uses Zig-style eager evaluation. Event loop via kqueue/epoll.
+1. ~~**Async model:**~~ **Answered** — async/await with dual backend.
 2. **Module system:** File-based (Go) or explicit exports (Rust/Zig)?
-3. **Concurrency:** Shared memory + mutexes, message passing, or actors?
+3. ~~**Concurrency:**~~ **Answered** — spawn + channels. See `docs/CONCURRENCY_DESIGN.md`.
 4. **FFI beyond C:** Interop with JS npm packages? Rust crates?
-5. **Standard library scope:** Minimal (Go) or batteries-included (Python)?
+5. ~~**Standard library scope:**~~ **Answered** — Batteries-included (Deno model). 20+ stdlib modules by 0.5.
 6. **Governance:** BDFL, RFC process, or foundation?
 
 ---
 
 ## Summary
 
-Cot 0.3 built the hard infrastructure — a complete compiler pipeline with dual-target output, ARC memory management, generics, closures, and 900+ passing tests. The MCP server (written in Cot) proves the language works for real tools. 0.4 Waves 1-2 are done — the language has errdefer, if-optional, map iteration, labeled loops, a formatter, rich errors, test filtering, and LSP autocomplete/rename/references.
+Cot 0.3 built the hard infrastructure — a complete compiler pipeline with dual-target output, ARC memory management, generics, closures, and 1000+ passing tests. The MCP server (written in Cot) proves the language works for real tools. 0.4 Waves 1-3 are done.
+
+Remaining 0.4 work is massive and intentional — three new waves (ecosystem polish, language maturity from Zig, stdlib expansion from Deno) that together make Cot a credible alternative to Deno for building real applications. With AI-assisted development, this is achievable at a pace that would be impossible for a traditional single-developer project.
 
 The road to 1.0:
 
-1. **0.3 (COMPLETE):** Language features, type system, stdlib, I/O, MCP server — Cot is a real language
-2. **0.4 (IN PROGRESS):** Waves 1-3 done. Remaining: ecosystem polish (Wave 4) + production capabilities (Wave 5: async, event loop, crypto, DB, web framework)
-3. **0.5:** Ecosystem, package manager — make it community-ready
-5. **1.0:** Polish, docs, stability — make it public
+1. **0.3 (COMPLETE):** Language core, type system, stdlib, I/O, MCP server — Cot is a real language
+2. **0.4 (IN PROGRESS):** 7 waves total. Language maturity (Zig ports), stdlib expansion (Deno ports), tooling (check, lint, bench, doc, watch). The "build real things" release.
+3. **0.5:** Package manager, web framework, database, cross-compilation — the "share and deploy" release
+4. **0.6:** Concurrency (spawn/channels), permissions, observability — the "production" release
+5. **1.0:** Specification, docs, stability, playground — the "public" release
 
-The Wasm-as-IR architecture works for everything through 0.4. The IR split happens in 0.5 only if async demands it. Version numbers mark maturity milestones, not deadlines.
-
-**0.4's goal: a developer can build production applications — async web servers, database-backed APIs, full-stack apps with shared types — using `cot init`, `cot fmt`, `cot test`, and `cot build`. Like Deno, but compiled to native with zero runtime overhead.**
+**0.4's goal: A developer can `cot init`, write a server with crypto + regex + path handling, `cot test --watch` during development, `cot lint` + `cot check` for fast feedback, `cot bench` for performance, `cot doc` for API docs, and `cot build` for a native binary. Like Deno, but compiled to native with zero runtime overhead.**

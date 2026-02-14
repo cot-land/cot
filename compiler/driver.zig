@@ -79,6 +79,126 @@ pub const Driver = struct {
         self.test_filter = filter;
     }
 
+    /// Type-check a source file without compiling (supports imports).
+    /// Runs Phase 1 (parse) and Phase 2 (type check), then stops.
+    /// On error: errors already printed by ErrorReporter.
+    pub fn checkFile(self: *Driver, path: []const u8) !void {
+        var seen_files = std.StringHashMap(void).init(self.allocator);
+        defer seen_files.deinit();
+
+        // Phase 1: Parse all files recursively
+        var parsed_files = std.ArrayListUnmanaged(ParsedFile){};
+        defer {
+            for (parsed_files.items) |*pf| {
+                pf.tree.deinit();
+                pf.source.deinit();
+                self.allocator.free(pf.source_text);
+                self.allocator.free(pf.path);
+            }
+            parsed_files.deinit(self.allocator);
+        }
+        try self.parseFileRecursive(path, &parsed_files, &seen_files);
+
+        // Apply project-level @safe mode from cot.json
+        {
+            const maybe_loaded = project_mod.loadConfig(self.allocator, null) catch null;
+            if (maybe_loaded) |loaded_val| {
+                var loaded = loaded_val;
+                defer loaded.deinit();
+                if (loaded.value().safe orelse false) {
+                    for (parsed_files.items) |*pf| {
+                        if (pf.tree.file) |*file| {
+                            file.safe_mode = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Phase 2: Type check all files with shared symbol table
+        var type_reg = try types_mod.TypeRegistry.init(self.allocator);
+        defer type_reg.deinit();
+        var global_scope = checker_mod.Scope.init(self.allocator, null);
+        defer global_scope.deinit();
+        var generic_ctx = checker_mod.SharedGenericContext.init(self.allocator);
+        defer generic_ctx.deinit(self.allocator);
+
+        for (parsed_files.items) |*pf| {
+            var err_reporter = errors_mod.ErrorReporter.init(&pf.source, null);
+            var chk = checker_mod.Checker.init(self.allocator, &pf.tree, &type_reg, &err_reporter, &global_scope, &generic_ctx, self.target);
+            defer chk.deinit();
+            chk.checkFile() catch |e| {
+                return e;
+            };
+            if (err_reporter.hasErrors()) {
+                return error.TypeCheckError;
+            }
+        }
+        // Success — no errors found
+    }
+
+    /// Lint a source file: type-check + run lint rules. Returns warning count.
+    pub fn lintFile(self: *Driver, path: []const u8) !u32 {
+        var seen_files = std.StringHashMap(void).init(self.allocator);
+        defer seen_files.deinit();
+
+        // Phase 1: Parse all files recursively
+        var parsed_files = std.ArrayListUnmanaged(ParsedFile){};
+        defer {
+            for (parsed_files.items) |*pf| {
+                pf.tree.deinit();
+                pf.source.deinit();
+                self.allocator.free(pf.source_text);
+                self.allocator.free(pf.path);
+            }
+            parsed_files.deinit(self.allocator);
+        }
+        try self.parseFileRecursive(path, &parsed_files, &seen_files);
+
+        // Apply project-level @safe mode from cot.json
+        {
+            const maybe_loaded = project_mod.loadConfig(self.allocator, null) catch null;
+            if (maybe_loaded) |loaded_val| {
+                var loaded = loaded_val;
+                defer loaded.deinit();
+                if (loaded.value().safe orelse false) {
+                    for (parsed_files.items) |*pf| {
+                        if (pf.tree.file) |*file| {
+                            file.safe_mode = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Phase 2: Type check all files with shared symbol table + lint
+        var type_reg = try types_mod.TypeRegistry.init(self.allocator);
+        defer type_reg.deinit();
+        var global_scope = checker_mod.Scope.init(self.allocator, null);
+        defer global_scope.deinit();
+        var generic_ctx = checker_mod.SharedGenericContext.init(self.allocator);
+        defer generic_ctx.deinit(self.allocator);
+
+        var total_warnings: u32 = 0;
+        for (parsed_files.items) |*pf| {
+            var err_reporter = errors_mod.ErrorReporter.init(&pf.source, null);
+            var chk = checker_mod.Checker.init(self.allocator, &pf.tree, &type_reg, &err_reporter, &global_scope, &generic_ctx, self.target);
+            chk.lint_mode = true;
+            chk.checkFile() catch |e| {
+                chk.deinit();
+                return e;
+            };
+            if (err_reporter.hasErrors()) {
+                chk.deinit();
+                return error.TypeCheckError;
+            }
+            chk.runLintChecks();
+            total_warnings += err_reporter.warning_count;
+            chk.deinit();
+        }
+        return total_warnings;
+    }
+
     /// Compile source code to machine code (single file, no imports).
     pub fn compileSource(self: *Driver, source_text: []const u8) ![]u8 {
         var src = source_mod.Source.init(self.allocator, "<input>", source_text);
@@ -2603,6 +2723,8 @@ pub const Driver = struct {
 
         // ====================================================================
         // Add print runtime functions (Go style)
+        // Note: cot_write is a stub on Wasm (native overrides with ARM64 syscall).
+        // Wasm test output is handled host-side in main.zig testCommand.
         // Reference: Go runtime/print.go
         // ====================================================================
         const print_funcs = try print_runtime.addToLinker(self.allocator, &linker);
@@ -2617,7 +2739,7 @@ pub const Driver = struct {
         // Add test runtime functions (Zig test runner pattern)
         // Reference: Zig test runner output format
         // ====================================================================
-        const test_funcs = try test_runtime.addToLinker(self.allocator, &linker, print_funcs.write_idx, print_funcs.eprint_int_idx);
+        const test_funcs = try test_runtime.addToLinker(self.allocator, &linker, print_funcs.write_idx, print_funcs.eprint_int_idx, wasi_funcs.time_idx);
 
         // Get actual count from linker - never hardcode (Go: len(hostImports))
         const runtime_func_count = linker.funcCount();
@@ -2687,6 +2809,7 @@ pub const Driver = struct {
         try func_indices.put(self.allocator, wasi_runtime.SET_NONBLOCK_NAME, wasi_funcs.set_nonblocking_idx);
 
         // Add test function names to index map (Zig)
+        try func_indices.put(self.allocator, test_runtime.TEST_BEGIN_NAME, test_funcs.test_begin_idx);
         try func_indices.put(self.allocator, test_runtime.TEST_PRINT_NAME_NAME, test_funcs.test_print_name_idx);
         try func_indices.put(self.allocator, test_runtime.TEST_PASS_NAME, test_funcs.test_pass_idx);
         try func_indices.put(self.allocator, test_runtime.TEST_FAIL_NAME, test_funcs.test_fail_idx);

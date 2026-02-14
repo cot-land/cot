@@ -7,6 +7,27 @@ const Pos = source.Pos;
 const Span = source.Span;
 const Source = source.Source;
 
+pub const Severity = enum { err, warning };
+
+/// Warning codes for lint rules: W001=unused var, W002=unused param, W003=shadowing.
+pub const WarningCode = enum(u16) {
+    w001 = 1,
+    w002 = 2,
+    w003 = 3,
+
+    pub fn code(self: WarningCode) u16 {
+        return @intFromEnum(self);
+    }
+
+    pub fn description(self: WarningCode) []const u8 {
+        return switch (self) {
+            .w001 => "unused variable",
+            .w002 => "unused parameter",
+            .w003 => "variable shadowing",
+        };
+    }
+};
+
 /// Error codes: 1xx=scanner, 2xx=parser, 3xx=type, 4xx=semantic.
 pub const ErrorCode = enum(u16) {
     // Scanner
@@ -58,6 +79,8 @@ pub const Error = struct {
     span: Span,
     msg: []const u8,
     err_code: ?ErrorCode = null,
+    severity: Severity = .err,
+    warning_code: ?WarningCode = null,
 
     pub fn at(pos: Pos, msg: []const u8) Error {
         return .{ .span = Span.fromPos(pos), .msg = msg };
@@ -70,6 +93,10 @@ pub const Error = struct {
     pub fn atSpan(span: Span, msg: []const u8) Error {
         return .{ .span = span, .msg = msg };
     }
+
+    pub fn warn(pos: Pos, wc: WarningCode, msg: []const u8) Error {
+        return .{ .span = Span.fromPos(pos), .msg = msg, .severity = .warning, .warning_code = wc };
+    }
 };
 
 pub const ErrorHandler = *const fn (err: Error) void;
@@ -80,10 +107,11 @@ pub const ErrorReporter = struct {
     handler: ?ErrorHandler,
     first: ?Error,
     count: u32,
+    warning_count: u32,
     suppressed: bool,
 
     pub fn init(src: *Source, handler: ?ErrorHandler) ErrorReporter {
-        return .{ .src = src, .handler = handler, .first = null, .count = 0, .suppressed = false };
+        return .{ .src = src, .handler = handler, .first = null, .count = 0, .warning_count = 0, .suppressed = false };
     }
 
     pub fn errorAt(self: *ErrorReporter, pos: Pos, msg: []const u8) void {
@@ -96,6 +124,12 @@ pub const ErrorReporter = struct {
 
     pub fn errorAtSpan(self: *ErrorReporter, span: Span, msg: []const u8) void {
         self.report(Error.atSpan(span, msg));
+    }
+
+    pub fn warningWithCode(self: *ErrorReporter, pos: Pos, wc: WarningCode, msg: []const u8) void {
+        self.warning_count += 1;
+        const err = Error.warn(pos, wc, msg);
+        if (self.handler) |h| h(err) else self.printError(err);
     }
 
     pub fn report(self: *ErrorReporter, err: Error) void {
@@ -119,11 +153,27 @@ pub const ErrorReporter = struct {
 
         // ANSI color codes
         const red = if (is_tty) "\x1b[1;31m" else "";
+        const yellow = if (is_tty) "\x1b[1;33m" else "";
         const cyan = if (is_tty) "\x1b[1;36m" else "";
         const green = if (is_tty) "\x1b[1;32m" else "";
         const reset = if (is_tty) "\x1b[0m" else "";
 
-        if (err.err_code) |ec| {
+        if (err.severity == .warning) {
+            // Deno-style: warning[W001]: message
+            if (err.warning_code) |wc| {
+                std.debug.print("{s}{s}:{d}:{d}:{s} {s}warning[W{d:0>3}]:{s} {s}\n", .{
+                    cyan, pos.filename, pos.line, pos.column, reset,
+                    yellow, wc.code(), reset,
+                    err.msg,
+                });
+            } else {
+                std.debug.print("{s}{s}:{d}:{d}:{s} {s}warning:{s} {s}\n", .{
+                    cyan, pos.filename, pos.line, pos.column, reset,
+                    yellow, reset,
+                    err.msg,
+                });
+            }
+        } else if (err.err_code) |ec| {
             std.debug.print("{s}{s}:{d}:{d}:{s} {s}error[E{d}]:{s} {s}\n", .{
                 cyan, pos.filename, pos.line, pos.column, reset,
                 red,  ec.code(),                           reset,
@@ -149,7 +199,8 @@ pub const ErrorReporter = struct {
             // Underline the full span: ^~~~ instead of just ^
             const span_len = err.span.len();
             const underline_len = if (span_len > 1) span_len else 1;
-            std.debug.print("{s}^", .{green});
+            const underline_color = if (err.severity == .warning) yellow else green;
+            std.debug.print("{s}^", .{underline_color});
             var j: u32 = 1;
             while (j < underline_len) : (j += 1) {
                 std.debug.print("~", .{});

@@ -437,6 +437,36 @@ fn expectTestMode(backing_allocator: std.mem.Allocator, code: []const u8, expect
     }
 }
 
+/// Strip ANSI escape sequences (\x1b[...m) and timing suffixes like " (Nms)" from test output
+/// so that expected strings can be plain text without colors or non-deterministic timing.
+fn stripAnsiAndTiming(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
+    var out = std.ArrayListUnmanaged(u8){};
+    var i: usize = 0;
+    while (i < input.len) {
+        // Skip ANSI escape sequences: \x1b[ ... m
+        if (i + 1 < input.len and input[i] == 0x1b and input[i + 1] == '[') {
+            i += 2;
+            while (i < input.len and input[i] != 'm') : (i += 1) {}
+            if (i < input.len) i += 1; // skip 'm'
+            continue;
+        }
+        // Skip timing suffixes: " (Nms)" where N is digits
+        if (i + 2 < input.len and input[i] == ' ' and input[i + 1] == '(') {
+            var j = i + 2;
+            // Check for optional '-' then digits
+            while (j < input.len and (input[j] >= '0' and input[j] <= '9')) : (j += 1) {}
+            if (j + 2 < input.len and input[j] == 'm' and input[j + 1] == 's' and input[j + 2] == ')') {
+                // Found " (Nms)", skip it
+                i = j + 3;
+                continue;
+            }
+        }
+        try out.append(allocator, input[i]);
+        i += 1;
+    }
+    return out.items;
+}
+
 fn expectTestModeInner(backing_allocator: std.mem.Allocator, code: []const u8, expected_exit: u32, expected_stderr: []const u8, test_name: []const u8) !void {
     var arena = std.heap.ArenaAllocator.init(backing_allocator);
     defer arena.deinit();
@@ -463,10 +493,13 @@ fn expectTestModeInner(backing_allocator: std.mem.Allocator, code: []const u8, e
         return error.WrongExitCode;
     }
 
-    if (!std.mem.eql(u8, result.stderr, expected_stderr)) {
-        std.debug.print("WRONG STDERR:\n  expected: \"{s}\" ({d} bytes)\n  actual:   \"{s}\" ({d} bytes)\n", .{
+    // Strip ANSI codes and timing from actual output for comparison
+    const stripped = try stripAnsiAndTiming(allocator, result.stderr);
+    if (!std.mem.eql(u8, stripped, expected_stderr)) {
+        std.debug.print("WRONG STDERR:\n  expected: \"{s}\" ({d} bytes)\n  actual:   \"{s}\" ({d} bytes)\n  stripped: \"{s}\" ({d} bytes)\n", .{
             expected_stderr, expected_stderr.len,
             result.stderr,   result.stderr.len,
+            stripped,         stripped.len,
         });
         return error.WrongOutput;
     }
@@ -499,7 +532,7 @@ test "native: test mode - all pass" {
         \\    @assert(1 == 1)
         \\}
     , 0,
-        "test \"math\" ... ok\ntest \"bool\" ... ok\n\n2 passed\n",
+        "test \"math\" ... ok\ntest \"bool\" ... ok\n\nok | 2 passed\n",
         "test_all_pass");
 }
 
@@ -515,7 +548,7 @@ test "native: test mode - one failure" {
         \\    @assert(2 == 2)
         \\}
     , 1,
-        "test \"pass\" ... ok\ntest \"fail\" ... FAIL\ntest \"also pass\" ... ok\n\n2 passed, 1 failed\n",
+        "test \"pass\" ... ok\ntest \"fail\" ... FAIL\ntest \"also pass\" ... ok\n\nFAILED | 2 passed | 1 failed\n",
         "test_one_fail");
 }
 
@@ -525,6 +558,6 @@ test "native: test mode - assert_eq" {
         \\    @assert_eq(42, 42)
         \\}
     , 0,
-        "test \"eq\" ... ok\n\n1 passed\n",
+        "test \"eq\" ... ok\n\nok | 1 passed\n",
         "test_assert_eq");
 }

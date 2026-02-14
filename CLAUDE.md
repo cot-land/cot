@@ -243,4 +243,6 @@ cursor --uninstall-extension cot-lang.cot-lang 2>/dev/null; cursor --install-ext
 | `docs/VERSION_TRAJECTORY.md` | Version plan benchmarked against Zig's history (self-hosting at 0.11) |
 | `docs/COT_SYNTAX.md` | Complete language syntax reference with examples |
 | `VISION.md` | Language vision, design principles, execution roadmap |
+| `docs/CONCURRENCY_DESIGN.md` | Concurrency roadmap: spawn, channels, work-stealing, atomic ARC |
+| `docs/BUSINESS_MODEL.md` | Licensing, trademark, revenue model, funding strategy |
 | `docs/archive/` | Historical: completed milestones, past bug fixes, postmortems |

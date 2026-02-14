@@ -105,6 +105,8 @@ pub fn main() !void {
         .build => |opts| buildCommand(allocator, opts),
         .run => |opts| runCommand(allocator, opts),
         .@"test" => |opts| testCommand(allocator, opts),
+        .check => |opts| checkCommand(allocator, opts),
+        .lint => |opts| lintCommand(allocator, opts),
         .fmt => |opts| fmtCommand(allocator, opts),
         .init => |opts| initCommand(allocator, opts),
         .lsp => lsp_main.run(allocator),
@@ -240,8 +242,14 @@ fn testCommand(allocator: std.mem.Allocator, opts: cli.TestOptions) void {
 
     switch (result) {
         .Exited => |code| {
-            if (code == 0) {
-                std.debug.print("Tests passed\n", .{});
+            // On Wasm, cot_write is a stub so the binary can't produce output.
+            // Print host-side summary based on exit code (native has Deno-style output).
+            if (opts.target.isWasm()) {
+                if (code == 0) {
+                    std.debug.print("\x1b[1;32mok\x1b[0m | all tests passed\n", .{});
+                } else {
+                    std.debug.print("\x1b[1;31mFAILED\x1b[0m | {d} test(s) failed\n", .{code});
+                }
             }
             std.process.exit(code);
         },
@@ -250,6 +258,45 @@ fn testCommand(allocator: std.mem.Allocator, opts: cli.TestOptions) void {
             std.process.exit(1);
         },
         else => std.process.exit(1),
+    }
+}
+
+fn checkCommand(allocator: std.mem.Allocator, opts: cli.CheckOptions) void {
+    var compile_driver = Driver.init(allocator);
+    compile_driver.setTarget(opts.target);
+
+    compile_driver.checkFile(opts.input_file) catch |e| {
+        if (e != error.ParseError and e != error.TypeCheckError) {
+            std.debug.print("Check failed: {any}\n", .{e});
+        }
+        std.process.exit(1);
+    };
+    // Deno pattern: on success, print "Check <file>" in green and exit 0
+    const is_tty = std.posix.isatty(2);
+    const green = if (is_tty) "\x1b[1;32m" else "";
+    const reset = if (is_tty) "\x1b[0m" else "";
+    std.debug.print("{s}Check{s} {s}\n", .{ green, reset, opts.input_file });
+}
+
+fn lintCommand(allocator: std.mem.Allocator, opts: cli.LintOptions) void {
+    var compile_driver = Driver.init(allocator);
+    compile_driver.setTarget(opts.target);
+
+    const warning_count = compile_driver.lintFile(opts.input_file) catch |e| {
+        if (e != error.ParseError and e != error.TypeCheckError) {
+            std.debug.print("Lint failed: {any}\n", .{e});
+        }
+        std.process.exit(1);
+    };
+
+    const is_tty = std.posix.isatty(2);
+    const green = if (is_tty) "\x1b[1;32m" else "";
+    const reset = if (is_tty) "\x1b[0m" else "";
+
+    if (warning_count == 0) {
+        std.debug.print("{s}Checked{s} {s}\n", .{ green, reset, opts.input_file });
+    } else {
+        std.debug.print("\nFound {d} warning{s}\n", .{ warning_count, if (warning_count == 1) "" else "s" });
     }
 }
 

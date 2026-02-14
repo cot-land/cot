@@ -45,6 +45,7 @@ pub const PrintFunctions = struct {
 pub fn addToLinker(allocator: std.mem.Allocator, linker: *@import("wasm/link.zig").Linker) !PrintFunctions {
     // cot_write: (fd: i64, ptr: i64, len: i64) -> i64
     // Must be added FIRST (print_int calls it by index)
+    // Stub body: native overrides with ARM64/x64 syscall in driver.zig
     const write_type = try linker.addType(
         &[_]ValType{ .i64, .i64, .i64 },
         &[_]ValType{.i64},
@@ -247,7 +248,7 @@ fn generateWriteStubBody(allocator: std.mem.Allocator) ![]const u8 {
     defer code.deinit();
 
     // Parameters: fd (local 0), ptr (local 1), len (local 2) — all i64
-    // Stub: just return 0 (Wasm can't do I/O)
+    // Stub: just return 0 (native overrides with ARM64/x64 syscall)
     try code.emitI64Const(0);
     // Stack has i64 return value; finish() adds end opcode
     return try code.finish();

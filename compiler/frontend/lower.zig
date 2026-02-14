@@ -164,8 +164,11 @@ pub const Lowerer = struct {
             const pass_count = try fb.addLocalWithSize("__pass_count", TypeRegistry.I64, true, 8);
             _ = try fb.emitStoreLocal(pass_count, zero_init, span);
 
+            // Note: total timing start is lazy-initialized in __test_print_name
+            // (adding extra IR nodes to the test runner disrupts native br_table dispatch)
+
             for (self.test_names.items, self.test_display_names.items) |test_name, display_name| {
-                // Print test name: test "name" ...
+                // Print test name (also records per-test start time internally)
                 const name_copy = try self.allocator.dupe(u8, display_name);
                 const str_idx = try fb.addStringLiteral(name_copy);
                 const str_slice = try fb.emitConstSlice(str_idx, span);
@@ -189,18 +192,20 @@ pub const Lowerer = struct {
                 const merge_block = try fb.newBlock("test.merge");
                 _ = try fb.emitBranch(is_error, fail_block, pass_block, span);
 
-                // Fail block: print FAIL, increment fail counter
+                // Fail block: __test_fail() computes timing internally
                 fb.setBlock(fail_block);
-                _ = try fb.emitCall("__test_fail", &no_args, false, TypeRegistry.VOID, span);
+                var fail_args = [_]ir.NodeIndex{};
+                _ = try fb.emitCall("__test_fail", &fail_args, false, TypeRegistry.VOID, span);
                 const cur_fail = try fb.emitLoadLocal(fail_count, TypeRegistry.I64, span);
                 const one_f = try fb.emitConstInt(1, TypeRegistry.I64, span);
                 const new_fail = try fb.emitBinary(.add, cur_fail, one_f, TypeRegistry.I64, span);
                 _ = try fb.emitStoreLocal(fail_count, new_fail, span);
                 _ = try fb.emitJump(merge_block, span);
 
-                // Pass block: print ok, increment pass counter
+                // Pass block: __test_pass() computes timing internally
                 fb.setBlock(pass_block);
-                _ = try fb.emitCall("__test_pass", &no_args, false, TypeRegistry.VOID, span);
+                var pass_args = [_]ir.NodeIndex{};
+                _ = try fb.emitCall("__test_pass", &pass_args, false, TypeRegistry.VOID, span);
                 const cur_pass = try fb.emitLoadLocal(pass_count, TypeRegistry.I64, span);
                 const one_p = try fb.emitConstInt(1, TypeRegistry.I64, span);
                 const new_pass = try fb.emitBinary(.add, cur_pass, one_p, TypeRegistry.I64, span);
@@ -212,6 +217,7 @@ pub const Lowerer = struct {
             }
 
             // Print summary: __test_summary(pass_count, fail_count)
+            // Total timing computed internally from stored start time
             const final_pass = try fb.emitLoadLocal(pass_count, TypeRegistry.I64, span);
             const final_fail = try fb.emitLoadLocal(fail_count, TypeRegistry.I64, span);
             var summary_args = [_]ir.NodeIndex{ final_pass, final_fail };

@@ -41,6 +41,7 @@ pub const Symbol = struct {
     is_extern: bool = false,
     const_value: ?i64 = null,
     float_const_value: ?f64 = null,
+    used: bool = false,
 
     pub fn init(name: []const u8, kind: SymbolKind, type_idx: TypeIndex, node: NodeIndex, mutable: bool) Symbol {
         return .{ .name = name, .kind = kind, .type_idx = type_idx, .node = node, .mutable = mutable };
@@ -74,6 +75,16 @@ pub const Scope = struct {
 
     pub fn lookup(self: *const Scope, name: []const u8) ?Symbol {
         return self.symbols.get(name) orelse if (self.parent) |p| p.lookup(name) else null;
+    }
+
+    /// Mark a symbol as used (for lint: unused variable detection).
+    /// Walks up scopes like lookup() but mutates via getPtr().
+    pub fn markUsed(self: *Scope, name: []const u8) void {
+        if (self.symbols.getPtr(name)) |ptr| {
+            ptr.used = true;
+        } else if (self.parent) |p| {
+            p.markUsed(name);
+        }
     }
 
     pub fn isDefined(self: *const Scope, name: []const u8) bool { return self.symbols.contains(name); }
@@ -188,6 +199,8 @@ pub const Checker = struct {
     target: target_mod.Target = target_mod.Target.native(),
     /// @safe file annotation: auto-wrap struct types with pointer in function signatures
     safe_mode: bool = false,
+    /// Lint mode: track symbol usage for unused variable/parameter warnings
+    lint_mode: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, tree: *const Ast, type_reg: *TypeRegistry, reporter: *ErrorReporter, global_scope: *Scope, generic_ctx: *SharedGenericContext, target: target_mod.Target) Checker {
         return .{
@@ -209,6 +222,36 @@ pub const Checker = struct {
         self.generic_instantiations.deinit();
         // SharedGenericContext is owned by the driver, not the checker
     }
+
+    /// Run lint checks on the global scope (top-level unused functions/vars).
+    /// Function-local lint checks are emitted inline during checkFnDeclWithName.
+    pub fn runLintChecks(self: *Checker) void {
+        self.checkScopeUnused(self.global_scope);
+    }
+
+    /// Emit warnings for unused symbols in a scope.
+    fn checkScopeUnused(self: *Checker, scope_ptr: *const Scope) void {
+        var it = scope_ptr.symbols.iterator();
+        while (it.next()) |entry| {
+            const sym = entry.value_ptr;
+            if (sym.used) continue;
+            // Skip _ prefixed names (intentionally unused, Zig/Go convention)
+            if (sym.name.len > 0 and sym.name[0] == '_') continue;
+            // Skip "self" parameter
+            if (std.mem.eql(u8, sym.name, "self")) continue;
+            // Skip functions and type names (only lint vars/consts/params)
+            if (sym.kind == .function or sym.kind == .type_name) continue;
+
+            // Get position from the node's span
+            const pos = if (self.tree.getNode(sym.node)) |n| n.span().start else Pos.zero;
+            if (sym.kind == .parameter) {
+                self.err.warningWithCode(pos, .w002, sym.name);
+            } else {
+                self.err.warningWithCode(pos, .w001, sym.name);
+            }
+        }
+    }
+
     pub fn checkFile(self: *Checker) CheckError!void {
         const file = self.tree.file orelse return;
         self.safe_mode = file.safe_mode;
@@ -430,6 +473,7 @@ pub const Checker = struct {
         self.scope = &test_scope;
         self.current_return_type = TypeRegistry.VOID;
         if (t.body != null_node) try self.checkStmt(t.body);
+        if (self.lint_mode) self.checkScopeUnused(&test_scope);
         self.scope = old_scope;
         self.current_return_type = old_return;
     }
@@ -457,6 +501,8 @@ pub const Checker = struct {
         self.current_return_type = body_return_type;
         self.in_async_fn = f.is_async;
         if (f.body != null_node) try self.checkBlockExpr(f.body);
+        // Lint: check for unused vars/params before scope exits
+        if (self.lint_mode) self.checkScopeUnused(&func_scope);
         self.scope = old_scope;
         self.current_return_type = old_return;
         self.in_async_fn = old_in_async;
@@ -696,7 +742,10 @@ pub const Checker = struct {
             self.err.errorWithCode(id.span.start, .e300, "generic function requires type arguments");
             return invalid_type;
         }
-        if (self.scope.lookup(id.name)) |sym| return sym.type_idx;
+        if (self.scope.lookup(id.name)) |sym| {
+            if (self.lint_mode) self.scope.markUsed(id.name);
+            return sym.type_idx;
+        }
         // Check type substitution (for type params used as values)
         if (self.type_substitution) |sub| {
             if (sub.get(id.name)) |_| return invalid_type;
@@ -1395,6 +1444,7 @@ pub const Checker = struct {
         const old_scope = self.scope;
         self.scope = &block_scope;
         for (b.stmts) |stmt_idx| try self.checkStmt(stmt_idx);
+        if (self.lint_mode) self.checkScopeUnused(&block_scope);
         self.scope = old_scope;
         return if (b.expr != null_node) try self.checkExpr(b.expr) else TypeRegistry.VOID;
     }
@@ -1521,6 +1571,12 @@ pub const Checker = struct {
 
     fn checkVarStmt(self: *Checker, vs: ast.VarStmt, idx: NodeIndex) CheckError!void {
         if (self.scope.isDefined(vs.name)) { self.err.errorWithCode(vs.span.start, .e302, "redefined identifier"); return; }
+        // Lint: check for variable shadowing (parent scope has same name)
+        if (self.lint_mode and self.scope.parent != null) {
+            if (self.scope.parent.?.lookup(vs.name) != null) {
+                self.err.warningWithCode(vs.span.start, .w003, vs.name);
+            }
+        }
         var var_type: TypeIndex = if (vs.type_expr != null_node) try self.resolveTypeExpr(vs.type_expr) else invalid_type;
         if (vs.value != null_node and !self.isUndefinedLit(vs.value) and !self.isZeroInitLit(vs.value)) {
             const val_type = try self.checkExpr(vs.value);
@@ -1666,6 +1722,7 @@ pub const Checker = struct {
         const old_scope = self.scope;
         self.scope = &block_scope;
         for (bs.stmts) |stmt_idx| try self.checkStmt(stmt_idx);
+        if (self.lint_mode) self.checkScopeUnused(&block_scope);
         self.scope = old_scope;
     }
 

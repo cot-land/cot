@@ -31,10 +31,21 @@ pub const RunOptions = struct {
     program_args: []const []const u8 = &.{},
 };
 
+pub const CheckOptions = struct {
+    input_file: []const u8,
+    target: Target = Target.native(),
+};
+
+pub const LintOptions = struct {
+    input_file: []const u8,
+    target: Target = Target.native(),
+};
+
 pub const TestOptions = struct {
     input_file: []const u8,
     target: Target = Target.native(),
     filter: ?[]const u8 = null,
+    verbose: bool = false,
 };
 
 pub const FmtOptions = struct {
@@ -54,6 +65,8 @@ pub const Command = union(enum) {
     build: BuildOptions,
     run: RunOptions,
     @"test": TestOptions,
+    check: CheckOptions,
+    lint: LintOptions,
     fmt: FmtOptions,
     init: InitOptions,
     lsp,
@@ -72,6 +85,8 @@ pub fn parseArgs(allocator: std.mem.Allocator) ?Command {
     if (std.mem.eql(u8, first, "build")) return parseBuild(&args);
     if (std.mem.eql(u8, first, "run")) return parseRun(allocator, &args);
     if (std.mem.eql(u8, first, "test")) return parseTest(&args);
+    if (std.mem.eql(u8, first, "check")) return parseCheck(&args);
+    if (std.mem.eql(u8, first, "lint")) return parseLint(&args);
     if (std.mem.eql(u8, first, "fmt")) return parseFmt(&args);
     if (std.mem.eql(u8, first, "init")) return parseInit(&args);
     if (std.mem.eql(u8, first, "lsp")) return .lsp;
@@ -171,6 +186,8 @@ fn parseTest(args: *std.process.ArgIterator) ?Command {
                 std.debug.print("Error: --filter requires an argument\n", .{});
                 return null;
             };
+        } else if (std.mem.eql(u8, arg, "--verbose") or std.mem.eql(u8, arg, "-v")) {
+            opts.verbose = true;
         } else if (!std.mem.startsWith(u8, arg, "-")) {
             opts.input_file = arg;
             has_input = true;
@@ -181,10 +198,56 @@ fn parseTest(args: *std.process.ArgIterator) ?Command {
     }
 
     if (!has_input) {
-        std.debug.print("Error: No input file\nUsage: cot test <file.cot> [--target=<t>] [--filter=<str>]\n", .{});
+        std.debug.print("Error: No input file\nUsage: cot test <file.cot> [--target=<t>] [--filter=<str>] [--verbose]\n", .{});
         return null;
     }
     return .{ .@"test" = opts };
+}
+
+fn parseCheck(args: *std.process.ArgIterator) ?Command {
+    var opts = CheckOptions{ .input_file = undefined };
+    var has_input = false;
+
+    while (args.next()) |arg| {
+        if (isTargetFlag(arg)) {
+            opts.target = parseTarget(arg, args) orelse return null;
+        } else if (!std.mem.startsWith(u8, arg, "-")) {
+            opts.input_file = arg;
+            has_input = true;
+        } else {
+            std.debug.print("Error: Unknown option '{s}'\n", .{arg});
+            return null;
+        }
+    }
+
+    if (!has_input) {
+        std.debug.print("Error: No input file\nUsage: cot check <file.cot> [--target=<t>]\n", .{});
+        return null;
+    }
+    return .{ .check = opts };
+}
+
+fn parseLint(args: *std.process.ArgIterator) ?Command {
+    var opts = LintOptions{ .input_file = undefined };
+    var has_input = false;
+
+    while (args.next()) |arg| {
+        if (isTargetFlag(arg)) {
+            opts.target = parseTarget(arg, args) orelse return null;
+        } else if (!std.mem.startsWith(u8, arg, "-")) {
+            opts.input_file = arg;
+            has_input = true;
+        } else {
+            std.debug.print("Error: Unknown option '{s}'\n", .{arg});
+            return null;
+        }
+    }
+
+    if (!has_input) {
+        std.debug.print("Error: No input file\nUsage: cot lint <file.cot> [--target=<t>]\n", .{});
+        return null;
+    }
+    return .{ .lint = opts };
 }
 
 fn parseFmt(args: *std.process.ArgIterator) ?Command {
@@ -333,6 +396,10 @@ pub fn printHelp(subcommand: ?[]const u8) void {
             printRunHelp();
         } else if (std.mem.eql(u8, sub, "test")) {
             printTestHelp();
+        } else if (std.mem.eql(u8, sub, "check")) {
+            printCheckHelp();
+        } else if (std.mem.eql(u8, sub, "lint")) {
+            printLintHelp();
         } else if (std.mem.eql(u8, sub, "fmt")) {
             printFmtHelp();
         } else if (std.mem.eql(u8, sub, "init")) {
@@ -356,6 +423,8 @@ fn printUsage() void {
         \\  cot build <file.cot> [-o name]  Compile with options
         \\  cot run <file.cot> [-- args]    Compile and run
         \\  cot test <file.cot>             Run tests
+        \\  cot check <file.cot>            Type-check without compiling
+        \\  cot lint <file.cot>             Check for warnings
         \\  cot fmt <file.cot> [-w]         Format source code
         \\  cot init [name]                 Create a new project
         \\  cot lsp                         Start language server (LSP)
@@ -409,17 +478,58 @@ fn printRunHelp() void {
 
 fn printTestHelp() void {
     std.debug.print(
-        \\Usage: cot test <file.cot> [--target=<t>] [--filter=<str>]
+        \\Usage: cot test <file.cot> [--target=<t>] [--filter=<str>] [--verbose]
         \\
         \\Compile and run a Cot source file in test mode.
         \\
         \\Flags:
         \\  --target=<t>    Target: arm64-macos, amd64-linux
         \\  --filter=<str>  Only run tests whose name contains <str>
+        \\  --verbose, -v   Show detailed test output
         \\
         \\Examples:
         \\  cot test app.cot                    Run all tests in app.cot
         \\  cot test app.cot --filter=math       Run only tests matching "math"
+        \\  cot test app.cot --verbose           Run with detailed output
+        \\
+    , .{});
+}
+
+fn printCheckHelp() void {
+    std.debug.print(
+        \\Usage: cot check <file.cot> [--target=<t>]
+        \\
+        \\Type-check a Cot source file without compiling. Fast feedback loop
+        \\for catching type errors during development.
+        \\
+        \\Flags:
+        \\  --target=<t>    Target: wasm32, arm64-macos, amd64-linux
+        \\
+        \\Examples:
+        \\  cot check app.cot                   Type-check app.cot
+        \\  cot check app.cot --target=wasm32   Type-check for Wasm target
+        \\
+    , .{});
+}
+
+fn printLintHelp() void {
+    std.debug.print(
+        \\Usage: cot lint <file.cot> [--target=<t>]
+        \\
+        \\Check a Cot source file for common issues: unused variables,
+        \\unused parameters, and variable shadowing.
+        \\
+        \\Flags:
+        \\  --target=<t>    Target: wasm32, arm64-macos, amd64-linux
+        \\
+        \\Rules:
+        \\  W001  Unused variable        Local variable defined but never used
+        \\  W002  Unused parameter        Function parameter never referenced
+        \\  W003  Variable shadowing      Local shadows an outer scope variable
+        \\
+        \\Examples:
+        \\  cot lint app.cot                    Lint app.cot
+        \\  cot lint src/main.cot               Lint with imports
         \\
     , .{});
 }
