@@ -32,7 +32,7 @@ pub const Token = enum(u8) {
     kw_fn, kw_var, kw_let, kw_const, kw_struct, kw_impl, kw_trait, kw_where,
     kw_enum, kw_union, kw_type, kw_import, kw_extern, kw_test,
     kw_if, kw_else, kw_switch, kw_while, kw_for, kw_in,
-    kw_return, kw_break, kw_continue, kw_defer, kw_try, kw_catch, kw_error,
+    kw_return, kw_break, kw_continue, kw_defer, kw_errdefer, kw_try, kw_catch, kw_error,
     kw_true, kw_false, kw_null, kw_new, kw_undefined,
     kw_comptime,
     kw_and, kw_or, kw_not,
@@ -176,6 +176,7 @@ const token_strings = blk: {
     s[@intFromEnum(Token.kw_break)] = "break";
     s[@intFromEnum(Token.kw_continue)] = "continue";
     s[@intFromEnum(Token.kw_defer)] = "defer";
+    s[@intFromEnum(Token.kw_errdefer)] = "errdefer";
     s[@intFromEnum(Token.kw_try)] = "try";
     s[@intFromEnum(Token.kw_catch)] = "catch";
     s[@intFromEnum(Token.kw_error)] = "error";
@@ -213,7 +214,7 @@ pub const keywords = std.StaticStringMap(Token).initComptime(.{
     .{ "type", .kw_type }, .{ "import", .kw_import }, .{ "extern", .kw_extern }, .{ "test", .kw_test },
     .{ "if", .kw_if }, .{ "else", .kw_else }, .{ "switch", .kw_switch }, .{ "while", .kw_while },
     .{ "for", .kw_for }, .{ "in", .kw_in }, .{ "return", .kw_return }, .{ "break", .kw_break },
-    .{ "continue", .kw_continue }, .{ "defer", .kw_defer },
+    .{ "continue", .kw_continue }, .{ "defer", .kw_defer }, .{ "errdefer", .kw_errdefer },
     .{ "try", .kw_try }, .{ "catch", .kw_catch }, .{ "error", .kw_error },
     .{ "true", .kw_true }, .{ "false", .kw_false }, .{ "null", .kw_null }, .{ "new", .kw_new },
     .{ "undefined", .kw_undefined }, .{ "comptime", .kw_comptime },

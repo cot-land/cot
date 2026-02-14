@@ -50,6 +50,9 @@ pub const CleanupKind = enum {
     /// Deferred expression to evaluate at scope exit.
     /// Port of Swift's DeferCleanup subclass on the unified cleanup stack.
     defer_expr,
+    /// Deferred expression evaluated only on error paths (Zig's errdefer).
+    /// Zig reference: AstGen.zig:3132-3200 (.defer_error scope kind).
+    errdefer_expr,
     /// Call free() on a struct at scope exit (auto-detected by free() method).
     /// Equivalent to Rust's schedule_drop (rustc_mir_build/build/scope.rs) for "Static"
     /// drops — value is always initialized, so cleanup always runs.

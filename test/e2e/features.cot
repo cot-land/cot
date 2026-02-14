@@ -2,6 +2,7 @@
 // Each `test "name" { ... }` block runs independently.
 
 import "std/list"
+import "std/map"
 
 // ============================================================================
 // Shared type declarations
@@ -1806,4 +1807,315 @@ test "not operator on bool" {
     @assert_eq(y, 0)
     var z = not false
     @assert_eq(z, 1)
+}
+
+// =============================================================================
+// errdefer — Zig reference: AstGen.zig:3132-3200, test/behavior/defer.zig:34-233
+// =============================================================================
+
+var errdefer_tracker: i64 = 0
+
+fn errdefer_fail() !i64 {
+    errdefer errdefer_tracker = 1
+    return error.Fail
+}
+
+fn errdefer_succeed() !i64 {
+    errdefer errdefer_tracker = 1
+    return 42
+}
+
+test "errdefer runs on error" {
+    errdefer_tracker = 0
+    var result = errdefer_fail() catch 0
+    @assert_eq(result, 0)
+    @assert_eq(errdefer_tracker, 1)
+}
+
+test "errdefer does not run on success" {
+    errdefer_tracker = 0
+    var result = errdefer_succeed() catch 0
+    @assert_eq(result, 42)
+    @assert_eq(errdefer_tracker, 0)
+}
+
+var errdefer_order: i64 = 0
+
+fn errdefer_ordering() !i64 {
+    defer errdefer_order = errdefer_order * 10 + 1
+    errdefer errdefer_order = errdefer_order * 10 + 2
+    defer errdefer_order = errdefer_order * 10 + 3
+    return error.Fail
+}
+
+test "errdefer LIFO ordering with defer" {
+    errdefer_order = 0
+    var result = errdefer_ordering() catch 0
+    // LIFO on error: defer(3), errdefer(2), defer(1) → 321
+    @assert_eq(errdefer_order, 321)
+}
+
+var errdefer_order2: i64 = 0
+
+fn errdefer_ordering_success() !i64 {
+    defer errdefer_order2 = errdefer_order2 * 10 + 1
+    errdefer errdefer_order2 = errdefer_order2 * 10 + 2
+    defer errdefer_order2 = errdefer_order2 * 10 + 3
+    return 99
+}
+
+test "errdefer skipped on success, defers still run" {
+    errdefer_order2 = 0
+    var result = errdefer_ordering_success() catch 0
+    @assert_eq(result, 99)
+    // LIFO on success: defer(3), skip errdefer, defer(1) → 31
+    @assert_eq(errdefer_order2, 31)
+}
+
+var errdefer_try_tracker: i64 = 0
+
+fn errdefer_inner() !i64 {
+    return error.Fail
+}
+
+fn errdefer_try_propagate() !i64 {
+    errdefer errdefer_try_tracker = 1
+    var x = try errdefer_inner()
+    return x
+}
+
+test "errdefer runs on try propagation" {
+    errdefer_try_tracker = 0
+    var result = errdefer_try_propagate() catch 0
+    @assert_eq(result, 0)
+    @assert_eq(errdefer_try_tracker, 1)
+}
+
+// =============================================================================
+// if let optional unwrap — Rust/Swift pattern: if let val = expr { ... }
+// =============================================================================
+
+test "if let unwrap non-null" {
+    var x: ?i64 = 42
+    var result: i64 = 0
+    if let val = x {
+        result = val
+    }
+    @assert_eq(result, 42)
+}
+
+test "if let unwrap null" {
+    var x: ?i64 = null
+    var result: i64 = 99
+    if let val = x {
+        result = val
+    }
+    @assert_eq(result, 99)
+}
+
+test "if let unwrap with else" {
+    var x: ?i64 = null
+    var result: i64 = 0
+    if let val = x {
+        result = val * 2
+    } else {
+        result = -1
+    }
+    @assert_eq(result, -1)
+}
+
+test "if let unwrap non-null with else" {
+    var x: ?i64 = 10
+    var result: i64 = 0
+    if let val = x {
+        result = val * 2
+    } else {
+        result = -1
+    }
+    @assert_eq(result, 20)
+}
+
+test "if let unwrap expr" {
+    var x: ?i64 = 5
+    var result = if let val = x { val + 10 } else { -1 }
+    @assert_eq(result, 15)
+}
+
+test "if let unwrap expr null" {
+    var x: ?i64 = null
+    var result = if let val = x { val + 10 } else { -1 }
+    @assert_eq(result, -1)
+}
+
+// =============================================================================
+// Named error set switch matching — catch |err| switch err { error.X => ... }
+// =============================================================================
+
+const TestError = error { NotFound, PermissionDenied, IoError }
+
+fn fail_not_found() !i64 {
+    return error.NotFound
+}
+
+fn fail_io() !i64 {
+    return error.IoError
+}
+
+test "catch switch on error variant" {
+    var result = fail_not_found() catch |err| switch err {
+        error.NotFound => -1,
+        error.PermissionDenied => -2,
+        _ => -99,
+    }
+    @assert_eq(result, -1)
+}
+
+test "catch switch io error" {
+    var result = fail_io() catch |err| switch err {
+        error.NotFound => -1,
+        error.IoError => -3,
+        _ => -99,
+    }
+    @assert_eq(result, -3)
+}
+
+test "catch switch default case" {
+    var result = fail_not_found() catch |err| switch err {
+        error.PermissionDenied => -2,
+        _ => -99,
+    }
+    @assert_eq(result, -99)
+}
+
+// ============================================================================
+// Map iteration (for k, v in map)
+// Reference: Go range.go:241-270 (mapIterStart/mapIterNext desugaring)
+// Reference: Zig array_hash_map.zig:749-770 (Iterator with next())
+// ============================================================================
+
+test "for key value in map" {
+    var m: Map(i64, i64) = .{}
+    m.set(1, 100)
+    m.set(2, 200)
+    m.set(3, 300)
+    var sum: i64 = 0
+    for k, v in m {
+        sum = sum + k + v
+    }
+    @assert_eq(sum, 606)
+    m.free()
+}
+
+test "for key value in map single entry" {
+    var m: Map(i64, i64) = .{}
+    m.set(42, 99)
+    var key_sum: i64 = 0
+    var val_sum: i64 = 0
+    for k, v in m {
+        key_sum = key_sum + k
+        val_sum = val_sum + v
+    }
+    @assert_eq(key_sum, 42)
+    @assert_eq(val_sum, 99)
+    m.free()
+}
+
+test "for key value in empty map" {
+    var m: Map(i64, i64) = .{}
+    var count: i64 = 0
+    for k, v in m {
+        count = count + 1
+    }
+    @assert_eq(count, 0)
+    m.free()
+}
+
+// ============================================================================
+// Feature 5: Labeled break / labeled continue
+// Reference: Zig AstGen.zig label resolution, Go labeled statements
+// ============================================================================
+
+test "labeled break from nested for loops" {
+    var result: i64 = 0
+    outer: for i in 0..5 {
+        for j in 0..5 {
+            if i == 2 {
+                if j == 3 {
+                    break :outer
+                }
+            }
+            result = result + 1
+        }
+    }
+    // i=0: 5, i=1: 5, i=2: 3 (j=0,1,2 then break) = 13
+    @assert_eq(result, 13)
+}
+
+test "labeled continue from nested for loops" {
+    var result: i64 = 0
+    outer: for i in 0..3 {
+        for j in 0..3 {
+            if j == 1 {
+                continue :outer
+            }
+            result = result + 1
+        }
+    }
+    // each outer iteration only counts j=0
+    @assert_eq(result, 3)
+}
+
+test "labeled break from nested while loops" {
+    var result: i64 = 0
+    var i: i64 = 0
+    outer: while i < 5 {
+        var j: i64 = 0
+        while j < 5 {
+            if i == 3 {
+                break :outer
+            }
+            result = result + 1
+            j = j + 1
+        }
+        i = i + 1
+    }
+    // i=0: 5, i=1: 5, i=2: 5, i=3: break immediately = 15
+    @assert_eq(result, 15)
+}
+
+test "labeled continue from nested while loops" {
+    var result: i64 = 0
+    var i: i64 = 0
+    outer: while i < 3 {
+        var j: i64 = 0
+        while j < 3 {
+            if j == 1 {
+                i = i + 1
+                continue :outer
+            }
+            result = result + 1
+            j = j + 1
+        }
+        i = i + 1
+    }
+    // each outer iteration only counts j=0, then continue :outer
+    @assert_eq(result, 3)
+}
+
+test "labeled break with mixed for and while" {
+    var result: i64 = 0
+    outer: for i in 0..4 {
+        var j: i64 = 0
+        while j < 4 {
+            if i == 2 {
+                if j == 1 {
+                    break :outer
+                }
+            }
+            result = result + 1
+            j = j + 1
+        }
+    }
+    // i=0: 4, i=1: 4, i=2: 1 (j=0 then break) = 9
+    @assert_eq(result, 9)
 }

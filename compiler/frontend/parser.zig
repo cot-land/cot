@@ -1069,7 +1069,19 @@ pub const Parser = struct {
     fn parseIfExpr(self: *Parser) ParseError!?NodeIndex {
         const start = self.pos();
         self.advance();
-        const cond = try self.parseExpr() orelse return null;
+        // Optional unwrap: if let val = expr { ... } (Rust/Swift pattern)
+        var capture: []const u8 = "";
+        var cond: NodeIndex = undefined;
+        if (self.check(.kw_let)) {
+            self.advance();
+            if (!self.check(.ident)) { self.syntaxError("expected identifier after 'let'"); return null; }
+            capture = self.tok.text;
+            self.advance();
+            if (!self.expect(.assign)) return null;
+            cond = try self.parseExpr() orelse return null;
+        } else {
+            cond = try self.parseExpr() orelse return null;
+        }
         if (!self.check(.lbrace)) { self.err.errorWithCode(self.pos(), .e204, "expected '{' after if condition"); return null; }
         const then_br = try self.parseBlockExpr() orelse return null;
         var else_br: NodeIndex = null_node;
@@ -1078,7 +1090,7 @@ pub const Parser = struct {
             else if (self.check(.lbrace)) else_br = try self.parseBlockExpr() orelse return null
             else { self.syntaxError("expected '{' or 'if' after 'else'"); return null; }
         }
-        return try self.tree.addExpr(.{ .if_expr = .{ .condition = cond, .then_branch = then_br, .else_branch = else_br, .span = Span.init(start, self.pos()) } });
+        return try self.tree.addExpr(.{ .if_expr = .{ .condition = cond, .then_branch = then_br, .else_branch = else_br, .capture = capture, .span = Span.init(start, self.pos()) } });
     }
 
     fn parseSwitchExpr(self: *Parser) ParseError!?NodeIndex {
@@ -1180,7 +1192,7 @@ pub const Parser = struct {
             .kw_const => return self.parseVarStmt(true),
             .kw_if => return self.parseIfStmt(),
             .kw_while => return self.parseWhileStmt(null),
-            .kw_for => return self.parseForStmt(),
+            .kw_for => return self.parseForStmt(null),
             .kw_break => {
                 self.advance();
                 var label: ?[]const u8 = null;
@@ -1195,12 +1207,13 @@ pub const Parser = struct {
                 _ = self.match(.semicolon);
                 return try self.tree.addStmt(.{ .continue_stmt = .{ .label = label, .span = Span.init(start, self.pos()) } });
             },
-            .kw_defer => {
+            .kw_defer, .kw_errdefer => {
+                const is_errdefer = self.tok.tok == .kw_errdefer;
                 self.advance();
-                // defer can take a block { ... } or a simple expression/assignment
+                // defer/errdefer can take a block { ... } or a simple expression/assignment
                 if (self.check(.lbrace)) {
                     const block = try self.parseBlock() orelse return null;
-                    return try self.tree.addStmt(.{ .defer_stmt = .{ .expr = block, .span = Span.init(start, self.pos()) } });
+                    return try self.tree.addStmt(.{ .defer_stmt = .{ .expr = block, .is_errdefer = is_errdefer, .span = Span.init(start, self.pos()) } });
                 }
                 // Parse expression, then check for assignment operator
                 const e = try self.parseExpr() orelse return null;
@@ -1215,10 +1228,10 @@ pub const Parser = struct {
                         .op = op,
                         .span = Span.init(start, self.pos()),
                     } });
-                    return try self.tree.addStmt(.{ .defer_stmt = .{ .expr = assign_node, .span = Span.init(start, self.pos()) } });
+                    return try self.tree.addStmt(.{ .defer_stmt = .{ .expr = assign_node, .is_errdefer = is_errdefer, .span = Span.init(start, self.pos()) } });
                 }
                 _ = self.match(.semicolon);
-                return try self.tree.addStmt(.{ .defer_stmt = .{ .expr = e, .span = Span.init(start, self.pos()) } });
+                return try self.tree.addStmt(.{ .defer_stmt = .{ .expr = e, .is_errdefer = is_errdefer, .span = Span.init(start, self.pos()) } });
             },
             .ident => {
                 if (self.peekToken().tok == .colon) {
@@ -1226,7 +1239,8 @@ pub const Parser = struct {
                     self.advance();
                     self.advance();
                     if (self.check(.kw_while)) return self.parseWhileStmt(label);
-                    self.err.errorWithCode(self.pos(), .e201, "expected 'while' after label");
+                    if (self.check(.kw_for)) return self.parseForStmt(label);
+                    self.err.errorWithCode(self.pos(), .e201, "expected 'while' or 'for' after label");
                     return null;
                 }
                 return self.parseExprOrAssign(start);
@@ -1265,7 +1279,19 @@ pub const Parser = struct {
     fn parseIfStmt(self: *Parser) ParseError!?NodeIndex {
         const start = self.pos();
         self.advance();
-        const cond = try self.parseExpr() orelse return null;
+        // Optional unwrap: if let val = expr { ... } (Rust/Swift pattern)
+        var capture: []const u8 = "";
+        var cond: NodeIndex = undefined;
+        if (self.check(.kw_let)) {
+            self.advance();
+            if (!self.check(.ident)) { self.syntaxError("expected identifier after 'let'"); return null; }
+            capture = self.tok.text;
+            self.advance();
+            if (!self.expect(.assign)) return null;
+            cond = try self.parseExpr() orelse return null;
+        } else {
+            cond = try self.parseExpr() orelse return null;
+        }
         const then_br = if (self.check(.lbrace)) try self.parseBlock() orelse return null else try self.parseStmt() orelse return null;
         var else_br: NodeIndex = null_node;
         if (self.match(.kw_else)) {
@@ -1273,7 +1299,7 @@ pub const Parser = struct {
             else if (self.check(.lbrace)) else_br = try self.parseBlock() orelse return null
             else else_br = try self.parseStmt() orelse return null;
         }
-        return try self.tree.addStmt(.{ .if_stmt = .{ .condition = cond, .then_branch = then_br, .else_branch = else_br, .span = Span.init(start, self.pos()) } });
+        return try self.tree.addStmt(.{ .if_stmt = .{ .condition = cond, .then_branch = then_br, .else_branch = else_br, .capture = capture, .span = Span.init(start, self.pos()) } });
     }
 
     fn parseWhileStmt(self: *Parser, label: ?[]const u8) ParseError!?NodeIndex {
@@ -1285,7 +1311,7 @@ pub const Parser = struct {
         return try self.tree.addStmt(.{ .while_stmt = .{ .condition = cond, .body = body, .label = label, .span = Span.init(start, self.pos()) } });
     }
 
-    fn parseForStmt(self: *Parser) ParseError!?NodeIndex {
+    fn parseForStmt(self: *Parser, label: ?[]const u8) ParseError!?NodeIndex {
         const start = self.pos();
         self.advance();
         if (!self.check(.ident)) {
@@ -1342,6 +1368,7 @@ pub const Parser = struct {
             .range_start = range_start,
             .range_end = range_end,
             .body = body,
+            .label = label,
             .span = Span.init(start, self.pos()),
         } });
     }

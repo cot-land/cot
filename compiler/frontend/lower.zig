@@ -45,6 +45,11 @@ pub const Lowerer = struct {
     type_substitution: ?std.StringHashMap(TypeIndex) = null,
     /// Compilation target — used for @target_os(), @target_arch(), @target() comptime builtins
     target: target_mod.Target = target_mod.Target.native(),
+    /// Global error variant table: maps error variant names to globally unique indices.
+    /// Zig pattern: each error value has a unique integer across all error sets.
+    /// Reference: Zig compiler uses a global error value table for @intFromError/@errorName.
+    global_error_table: std.StringHashMap(i64) = undefined,
+    next_error_idx: i64 = 0,
 
     pub const Error = error{OutOfMemory};
 
@@ -84,6 +89,7 @@ pub const Lowerer = struct {
             .test_display_names = .{},
             .lowered_generics = std.StringHashMap(void).init(allocator),
             .target = target,
+            .global_error_table = std.StringHashMap(i64).init(allocator),
         };
     }
 
@@ -481,9 +487,10 @@ pub const Lowerer = struct {
             .continue_stmt => |cs| { try self.lowerContinue(cs.label); return true; },
             .expr_stmt => |es| { _ = try self.lowerExprNode(es.expr); return false; },
             .defer_stmt => |ds| {
-                // Push defer as cleanup entry on unified stack (Swift's DeferCleanup pattern)
+                // Push defer/errdefer as cleanup entry on unified stack (Swift's DeferCleanup pattern)
+                // Zig reference: AstGen.zig:3132-3200 — .defer_normal vs .defer_error
                 const cleanup = arc.Cleanup{
-                    .kind = .defer_expr,
+                    .kind = if (ds.is_errdefer) .errdefer_expr else .defer_expr,
                     .value = @intCast(ds.expr),
                     .type_idx = TypeRegistry.VOID,
                     .state = .active,
@@ -500,6 +507,9 @@ pub const Lowerer = struct {
     fn lowerReturn(self: *Lowerer, ret: ast.ReturnStmt) !void {
         const fb = self.current_func orelse return;
         var value_node: ?ir.NodeIndex = null;
+        // Track whether this return is an error path (for errdefer)
+        // Zig reference: errdefer fires on `return error.X` and `try` propagation
+        var is_error_return = false;
         if (ret.value != null_node) {
             // Check if the return expression is an error literal in an error union function
             const ret_node = self.tree.getNode(ret.value);
@@ -512,6 +522,7 @@ pub const Lowerer = struct {
 
             if (is_error_literal and is_error_union_fn) {
                 // error.X in error union function — lowerErrorLiteral returns a pointer to the EU
+                is_error_return = true;
                 const lowered = try self.lowerExprNode(ret.value);
                 if (lowered != ir.null_node) value_node = lowered;
             } else if (is_error_union_fn) {
@@ -601,20 +612,28 @@ pub const Lowerer = struct {
                 const ret_size = self.type_reg.sizeOf(ret_type);
                 const tmp_local = try fb.addLocalWithSize("__ret_tmp", ret_type, false, ret_size);
                 _ = try fb.emitStoreLocal(tmp_local, ret_val, ret.span);
-                try self.emitCleanups(0);
+                if (is_error_return) {
+                    try self.emitCleanupsErrorPath(0);
+                } else {
+                    try self.emitCleanups(0);
+                }
                 value_node = try fb.emitLoadLocal(tmp_local, ret_type, ret.span);
                 _ = try fb.emitRet(value_node, ret.span);
                 return;
             }
         }
-        try self.emitCleanups(0);
+        if (is_error_return) {
+            try self.emitCleanupsErrorPath(0);
+        } else {
+            try self.emitCleanups(0);
+        }
         _ = try fb.emitRet(value_node, ret.span);
     }
 
     /// Check if there are any active defer or scope_destroy cleanups on the stack.
     fn hasDeferCleanups(self: *const Lowerer) bool {
         for (self.cleanup_stack.items.items) |cleanup| {
-            if (cleanup.isActive() and (cleanup.kind == .defer_expr or cleanup.kind == .scope_destroy)) return true;
+            if (cleanup.isActive() and (cleanup.kind == .defer_expr or cleanup.kind == .errdefer_expr or cleanup.kind == .scope_destroy)) return true;
         }
         return false;
     }
@@ -673,7 +692,18 @@ pub const Lowerer = struct {
     /// Called at scope exit (block end, return, break, etc.)
     /// Unified stack handles both ARC releases and deferred expressions in LIFO order.
     /// Port of Swift's CleanupManager pattern.
+    /// Zig errdefer reference: AstGen.zig:3132-3200 — errdefer_expr only runs on error paths.
     fn emitCleanups(self: *Lowerer, target_depth: usize) Error!void {
+        return self.emitCleanupsImpl(target_depth, false, true);
+    }
+
+    /// Emit cleanups on an error path — runs both defer_expr AND errdefer_expr.
+    /// Called when returning an error or propagating via try.
+    fn emitCleanupsErrorPath(self: *Lowerer, target_depth: usize) Error!void {
+        return self.emitCleanupsImpl(target_depth, true, true);
+    }
+
+    fn emitCleanupsImpl(self: *Lowerer, target_depth: usize, is_error_path: bool, pop: bool) Error!void {
         const fb = self.current_func orelse return;
         const items = self.cleanup_stack.getActiveCleanups();
 
@@ -696,6 +726,12 @@ pub const Lowerer = struct {
                     .defer_expr => {
                         try self.lowerDeferredNode(@intCast(cleanup.value));
                     },
+                    .errdefer_expr => {
+                        // Zig semantics: errdefer only fires on error exit paths
+                        if (is_error_path) {
+                            try self.lowerDeferredNode(@intCast(cleanup.value));
+                        }
+                    },
                     .scope_destroy => {
                         // Emit free() call on struct at scope exit.
                         // Rust parallel: drop_in_place<T> shim (compiler/rustc_mir_transform/src/elaborate_drops.rs).
@@ -715,8 +751,10 @@ pub const Lowerer = struct {
         }
 
         // Pop the cleanups we just emitted
-        while (self.cleanup_stack.items.items.len > target_depth) {
-            _ = self.cleanup_stack.items.pop();
+        if (pop) {
+            while (self.cleanup_stack.items.items.len > target_depth) {
+                _ = self.cleanup_stack.items.pop();
+            }
         }
     }
 
@@ -724,39 +762,7 @@ pub const Lowerer = struct {
     /// Used for break/continue — other paths still need these cleanups.
     /// Port of Swift's emitBranchAndCleanups pattern.
     fn emitCleanupsNoPop(self: *Lowerer, target_depth: usize) Error!void {
-        const fb = self.current_func orelse return;
-        const items = self.cleanup_stack.getActiveCleanups();
-        var i = items.len;
-        while (i > target_depth) {
-            i -= 1;
-            const cleanup = items[i];
-            if (cleanup.isActive()) {
-                switch (cleanup.kind) {
-                    .release => {
-                        const value = if (cleanup.local_idx) |lidx|
-                            try fb.emitLoadLocal(lidx, cleanup.type_idx, Span.zero)
-                        else
-                            cleanup.value;
-                        var args = [_]ir.NodeIndex{value};
-                        _ = try fb.emitCall("cot_release", &args, false, TypeRegistry.VOID, Span.zero);
-                    },
-                    .defer_expr => {
-                        try self.lowerDeferredNode(@intCast(cleanup.value));
-                    },
-                    .scope_destroy => {
-                        if (cleanup.local_idx) |lidx| {
-                            if (cleanup.func_name) |fname| {
-                                const ptr_type = self.type_reg.makePointer(cleanup.type_idx) catch TypeRegistry.I64;
-                                const self_addr = try fb.emitAddrLocal(lidx, ptr_type, Span.zero);
-                                var call_args = [_]ir.NodeIndex{self_addr};
-                                _ = try fb.emitCall(fname, &call_args, false, TypeRegistry.VOID, Span.zero);
-                            }
-                        }
-                    },
-                    .end_borrow => {},
-                }
-            }
-        }
+        return self.emitCleanupsImpl(target_depth, false, false);
         // Do NOT pop — other code paths still need these cleanups
     }
 
@@ -1463,6 +1469,8 @@ pub const Lowerer = struct {
     }
 
     fn lowerIf(self: *Lowerer, if_stmt: ast.IfStmt) !bool {
+        // Optional unwrap: if expr |val| { ... } — Zig payload capture pattern
+        if (if_stmt.capture.len > 0) return try self.lowerIfOptional(if_stmt);
         // Comptime const-fold: eliminate dead branches for platform conditionals
         if (self.chk.evalConstExpr(if_stmt.condition)) |cond_val| {
             if (cond_val != 0) {
@@ -1485,6 +1493,46 @@ pub const Lowerer = struct {
             fb.setBlock(eb);
             if (!try self.lowerBlockNode(if_stmt.else_branch)) _ = try fb.emitJump(merge_block, if_stmt.span);
         }
+        fb.setBlock(merge_block);
+        return false;
+    }
+
+    /// Lower if-optional: if expr |val| { ... } else { ... }
+    /// Same pattern as catch |err| capture (lower.zig:4220-4228).
+    fn lowerIfOptional(self: *Lowerer, if_stmt: ast.IfStmt) !bool {
+        const fb = self.current_func orelse return false;
+
+        // Evaluate the optional expression
+        const opt_val = try self.lowerExprNode(if_stmt.condition);
+        if (opt_val == ir.null_node) return false;
+
+        // Check if non-null: val != null
+        const null_val = try fb.emit(ir.Node.init(.const_null, TypeRegistry.UNTYPED_NULL, if_stmt.span));
+        const is_non_null = try fb.emitBinary(.ne, opt_val, null_val, TypeRegistry.BOOL, if_stmt.span);
+
+        const then_block = try fb.newBlock("if.opt.then");
+        const else_block = if (if_stmt.else_branch != null_node) try fb.newBlock("if.opt.else") else null;
+        const merge_block = try fb.newBlock("if.opt.end");
+        _ = try fb.emitBranch(is_non_null, then_block, else_block orelse merge_block, if_stmt.span);
+
+        // Then block: unwrap and bind capture variable
+        fb.setBlock(then_block);
+        const scope_depth = fb.markScopeEntry();
+        const opt_type_idx = self.inferExprType(if_stmt.condition);
+        const opt_info = self.type_reg.get(opt_type_idx);
+        const elem_type = if (opt_info == .optional) opt_info.optional.elem else opt_type_idx;
+        const unwrapped = try fb.emitUnary(.optional_unwrap, opt_val, elem_type, if_stmt.span);
+        const capture_local = try fb.addLocalWithSize(if_stmt.capture, elem_type, false, self.type_reg.sizeOf(elem_type));
+        _ = try fb.emitStoreLocal(capture_local, unwrapped, if_stmt.span);
+        if (!try self.lowerBlockNode(if_stmt.then_branch)) _ = try fb.emitJump(merge_block, if_stmt.span);
+        fb.restoreScope(scope_depth);
+
+        // Else block
+        if (else_block) |eb| {
+            fb.setBlock(eb);
+            if (!try self.lowerBlockNode(if_stmt.else_branch)) _ = try fb.emitJump(merge_block, if_stmt.span);
+        }
+
         fb.setBlock(merge_block);
         return false;
     }
@@ -1517,6 +1565,21 @@ pub const Lowerer = struct {
 
         const iter_type = self.inferExprType(for_stmt.iterable);
         const iter_info = self.type_reg.get(iter_type);
+
+        // Map iteration has different structure — dispatch to dedicated handler
+        // After monomorphization, Map(K,V) is a struct_type with name "Map(...)".
+        // Look up generic inst info to get K and V type args.
+        if (iter_info == .map) {
+            try self.lowerForMap(for_stmt, iter_type, iter_info.map);
+            return;
+        }
+        if (iter_info == .struct_type and std.mem.startsWith(u8, iter_info.struct_type.name, "Map(")) {
+            if (checker.parseMapTypeArgs(iter_info.struct_type.name)) |args| {
+                try self.lowerForMap(for_stmt, iter_type, .{ .key = args[0], .value = args[1] });
+                return;
+            }
+        }
+
         const elem_type: TypeIndex = switch (iter_info) {
             .array => |a| a.elem,
             .slice => |s| s.elem,
@@ -1565,7 +1628,7 @@ pub const Lowerer = struct {
         const cond = try fb.emitBinary(.lt, idx_val, len_val_cond, TypeRegistry.BOOL, for_stmt.span);
         _ = try fb.emitBranch(cond, body_block, exit_block, for_stmt.span);
 
-        try self.loop_stack.append(self.allocator, .{ .cond_block = incr_block, .exit_block = exit_block, .cleanup_depth = self.cleanup_stack.getScopeDepth() });
+        try self.loop_stack.append(self.allocator, .{ .cond_block = incr_block, .exit_block = exit_block, .cleanup_depth = self.cleanup_stack.getScopeDepth(), .label = for_stmt.label });
 
         fb.setBlock(body_block);
         const binding_local = try fb.addLocalWithSize(for_stmt.binding, elem_type, false, elem_size);
@@ -1679,6 +1742,7 @@ pub const Lowerer = struct {
             .cond_block = incr_block,
             .exit_block = exit_block,
             .cleanup_depth = self.cleanup_stack.getScopeDepth(),
+            .label = for_stmt.label,
         });
 
         // Body
@@ -1692,6 +1756,138 @@ pub const Lowerer = struct {
         const idx_before = try fb.emitLoadLocal(idx_local, TypeRegistry.I64, for_stmt.span);
         const one = try fb.emitConstInt(1, TypeRegistry.I64, for_stmt.span);
         const idx_after = try fb.emitBinary(.add, idx_before, one, TypeRegistry.I64, for_stmt.span);
+        _ = try fb.emitStoreLocal(idx_local, idx_after, for_stmt.span);
+        _ = try fb.emitJump(cond_block, for_stmt.span);
+
+        // Exit
+        _ = self.loop_stack.pop();
+        fb.setBlock(exit_block);
+    }
+
+    /// Lower `for k, v in map { }` — iterates occupied slots in hash table.
+    /// Reference: Zig array_hash_map.zig:749-770 (Iterator with next() returning ?Entry).
+    /// Go range.go:241-270 (desugars to mapIterStart/mapIterNext).
+    /// Map struct layout: keys(0), values(8), states(16), count(24), capacity(32).
+    /// States: 0=empty, 1=occupied, 2=tombstone.
+    fn lowerForMap(self: *Lowerer, for_stmt: ast.ForStmt, iter_type: TypeIndex, map_info: types.MapType) !void {
+        const fb = self.current_func orelse return;
+        _ = iter_type;
+        const key_type = map_info.key;
+        const val_type = map_info.value;
+        const key_size: u32 = self.type_reg.sizeOf(key_type);
+        const val_size: u32 = self.type_reg.sizeOf(val_type);
+
+        // Get the map local
+        const iter_node = self.tree.getNode(for_stmt.iterable) orelse return;
+        const iter_expr = iter_node.asExpr() orelse return;
+        if (iter_expr != .ident) return;
+        const map_local = fb.lookupLocal(iter_expr.ident.name) orelse return;
+
+        // Read map fields into locals BEFORE the loop (same pattern as lowerFor for arrays/slices).
+        // We use emitFieldLocal to read from the struct, then store into simple i64 locals.
+        const idx_name = try std.fmt.allocPrint(self.allocator, "__map_idx_{d}", .{self.temp_counter});
+        self.temp_counter += 1;
+        const idx_local = try fb.addLocalWithSize(idx_name, TypeRegistry.I64, true, 8);
+        const zero = try fb.emitConstInt(0, TypeRegistry.I64, for_stmt.span);
+        _ = try fb.emitStoreLocal(idx_local, zero, for_stmt.span);
+
+        // Use m.count for total entries (optimization: early exit when found_count reaches count)
+        // But loop 0..capacity is correct for hash table iteration, checking states.
+        // Read capacity from the struct into a simple local
+        const cap_name = try std.fmt.allocPrint(self.allocator, "__map_cap_{d}", .{self.temp_counter});
+        self.temp_counter += 1;
+        const cap_local = try fb.addLocalWithSize(cap_name, TypeRegistry.I64, false, 8);
+        const cap_field = try fb.emitFieldLocal(map_local, 4, 32, TypeRegistry.I64, for_stmt.span);
+        _ = try fb.emitStoreLocal(cap_local, cap_field, for_stmt.span);
+
+        // Read keys/values/states pointers into locals
+        const keys_name = try std.fmt.allocPrint(self.allocator, "__map_keys_{d}", .{self.temp_counter});
+        self.temp_counter += 1;
+        const keys_local = try fb.addLocalWithSize(keys_name, TypeRegistry.I64, false, 8);
+        const keys_field = try fb.emitFieldLocal(map_local, 0, 0, TypeRegistry.I64, for_stmt.span);
+        _ = try fb.emitStoreLocal(keys_local, keys_field, for_stmt.span);
+
+        const vals_name = try std.fmt.allocPrint(self.allocator, "__map_vals_{d}", .{self.temp_counter});
+        self.temp_counter += 1;
+        const vals_local = try fb.addLocalWithSize(vals_name, TypeRegistry.I64, false, 8);
+        const vals_field = try fb.emitFieldLocal(map_local, 1, 8, TypeRegistry.I64, for_stmt.span);
+        _ = try fb.emitStoreLocal(vals_local, vals_field, for_stmt.span);
+
+        const states_name = try std.fmt.allocPrint(self.allocator, "__map_states_{d}", .{self.temp_counter});
+        self.temp_counter += 1;
+        const states_local = try fb.addLocalWithSize(states_name, TypeRegistry.I64, false, 8);
+        const states_field = try fb.emitFieldLocal(map_local, 2, 16, TypeRegistry.I64, for_stmt.span);
+        _ = try fb.emitStoreLocal(states_local, states_field, for_stmt.span);
+
+        // Create loop blocks — same structure as lowerForRange
+        const cond_block = try fb.newBlock("map.cond");
+        const body_block = try fb.newBlock("map.body");
+        const incr_block = try fb.newBlock("map.incr");
+        const exit_block = try fb.newBlock("map.end");
+
+        _ = try fb.emitJump(cond_block, for_stmt.span);
+
+        // Condition: idx < capacity
+        fb.setBlock(cond_block);
+        const idx_cond = try fb.emitLoadLocal(idx_local, TypeRegistry.I64, for_stmt.span);
+        const cap_cond = try fb.emitLoadLocal(cap_local, TypeRegistry.I64, for_stmt.span);
+        const cond = try fb.emitBinary(.lt, idx_cond, cap_cond, TypeRegistry.BOOL, for_stmt.span);
+        _ = try fb.emitBranch(cond, body_block, exit_block, for_stmt.span);
+
+        // Push loop context for break/continue
+        try self.loop_stack.append(self.allocator, .{
+            .cond_block = incr_block,
+            .exit_block = exit_block,
+            .cleanup_depth = self.cleanup_stack.getScopeDepth(),
+            .label = for_stmt.label,
+        });
+
+        // Body: check state[idx] == 1, if so bind key/value and execute user body
+        fb.setBlock(body_block);
+        const cur_idx = try fb.emitLoadLocal(idx_local, TypeRegistry.I64, for_stmt.span);
+
+        // Read state at current index: *(states + idx * 8)
+        const states_base = try fb.emitLoadLocal(states_local, TypeRegistry.I64, for_stmt.span);
+        const state_val = try fb.emitIndexValue(states_base, cur_idx, 8, TypeRegistry.I64, for_stmt.span);
+        const one = try fb.emitConstInt(1, TypeRegistry.I64, for_stmt.span);
+        const is_occupied = try fb.emitBinary(.eq, state_val, one, TypeRegistry.BOOL, for_stmt.span);
+
+        // Branch: if occupied, go to occupied block; else skip to increment
+        const occupied_block = try fb.newBlock("map.occupied");
+        _ = try fb.emitBranch(is_occupied, occupied_block, incr_block, for_stmt.span);
+
+        // Occupied block: load key and value, execute body
+        fb.setBlock(occupied_block);
+        const idx_load = try fb.emitLoadLocal(idx_local, TypeRegistry.I64, for_stmt.span);
+
+        // Load key from keys[idx]
+        const keys_base = try fb.emitLoadLocal(keys_local, TypeRegistry.I64, for_stmt.span);
+        const key_val = try fb.emitIndexValue(keys_base, idx_load, @intCast(key_size), key_type, for_stmt.span);
+
+        // Load value from values[idx]
+        const vals_base = try fb.emitLoadLocal(vals_local, TypeRegistry.I64, for_stmt.span);
+        const val_val = try fb.emitIndexValue(vals_base, idx_load, @intCast(val_size), val_type, for_stmt.span);
+
+        // Bind value (binding = second name = value)
+        const val_local = try fb.addLocalWithSize(for_stmt.binding, val_type, false, val_size);
+        _ = try fb.emitStoreLocal(val_local, val_val, for_stmt.span);
+
+        // Bind key (index_binding = first name = key)
+        if (for_stmt.index_binding) |key_binding| {
+            const key_local = try fb.addLocalWithSize(key_binding, key_type, false, key_size);
+            _ = try fb.emitStoreLocal(key_local, key_val, for_stmt.span);
+        }
+
+        // Execute loop body
+        if (!try self.lowerBlockNode(for_stmt.body)) {
+            _ = try fb.emitJump(incr_block, for_stmt.span);
+        }
+
+        // Increment: idx += 1
+        fb.setBlock(incr_block);
+        const idx_before = try fb.emitLoadLocal(idx_local, TypeRegistry.I64, for_stmt.span);
+        const inc = try fb.emitConstInt(1, TypeRegistry.I64, for_stmt.span);
+        const idx_after = try fb.emitBinary(.add, idx_before, inc, TypeRegistry.I64, for_stmt.span);
         _ = try fb.emitStoreLocal(idx_local, idx_after, for_stmt.span);
         _ = try fb.emitJump(cond_block, for_stmt.span);
 
@@ -2735,6 +2931,8 @@ pub const Lowerer = struct {
     }
 
     fn lowerIfExpr(self: *Lowerer, if_expr: ast.IfExpr) Error!ir.NodeIndex {
+        // Optional unwrap expression: if expr |val| { val * 2 } else { -1 }
+        if (if_expr.capture.len > 0) return try self.lowerIfOptionalExpr(if_expr);
         // Comptime const-fold: if condition is known at compile time, only emit the taken branch.
         // This eliminates dead branches for @target_os() == "linux" etc.
         if (self.chk.evalConstExpr(if_expr.condition)) |cond_val| {
@@ -2749,6 +2947,56 @@ pub const Lowerer = struct {
         if (then_val == ir.null_node) return ir.null_node;
         const else_val = if (if_expr.else_branch != null_node) try self.lowerExprNode(if_expr.else_branch) else ir.null_node;
         return try fb.emitSelect(cond, then_val, else_val, self.inferExprType(if_expr.then_branch), if_expr.span);
+    }
+
+    /// Lower if-optional expression: if expr |val| { val * 2 } else { -1 }
+    /// Same pattern as catch expr with capture.
+    fn lowerIfOptionalExpr(self: *Lowerer, if_expr: ast.IfExpr) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+
+        // Evaluate the optional expression
+        const opt_val = try self.lowerExprNode(if_expr.condition);
+        if (opt_val == ir.null_node) return ir.null_node;
+
+        // Check if non-null
+        const null_val = try fb.emit(ir.Node.init(.const_null, TypeRegistry.UNTYPED_NULL, if_expr.span));
+        const is_non_null = try fb.emitBinary(.ne, opt_val, null_val, TypeRegistry.BOOL, if_expr.span);
+
+        // Determine result type
+        const result_type = self.inferExprType(if_expr.then_branch);
+        const result_size = self.type_reg.sizeOf(result_type);
+        const result_local = try fb.addLocalWithSize("__if_opt_result", result_type, false, result_size);
+
+        const then_block = try fb.newBlock("if.opt.then");
+        const else_block = try fb.newBlock("if.opt.else");
+        const merge_block = try fb.newBlock("if.opt.end");
+        _ = try fb.emitBranch(is_non_null, then_block, else_block, if_expr.span);
+
+        // Then block: unwrap and bind capture, evaluate then-branch
+        fb.setBlock(then_block);
+        const scope_depth = fb.markScopeEntry();
+        const opt_type_idx = self.inferExprType(if_expr.condition);
+        const opt_info = self.type_reg.get(opt_type_idx);
+        const elem_type = if (opt_info == .optional) opt_info.optional.elem else opt_type_idx;
+        const unwrapped = try fb.emitUnary(.optional_unwrap, opt_val, elem_type, if_expr.span);
+        const capture_local = try fb.addLocalWithSize(if_expr.capture, elem_type, false, self.type_reg.sizeOf(elem_type));
+        _ = try fb.emitStoreLocal(capture_local, unwrapped, if_expr.span);
+        const then_val = try self.lowerExprNode(if_expr.then_branch);
+        _ = try fb.emitStoreLocal(result_local, then_val, if_expr.span);
+        fb.restoreScope(scope_depth);
+        _ = try fb.emitJump(merge_block, if_expr.span);
+
+        // Else block
+        fb.setBlock(else_block);
+        if (if_expr.else_branch != null_node) {
+            const else_val = try self.lowerExprNode(if_expr.else_branch);
+            _ = try fb.emitStoreLocal(result_local, else_val, if_expr.span);
+        }
+        _ = try fb.emitJump(merge_block, if_expr.span);
+
+        // Merge: load result
+        fb.setBlock(merge_block);
+        return try fb.emitLoadLocal(result_local, result_type, if_expr.span);
     }
 
     fn lowerSwitchExpr(self: *Lowerer, se: ast.SwitchExpr) Error!ir.NodeIndex {
@@ -2794,7 +3042,8 @@ pub const Lowerer = struct {
                 case_cond = try fb.emitBinary(.@"and", ge_cond, le_cond, TypeRegistry.BOOL, se.span);
             } else {
                 for (case.patterns) |pattern_idx| {
-                    const pattern_val = try self.lowerExprNode(pattern_idx);
+                    // Error literal pattern: resolve to variant index for comparison
+                    const pattern_val = try self.resolveErrorPatternOrLower(pattern_idx, se.span);
                     const pattern_cond = try fb.emitBinary(.eq, subject, pattern_val, TypeRegistry.BOOL, se.span);
                     case_cond = if (case_cond == ir.null_node) pattern_cond else try fb.emitBinary(.@"or", case_cond, pattern_cond, TypeRegistry.BOOL, se.span);
                 }
@@ -2819,6 +3068,28 @@ pub const Lowerer = struct {
         }
         fb.setBlock(merge_block);
         return ir.null_node;
+    }
+
+    /// Resolve an error literal pattern to its globally unique variant index, or lower normally.
+    /// Uses global error table (Zig pattern: each error value has unique integer).
+    fn resolveErrorPatternOrLower(self: *Lowerer, pattern_idx: ast.NodeIndex, span: Span) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+        const pattern_node = self.tree.getNode(pattern_idx) orelse return ir.null_node;
+        const pattern_expr = pattern_node.asExpr() orelse return try self.lowerExprNode(pattern_idx);
+        if (pattern_expr != .error_literal) return try self.lowerExprNode(pattern_idx);
+        const el = pattern_expr.error_literal;
+        const error_idx = self.getGlobalErrorIndex(el.error_name);
+        return try fb.emitConstInt(error_idx, TypeRegistry.I64, span);
+    }
+
+    /// Get globally unique index for an error variant name. Assigns new index on first use.
+    /// Zig reference: each error value has a unique integer, @intFromError returns it.
+    fn getGlobalErrorIndex(self: *Lowerer, name: []const u8) i64 {
+        if (self.global_error_table.get(name)) |idx| return idx;
+        const idx = self.next_error_idx;
+        self.next_error_idx += 1;
+        self.global_error_table.put(name, idx) catch {};
+        return idx;
     }
 
     fn lowerUnionSwitch(self: *Lowerer, se: ast.SwitchExpr, subject_type: TypeIndex, ut: types.UnionType) Error!ir.NodeIndex {
@@ -2933,7 +3204,7 @@ pub const Lowerer = struct {
                 case_cond = try fb.emitBinary(.@"and", ge_cond, le_cond, TypeRegistry.BOOL, se.span);
             } else {
                 for (case.patterns) |pattern_idx| {
-                    const pattern_val = try self.lowerExprNode(pattern_idx);
+                    const pattern_val = try self.resolveErrorPatternOrLower(pattern_idx, se.span);
                     const pattern_cond = try fb.emitBinary(.eq, subject, pattern_val, TypeRegistry.BOOL, se.span);
                     case_cond = if (case_cond == ir.null_node) pattern_cond else try fb.emitBinary(.@"or", case_cond, pattern_cond, TypeRegistry.BOOL, se.span);
                 }
@@ -4108,16 +4379,9 @@ pub const Lowerer = struct {
         const ret_info = self.type_reg.get(ret_type);
         if (ret_info != .error_union) return ir.null_node;
 
-        // Look up the error variant index
-        var error_idx: i64 = 0;
-        if (ret_info.error_union.error_set != types.invalid_type) {
-            const es_info = self.type_reg.get(ret_info.error_union.error_set);
-            if (es_info == .error_set) {
-                for (es_info.error_set.variants, 0..) |v, i| {
-                    if (std.mem.eql(u8, v, el.error_name)) { error_idx = @intCast(i); break; }
-                }
-            }
-        }
+        // Look up error variant using global error table (unique index per variant name).
+        // Zig pattern: each error value has a globally unique integer.
+        const error_idx = self.getGlobalErrorIndex(el.error_name);
 
         // Create error union: tag=1 (error), payload=error_idx
         const size = self.type_reg.sizeOf(ret_type);
@@ -4169,6 +4433,9 @@ pub const Lowerer = struct {
         const err_payload = try fb.emitPtrLoadValue(payload_addr, TypeRegistry.I64, te.span);
         _ = try fb.emitStoreLocalField(err_local, 1, 8, err_payload, te.span);
         const err_ret = try fb.emitAddrLocal(err_local, TypeRegistry.I64, te.span);
+        // BUG FIX: emit cleanups on error path before returning
+        // Zig reference: errdefer fires on try propagation (AstGen.zig:3132-3200)
+        try self.emitCleanupsErrorPath(0);
         _ = try fb.emitRet(err_ret, te.span);
 
         // OK block: read the success payload at [ptr + 8]

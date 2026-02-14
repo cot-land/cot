@@ -147,6 +147,22 @@ pub const GenericImplInfo = struct {
     tree: *const Ast, // which file's AST these method NodeIndexes belong to (for cross-file generics)
 };
 
+/// Parse type arguments from a monomorphized Map name like "Map(5;5)" → [K, V] TypeIndex values.
+/// Returns null if the name cannot be parsed.
+pub fn parseMapTypeArgs(name: []const u8) ?[2]TypeIndex {
+    // Format: "Map(K;V)" where K and V are decimal TypeIndex integers
+    const open = std.mem.indexOfScalar(u8, name, '(') orelse return null;
+    const close = std.mem.lastIndexOfScalar(u8, name, ')') orelse return null;
+    if (close <= open + 1) return null;
+    const args_str = name[open + 1 .. close];
+    const semi = std.mem.indexOfScalar(u8, args_str, ';') orelse return null;
+    const k_str = args_str[0..semi];
+    const v_str = args_str[semi + 1 ..];
+    const k = std.fmt.parseInt(TypeIndex, k_str, 10) catch return null;
+    const v = std.fmt.parseInt(TypeIndex, v_str, 10) catch return null;
+    return .{ k, v };
+}
+
 pub const Checker = struct {
     types: *TypeRegistry,
     scope: *Scope,
@@ -1190,6 +1206,30 @@ pub const Checker = struct {
 
     fn checkIfExpr(self: *Checker, ie: ast.IfExpr) CheckError!TypeIndex {
         const cond_type = try self.checkExpr(ie.condition);
+        // Optional unwrap: if expr |val| { ... } — Zig payload capture pattern
+        if (ie.capture.len > 0) {
+            const cond_info = self.types.get(cond_type);
+            if (cond_info != .optional) {
+                self.err.errorWithCode(ie.span.start, .e300, "capture requires optional type");
+                return TypeRegistry.VOID;
+            }
+            const elem_type = cond_info.optional.elem;
+            // Check then-branch with capture variable in scope
+            var capture_scope = Scope.init(self.allocator, self.scope);
+            defer capture_scope.deinit();
+            const old_scope = self.scope;
+            self.scope = &capture_scope;
+            try capture_scope.define(Symbol.init(ie.capture, .variable, elem_type, ast.null_node, false));
+            const then_type = try self.checkExpr(ie.then_branch);
+            self.scope = old_scope;
+            if (ie.else_branch != null_node) {
+                const else_type = try self.checkExpr(ie.else_branch);
+                if (!self.types.equal(then_type, else_type) and !self.types.isAssignable(else_type, then_type) and !self.types.isAssignable(then_type, else_type))
+                    self.err.errorWithCode(ie.span.start, .e300, "if branches have different types");
+                return then_type;
+            }
+            return TypeRegistry.VOID;
+        }
         if (!types.isBool(self.types.get(cond_type))) self.err.errorWithCode(ie.span.start, .e300, "condition must be bool");
         // Comptime dead branch elimination: only check the taken branch when condition is comptime-known.
         // This allows @compileError in dead branches (Zig Sema pattern).
@@ -1344,13 +1384,25 @@ pub const Checker = struct {
             return try self.checkExpr(ce.fallback);
         }
         const elem_type = operand_info.error_union.elem;
-        _ = try self.checkExpr(ce.fallback);
+        // Catch capture: catch |err| { ... } — bind err to error set type
+        if (ce.capture.len > 0) {
+            const err_type = if (operand_info.error_union.error_set != types.invalid_type) operand_info.error_union.error_set else TypeRegistry.I64;
+            var capture_scope = Scope.init(self.allocator, self.scope);
+            defer capture_scope.deinit();
+            const old_scope = self.scope;
+            self.scope = &capture_scope;
+            try capture_scope.define(Symbol.init(ce.capture, .variable, err_type, ast.null_node, false));
+            _ = try self.checkExpr(ce.fallback);
+            self.scope = old_scope;
+        } else {
+            _ = try self.checkExpr(ce.fallback);
+        }
         return elem_type;
     }
 
     fn checkErrorLiteral(self: *Checker, el: ast.ErrorLiteral) CheckError!TypeIndex {
         // error.X returns an error set type; the specific set is inferred from context
-        // For now, look up any error set that has this variant
+        // First check the function's return type for the error set
         const ret_info = self.types.get(self.current_return_type);
         if (ret_info == .error_union and ret_info.error_union.error_set != types.invalid_type) {
             const es_info = self.types.get(ret_info.error_union.error_set);
@@ -1360,7 +1412,8 @@ pub const Checker = struct {
                 }
             }
         }
-        // Allow it through type checking, resolve at lowering time
+        // Also check all error set types in scope (for switch on caught errors)
+        // This allows error.X in switch patterns when catching from different error sets
         return self.current_return_type;
     }
 
@@ -1442,6 +1495,25 @@ pub const Checker = struct {
 
     fn checkIfStmt(self: *Checker, is: ast.IfStmt) CheckError!void {
         const cond_type = try self.checkExpr(is.condition);
+        // Optional unwrap: if expr |val| { ... } — Zig payload capture pattern
+        if (is.capture.len > 0) {
+            const cond_info = self.types.get(cond_type);
+            if (cond_info != .optional) {
+                self.err.errorWithCode(is.span.start, .e300, "capture requires optional type");
+                return;
+            }
+            const elem_type = cond_info.optional.elem;
+            // Check then-branch with capture variable in scope
+            var capture_scope = Scope.init(self.allocator, self.scope);
+            defer capture_scope.deinit();
+            const old_scope = self.scope;
+            self.scope = &capture_scope;
+            try capture_scope.define(Symbol.init(is.capture, .variable, elem_type, ast.null_node, false));
+            try self.checkStmt(is.then_branch);
+            self.scope = old_scope;
+            if (is.else_branch != null_node) try self.checkStmt(is.else_branch);
+            return;
+        }
         if (!types.isBool(self.types.get(cond_type))) self.err.errorWithCode(is.span.start, .e300, "condition must be bool");
         // Comptime dead branch elimination: only check the taken branch when condition is comptime-known.
         // This allows @compileError in dead branches (Zig Sema pattern).
@@ -1464,34 +1536,51 @@ pub const Checker = struct {
     }
 
     fn checkForStmt(self: *Checker, fs: ast.ForStmt) CheckError!void {
-        // Handle range loop: for i in start..end
-        const elem_type: TypeIndex = if (fs.isRange()) blk: {
+        var elem_type: TypeIndex = invalid_type;
+        var idx_type: TypeIndex = TypeRegistry.I64;
+        if (fs.isRange()) {
             const start_type = try self.checkExpr(fs.range_start);
             const end_type = try self.checkExpr(fs.range_end);
-            // Both start and end must be integers
             if (!types.isInteger(self.types.get(start_type)) or !types.isInteger(self.types.get(end_type))) {
                 self.err.errorWithCode(fs.span.start, .e300, "range bounds must be integers");
-                break :blk invalid_type;
+            } else {
+                elem_type = start_type;
             }
-            break :blk start_type; // Loop variable has same type as range start
-        } else blk: {
+        } else {
             const iter_type = try self.checkExpr(fs.iterable);
             const iter = self.types.get(iter_type);
-            break :blk switch (iter) {
-                .array => |a| a.elem,
-                .slice => |s| s.elem,
-                else => {
-                    self.err.errorWithCode(fs.span.start, .e300, "cannot iterate over this type");
-                    break :blk invalid_type;
+            switch (iter) {
+                .array => |a| elem_type = a.elem,
+                .slice => |s| elem_type = s.elem,
+                .map => |ma| {
+                    // for k, v in map — binding=value, index_binding=key
+                    elem_type = ma.value;
+                    idx_type = ma.key;
                 },
-            };
-        };
+                .struct_type => |st| {
+                    // Check if struct is a Map generic instance (name starts with "Map(")
+                    // Go range.go:241-270: desugars `for k, v := range m` to mapIterStart/mapIterNext
+                    if (std.mem.startsWith(u8, st.name, "Map(")) {
+                        // Parse type args from monomorphized name: "Map(K;V)" where K,V are TypeIndex ints
+                        if (parseMapTypeArgs(st.name)) |args| {
+                            idx_type = args[0]; // K
+                            elem_type = args[1]; // V
+                        } else {
+                            self.err.errorWithCode(fs.span.start, .e300, "cannot iterate over this type");
+                        }
+                    } else {
+                        self.err.errorWithCode(fs.span.start, .e300, "cannot iterate over this type");
+                    }
+                },
+                else => self.err.errorWithCode(fs.span.start, .e300, "cannot iterate over this type"),
+            }
+        }
         var loop_scope = Scope.init(self.allocator, self.scope);
         defer loop_scope.deinit();
         try loop_scope.define(Symbol.init(fs.binding, .variable, elem_type, null_node, false));
-        // Define index binding if present (for i, x in arr)
+        // Define index/key binding if present (for i, x in arr OR for k, v in map)
         if (fs.index_binding) |idx_binding| {
-            try loop_scope.define(Symbol.init(idx_binding, .variable, TypeRegistry.I64, null_node, false));
+            try loop_scope.define(Symbol.init(idx_binding, .variable, idx_type, null_node, false));
         }
         const old_scope = self.scope;
         const old_in_loop = self.in_loop;

@@ -118,7 +118,7 @@ pub const SliceExpr = struct { base: NodeIndex, start: NodeIndex, end: NodeIndex
 pub const FieldAccess = struct { base: NodeIndex, field: []const u8, span: Span };
 pub const ArrayLiteral = struct { elements: []const NodeIndex, span: Span };
 pub const Paren = struct { inner: NodeIndex, span: Span };
-pub const IfExpr = struct { condition: NodeIndex, then_branch: NodeIndex, else_branch: NodeIndex, span: Span };
+pub const IfExpr = struct { condition: NodeIndex, then_branch: NodeIndex, else_branch: NodeIndex, capture: []const u8 = "", span: Span };
 pub const SwitchExpr = struct { subject: NodeIndex, cases: []const SwitchCase, else_body: NodeIndex, span: Span };
 // Zig: switch supports ranges (1...10), captures, inline else.
 // Rust: match supports nested patterns, guards (if expr), ranges (1..=10).
@@ -351,7 +351,7 @@ pub const ExprStmt = struct { expr: NodeIndex, span: Span };
 pub const ReturnStmt = struct { value: NodeIndex, span: Span };
 pub const VarStmt = struct { name: []const u8, type_expr: NodeIndex, value: NodeIndex, is_const: bool, span: Span };
 pub const AssignStmt = struct { target: NodeIndex, op: Token, value: NodeIndex, span: Span };
-pub const IfStmt = struct { condition: NodeIndex, then_branch: NodeIndex, else_branch: NodeIndex, span: Span };
+pub const IfStmt = struct { condition: NodeIndex, then_branch: NodeIndex, else_branch: NodeIndex, capture: []const u8 = "", span: Span };
 pub const WhileStmt = struct { condition: NodeIndex, body: NodeIndex, label: ?[]const u8 = null, span: Span };
 /// For loop statement supporting:
 /// - `for item in collection { }` (value only)
@@ -364,6 +364,7 @@ pub const ForStmt = struct {
     range_start: NodeIndex = null_node, // For `for i in start..end`
     range_end: NodeIndex = null_node, // For `for i in start..end`
     body: NodeIndex,
+    label: ?[]const u8 = null, // Optional label for labeled break/continue (Zig: `outer: for ...`)
     span: Span,
 
     /// Check if this is a numeric range loop (for i in 0..10)
@@ -374,7 +375,7 @@ pub const ForStmt = struct {
 pub const BlockStmt = struct { stmts: []const NodeIndex, span: Span };
 pub const BreakStmt = struct { label: ?[]const u8 = null, span: Span };
 pub const ContinueStmt = struct { label: ?[]const u8 = null, span: Span };
-pub const DeferStmt = struct { expr: NodeIndex, span: Span };
+pub const DeferStmt = struct { expr: NodeIndex, is_errdefer: bool = false, span: Span };
 pub const BadStmt = struct { span: Span };
 
 // Unified Node
