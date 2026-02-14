@@ -22,7 +22,7 @@ The compiler handles a real programming language — generics, closures, ARC, er
 2. ~~**No string interpolation**~~ — **Done**: `"Hello, ${name}"` with integer auto-conversion
 3. ~~**No file I/O**~~ — **Done**: `std/fs` (File struct, openFile, createFile, 10 methods), `std/os` (args, environ, exit), `std/time`, `std/random`
 4. **No package manager** — can't install libraries
-5. **No async** — can't write a web server that handles concurrent connections
+5. ~~**No async**~~ — **Done**: `async fn` / `await` with dual backend (Wasm state machine + native eager eval), event loop (kqueue/epoll), async I/O wrappers
 6. **No framework** — the full-stack client/server story doesn't exist yet
 7. **No documentation** — no language guide, no API docs, no tutorials
 
@@ -145,39 +145,29 @@ This is the right architecture for 0.x. It simplifies the compiler (one backend)
 
 ### Where Wasm Becomes Limiting
 
-**Async/coroutines** is the only feature that truly cannot go through Wasm. Wasm has no stack switching — a function either runs to completion or traps. The [stack switching proposal](https://github.com/WebAssembly/stack-switching) is not in Wasm 3.0 and is years from standardization.
+**Async was predicted to require an IR split** — Wasm has no stack switching, so `async fn` for native would need a direct SSA → CLIF IR path bypassing Wasm. However, the actual implementation avoids this:
+
+- **Wasm target**: Rust-style stackless state machine (poll-based). The compiler transforms `async fn` into a constructor + poll function pair, with if-chain dispatch on state. This goes through the normal Wasm pipeline.
+- **Native target**: Zig-style eager evaluation. The async function body runs as a normal function, with results stored in a heap-allocated future. No state machine transform needed.
+
+Both approaches stay within the existing Wasm-first architecture — no IR split was required.
 
 Everything else (including tail calls, exceptions, and typed function references) was resolved by Wasm 3.0 (released September 2025). See `docs/specs/WASM_3_0_REFERENCE.md` for details.
 
-### The IR Split (When Async Demands It)
+### The IR Split (If Ever Needed)
 
-When implementing `async fn` for native, the compiler will need a direct SSA → CLIF IR path (`lower_clif.zig`) that bypasses Wasm:
+The IR split remains an option for future features that truly cannot go through Wasm. The existing CLIF IR, MachInst, regalloc, and emission infrastructure is already built — only a `lower_clif.zig` translation layer would be new. But async/await did not require it.
 
-```
-                    Cot SSA IR (unified)
-                          │
-               ┌──────────┼──────────┐
-               ▼                     ▼
-         lower_wasm.zig        lower_clif.zig (NEW)
-               │                     │
-         Wasm bytecode          CLIF IR
-               │                     │
-         Browser/WASI           MachInst → Native
-```
-
-This is an additive change — the Wasm path remains for browser/WASI targets. The existing CLIF IR, MachInst, regalloc, and emission infrastructure is already built. Only the `lower_clif.zig` translation layer is new.
-
-**Recommendation:** Don't split until async forces it. The current architecture is simpler and catches more bugs.
-
-### Async Strategy
+### Async Strategy (Implemented)
 
 Different targets use different async mechanisms, unified by the same syntax:
 
-- **Native:** OS event loop (epoll/kqueue) + coroutines (stack switching in native code)
-- **Browser:** JavaScript Promise interop (`async fn` returns a Promise via JS glue)
-- **WASI:** WASI 0.3 async model (component model `future`/`stream` types)
+- **Native:** Zig-style eager evaluation (body as normal function) + OS event loop (kqueue on macOS, epoll on Linux) + async I/O wrappers (EAGAIN → register → wait → retry)
+- **Wasm:** Rust-style stackless state machine (constructor + poll function, if-chain dispatch)
+- **Browser:** JavaScript Promise interop (`async fn` returns a Promise via JS glue) — planned
+- **WASI:** WASI 0.3 async model (component model `future`/`stream` types) — planned
 
-The syntax is the same (`async fn`, `await`). The lowering differs per target.
+The syntax is the same (`async fn`, `await`, `try await`). The lowering differs per target.
 
 ---
 
@@ -305,13 +295,13 @@ Combines compiler-internal improvements (Wasm codegen cleanup) with user-facing 
 
 #### Wave 5: Production Capabilities
 
-| # | Feature | Description | Reference |
-|---|---------|-------------|-----------|
-| 27 | `async fn` / `await` | Language-level async with target-specific lowering. | Zig async, JS async/await |
-| 28 | Native event loop | epoll (Linux) / kqueue (macOS) for non-blocking I/O. | Go netpoll, Tokio |
+| # | Feature | Status | Reference |
+|---|---------|--------|-----------|
+| 27 | `async fn` / `await` | **DONE** — Dual backend: Wasm state machine (Rust) + native eager eval (Zig). `try await` for error unions across await points. 18 tests. | Rust coroutine.rs, Zig async |
+| 28 | Native event loop | **DONE** — 9 builtins (kqueue/epoll/fcntl), `std/async` with platform-abstracted API, async I/O wrappers (asyncAccept/Read/Write/Connect). 14 tests. | Go netpoll, Zig Kqueue.zig |
 | 29 | Browser async | JS Promise interop for `async fn` on `--target=wasm32`. | wasm-bindgen futures |
-| 30 | IR split (`lower_clif.zig`) | Direct SSA → CLIF path bypassing Wasm, if async demands it. | — |
-| 31 | `std/net` | TCP/UDP sockets with async support. | Go `net`, Deno `Deno.connect` |
+| 30 | IR split (`lower_clif.zig`) | **NOT NEEDED** — Async implemented within Wasm-first architecture. Deferred indefinitely. | — |
+| 31 | `std/net` | Partially done via `std/http` (TCP sockets) + `std/async` (async I/O). | Go `net`, Deno `Deno.connect` |
 | 32 | `std/crypto` | Hash functions (SHA-256, BLAKE3), HMAC. | Go `crypto`, Deno `crypto` |
 | 33 | Database driver | `std/sql` or `std/db` — connect, query, parameterized statements. | Go `database/sql` |
 | 34 | Web framework prototype | The `@server`/`@client` story — shared types, auto boundary layer. | Next.js, SvelteKit |
@@ -367,7 +357,7 @@ A developer should be able to:
 - **Wave 2 (DX):** 6/6 done
 - **Wave 3 (maturity + project system + DX):** 8/9 done (multi-value cleanup deferred)
 - **Wave 4 (polish):** 0/4
-- **Wave 5 (production):** 0/8
+- **Wave 5 (production):** 3/8 (async/await, event loop, IR split not needed)
 
 ### 0.5: Make It Community-Ready
 
@@ -437,7 +427,7 @@ All three success criteria met: Claude Code writes valid Cot on first attempt, l
 
 These don't need answers now, but should be resolved before 1.0:
 
-1. **Async model:** Coroutines (Go-style), async/await (JS/Rust-style), or both?
+1. ~~**Async model:**~~ **Answered** — async/await (JS/Rust-style syntax) with dual backend: Wasm uses Rust-style state machines, native uses Zig-style eager evaluation. Event loop via kqueue/epoll.
 2. **Module system:** File-based (Go) or explicit exports (Rust/Zig)?
 3. **Concurrency:** Shared memory + mutexes, message passing, or actors?
 4. **FFI beyond C:** Interop with JS npm packages? Rust crates?

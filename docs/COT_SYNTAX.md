@@ -256,12 +256,38 @@ switch x {
 }
 ```
 
-## Defer
+## Defer / Errdefer
 
 ```cot
 defer @dealloc(ptr)           // runs at end of scope
 defer { cleanup_stuff() }     // block form, LIFO order
+errdefer @dealloc(ptr)        // runs ONLY if function returns error
 ```
+
+`defer` runs unconditionally at scope exit. `errdefer` runs only on error return (Zig pattern). Both follow LIFO ordering and can be mixed freely.
+
+## Async / Await
+
+```cot
+async fn fetchData(url: string) HttpError!string {
+    var fd = try await asyncConnect(loop_fd, sock, addr, len)
+    var result = try await asyncRead(loop_fd, fd, buf, 1024)
+    return @string(buf, result)
+}
+
+// Await extracts result from future
+const data = await fetchData("http://example.com")
+
+// try await — propagate errors across await points
+const data = try await fetchData("http://example.com")
+
+// await with catch
+const data = await fetchData("http://example.com") catch "fallback"
+```
+
+**Dual backend:**
+- Wasm: Rust-style stackless state machine (constructor + poll function)
+- Native: Zig-style eager evaluation (body runs as normal function)
 
 ## Closures / Anonymous Functions
 
@@ -296,7 +322,7 @@ var msg = "Value is ${x}, next is ${y + 1}"
 `=` `+=` `-=` `*=` `/=` `%=` `&=` `|=` `^=`
 
 ### Unary
-`-x` (negate) `~x` (bitwise NOT) `!x` / `not x` (logical NOT) `try expr` `&x` (address of)
+`-x` (negate) `~x` (bitwise NOT) `!x` / `not x` (logical NOT) `try expr` `await expr` `&x` (address of)
 
 ### Postfix
 `ptr.*` (dereference) `opt.?` (unwrap optional) `?.` (optional chain) `.field` (field access) `[i]` (index) `[start:end]` (slice) `(args)` (call)
@@ -407,6 +433,31 @@ var addr = @ptrToInt(ptr)
 | `@environ_len(n)` | Length of env var n |
 | `@environ_ptr(n)` | Pointer to env var n |
 
+### Networking
+
+| Builtin | Purpose |
+|---------|---------|
+| `@net_socket(domain, type, protocol)` | Create a socket |
+| `@net_bind(fd, addr, len)` | Bind socket to address |
+| `@net_listen(fd, backlog)` | Listen for connections |
+| `@net_accept(fd)` | Accept a connection |
+| `@net_connect(fd, addr, len)` | Connect to address |
+| `@net_set_reuse_addr(fd)` | Set SO_REUSEADDR on socket |
+
+### Event Loop
+
+| Builtin | Purpose |
+|---------|---------|
+| `@kqueue_create()` | Create kqueue fd (macOS) |
+| `@kevent_add(kq, fd, filter)` | Register fd for events (macOS) |
+| `@kevent_del(kq, fd, filter)` | Remove fd from kqueue (macOS) |
+| `@kevent_wait(kq, buf, max)` | Wait for kqueue events (macOS) |
+| `@epoll_create()` | Create epoll fd (Linux) |
+| `@epoll_add(epfd, fd, events)` | Register fd for events (Linux) |
+| `@epoll_del(epfd, fd)` | Remove fd from epoll (Linux) |
+| `@epoll_wait(epfd, buf, max)` | Wait for epoll events (Linux) |
+| `@set_nonblocking(fd)` | Set fd to non-blocking mode |
+
 ### System
 
 | Builtin | Purpose |
@@ -506,6 +557,11 @@ import "std/list"          // stdlib modules
 | `math` | `import "std/math"` | abs, min, max, clamp, ipow, fabs, ceil, floor, sqrt, fmin, fmax, PI, E |
 | `json` | `import "std/json"` | JSON parser (parse) + encoder (encode), JsonValue constructors + accessors |
 | `sort` | `import "std/sort"` | Insertion sort + reverse for List(T) |
+| `io` | `import "std/io"` | BufferedReader, BufferedWriter (4KB buffer) |
+| `encoding` | `import "std/encoding"` | Base64 (standard + URL-safe) + hex encode/decode |
+| `url` | `import "std/url"` | URL parsing (scheme, host, port, path, query, fragment) |
+| `http` | `import "std/http"` | TCP sockets, HTTP response builder, sockaddr_in |
+| `async` | `import "std/async"` | Event loop (kqueue/epoll), async I/O wrappers (asyncRead, asyncWrite, asyncAccept, asyncConnect) |
 
 ## @safe Mode
 

@@ -96,12 +96,13 @@ Cot Source → Scanner → Parser → Checker → IR → SSA
 - Control flow: `if`/`else`, `while`, `for`-range, `break`, `continue`
 - Data: structs, arrays, slices, enums, unions (with payloads), tuples
 - Functions: closures, function pointers, generics (monomorphized)
-- Error handling: error unions (`E!T`), `try`, `catch`
+- Error handling: error unions (`E!T`), `try`, `catch`, `errdefer`
 - Memory: ARC (automatic reference counting), `defer`, `new`/`@alloc`/`@dealloc`
+- Async: `async fn` / `await` / `try await` with dual backend (Wasm state machine + native eager eval)
 - Traits: `trait`/`impl Trait for Type` (monomorphized, no vtables)
 - I/O: `print`, `println`, `eprint`, `eprintln` (native syscalls)
 - Imports: `import "std/list"` with cross-file generic instantiation
-- Stdlib: `List(T)`, `Map(K,V)`, `Set(T)`, `std/string` (~25 functions + StringBuilder), `std/math`, `std/json` (parser + encoder), `std/sort`, `std/fs`, `std/os`, `std/time`, `std/random`, `std/io` (buffered I/O), `std/encoding` (base64 + hex), `std/url` (URL parser), `std/http` (TCP sockets + HTTP)
+- Stdlib: `List(T)`, `Map(K,V)`, `Set(T)`, `std/string` (~25 functions + StringBuilder), `std/math`, `std/json` (parser + encoder), `std/sort`, `std/fs`, `std/os`, `std/time`, `std/random`, `std/io` (buffered I/O), `std/encoding` (base64 + hex), `std/url` (URL parser), `std/http` (TCP sockets + HTTP), `std/async` (event loop + async I/O)
 - Comptime: `comptime {}` blocks, `@compileError`, const-fold if-expressions, dead branch elimination
 - CLI: `cot build`, `cot run`, `cot test`, `cot init`, `cot lsp`, `cot version`
 - Targets: Wasm32, WASI (`--target=wasm32-wasi`), ARM64 (macOS), x64 (Linux)
@@ -120,7 +121,7 @@ All tests passing across Wasm E2E, native E2E, and unit tests.
 | Native AOT (Cranelift-port: CLIF IR → regalloc2 → ARM64/x64) | Complete |
 | ARC runtime (retain/release, heap, destructors) | Complete |
 
-**Next:** MCP server dogfooding, iterator protocol, `cot fmt`, `errdefer`. See [docs/ROADMAP_1_0.md](docs/ROADMAP_1_0.md).
+**Next:** Browser async, `std/crypto`, database driver, web framework. See [docs/ROADMAP_1_0.md](docs/ROADMAP_1_0.md).
 
 ## Design Decisions
 
@@ -184,7 +185,8 @@ cot/
 │   ├── io.cot             # Buffered reader/writer
 │   ├── encoding.cot       # Base64 + hex encode/decode
 │   ├── url.cot            # URL parsing
-│   └── http.cot           # TCP sockets + HTTP response builder
+│   ├── http.cot           # TCP sockets + HTTP response builder
+│   └── async.cot          # Event loop (kqueue/epoll) + async I/O wrappers
 ├── runtime/               # Native runtime (.o files)
 ├── test/cases/            # .cot test files
 ├── VERSION                # Semantic version (single source of truth)
