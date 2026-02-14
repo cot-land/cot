@@ -1066,21 +1066,19 @@ pub const Parser = struct {
         return try self.tree.addExpr(.{ .block_expr = .{ .stmts = try self.allocator.dupe(NodeIndex, stmts.items), .expr = result_expr, .span = Span.init(start, self.pos()) } });
     }
 
+    /// Zig pattern: if (expr) |val| { ... }
+    /// Parentheses required around condition. `)` terminates expr, so `|val|` is unambiguous.
     fn parseIfExpr(self: *Parser) ParseError!?NodeIndex {
         const start = self.pos();
         self.advance();
-        // Optional unwrap: if let val = expr { ... } (Rust/Swift pattern)
+        if (!self.expect(.lparen)) return null;
+        const cond = try self.parseExpr() orelse return null;
+        if (!self.expect(.rparen)) return null;
+        // Optional capture: |val| (Zig PtrPayload)
         var capture: []const u8 = "";
-        var cond: NodeIndex = undefined;
-        if (self.check(.kw_let)) {
-            self.advance();
-            if (!self.check(.ident)) { self.syntaxError("expected identifier after 'let'"); return null; }
-            capture = self.tok.text;
-            self.advance();
-            if (!self.expect(.assign)) return null;
-            cond = try self.parseExpr() orelse return null;
-        } else {
-            cond = try self.parseExpr() orelse return null;
+        if (self.match(.@"or")) {
+            if (self.check(.ident)) { capture = self.tok.text; self.advance(); } else { self.syntaxError("expected identifier for optional capture"); return null; }
+            if (!self.expect(.@"or")) return null;
         }
         if (!self.check(.lbrace)) { self.err.errorWithCode(self.pos(), .e204, "expected '{' after if condition"); return null; }
         const then_br = try self.parseBlockExpr() orelse return null;
@@ -1279,18 +1277,15 @@ pub const Parser = struct {
     fn parseIfStmt(self: *Parser) ParseError!?NodeIndex {
         const start = self.pos();
         self.advance();
-        // Optional unwrap: if let val = expr { ... } (Rust/Swift pattern)
+        // Zig pattern: if (expr) |val| { ... }
+        if (!self.expect(.lparen)) return null;
+        const cond = try self.parseExpr() orelse return null;
+        if (!self.expect(.rparen)) return null;
+        // Optional capture: |val| (Zig PtrPayload)
         var capture: []const u8 = "";
-        var cond: NodeIndex = undefined;
-        if (self.check(.kw_let)) {
-            self.advance();
-            if (!self.check(.ident)) { self.syntaxError("expected identifier after 'let'"); return null; }
-            capture = self.tok.text;
-            self.advance();
-            if (!self.expect(.assign)) return null;
-            cond = try self.parseExpr() orelse return null;
-        } else {
-            cond = try self.parseExpr() orelse return null;
+        if (self.match(.@"or")) {
+            if (self.check(.ident)) { capture = self.tok.text; self.advance(); } else { self.syntaxError("expected identifier for optional capture"); return null; }
+            if (!self.expect(.@"or")) return null;
         }
         const then_br = if (self.check(.lbrace)) try self.parseBlock() orelse return null else try self.parseStmt() orelse return null;
         var else_br: NodeIndex = null_node;
@@ -1305,7 +1300,10 @@ pub const Parser = struct {
     fn parseWhileStmt(self: *Parser, label: ?[]const u8) ParseError!?NodeIndex {
         const start = self.pos();
         self.advance();
+        // Zig pattern: while (expr) { ... }
+        if (!self.expect(.lparen)) return null;
         const cond = try self.parseExpr() orelse return null;
+        if (!self.expect(.rparen)) return null;
         if (!self.check(.lbrace)) { self.err.errorWithCode(self.pos(), .e204, "expected '{' after while condition"); return null; }
         const body = try self.parseBlock() orelse return null;
         return try self.tree.addStmt(.{ .while_stmt = .{ .condition = cond, .body = body, .label = label, .span = Span.init(start, self.pos()) } });

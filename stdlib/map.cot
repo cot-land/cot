@@ -52,14 +52,14 @@ impl Map(K, V) {
 
     fn ensureCapacity(self: Map(K, V), needed: i64) void {
         // Check if we need to grow: count * 4 >= capacity * 3 (75% load factor)
-        if self.capacity > 0 {
-            if needed * 4 < self.capacity * 3 {
+        if (self.capacity > 0) {
+            if (needed * 4 < self.capacity * 3) {
                 return
             }
         }
         var new_cap = self.capacity
-        if new_cap == 0 { new_cap = 8 }
-        while needed * 4 >= new_cap * 3 {
+        if (new_cap == 0) { new_cap = 8 }
+        while (needed * 4 >= new_cap * 3) {
             new_cap *= 2
         }
         self.rehash(new_cap)
@@ -80,7 +80,7 @@ impl Map(K, V) {
 
         // Initialize all states to 0 (empty)
         var si: i64 = 0
-        while si < new_cap {
+        while (si < new_cap) {
             var sp = @intToPtr(*i64, self.states + si * @sizeOf(i64))
             sp.* = 0
             si += 1
@@ -89,9 +89,9 @@ impl Map(K, V) {
         // Reinsert all occupied entries from old table.
         // Fresh table has no tombstones, so only check for empty (state=0).
         var oi: i64 = 0
-        while oi < old_capacity {
+        while (oi < old_capacity) {
             var os = @intToPtr(*i64, old_states + oi * @sizeOf(i64))
-            if os.* == 1 {
+            if (os.* == 1) {
                 var ok = @intToPtr(*K, old_keys + oi * @sizeOf(K))
                 var ov = @intToPtr(*V, old_values + oi * @sizeOf(V))
                 self.set(ok.*, ov.*)
@@ -100,7 +100,7 @@ impl Map(K, V) {
         }
 
         // Free old arrays
-        if old_capacity > 0 {
+        if (old_capacity > 0) {
             @dealloc(old_keys)
             @dealloc(old_values)
             @dealloc(old_states)
@@ -111,10 +111,10 @@ impl Map(K, V) {
 
     fn set(self: Map(K, V), key: K, value: V) void {
         // Ensure we have capacity (75% load factor)
-        if self.capacity == 0 {
+        if (self.capacity == 0) {
             self.rehash(8)
         } else {
-            if (self.count + 1) * 4 >= self.capacity * 3 {
+            if ((self.count + 1) * 4 >= self.capacity * 3) {
                 self.rehash(self.capacity * 2)
             }
         }
@@ -125,12 +125,12 @@ impl Map(K, V) {
         var first_tombstone: i64 = 0 - 1
 
         var i: i64 = 0
-        while i < self.capacity {
+        while (i < self.capacity) {
             var st = @intToPtr(*i64, self.states + idx * @sizeOf(i64))
-            if st.* == 0 {
+            if (st.* == 0) {
                 // Empty slot — use tombstone slot if we found one, else this slot
                 var target = idx
-                if first_tombstone >= 0 { target = first_tombstone }
+                if (first_tombstone >= 0) { target = first_tombstone }
                 var kp = @intToPtr(*K, self.keys + target * @sizeOf(K))
                 var vp = @intToPtr(*V, self.values + target * @sizeOf(V))
                 var tp = @intToPtr(*i64, self.states + target * @sizeOf(i64))
@@ -140,17 +140,17 @@ impl Map(K, V) {
                 self.count += 1
                 return
             }
-            if st.* == 1 {
+            if (st.* == 1) {
                 var kp = @intToPtr(*K, self.keys + idx * @sizeOf(K))
-                if kp.* == key {
+                if (kp.* == key) {
                     // Key exists — update value
                     var vp = @intToPtr(*V, self.values + idx * @sizeOf(V))
                     vp.* = value
                     return
                 }
             }
-            if st.* == 2 {
-                if first_tombstone < 0 {
+            if (st.* == 2) {
+                if (first_tombstone < 0) {
                     first_tombstone = idx
                 }
             }
@@ -162,18 +162,18 @@ impl Map(K, V) {
     }
 
     fn get(self: Map(K, V), key: K) V {
-        if self.capacity == 0 { @trap() }
+        if (self.capacity == 0) { @trap() }
         var k = key
         var h = k.hash()
         var idx = h & (self.capacity - 1)
 
         var i: i64 = 0
-        while i < self.capacity {
+        while (i < self.capacity) {
             var st = @intToPtr(*i64, self.states + idx * @sizeOf(i64))
-            if st.* == 0 { @trap() }
-            if st.* == 1 {
+            if (st.* == 0) { @trap() }
+            if (st.* == 1) {
                 var kp = @intToPtr(*K, self.keys + idx * @sizeOf(K))
-                if kp.* == key {
+                if (kp.* == key) {
                     var vp = @intToPtr(*V, self.values + idx * @sizeOf(V))
                     return vp.*
                 }
@@ -186,18 +186,18 @@ impl Map(K, V) {
     }
 
     fn getOrDefault(self: Map(K, V), key: K, default: V) V {
-        if self.capacity == 0 { return default }
+        if (self.capacity == 0) { return default }
         var k = key
         var h = k.hash()
         var idx = h & (self.capacity - 1)
 
         var i: i64 = 0
-        while i < self.capacity {
+        while (i < self.capacity) {
             var st = @intToPtr(*i64, self.states + idx * @sizeOf(i64))
-            if st.* == 0 { return default }
-            if st.* == 1 {
+            if (st.* == 0) { return default }
+            if (st.* == 1) {
                 var kp = @intToPtr(*K, self.keys + idx * @sizeOf(K))
-                if kp.* == key {
+                if (kp.* == key) {
                     var vp = @intToPtr(*V, self.values + idx * @sizeOf(V))
                     return vp.*
                 }
@@ -209,18 +209,18 @@ impl Map(K, V) {
     }
 
     fn has(self: Map(K, V), key: K) i64 {
-        if self.capacity == 0 { return 0 }
+        if (self.capacity == 0) { return 0 }
         var k = key
         var h = k.hash()
         var idx = h & (self.capacity - 1)
 
         var i: i64 = 0
-        while i < self.capacity {
+        while (i < self.capacity) {
             var st = @intToPtr(*i64, self.states + idx * @sizeOf(i64))
-            if st.* == 0 { return 0 }
-            if st.* == 1 {
+            if (st.* == 0) { return 0 }
+            if (st.* == 1) {
                 var kp = @intToPtr(*K, self.keys + idx * @sizeOf(K))
-                if kp.* == key { return 1 }
+                if (kp.* == key) { return 1 }
             }
             idx = (idx + 1) & (self.capacity - 1)
             i += 1
@@ -229,18 +229,18 @@ impl Map(K, V) {
     }
 
     fn delete(self: Map(K, V), key: K) void {
-        if self.capacity == 0 { return }
+        if (self.capacity == 0) { return }
         var k = key
         var h = k.hash()
         var idx = h & (self.capacity - 1)
 
         var i: i64 = 0
-        while i < self.capacity {
+        while (i < self.capacity) {
             var st = @intToPtr(*i64, self.states + idx * @sizeOf(i64))
-            if st.* == 0 { return }
-            if st.* == 1 {
+            if (st.* == 0) { return }
+            if (st.* == 1) {
                 var kp = @intToPtr(*K, self.keys + idx * @sizeOf(K))
-                if kp.* == key {
+                if (kp.* == key) {
                     st.* = 2
                     self.count -= 1
                     return
@@ -256,14 +256,14 @@ impl Map(K, V) {
     fn len(self: Map(K, V)) i64 { return self.count }
 
     fn isEmpty(self: Map(K, V)) i64 {
-        if self.count == 0 { return 1 }
+        if (self.count == 0) { return 1 }
         return 0
     }
 
     // ===== Lifecycle =====
 
     fn free(self: Map(K, V)) void {
-        if self.capacity > 0 {
+        if (self.capacity > 0) {
             @dealloc(self.keys)
             @dealloc(self.values)
             @dealloc(self.states)
@@ -277,7 +277,7 @@ impl Map(K, V) {
 
     fn clear(self: Map(K, V)) void {
         var i: i64 = 0
-        while i < self.capacity {
+        while (i < self.capacity) {
             var sp = @intToPtr(*i64, self.states + i * @sizeOf(i64))
             sp.* = 0
             i += 1
@@ -294,9 +294,9 @@ impl Map(K, V) {
     fn keys(self: Map(K, V)) List(K) {
         var result: List(K) = .{}
         var i: i64 = 0
-        while i < self.capacity {
+        while (i < self.capacity) {
             var st = @intToPtr(*i64, self.states + i * @sizeOf(i64))
-            if st.* == 1 {
+            if (st.* == 1) {
                 var kp = @intToPtr(*K, self.keys + i * @sizeOf(K))
                 result.append(kp.*)
             }
@@ -308,9 +308,9 @@ impl Map(K, V) {
     fn values(self: Map(K, V)) List(V) {
         var result: List(V) = .{}
         var i: i64 = 0
-        while i < self.capacity {
+        while (i < self.capacity) {
             var st = @intToPtr(*i64, self.states + i * @sizeOf(i64))
-            if st.* == 1 {
+            if (st.* == 1) {
                 var vp = @intToPtr(*V, self.values + i * @sizeOf(V))
                 result.append(vp.*)
             }

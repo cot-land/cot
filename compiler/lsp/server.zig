@@ -7,6 +7,7 @@ const hover_mod = @import("hover.zig");
 const goto_mod = @import("goto.zig");
 const doc_symbol = @import("document_symbol.zig");
 const semantic_tokens = @import("semantic_tokens.zig");
+const completion_mod = @import("completion.zig");
 const lsp_types = @import("types.zig");
 
 const DocumentStore = document_store.DocumentStore;
@@ -79,6 +80,14 @@ pub const Server = struct {
             return try self.handleDefinition(arena, id, params);
         } else if (std.mem.eql(u8, method, "textDocument/documentSymbol")) {
             return try self.handleDocumentSymbol(arena, id, params);
+        } else if (std.mem.eql(u8, method, "textDocument/completion")) {
+            return try self.handleCompletion(arena, id, params);
+        } else if (std.mem.eql(u8, method, "textDocument/references")) {
+            return try self.handleReferences(arena, id, params);
+        } else if (std.mem.eql(u8, method, "textDocument/prepareRename")) {
+            return try self.handlePrepareRename(arena, id, params);
+        } else if (std.mem.eql(u8, method, "textDocument/rename")) {
+            return try self.handleRename(arena, id, params);
         } else if (std.mem.eql(u8, method, "textDocument/semanticTokens/full")) {
             return try self.handleSemanticTokensFull(arena, id, params);
         } else {
@@ -116,7 +125,7 @@ pub const Server = struct {
         try legend.append(arena, ']');
 
         const result = try std.fmt.allocPrint(arena,
-            \\{{"capabilities":{{"textDocumentSync":{{"openClose":true,"change":1}},"hoverProvider":true,"definitionProvider":true,"documentSymbolProvider":true,"semanticTokensProvider":{{"legend":{{{s}}},"full":true}}}},"serverInfo":{{"name":"cot-lsp","version":"0.1.0"}}}}
+            \\{{"capabilities":{{"textDocumentSync":{{"openClose":true,"change":1}},"hoverProvider":true,"definitionProvider":true,"documentSymbolProvider":true,"completionProvider":{{"triggerCharacters":["@","."]}},"referencesProvider":true,"renameProvider":{{"prepareProvider":true}},"semanticTokensProvider":{{"legend":{{{s}}},"full":true}}}},"serverInfo":{{"name":"cot-lsp","version":"0.1.0"}}}}
         , .{legend.items});
         return try self.successResponse(arena, id, result);
     }
@@ -233,6 +242,183 @@ pub const Server = struct {
             try serializeSymbol(arena, &json, sym);
         }
         try json.append(arena, ']');
+
+        return try self.successResponse(arena, id, json.items);
+    }
+
+    fn handleCompletion(self: *Server, arena: std.mem.Allocator, id: ?std.json.Value, params: ?std.json.Value) ![]const u8 {
+        const p = params orelse return try self.successResponse(arena, id, "[]");
+        const td = p.object.get("textDocument") orelse return try self.successResponse(arena, id, "[]");
+        const uri = (td.object.get("uri") orelse return try self.successResponse(arena, id, "[]")).string;
+        const pos = p.object.get("position") orelse return try self.successResponse(arena, id, "[]");
+        const line_val: u32 = @intCast(pos.object.get("line").?.integer);
+        const char_val: u32 = @intCast(pos.object.get("character").?.integer);
+
+        const handle = self.store.get(uri) orelse return try self.successResponse(arena, id, "[]");
+        var result = handle.result orelse return try self.successResponse(arena, id, "[]");
+
+        const byte_offset = lsp_types.lspToByteOffset(result.src.content, .{ .line = line_val, .character = char_val });
+        const items = completion_mod.getCompletions(arena, &result, byte_offset) catch return try self.successResponse(arena, id, "[]");
+
+        if (items.len == 0) return try self.successResponse(arena, id, "[]");
+
+        // Serialize to JSON
+        var json = std.ArrayListUnmanaged(u8){};
+        try json.append(arena, '[');
+        for (items, 0..) |item, i| {
+            if (i > 0) try json.append(arena, ',');
+            const label_escaped = lsp_types.jsonEscape(arena, item.label) catch item.label;
+            if (item.detail) |detail| {
+                const detail_escaped = lsp_types.jsonEscape(arena, detail) catch detail;
+                const entry = try std.fmt.allocPrint(arena,
+                    \\{{"label":"{s}","kind":{d},"detail":"{s}"}}
+                , .{ label_escaped, item.kind, detail_escaped });
+                try json.appendSlice(arena, entry);
+            } else {
+                const entry = try std.fmt.allocPrint(arena,
+                    \\{{"label":"{s}","kind":{d}}}
+                , .{ label_escaped, item.kind });
+                try json.appendSlice(arena, entry);
+            }
+        }
+        try json.append(arena, ']');
+
+        return try self.successResponse(arena, id, json.items);
+    }
+
+    fn handleReferences(self: *Server, arena: std.mem.Allocator, id: ?std.json.Value, params: ?std.json.Value) ![]const u8 {
+        const p = params orelse return try self.successResponse(arena, id, "[]");
+        const td = p.object.get("textDocument") orelse return try self.successResponse(arena, id, "[]");
+        const uri = (td.object.get("uri") orelse return try self.successResponse(arena, id, "[]")).string;
+        const pos = p.object.get("position") orelse return try self.successResponse(arena, id, "[]");
+        const line_val: u32 = @intCast(pos.object.get("line").?.integer);
+        const char_val: u32 = @intCast(pos.object.get("character").?.integer);
+
+        // Check includeDeclaration from context
+        var include_decl = true;
+        if (p.object.get("context")) |ctx| {
+            if (ctx.object.get("includeDeclaration")) |v| {
+                include_decl = v == .bool and v.bool;
+            }
+        }
+
+        const handle = self.store.get(uri) orelse return try self.successResponse(arena, id, "[]");
+        var result = handle.result orelse return try self.successResponse(arena, id, "[]");
+
+        const byte_offset = lsp_types.lspToByteOffset(result.src.content, .{ .line = line_val, .character = char_val });
+        const references_mod = @import("references.zig");
+        const locations = references_mod.getReferences(arena, &result, byte_offset, uri, include_decl) catch return try self.successResponse(arena, id, "[]");
+
+        if (locations.len == 0) return try self.successResponse(arena, id, "[]");
+
+        // Serialize to JSON
+        var json = std.ArrayListUnmanaged(u8){};
+        try json.append(arena, '[');
+        for (locations, 0..) |loc, i| {
+            if (i > 0) try json.append(arena, ',');
+            const uri_escaped = lsp_types.jsonEscape(arena, loc.uri) catch loc.uri;
+            const entry = try std.fmt.allocPrint(arena,
+                \\{{"uri":"{s}","range":{{"start":{{"line":{d},"character":{d}}},"end":{{"line":{d},"character":{d}}}}}}}
+            , .{
+                uri_escaped,
+                loc.range.start.line,
+                loc.range.start.character,
+                loc.range.end.line,
+                loc.range.end.character,
+            });
+            try json.appendSlice(arena, entry);
+        }
+        try json.append(arena, ']');
+
+        return try self.successResponse(arena, id, json.items);
+    }
+
+    fn handlePrepareRename(self: *Server, arena: std.mem.Allocator, id: ?std.json.Value, params: ?std.json.Value) ![]const u8 {
+        const p = params orelse return try self.nullResponse(arena, id);
+        const td = p.object.get("textDocument") orelse return try self.nullResponse(arena, id);
+        const uri = (td.object.get("uri") orelse return try self.nullResponse(arena, id)).string;
+        const pos = p.object.get("position") orelse return try self.nullResponse(arena, id);
+        const line_val: u32 = @intCast(pos.object.get("line").?.integer);
+        const char_val: u32 = @intCast(pos.object.get("character").?.integer);
+
+        const handle = self.store.get(uri) orelse return try self.nullResponse(arena, id);
+        var result = handle.result orelse return try self.nullResponse(arena, id);
+
+        const byte_offset = lsp_types.lspToByteOffset(result.src.content, .{ .line = line_val, .character = char_val });
+
+        // Find the identifier at the cursor
+        const node_idx = hover_mod.findNodeAtOffset(&result.tree, byte_offset) orelse return try self.nullResponse(arena, id);
+        const node = result.tree.getNode(node_idx) orelse return try self.nullResponse(arena, id);
+
+        const ident = switch (node) {
+            .expr => |e| switch (e) {
+                .ident => |ident_data| ident_data,
+                else => return try self.nullResponse(arena, id),
+            },
+            else => return try self.nullResponse(arena, id),
+        };
+
+        // Verify it's a scope symbol (renameable)
+        _ = result.global_scope.lookup(ident.name) orelse return try self.nullResponse(arena, id);
+
+        const span = node.span();
+        const range = lsp_types.spanToRange(result.src.content, span);
+        const name_escaped = lsp_types.jsonEscape(arena, ident.name) catch ident.name;
+
+        const prep_result = try std.fmt.allocPrint(arena,
+            \\{{"range":{{"start":{{"line":{d},"character":{d}}},"end":{{"line":{d},"character":{d}}}}},"placeholder":"{s}"}}
+        , .{
+            range.start.line,
+            range.start.character,
+            range.end.line,
+            range.end.character,
+            name_escaped,
+        });
+        return try self.successResponse(arena, id, prep_result);
+    }
+
+    fn handleRename(self: *Server, arena: std.mem.Allocator, id: ?std.json.Value, params: ?std.json.Value) ![]const u8 {
+        const p = params orelse return try self.nullResponse(arena, id);
+        const td = p.object.get("textDocument") orelse return try self.nullResponse(arena, id);
+        const uri = (td.object.get("uri") orelse return try self.nullResponse(arena, id)).string;
+        const pos = p.object.get("position") orelse return try self.nullResponse(arena, id);
+        const line_val: u32 = @intCast(pos.object.get("line").?.integer);
+        const char_val: u32 = @intCast(pos.object.get("character").?.integer);
+        const new_name = (p.object.get("newName") orelse return try self.nullResponse(arena, id)).string;
+
+        const handle = self.store.get(uri) orelse return try self.nullResponse(arena, id);
+        var result = handle.result orelse return try self.nullResponse(arena, id);
+
+        const byte_offset = lsp_types.lspToByteOffset(result.src.content, .{ .line = line_val, .character = char_val });
+        const references_mod = @import("references.zig");
+        const locations = references_mod.getReferences(arena, &result, byte_offset, uri, true) catch return try self.nullResponse(arena, id);
+
+        if (locations.len == 0) return try self.nullResponse(arena, id);
+
+        // Build WorkspaceEdit with TextEdit[]
+        const uri_escaped = lsp_types.jsonEscape(arena, uri) catch uri;
+        const new_name_escaped = lsp_types.jsonEscape(arena, new_name) catch new_name;
+
+        var json = std.ArrayListUnmanaged(u8){};
+        try json.appendSlice(arena, "{\"changes\":{\"");
+        try json.appendSlice(arena, uri_escaped);
+        try json.appendSlice(arena, "\":[");
+
+        for (locations, 0..) |loc, i| {
+            if (i > 0) try json.append(arena, ',');
+            const edit = try std.fmt.allocPrint(arena,
+                \\{{"range":{{"start":{{"line":{d},"character":{d}}},"end":{{"line":{d},"character":{d}}}}},"newText":"{s}"}}
+            , .{
+                loc.range.start.line,
+                loc.range.start.character,
+                loc.range.end.line,
+                loc.range.end.character,
+                new_name_escaped,
+            });
+            try json.appendSlice(arena, edit);
+        }
+
+        try json.appendSlice(arena, "]}}");
 
         return try self.successResponse(arena, id, json.items);
     }

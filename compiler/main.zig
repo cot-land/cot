@@ -19,6 +19,7 @@ pub const types = @import("frontend/types.zig");
 pub const checker = @import("frontend/checker.zig");
 pub const ir = @import("frontend/ir.zig");
 pub const lower = @import("frontend/lower.zig");
+pub const formatter = @import("frontend/formatter.zig");
 pub const ssa_builder = @import("frontend/ssa_builder.zig");
 
 // SSA modules
@@ -102,6 +103,7 @@ pub fn main() !void {
         .build => |opts| buildCommand(allocator, opts),
         .run => |opts| runCommand(allocator, opts),
         .@"test" => |opts| testCommand(allocator, opts),
+        .fmt => |opts| fmtCommand(allocator, opts),
         .lsp => lsp_main.run(allocator),
         .version => cli.printVersion(),
         .help => |opts| cli.printHelp(opts.subcommand),
@@ -115,7 +117,7 @@ fn buildCommand(allocator: std.mem.Allocator, opts: cli.BuildOptions) void {
         std.process.exit(1);
     });
 
-    compileAndLink(allocator, opts.input_file, output_name, compile_target, false, false);
+    compileAndLink(allocator, opts.input_file, output_name, compile_target, false, false, null);
 }
 
 fn runCommand(allocator: std.mem.Allocator, opts: cli.RunOptions) void {
@@ -143,7 +145,7 @@ fn runCommand(allocator: std.mem.Allocator, opts: cli.RunOptions) void {
         std.process.exit(1);
     };
 
-    compileAndLink(allocator, opts.input_file, tmp_output, opts.target, false, true);
+    compileAndLink(allocator, opts.input_file, tmp_output, opts.target, false, true, null);
 
     // Run the compiled executable
     var run_args = std.ArrayListUnmanaged([]const u8){};
@@ -200,7 +202,7 @@ fn testCommand(allocator: std.mem.Allocator, opts: cli.TestOptions) void {
         std.process.exit(1);
     };
 
-    compileAndLink(allocator, opts.input_file, tmp_output, opts.target, true, true);
+    compileAndLink(allocator, opts.input_file, tmp_output, opts.target, true, true, opts.filter);
 
     // Run the test: wasmtime for wasm targets, direct execution for native
     const run_path = if (opts.target.isWasm())
@@ -247,6 +249,63 @@ fn testCommand(allocator: std.mem.Allocator, opts: cli.TestOptions) void {
     }
 }
 
+fn fmtCommand(allocator: std.mem.Allocator, opts: cli.FmtOptions) void {
+    const fmt_mod = @import("frontend/formatter.zig");
+
+    // Read source file
+    const source_text = std.fs.cwd().readFileAlloc(allocator, opts.input_file, 1024 * 1024) catch |e| {
+        std.debug.print("Error: Failed to read {s}: {any}\n", .{ opts.input_file, e });
+        std.process.exit(1);
+    };
+    defer allocator.free(source_text);
+
+    // Collect comments from source
+    const comments = fmt_mod.collectComments(allocator, source_text) catch {
+        std.debug.print("Error: Failed to collect comments\n", .{});
+        std.process.exit(1);
+    };
+    defer allocator.free(comments);
+
+    // Parse
+    var src = source.Source.init(allocator, opts.input_file, source_text);
+    defer src.deinit();
+    var err_reporter = errors.ErrorReporter.init(&src, null);
+    var tree = ast.Ast.init(allocator);
+    defer tree.deinit();
+    var scan = scanner.Scanner.initWithErrors(&src, &err_reporter);
+    var parser_inst = parser.Parser.init(allocator, &scan, &tree, &err_reporter);
+    parser_inst.parseFile() catch {
+        std.debug.print("Error: Parse failed\n", .{});
+        std.process.exit(1);
+    };
+    if (err_reporter.hasErrors()) {
+        std.process.exit(1);
+    }
+
+    // Format
+    var fmtr = fmt_mod.Formatter.init(allocator, &tree, source_text, comments);
+    const output = fmtr.format() catch {
+        std.debug.print("Error: Format failed\n", .{});
+        std.process.exit(1);
+    };
+    defer allocator.free(output);
+
+    if (opts.write) {
+        // Write back to file
+        std.fs.cwd().writeFile(.{ .sub_path = opts.input_file, .data = output }) catch |e| {
+            std.debug.print("Error: Failed to write {s}: {any}\n", .{ opts.input_file, e });
+            std.process.exit(1);
+        };
+    } else {
+        // Write to stdout
+        const stdout = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        stdout.writeAll(output) catch {
+            std.debug.print("Error: Failed to write to stdout\n", .{});
+            std.process.exit(1);
+        };
+    }
+}
+
 fn cleanup(dir: []const u8) void {
     std.fs.cwd().deleteTree(dir) catch {};
 }
@@ -259,12 +318,18 @@ fn compileAndLink(
     compile_target: Target,
     test_mode: bool,
     quiet: bool,
+    test_filter: ?[]const u8,
 ) void {
     var compile_driver = Driver.init(allocator);
     compile_driver.setTarget(compile_target);
     if (test_mode) compile_driver.setTestMode(true);
+    if (test_filter) |f| compile_driver.setTestFilter(f);
 
     const code = compile_driver.compileFile(input_file) catch |e| {
+        if (e == error.NoTestsMatched) {
+            // Already printed "0 tests matched filter" — exit success
+            std.process.exit(0);
+        }
         std.debug.print("Compilation failed: {any}\n", .{e});
         std.process.exit(1);
     };

@@ -82,7 +82,7 @@ test "set toList" {
 test "set many elements" {
     var s: Set(i64) = .{}
     var i: i64 = 0
-    while i < 20 {
+    while (i < 20) {
         s.add(i)
         i = i + 1
     }

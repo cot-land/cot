@@ -17,12 +17,12 @@ fn expr_bitor(a: i64, b: i64) i64 { return a | b; }
 fn expr_bitxor(a: i64, b: i64) i64 { return a ^ b; }
 fn expr_shl(a: i64, b: i64) i64 { return a << b; }
 fn expr_shr(a: i64, b: i64) i64 { return a >> b; }
-fn expr_lt(a: i64, b: i64) i64 { if a < b { return 1; } return 0; }
-fn expr_le(a: i64, b: i64) i64 { if a <= b { return 1; } return 0; }
-fn expr_gt(a: i64, b: i64) i64 { if a > b { return 1; } return 0; }
-fn expr_ge(a: i64, b: i64) i64 { if a >= b { return 1; } return 0; }
-fn expr_eq(a: i64, b: i64) i64 { if a == b { return 1; } return 0; }
-fn expr_ne(a: i64, b: i64) i64 { if a != b { return 1; } return 0; }
+fn expr_lt(a: i64, b: i64) i64 { if (a < b) { return 1; } return 0; }
+fn expr_le(a: i64, b: i64) i64 { if (a <= b) { return 1; } return 0; }
+fn expr_gt(a: i64, b: i64) i64 { if (a > b) { return 1; } return 0; }
+fn expr_ge(a: i64, b: i64) i64 { if (a >= b) { return 1; } return 0; }
+fn expr_eq(a: i64, b: i64) i64 { if (a == b) { return 1; } return 0; }
+fn expr_ne(a: i64, b: i64) i64 { if (a != b) { return 1; } return 0; }
 fn expr_chain(a: i64, b: i64, c: i64) i64 { return a + b + c + a + b + c; }
 fn expr_prec() i64 { return 2 + 3 * 4; }
 fn expr_left_assoc() i64 { return 100 - 30 - 20; }
@@ -34,23 +34,23 @@ fn expr_chain4(a: i64, b: i64, c: i64, d: i64) i64 {
 fn expr_bitnot(x: i64) i64 { return ~x; }
 fn expr_shift_chain(x: i64) i64 { return ((x << 2) >> 1) << 1; }
 fn expr_bitcombo(a: i64, b: i64) i64 { return (a & b) | (a ^ b); }
-fn expr_max(a: i64, b: i64) i64 { if a > b { return a; } return b; }
-fn expr_min(a: i64, b: i64) i64 { if a < b { return a; } return b; }
-fn expr_abs(x: i64) i64 { if x < 0 { return -x; } return x; }
+fn expr_max(a: i64, b: i64) i64 { if (a > b) { return a; } return b; }
+fn expr_min(a: i64, b: i64) i64 { if (a < b) { return a; } return b; }
+fn expr_abs(x: i64) i64 { if (x < 0) { return -x; } return x; }
 fn expr_sign(x: i64) i64 {
-    if x < 0 { return -1; }
-    if x > 0 { return 1; }
+    if (x < 0) { return -1; }
+    if (x > 0) { return 1; }
     return 0;
 }
 fn expr_clamp(x: i64, lo: i64, hi: i64) i64 {
-    if x < lo { return lo; }
-    if x > hi { return hi; }
+    if (x < lo) { return lo; }
+    if (x > hi) { return hi; }
     return x;
 }
 fn expr_power(base: i64, exp: i64) i64 {
     var result: i64 = 1;
     var i: i64 = 0;
-    while i < exp {
+    while (i < exp) {
         result = result * base;
         i = i + 1;
     }
@@ -61,7 +61,7 @@ fn expr_cube(x: i64) i64 { return x * x * x; }
 fn expr_sum_squares(n: i64) i64 {
     var sum: i64 = 0;
     var i: i64 = 1;
-    while i <= n {
+    while (i <= n) {
         sum = sum + i * i;
         i = i + 1;
     }
@@ -85,7 +85,7 @@ fn expr_lerp(a: i64, b: i64, t: i64) i64 {
 fn expr_popcount(n: i64) i64 {
     var count: i64 = 0;
     var x: i64 = n;
-    while x != 0 {
+    while (x != 0) {
         count = count + (x & 1);
         x = x >> 1;
     }
@@ -95,7 +95,7 @@ fn expr_reverse8(n: i64) i64 {
     var result: i64 = 0;
     var x: i64 = n;
     var i: i64 = 0;
-    while i < 8 {
+    while (i < 8) {
         result = result << 1;
         result = result | (x & 1);
         x = x >> 1;
@@ -104,8 +104,8 @@ fn expr_reverse8(n: i64) i64 {
     return result;
 }
 fn expr_is_pow2(n: i64) i64 {
-    if n <= 0 { return 0; }
-    if (n & (n - 1)) == 0 { return 1; }
+    if (n <= 0) { return 0; }
+    if ((n & (n - 1)) == 0) { return 1; }
     return 0;
 }
 fn expr_neg_div(a: i64, b: i64) i64 { return (-a) / b; }
@@ -114,13 +114,13 @@ fn expr_neg_mod(a: i64, b: i64) i64 { return (-a) % b; }
 fn expr_double_neg(x: i64) i64 { return -(-x); }
 fn expr_triple_neg(x: i64) i64 { return -(-(-x)); }
 fn expr_in_range(x: i64, lo: i64, hi: i64) i64 {
-    if x >= lo {
-        if x <= hi { return 1; }
+    if (x >= lo) {
+        if (x <= hi) { return 1; }
     }
     return 0;
 }
-fn expr_is_zero(x: i64) i64 { if x == 0 { return 1; } return 0; }
-fn expr_is_neg(x: i64) i64 { if x < 0 { return 1; } return 0; }
+fn expr_is_zero(x: i64) i64 { if (x == 0) { return 1; } return 0; }
+fn expr_is_neg(x: i64) i64 { if (x < 0) { return 1; } return 0; }
 fn expr_align_up(n: i64, align: i64) i64 {
     return (n + align - 1) & (0 - align);
 }
@@ -130,7 +130,7 @@ fn expr_extract_byte(x: i64, pos: i64) i64 {
 fn expr_count_bits(n: i64) i64 {
     var count: i64 = 0;
     var x: i64 = n;
-    while x > 0 {
+    while (x > 0) {
         count = count + (x & 1);
         x = x >> 1;
     }
@@ -139,8 +139,8 @@ fn expr_count_bits(n: i64) i64 {
 fn expr_clz_byte(x: i64) i64 {
     var count: i64 = 0;
     var mask: i64 = 0x80;
-    while mask > 0 {
-        if (x & mask) != 0 {
+    while (mask > 0) {
+        if ((x & mask) != 0) {
             return count;
         }
         count = count + 1;
@@ -628,9 +628,9 @@ test "103: compare chain" {
     var r1: i64 = 0;
     var r2: i64 = 0;
     var r3: i64 = 0;
-    if a < b { r1 = 1; }
-    if b < c { r2 = 1; }
-    if a < c { r3 = 1; }
+    if (a < b) { r1 = 1; }
+    if (b < c) { r2 = 1; }
+    if (a < c) { r3 = 1; }
     @assert_eq(r1, 1)
     @assert_eq(r2, 1)
     @assert_eq(r3, 1)
@@ -759,8 +759,8 @@ test "126: compare chain nested" {
     var b: i64 = 10;
     var c: i64 = 15;
     var result: i64 = 0;
-    if a < b {
-        if b < c {
+    if (a < b) {
+        if (b < c) {
             result = 1;
         }
     }
@@ -772,8 +772,8 @@ test "127: equality chain" {
     var b: i64 = 5;
     var c: i64 = 5;
     var result: i64 = 0;
-    if a == b {
-        if b == c {
+    if (a == b) {
+        if (b == c) {
             result = 1;
         }
     }
@@ -847,8 +847,8 @@ test "141: chained compare" {
     var c: i64 = 15;
     var r1: i64 = 0;
     var r2: i64 = 0;
-    if a < b { r1 = 1; }
-    if b < c { r2 = 1; }
+    if (a < b) { r1 = 1; }
+    if (b < c) { r2 = 1; }
     @assert_eq(r1, 1)
     @assert_eq(r2, 1)
 }

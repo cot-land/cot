@@ -40,7 +40,7 @@ fn ty02_test_reassign() i64 {
 }
 
 fn ty03_to_bool(x: i64) i64 {
-    if x != 0 { return 1; }
+    if (x != 0) { return 1; }
     return 0;
 }
 
@@ -56,7 +56,7 @@ fn ty28_translate(p: *TyPoint, dx: i64, dy: i64) void { p.x = p.x + dx; p.y = p.
 fn ty30_area(r: *TyRect) i64 { return r.w * r.h; }
 fn ty37_copy_point(src: *TyPoint, dst: *TyPoint) void { dst.x = src.x; dst.y = src.y; }
 fn ty38_points_equal(a: *TyPoint, b: *TyPoint) i64 {
-    if a.x == b.x and a.y == b.y { return 1; }
+    if (a.x == b.x and a.y == b.y) { return 1; }
     return 0;
 }
 fn ty41_sum_triple(t: *TyTriple) i64 { return t.a + t.b + t.c; }

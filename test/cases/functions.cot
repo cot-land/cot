@@ -23,33 +23,33 @@ fn identity(x: i64) i64 {
 }
 
 fn fibonacci(n: i64) i64 {
-    if n <= 1 {
+    if (n <= 1) {
         return n
     }
     return fibonacci(n - 1) + fibonacci(n - 2)
 }
 
 fn factorial(n: i64) i64 {
-    if n <= 1 {
+    if (n <= 1) {
         return 1
     }
     return n * factorial(n - 1)
 }
 
 fn countdown(n: i64) i64 {
-    if n <= 0 {
+    if (n <= 0) {
         return 1
     }
     return countdown(n - 1)
 }
 
 fn isEven(n: i64) i64 {
-    if n == 0 { return 1 }
+    if (n == 0) { return 1 }
     return isOdd(n - 1)
 }
 
 fn isOdd(n: i64) i64 {
-    if n == 0 { return 0 }
+    if (n == 0) { return 0 }
     return isEven(n - 1)
 }
 
@@ -71,7 +71,7 @@ test "three params" {
 
 test "call in if" {
     var result: i64 = 0
-    if cf_double(5) == 10 {
+    if (cf_double(5) == 10) {
         result = 10
     }
     @assert_eq(result, 10)

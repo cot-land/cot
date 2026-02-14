@@ -59,6 +59,7 @@ pub const Driver = struct {
     allocator: Allocator,
     target: Target = Target.native(),
     test_mode: bool = false,
+    test_filter: ?[]const u8 = null,
 
     pub fn init(allocator: Allocator) Driver {
         return .{ .allocator = allocator };
@@ -70,6 +71,10 @@ pub const Driver = struct {
 
     pub fn setTestMode(self: *Driver, enabled: bool) void {
         self.test_mode = enabled;
+    }
+
+    pub fn setTestFilter(self: *Driver, filter: []const u8) void {
+        self.test_filter = filter;
     }
 
     /// Compile source code to machine code (single file, no imports).
@@ -191,6 +196,31 @@ pub const Driver = struct {
             }
             shared_builder = lowerer.builder;
             lowerer.deinitWithoutBuilder();
+        }
+
+        // Filter tests if --filter is specified
+        if (self.test_filter) |filter| {
+            var filtered_names = std.ArrayListUnmanaged([]const u8){};
+            defer filtered_names.deinit(self.allocator);
+            var filtered_display = std.ArrayListUnmanaged([]const u8){};
+            defer filtered_display.deinit(self.allocator);
+
+            for (all_test_names.items, all_test_display_names.items) |name, display| {
+                if (std.mem.indexOf(u8, display, filter) != null) {
+                    try filtered_names.append(self.allocator, name);
+                    try filtered_display.append(self.allocator, display);
+                }
+            }
+
+            all_test_names.clearRetainingCapacity();
+            all_test_display_names.clearRetainingCapacity();
+            for (filtered_names.items) |n| try all_test_names.append(self.allocator, n);
+            for (filtered_display.items) |n| try all_test_display_names.append(self.allocator, n);
+
+            if (all_test_names.items.len == 0) {
+                std.debug.print("0 tests matched filter \"{s}\"\n", .{filter});
+                return error.NoTestsMatched;
+            }
         }
 
         // Generate test runner if in test mode

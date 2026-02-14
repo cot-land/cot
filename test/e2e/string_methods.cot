@@ -285,7 +285,7 @@ test "StringBuilder clear" {
 test "StringBuilder grow" {
     var sb: StringBuilder = .{}
     var i: i64 = 0
-    while i < 100 {
+    while (i < 100) {
         sb.append("x")
         i = i + 1
     }

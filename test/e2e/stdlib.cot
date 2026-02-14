@@ -4,8 +4,8 @@
 import "std/list"
 
 fn cmp_asc(a: i64, b: i64) i64 {
-    if a < b { return 0 - 1 }
-    if a > b { return 1 }
+    if (a < b) { return 0 - 1 }
+    if (a > b) { return 1 }
     return 0
 }
 

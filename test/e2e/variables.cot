@@ -97,7 +97,7 @@ test "006: twenty variables sum" {
 test "008: loop with local var" {
     var sum: i64 = 0;
     var i: i64 = 0;
-    while i < 5 {
+    while (i < 5) {
         var term: i64 = i * 2;
         sum = sum + term;
         i = i + 1;
@@ -276,7 +276,7 @@ test "026: cyclic rotate" {
 test "027: sum of squares loop" {
     var acc: i64 = 0;
     var i: i64 = 1;
-    while i <= 10 {
+    while (i <= 10) {
         acc = acc + i * i;
         i = i + 1;
     }
@@ -286,7 +286,7 @@ test "027: sum of squares loop" {
 test "033: sum 1 to 10" {
     var sum: i64 = 0;
     var i: i64 = 1;
-    while i <= 10 {
+    while (i <= 10) {
         sum = sum + i;
         i = i + 1;
     }
@@ -296,8 +296,8 @@ test "033: sum 1 to 10" {
 test "034: flag toggle loop" {
     var flag: i64 = 0;
     var i: i64 = 0;
-    while i < 5 {
-        if flag == 0 {
+    while (i < 5) {
+        if (flag == 0) {
             flag = 1;
         } else {
             flag = 0;
@@ -321,7 +321,7 @@ test "036: fibonacci" {
     var a: i64 = 0;
     var b: i64 = 1;
     var i: i64 = 0;
-    while i < 10 {
+    while (i < 10) {
         var t: i64 = a + b;
         a = b;
         b = t;
@@ -333,7 +333,7 @@ test "036: fibonacci" {
 test "037: factorial" {
     var product: i64 = 1;
     var i: i64 = 1;
-    while i <= 5 {
+    while (i <= 5) {
         product = product * i;
         i = i + 1;
     }
@@ -343,7 +343,7 @@ test "037: factorial" {
 test "038: gcd" {
     var a: i64 = 48;
     var b: i64 = 18;
-    while b != 0 {
+    while (b != 0) {
         var t: i64 = b;
         b = a % b;
         a = t;
@@ -355,9 +355,9 @@ test "039: binary search" {
     var target: i64 = 37;
     var lo: i64 = 0;
     var hi: i64 = 100;
-    while lo < hi {
+    while (lo < hi) {
         var mid: i64 = (lo + hi) / 2;
-        if mid < target {
+        if (mid < target) {
             lo = mid + 1;
         } else {
             hi = mid;
@@ -369,8 +369,8 @@ test "039: binary search" {
 test "040: collatz conjecture" {
     var n: i64 = 27;
     var steps: i64 = 0;
-    while n != 1 {
-        if n % 2 == 0 {
+    while (n != 1) {
+        if (n % 2 == 0) {
             n = n / 2;
         } else {
             n = 3 * n + 1;
@@ -383,7 +383,7 @@ test "040: collatz conjecture" {
 test "041: popcount loop" {
     var n: i64 = 255;
     var count: i64 = 0;
-    while n > 0 {
+    while (n > 0) {
         count = count + (n & 1);
         n = n >> 1;
     }
@@ -395,7 +395,7 @@ test "042: bit reverse" {
     var rev: i64 = 0;
     var bits: i64 = 4;
     var i: i64 = 0;
-    while i < bits {
+    while (i < bits) {
         rev = rev << 1;
         rev = rev | (n & 1);
         n = n >> 1;
@@ -408,8 +408,8 @@ test "043: prime check" {
     var n: i64 = 17;
     var is_prime: i64 = 1;
     var i: i64 = 2;
-    while i < n {
-        if n % i == 0 {
+    while (i < n) {
+        if (n % i == 0) {
             is_prime = 0;
         }
         i = i + 1;
@@ -421,8 +421,8 @@ test "044: perfect number" {
     var n: i64 = 6;
     var sum: i64 = 0;
     var i: i64 = 1;
-    while i < n {
-        if n % i == 0 {
+    while (i < n) {
+        if (n % i == 0) {
             sum = sum + i;
         }
         i = i + 1;
@@ -433,7 +433,7 @@ test "044: perfect number" {
 test "045: reverse digits" {
     var n: i64 = 123;
     var rev: i64 = 0;
-    while n > 0 {
+    while (n > 0) {
         rev = rev * 10 + n % 10;
         n = n / 10;
     }

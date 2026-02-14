@@ -34,6 +34,12 @@ pub const RunOptions = struct {
 pub const TestOptions = struct {
     input_file: []const u8,
     target: Target = Target.native(),
+    filter: ?[]const u8 = null,
+};
+
+pub const FmtOptions = struct {
+    input_file: []const u8,
+    write: bool = false,
 };
 
 pub const HelpOptions = struct {
@@ -44,6 +50,7 @@ pub const Command = union(enum) {
     build: BuildOptions,
     run: RunOptions,
     @"test": TestOptions,
+    fmt: FmtOptions,
     lsp,
     version,
     help: HelpOptions,
@@ -59,6 +66,7 @@ pub fn parseArgs(allocator: std.mem.Allocator) ?Command {
     if (std.mem.eql(u8, first, "build")) return parseBuild(&args);
     if (std.mem.eql(u8, first, "run")) return parseRun(allocator, &args);
     if (std.mem.eql(u8, first, "test")) return parseTest(&args);
+    if (std.mem.eql(u8, first, "fmt")) return parseFmt(&args);
     if (std.mem.eql(u8, first, "lsp")) return .lsp;
     if (std.mem.eql(u8, first, "version")) return .version;
     if (std.mem.eql(u8, first, "help")) {
@@ -148,6 +156,13 @@ fn parseTest(args: *std.process.ArgIterator) ?Command {
     while (args.next()) |arg| {
         if (isTargetFlag(arg)) {
             opts.target = parseTarget(arg, args) orelse return null;
+        } else if (std.mem.startsWith(u8, arg, "--filter=")) {
+            opts.filter = arg[9..];
+        } else if (std.mem.eql(u8, arg, "--filter")) {
+            opts.filter = args.next() orelse {
+                std.debug.print("Error: --filter requires an argument\n", .{});
+                return null;
+            };
         } else if (!std.mem.startsWith(u8, arg, "-")) {
             opts.input_file = arg;
             has_input = true;
@@ -158,10 +173,33 @@ fn parseTest(args: *std.process.ArgIterator) ?Command {
     }
 
     if (!has_input) {
-        std.debug.print("Error: No input file\nUsage: cot test <file.cot> [--target=<t>]\n", .{});
+        std.debug.print("Error: No input file\nUsage: cot test <file.cot> [--target=<t>] [--filter=<str>]\n", .{});
         return null;
     }
     return .{ .@"test" = opts };
+}
+
+fn parseFmt(args: *std.process.ArgIterator) ?Command {
+    var opts = FmtOptions{ .input_file = undefined };
+    var has_input = false;
+
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "-w") or std.mem.eql(u8, arg, "--write")) {
+            opts.write = true;
+        } else if (!std.mem.startsWith(u8, arg, "-")) {
+            opts.input_file = arg;
+            has_input = true;
+        } else {
+            std.debug.print("Error: Unknown option '{s}'\n", .{arg});
+            return null;
+        }
+    }
+
+    if (!has_input) {
+        std.debug.print("Error: No input file\nUsage: cot fmt [-w] <file.cot>\n", .{});
+        return null;
+    }
+    return .{ .fmt = opts };
 }
 
 fn parseImplicitBuild(maybe_file: ?[]const u8, args: *std.process.ArgIterator, first_flag: ?[]const u8) ?Command {
@@ -274,6 +312,8 @@ pub fn printHelp(subcommand: ?[]const u8) void {
             printRunHelp();
         } else if (std.mem.eql(u8, sub, "test")) {
             printTestHelp();
+        } else if (std.mem.eql(u8, sub, "fmt")) {
+            printFmtHelp();
         } else {
             std.debug.print("Unknown command: {s}\n\n", .{sub});
             printUsage();
@@ -291,6 +331,7 @@ fn printUsage() void {
         \\  cot build <file.cot> [-o name]  Compile with options
         \\  cot run <file.cot> [-- args]    Compile and run
         \\  cot test <file.cot>             Run tests
+        \\  cot fmt <file.cot> [-w]         Format source code
         \\  cot lsp                         Start language server (LSP)
         \\  cot version                     Print version
         \\  cot help [command]              Print help
@@ -341,15 +382,33 @@ fn printRunHelp() void {
 
 fn printTestHelp() void {
     std.debug.print(
-        \\Usage: cot test <file.cot> [--target=<t>]
+        \\Usage: cot test <file.cot> [--target=<t>] [--filter=<str>]
         \\
         \\Compile and run a Cot source file in test mode.
         \\
         \\Flags:
         \\  --target=<t>    Target: arm64-macos, amd64-linux
+        \\  --filter=<str>  Only run tests whose name contains <str>
         \\
         \\Examples:
-        \\  cot test app.cot                Run tests in app.cot
+        \\  cot test app.cot                    Run all tests in app.cot
+        \\  cot test app.cot --filter=math       Run only tests matching "math"
+        \\
+    , .{});
+}
+
+fn printFmtHelp() void {
+    std.debug.print(
+        \\Usage: cot fmt [-w] <file.cot>
+        \\
+        \\Format a Cot source file. Output goes to stdout by default.
+        \\
+        \\Flags:
+        \\  -w, --write     Write result back to source file (in-place)
+        \\
+        \\Examples:
+        \\  cot fmt app.cot                 Print formatted output to stdout
+        \\  cot fmt -w app.cot              Format file in-place
         \\
     , .{});
 }

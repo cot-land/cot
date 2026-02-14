@@ -115,11 +115,26 @@ pub const ErrorReporter = struct {
 
     fn printError(self: *ErrorReporter, err: Error) void {
         const pos = self.src.position(err.span.start);
+        const is_tty = std.posix.isatty(2);
+
+        // ANSI color codes
+        const red = if (is_tty) "\x1b[1;31m" else "";
+        const cyan = if (is_tty) "\x1b[1;36m" else "";
+        const green = if (is_tty) "\x1b[1;32m" else "";
+        const reset = if (is_tty) "\x1b[0m" else "";
 
         if (err.err_code) |ec| {
-            std.debug.print("{s}:{d}:{d}: error[E{d}]: {s}\n", .{ pos.filename, pos.line, pos.column, ec.code(), err.msg });
+            std.debug.print("{s}{s}:{d}:{d}:{s} {s}error[E{d}]:{s} {s}\n", .{
+                cyan, pos.filename, pos.line, pos.column, reset,
+                red,  ec.code(),                           reset,
+                err.msg,
+            });
         } else {
-            std.debug.print("{s}:{d}:{d}: error: {s}\n", .{ pos.filename, pos.line, pos.column, err.msg });
+            std.debug.print("{s}{s}:{d}:{d}:{s} {s}error:{s} {s}\n", .{
+                cyan, pos.filename, pos.line, pos.column, reset,
+                red,                                      reset,
+                err.msg,
+            });
         }
 
         const line = self.src.getLine(err.span.start);
@@ -131,7 +146,15 @@ pub const ErrorReporter = struct {
             while (i < pos.column - 1) : (i += 1) {
                 if (i < line.len and line[i] == '\t') std.debug.print("\t", .{}) else std.debug.print(" ", .{});
             }
-            std.debug.print("^\n", .{});
+            // Underline the full span: ^~~~ instead of just ^
+            const span_len = err.span.len();
+            const underline_len = if (span_len > 1) span_len else 1;
+            std.debug.print("{s}^", .{green});
+            var j: u32 = 1;
+            while (j < underline_len) : (j += 1) {
+                std.debug.print("~", .{});
+            }
+            std.debug.print("{s}\n", .{reset});
         }
     }
 

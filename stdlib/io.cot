@@ -37,9 +37,9 @@ fn readerFill(r: i64) void {
     var buf_size = @intToPtr(*i64, r + 32).*
 
     // Slide unread data to front
-    if rd > 0 {
+    if (rd > 0) {
         var unread = wr - rd
-        if unread > 0 {
+        if (unread > 0) {
             @memcpy(buf, buf + rd, unread)
         }
         wr = unread
@@ -48,11 +48,11 @@ fn readerFill(r: i64) void {
         @intToPtr(*i64, r + 24).* = wr
     }
     // Buffer full — caller must consume
-    if wr >= buf_size { return }
+    if (wr >= buf_size) { return }
     // Read from fd
     var fd = @intToPtr(*i64, r).*
     var n = @fd_read(fd, buf + wr, buf_size - wr)
-    if n > 0 {
+    if (n > 0) {
         @intToPtr(*i64, r + 24).* = wr + n
     }
 }
@@ -61,11 +61,11 @@ fn readerFill(r: i64) void {
 fn readByte(r: i64) i64 {
     var rd = @intToPtr(*i64, r + 16).*
     var wr = @intToPtr(*i64, r + 24).*
-    if rd >= wr {
+    if (rd >= wr) {
         readerFill(r)
         rd = @intToPtr(*i64, r + 16).*
         wr = @intToPtr(*i64, r + 24).*
-        if rd >= wr { return 0 - 1 }
+        if (rd >= wr) { return 0 - 1 }
     }
     var buf = @intToPtr(*i64, r + 8).*
     var c = @intToPtr(*u8, buf + rd).*
@@ -80,20 +80,20 @@ fn readLine(r: i64) string {
     var have_prefix: i64 = 0
 
     var searching: i64 = 1
-    while searching == 1 {
+    while (searching == 1) {
         var buf = @intToPtr(*i64, r + 8).*
         var rd = @intToPtr(*i64, r + 16).*
         var wr = @intToPtr(*i64, r + 24).*
 
         // Scan current buffer for \n
         var i = rd
-        while i < wr {
+        while (i < wr) {
             var c = @intToPtr(*u8, buf + i).*
-            if c == 10 {
+            if (c == 10) {
                 // Found \n at position i
                 var line_len = i - rd
-                if have_prefix == 1 {
-                    if line_len > 0 {
+                if (have_prefix == 1) {
+                    if (line_len > 0) {
                         sb.append(@string(buf + rd, line_len))
                     }
                     @intToPtr(*i64, r + 16).* = i + 1
@@ -110,7 +110,7 @@ fn readLine(r: i64) string {
 
         // No \n found — save what we have and fill more
         var chunk_len = wr - rd
-        if chunk_len > 0 {
+        if (chunk_len > 0) {
             sb.append(@string(buf + rd, chunk_len))
             have_prefix = 1
             @intToPtr(*i64, r + 16).* = wr
@@ -119,13 +119,13 @@ fn readLine(r: i64) string {
         readerFill(r)
         var new_rd = @intToPtr(*i64, r + 16).*
         var new_wr = @intToPtr(*i64, r + 24).*
-        if new_rd >= new_wr {
+        if (new_rd >= new_wr) {
             searching = 0
         }
     }
 
     // EOF: return accumulated data (or empty for true EOF)
-    if have_prefix == 1 {
+    if (have_prefix == 1) {
         var result = sb.toString()
         return result
     }
@@ -158,7 +158,7 @@ fn newBufferedWriterSize(fd: i64, size: i64) i64 {
 // Go bufio.go:635 — write buffered data to fd
 fn writerFlush(w: i64) void {
     var wr = @intToPtr(*i64, w + 16).*
-    if wr > 0 {
+    if (wr > 0) {
         var fd = @intToPtr(*i64, w).*
         var buf = @intToPtr(*i64, w + 8).*
         @fd_write(fd, buf, wr)
@@ -169,7 +169,7 @@ fn writerFlush(w: i64) void {
 fn writeByte(w: i64, b: i64) void {
     var wr = @intToPtr(*i64, w + 16).*
     var buf_size = @intToPtr(*i64, w + 24).*
-    if wr >= buf_size {
+    if (wr >= buf_size) {
         writerFlush(w)
         wr = 0
     }
@@ -182,19 +182,19 @@ fn writeByte(w: i64, b: i64) void {
 // Go bufio.go:672
 fn writeString(w: i64, s: string) void {
     var slen = @lenOf(s)
-    if slen == 0 { return }
+    if (slen == 0) { return }
     var wr = @intToPtr(*i64, w + 16).*
     var buf_size = @intToPtr(*i64, w + 24).*
     var buf = @intToPtr(*i64, w + 8).*
     var avail = buf_size - wr
-    if slen <= avail {
+    if (slen <= avail) {
         @memcpy(buf + wr, @ptrOf(s), slen)
         @intToPtr(*i64, w + 16).* = wr + slen
         return
     }
     // Flush, then write directly if still too big
     writerFlush(w)
-    if slen >= buf_size {
+    if (slen >= buf_size) {
         var fd = @intToPtr(*i64, w).*
         @fd_write(fd, @ptrOf(s), slen)
         return
@@ -205,18 +205,18 @@ fn writeString(w: i64, s: string) void {
 }
 
 fn writerWriteAll(w: i64, ptr: i64, len: i64) void {
-    if len == 0 { return }
+    if (len == 0) { return }
     var wr = @intToPtr(*i64, w + 16).*
     var buf_size = @intToPtr(*i64, w + 24).*
     var buf = @intToPtr(*i64, w + 8).*
     var avail = buf_size - wr
-    if len <= avail {
+    if (len <= avail) {
         @memcpy(buf + wr, ptr, len)
         @intToPtr(*i64, w + 16).* = wr + len
         return
     }
     writerFlush(w)
-    if len >= buf_size {
+    if (len >= buf_size) {
         var fd = @intToPtr(*i64, w).*
         @fd_write(fd, ptr, len)
         return

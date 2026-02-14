@@ -53,7 +53,7 @@ fn inc(x: i64) i64 { return x + 1 }
 fn dec(x: i64) i64 { return x - 1 }
 
 fn mayFail(x: i64) MyError!i64 {
-    if x < 0 { return error.Fail }
+    if (x < 0) { return error.Fail }
     return x * 2
 }
 
@@ -87,7 +87,7 @@ struct CounterM(T) { value: T, count: i64 }
 // ============================================================================
 
 fn max(T)(a: T, b: T) T {
-    if a > b { return a }
+    if (a > b) { return a }
     return b
 }
 
@@ -115,11 +115,11 @@ fn CounterM_increment(T)(self: *CounterM(T)) void {
 
 // List free functions
 fn List_ensureCapacity(T)(self: *List(T), needed: i64) void {
-    if self.capacity >= needed { return }
+    if (self.capacity >= needed) { return }
     var new_cap: i64 = 8
-    if self.capacity > 0 { new_cap = self.capacity * 2 }
+    if (self.capacity > 0) { new_cap = self.capacity * 2 }
     var bytes = new_cap * @sizeOf(T)
-    if self.capacity == 0 {
+    if (self.capacity == 0) {
         self.items = @alloc(bytes)
     } else {
         self.items = @realloc(self.items, bytes)
@@ -201,7 +201,7 @@ test "baseline" {
     @assert_eq(x + y, 15)
 
     // If/else
-    if 10 > 5 {
+    if (10 > 5) {
         var ok = 1
         @assert_eq(ok, 1)
     } else {
@@ -211,7 +211,7 @@ test "baseline" {
     // While loop
     var sum: i64 = 0
     var i: i64 = 1
-    while i <= 10 {
+    while (i <= 10) {
         sum = sum + i
         i = i + 1
     }
@@ -389,10 +389,10 @@ test "defer_basic" {
 test "defer_loop_break" {
     var sum: i64 = 0
     var i: i64 = 0
-    while i < 5 {
+    while (i < 5) {
         defer sum = sum + 1
         i = i + 1
-        if i == 3 { break }
+        if (i == 3) { break }
     }
     @assert_eq(sum, 3)
 }
@@ -613,7 +613,7 @@ test "list_growth" {
     list.count = 0
     list.capacity = 0
     var i: i64 = 0
-    while i < 20 {
+    while (i < 20) {
         List_append(i64)(&list, i)
         i = i + 1
     }
@@ -686,7 +686,7 @@ test "list_impl_growth" {
     list.count = 0
     list.capacity = 0
     var i: i64 = 0
-    while i < 20 {
+    while (i < 20) {
         list.append(i)
         i = i + 1
     }
@@ -848,7 +848,7 @@ test "memcpy_zero_length" {
 
 test "trap_not_reached" {
     var x: i64 = 42
-    if x == 0 { @trap() }
+    if (x == 0) { @trap() }
 }
 
 // ============================================================================
@@ -862,7 +862,7 @@ fn get_slice_len(items: []i64) i64 {
 fn slice_sum(items: []i64) i64 {
     var total: i64 = 0
     var i: i64 = 0
-    while i < items.len {
+    while (i < items.len) {
         total = total + items[i]
         i = i + 1
     }
@@ -958,8 +958,8 @@ struct TraitPoint { x: i64, y: i64 }
 
 impl TraitEq for TraitPoint {
     fn eq(self: *TraitPoint, other: *TraitPoint) i64 {
-        if self.x == other.x {
-            if self.y == other.y {
+        if (self.x == other.x) {
+            if (self.y == other.y) {
                 return 1
             }
         }
@@ -1011,8 +1011,8 @@ trait BComparable {
 
 impl BComparable for i64 {
     fn bcmp(self: *i64, other: *i64) i64 {
-        if self.* > other.* { return 1 }
-        if self.* < other.* { return 0 - 1 }
+        if (self.* > other.*) { return 1 }
+        if (self.* < other.*) { return 0 - 1 }
         return 0
     }
 }
@@ -1020,7 +1020,7 @@ impl BComparable for i64 {
 fn bounded_max(T)(a: T, b: T) T where T: BComparable {
     var x = a
     var y = b
-    if x.bcmp(&y) > 0 { return a }
+    if (x.bcmp(&y) > 0) { return a }
     return b
 }
 
@@ -1188,7 +1188,7 @@ test "list_growth_go" {
     // Go's nextslicecap: 2x for cap<256, ~1.25x for larger
     var list: List(i64) = .{}
     var i: i64 = 0
-    while i < 300 {
+    while (i < 300) {
         list.append(i)
         i = i + 1
     }
@@ -1638,23 +1638,23 @@ test "target returns string" {
 }
 
 test "comptime if folds integer" {
-    const val: i64 = if 1 == 1 { 42 } else { 99 }
+    const val: i64 = if (1 == 1) { 42 } else { 99 }
     @assert_eq(val, 42)
 }
 
 test "comptime if folds else branch" {
-    const val: i64 = if 1 == 2 { 42 } else { 99 }
+    const val: i64 = if (1 == 2) { 42 } else { 99 }
     @assert_eq(val, 99)
 }
 
 test "comptime if target_os string compare" {
-    const flag: i64 = if @target_os() == "linux" { 64 } else { 512 }
+    const flag: i64 = if (@target_os() == "linux") { 64 } else { 512 }
     // On macOS this should be 512, on linux 64
     @assert(flag > 0)
 }
 
 test "comptime if target_os neq" {
-    const flag: i64 = if @target_os() != "nonexistent_os" { 1 } else { 0 }
+    const flag: i64 = if (@target_os() != "nonexistent_os") { 1 } else { 0 }
     @assert_eq(flag, 1)
 }
 
@@ -1697,7 +1697,7 @@ test "comptime block used in expression" {
 
 test "compileError in dead branch is not triggered" {
     const mode = 1
-    if mode == 1 {
+    if (mode == 1) {
         @assert(true)
     } else {
         @compileError("this should never be reached")
@@ -1705,13 +1705,13 @@ test "compileError in dead branch is not triggered" {
 }
 
 test "compileError in dead else with target check" {
-    if @target_os() == "macos" {
+    if (@target_os() == "macos") {
         @assert(true)
-    } else if @target_os() == "linux" {
+    } else if (@target_os() == "linux") {
         @assert(true)
-    } else if @target_os() == "freestanding" {
+    } else if (@target_os() == "freestanding") {
         @assert(true)
-    } else if @target_os() == "wasi" {
+    } else if (@target_os() == "wasi") {
         @assert(true)
     } else {
         @compileError("unsupported OS")
@@ -1782,7 +1782,7 @@ test "string reassignment preserves length" {
 test "string conditional reassignment" {
     var s = ""
     var flag: i64 = 1
-    if flag == 1 {
+    if (flag == 1) {
         s = "yes"
     }
     @assert_eq(s, "yes")
@@ -1792,9 +1792,9 @@ test "string conditional reassignment" {
 test "while not done" {
     var done = false
     var count: i64 = 0
-    while not done {
+    while (not done) {
         count = count + 1
-        if count == 5 {
+        if (count == 5) {
             done = true
         }
     }
@@ -1892,31 +1892,31 @@ test "errdefer runs on try propagation" {
 }
 
 // =============================================================================
-// if let optional unwrap — Rust/Swift pattern: if let val = expr { ... }
+// if optional unwrap — Zig pattern: if (expr) |val| { ... }
 // =============================================================================
 
-test "if let unwrap non-null" {
+test "if optional unwrap non-null" {
     var x: ?i64 = 42
     var result: i64 = 0
-    if let val = x {
+    if (x) |val| {
         result = val
     }
     @assert_eq(result, 42)
 }
 
-test "if let unwrap null" {
+test "if optional unwrap null" {
     var x: ?i64 = null
     var result: i64 = 99
-    if let val = x {
+    if (x) |val| {
         result = val
     }
     @assert_eq(result, 99)
 }
 
-test "if let unwrap with else" {
+test "if optional unwrap with else" {
     var x: ?i64 = null
     var result: i64 = 0
-    if let val = x {
+    if (x) |val| {
         result = val * 2
     } else {
         result = -1
@@ -1924,10 +1924,10 @@ test "if let unwrap with else" {
     @assert_eq(result, -1)
 }
 
-test "if let unwrap non-null with else" {
+test "if optional unwrap non-null with else" {
     var x: ?i64 = 10
     var result: i64 = 0
-    if let val = x {
+    if (x) |val| {
         result = val * 2
     } else {
         result = -1
@@ -1935,15 +1935,15 @@ test "if let unwrap non-null with else" {
     @assert_eq(result, 20)
 }
 
-test "if let unwrap expr" {
+test "if optional unwrap expr" {
     var x: ?i64 = 5
-    var result = if let val = x { val + 10 } else { -1 }
+    var result = if (x) |val| { val + 10 } else { -1 }
     @assert_eq(result, 15)
 }
 
-test "if let unwrap expr null" {
+test "if optional unwrap expr null" {
     var x: ?i64 = null
-    var result = if let val = x { val + 10 } else { -1 }
+    var result = if (x) |val| { val + 10 } else { -1 }
     @assert_eq(result, -1)
 }
 
@@ -2039,8 +2039,8 @@ test "labeled break from nested for loops" {
     var result: i64 = 0
     outer: for i in 0..5 {
         for j in 0..5 {
-            if i == 2 {
-                if j == 3 {
+            if (i == 2) {
+                if (j == 3) {
                     break :outer
                 }
             }
@@ -2055,7 +2055,7 @@ test "labeled continue from nested for loops" {
     var result: i64 = 0
     outer: for i in 0..3 {
         for j in 0..3 {
-            if j == 1 {
+            if (j == 1) {
                 continue :outer
             }
             result = result + 1
@@ -2068,10 +2068,10 @@ test "labeled continue from nested for loops" {
 test "labeled break from nested while loops" {
     var result: i64 = 0
     var i: i64 = 0
-    outer: while i < 5 {
+    outer: while (i < 5) {
         var j: i64 = 0
-        while j < 5 {
-            if i == 3 {
+        while (j < 5) {
+            if (i == 3) {
                 break :outer
             }
             result = result + 1
@@ -2086,10 +2086,10 @@ test "labeled break from nested while loops" {
 test "labeled continue from nested while loops" {
     var result: i64 = 0
     var i: i64 = 0
-    outer: while i < 3 {
+    outer: while (i < 3) {
         var j: i64 = 0
-        while j < 3 {
-            if j == 1 {
+        while (j < 3) {
+            if (j == 1) {
                 i = i + 1
                 continue :outer
             }
@@ -2106,9 +2106,9 @@ test "labeled break with mixed for and while" {
     var result: i64 = 0
     outer: for i in 0..4 {
         var j: i64 = 0
-        while j < 4 {
-            if i == 2 {
-                if j == 1 {
+        while (j < 4) {
+            if (i == 2) {
+                if (j == 1) {
                     break :outer
                 }
             }

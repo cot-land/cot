@@ -51,13 +51,13 @@ test "map_get_or_default" {
 test "map_multiple_entries" {
     var m: Map(i64, i64) = .{}
     var i: i64 = 0
-    while i < 10 {
+    while (i < 10) {
         m.set(i, i * 10)
         i = i + 1
     }
     @assert_eq(m.len(), 10)
     i = 0
-    while i < 10 {
+    while (i < 10) {
         @assert_eq(m.get(i), i * 10)
         i = i + 1
     }
@@ -81,13 +81,13 @@ test "map_grow" {
     // Initial capacity is 8, 75% load = 6. Insert 7+ to trigger growth.
     var m: Map(i64, i64) = .{}
     var i: i64 = 0
-    while i < 20 {
+    while (i < 20) {
         m.set(i, i * 100)
         i = i + 1
     }
     @assert_eq(m.len(), 20)
     i = 0
-    while i < 20 {
+    while (i < 20) {
         @assert_eq(m.get(i), i * 100)
         i = i + 1
     }
@@ -188,13 +188,13 @@ test "map_len" {
 test "map_large" {
     var m: Map(i64, i64) = .{}
     var i: i64 = 0
-    while i < 100 {
+    while (i < 100) {
         m.set(i, i * i)
         i = i + 1
     }
     @assert_eq(m.len(), 100)
     i = 0
-    while i < 100 {
+    while (i < 100) {
         @assert_eq(m.get(i), i * i)
         i = i + 1
     }
@@ -247,25 +247,25 @@ test "map_mass_delete_then_reinsert" {
     // Tests tombstone reuse with no growth.
     var m: Map(i64, i64) = .{}
     var i: i64 = 0
-    while i < 5 {
+    while (i < 5) {
         m.set(i, i * 10)
         i = i + 1
     }
     i = 0
-    while i < 5 {
+    while (i < 5) {
         m.delete(i)
         i = i + 1
     }
     @assert_eq(m.len(), 0)
     // Insert 5 different keys into tombstone-laden table
     i = 100
-    while i < 105 {
+    while (i < 105) {
         m.set(i, i * 10)
         i = i + 1
     }
     @assert_eq(m.len(), 5)
     i = 100
-    while i < 105 {
+    while (i < 105) {
         @assert_eq(m.get(i), i * 10)
         i = i + 1
     }
@@ -280,12 +280,12 @@ test "map_has_after_all_deleted" {
     // has() must terminate and return 0 (not loop forever).
     var m: Map(i64, i64) = .{}
     var i: i64 = 0
-    while i < 5 {
+    while (i < 5) {
         m.set(i, i)
         i = i + 1
     }
     i = 0
-    while i < 5 {
+    while (i < 5) {
         m.delete(i)
         i = i + 1
     }

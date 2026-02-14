@@ -25,23 +25,23 @@ const MIN_I64: i64 = 0 - 9223372036854775807 - 1
 // =========================================================================
 
 fn abs(x: i64) i64 {
-    if x < 0 { return 0 - x }
+    if (x < 0) { return 0 - x }
     return x
 }
 
 fn min(a: i64, b: i64) i64 {
-    if a < b { return a }
+    if (a < b) { return a }
     return b
 }
 
 fn max(a: i64, b: i64) i64 {
-    if a > b { return a }
+    if (a > b) { return a }
     return b
 }
 
 fn clamp(x: i64, lo: i64, hi: i64) i64 {
-    if x < lo { return lo }
-    if x > hi { return hi }
+    if (x < lo) { return lo }
+    if (x > hi) { return hi }
     return x
 }
 
@@ -71,12 +71,12 @@ fn toFloat(x: i64) f64 { return @intCast(f64, x) }
 
 // Integer power: base^exp by repeated squaring
 fn ipow(base: i64, exp: i64) i64 {
-    if exp == 0 { return 1 }
+    if (exp == 0) { return 1 }
     var result: i64 = 1
     var b = base
     var e = exp
-    while e > 0 {
-        if e - (e / 2) * 2 == 1 {
+    while (e > 0) {
+        if (e - (e / 2) * 2 == 1) {
             result = result * b
         }
         b = b * b
@@ -87,20 +87,20 @@ fn ipow(base: i64, exp: i64) i64 {
 
 // Float power with integer exponent: base^n by repeated squaring
 fn fpow(base: f64, n: i64) f64 {
-    if n == 0 { return 1.0 }
+    if (n == 0) { return 1.0 }
     var result: f64 = 1.0
     var b = base
     var e = n
-    if e < 0 {
+    if (e < 0) {
         e = 0 - e
     }
-    while e > 0 {
-        if e - (e / 2) * 2 == 1 {
+    while (e > 0) {
+        if (e - (e / 2) * 2 == 1) {
             result = result * b
         }
         b = b * b
         e = e / 2
     }
-    if n < 0 { return 1.0 / result }
+    if (n < 0) { return 1.0 / result }
     return result
 }

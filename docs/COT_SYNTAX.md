@@ -104,7 +104,7 @@ extern fn c_function(x: i64) i64
 Type params in **separate parens** (not angle brackets):
 
 ```cot
-fn max(T)(a: T, b: T) T { if a > b { return a } return b }
+fn max(T)(a: T, b: T) T { if (a > b) { return a } return b }
 struct Box(T) { value: T }
 fn Box_getValue(T)(self: *Box(T)) T { return self.value }
 
@@ -158,7 +158,7 @@ union Event { Click: i64, Hover, KeyPress: i64 }
 const MyError = error { Fail, NotFound }
 
 fn mayFail(x: i64) MyError!i64 {
-    if x < 0 { return error.Fail }
+    if (x < 0) { return error.Fail }
     return x * 2
 }
 
@@ -211,13 +211,16 @@ fn bounded_max(T)(a: T, b: T) T where T: Comparable { ... }
 ## Control Flow
 
 ```cot
-// If/else
-if x > 0 { ... }
-if x > 0 { ... } else { ... }
-if x > 0 { ... } else if x == 0 { ... } else { ... }
+// If/else (parens required, like Zig)
+if (x > 0) { ... }
+if (x > 0) { ... } else { ... }
+if (x > 0) { ... } else if (x == 0) { ... } else { ... }
 
-// While
-while x < 10 { x = x + 1 }
+// If optional unwrap (Zig pattern)
+if (optional_val) |val| { ... } else { ... }
+
+// While (parens required)
+while (x < 10) { x = x + 1 }
 
 // For-in (collection)
 for item in collection { ... }

@@ -103,24 +103,24 @@ fn handleToolsList(id_val: i64) i64 {
 
 fn handleToolsCall(req: i64, id_val: i64) i64 {
     var params = jsonObjectGet(req, "params")
-    if params == 0 { return makeError(id_val, 0 - 32602, "Missing params") }
+    if (params == 0) { return makeError(id_val, 0 - 32602, "Missing params") }
     var name = jsonObjectGetString(params, "name")
-    if @lenOf(name) == 0 { return makeError(id_val, 0 - 32602, "Missing tool name") }
+    if (@lenOf(name) == 0) { return makeError(id_val, 0 - 32602, "Missing tool name") }
 
-    if name == "get_syntax_reference" {
+    if (name == "get_syntax_reference") {
         var text = syntaxReference()
         return makeToolResponse(id_val, text)
     }
-    if name == "get_stdlib_docs" {
+    if (name == "get_stdlib_docs") {
         var args = jsonObjectGet(params, "arguments")
         var module = ""
-        if args != 0 {
+        if (args != 0) {
             module = jsonObjectGetString(args, "module")
         }
         var text = stdlibDocs(module)
         return makeToolResponse(id_val, text)
     }
-    if name == "get_project_info" {
+    if (name == "get_project_info") {
         var text = projectInfo()
         return makeToolResponse(id_val, text)
     }
@@ -133,7 +133,7 @@ fn handleToolsCall(req: i64, id_val: i64) i64 {
 
 fn getIdVal(req: i64) i64 {
     var id = jsonObjectGet(req, "id")
-    if id == 0 { return 0 }
+    if (id == 0) { return 0 }
     return jsonGetInt(id)
 }
 
@@ -142,21 +142,21 @@ fn handleRequest(req: i64, writer: i64) void {
     var id_val = getIdVal(req)
 
     var response: i64 = 0
-    if method == "initialize" {
+    if (method == "initialize") {
         response = handleInitialize(id_val)
-    } else if method == "tools/list" {
+    } else if (method == "tools/list") {
         response = handleToolsList(id_val)
-    } else if method == "tools/call" {
+    } else if (method == "tools/call") {
         response = handleToolsCall(req, id_val)
-    } else if method == "notifications/initialized" {
+    } else if (method == "notifications/initialized") {
         return
     } else {
-        if id_val != 0 {
+        if (id_val != 0) {
             response = makeError(id_val, 0 - 32601, "Method not found")
         }
     }
 
-    if response != 0 {
+    if (response != 0) {
         var out = encode(response)
         writeString(writer, out)
         writeByte(writer, 10)
@@ -173,9 +173,9 @@ fn main() i64 {
     var writer = newBufferedWriter(1)
 
     var running: i64 = 1
-    while running == 1 {
+    while (running == 1) {
         var line = readLine(reader)
-        if @lenOf(line) == 0 {
+        if (@lenOf(line) == 0) {
             running = 0
         } else {
             var request = parse(line)
@@ -210,7 +210,7 @@ fn syntaxReference() string {
     sb.append("fn apply(f: fn(i64) -> i64, x: i64) i64 { return f(x) }\n\n")
 
     sb.append("## Generics (separate parens, NOT angle brackets)\n")
-    sb.append("fn max(T)(a: T, b: T) T { if a > b { return a } return b }\n")
+    sb.append("fn max(T)(a: T, b: T) T { if (a > b) { return a } return b }\n")
     sb.append("struct Box(T) { value: T }\n")
     sb.append("var b = Box(i64) { .value = 42 }\n\n")
 
@@ -227,8 +227,9 @@ fn syntaxReference() string {
     sb.append("}\n\n")
 
     sb.append("## Control Flow\n")
-    sb.append("if condition { } else if other { } else { }\n")
-    sb.append("while condition { }\n")
+    sb.append("if (condition) { } else if (other) { } else { }\n")
+    sb.append("if (optional) |val| { }  // Zig-style optional unwrap\n")
+    sb.append("while (condition) { }\n")
     sb.append("for item in collection { }\n")
     sb.append("break / continue\n")
     sb.append("Logical: and, or, not (NOT &&, ||, !)\n\n")
@@ -268,7 +269,7 @@ fn syntaxReference() string {
 fn stdlibDocs(module: string) string {
     var sb = StringBuilder { .buf = 0, .len = 0, .cap = 0 }
 
-    if @lenOf(module) == 0 {
+    if (@lenOf(module) == 0) {
         sb.append("# Cot Stdlib Modules\n\n")
         sb.append("Available: json, string, fs, io, list, map, os, time, random, sort, set, math\n")
         sb.append("Use get_stdlib_docs with module param for details.\n")
@@ -276,7 +277,7 @@ fn stdlibDocs(module: string) string {
         return result
     }
 
-    if module == "json" {
+    if (module == "json") {
         sb.append("# std/json\n\n")
         sb.append("JSON parser + encoder. Values are heap-allocated i64 pointers.\n\n")
         sb.append("## Constructors (return i64)\n")
@@ -296,7 +297,7 @@ fn stdlibDocs(module: string) string {
         sb.append("jsonObjectGetInt(obj: i64, key: string) i64\n\n")
         sb.append("## Parse/Encode\n")
         sb.append("parse(input: string) i64    encode(val: i64) string\n")
-    } else if module == "string" {
+    } else if (module == "string") {
         sb.append("# std/string\n\n")
         sb.append("charAt(s, index) i64  indexOf(s, needle) i64  lastIndexOf(s, needle) i64\n")
         sb.append("contains(s, needle) bool  startsWith(s, prefix) bool  endsWith(s, suffix) bool\n")
@@ -309,7 +310,7 @@ fn stdlibDocs(module: string) string {
         sb.append("var sb = StringBuilder { .buf = 0, .len = 0, .cap = 0 }\n")
         sb.append("sb.append(s)  sb.appendByte(b)  sb.appendInt(n)\n")
         sb.append("sb.toString() string  sb.length() i64  sb.clear()  sb.free()\n")
-    } else if module == "fs" {
+    } else if (module == "fs") {
         sb.append("# std/fs\n\n")
         sb.append("struct File { fd: i64 }\n")
         sb.append("openFile(path: string, flags: i64) File\n")
@@ -322,7 +323,7 @@ fn stdlibDocs(module: string) string {
         sb.append("f.seekTo(pos) FsError!i64  f.seekBy(delta) FsError!i64  f.getPos() FsError!i64\n\n")
         sb.append("## Flags\n")
         sb.append("O_RDONLY=0  O_WRONLY=1  O_RDWR=2  O_CREATE  O_WRITE_CREATE\n")
-    } else if module == "io" {
+    } else if (module == "io") {
         sb.append("# std/io\n\n")
         sb.append("Buffered I/O. State is heap-allocated (i64 pointer).\n\n")
         sb.append("## BufferedReader\n")
@@ -338,7 +339,7 @@ fn stdlibDocs(module: string) string {
         sb.append("writeString(w: i64, s: string) void\n")
         sb.append("writerWriteAll(w: i64, ptr: i64, len: i64) void\n")
         sb.append("writerFlush(w: i64) void\n")
-    } else if module == "list" {
+    } else if (module == "list") {
         sb.append("# std/list\n\n")
         sb.append("struct List(T) { items: i64, count: i64, capacity: i64 }\n")
         sb.append("var l: List(i64) = .{}\n\n")
@@ -351,38 +352,38 @@ fn stdlibDocs(module: string) string {
         sb.append("l.clear()  l.free()  l.resize(n)  l.sort(cmp)\n\n")
         sb.append("## Search\n")
         sb.append("l.indexOf(val) i64  l.contains(val) i64  l.equal(other) i64\n")
-    } else if module == "map" {
+    } else if (module == "map") {
         sb.append("# std/map\n\n")
         sb.append("struct Map(K, V) -- hash map with open addressing.\n")
         sb.append("var m: Map(i64, i64) = .{}\n\n")
         sb.append("m.set(key, val)  m.get(key) V  m.contains(key) i64\n")
         sb.append("m.remove(key) i64  m.len() i64  m.clear()  m.free()\n")
         sb.append("m.keys() List(K)  m.values() List(V)\n")
-    } else if module == "os" {
+    } else if (module == "os") {
         sb.append("# std/os\n\n")
         sb.append("exit(code: i64)  argsCount() i64  argLen(n) i64  argPtr(n) i64\n")
         sb.append("arg(n: i64) string  environ(n: i64) string\n")
         sb.append("environCount() i64  environLen(n) i64  environPtr(n) i64\n")
-    } else if module == "time" {
+    } else if (module == "time") {
         sb.append("# std/time\n\n")
         sb.append("nanoTimestamp() i64  milliTimestamp() i64  timestamp() i64\n")
         sb.append("struct Timer { start_time: i64 }\n")
         sb.append("t.elapsed() i64  t.reset() void\n")
         sb.append("ns_per_ms=1000000  ns_per_s=1000000000  ms_per_s=1000\n")
-    } else if module == "random" {
+    } else if (module == "random") {
         sb.append("# std/random\n\n")
         sb.append("fillBytes(buf: i64, len: i64) i64\n")
         sb.append("randomInt() i64  randomRange(max: i64) i64\n")
-    } else if module == "sort" {
+    } else if (module == "sort") {
         sb.append("# std/sort\n\n")
         sb.append("insertionSort for List(T) with comparator function.\n")
-    } else if module == "set" {
+    } else if (module == "set") {
         sb.append("# std/set\n\n")
         sb.append("struct Set(T) -- hash set.\n")
         sb.append("var s: Set(i64) = .{}\n")
         sb.append("s.add(val)  s.contains(val) i64  s.remove(val) i64\n")
         sb.append("s.len() i64  s.clear()  s.free()\n")
-    } else if module == "math" {
+    } else if (module == "math") {
         sb.append("# std/math\n\n")
         sb.append("abs(x) i64  min(a, b) i64  max(a, b) i64  clamp(x, lo, hi) i64\n")
         sb.append("@sqrt(x)  @floor(x)  @ceil(x)  @fabs(x)  @min(a,b)  @max(a,b)\n")
