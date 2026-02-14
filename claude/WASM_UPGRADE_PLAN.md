@@ -219,7 +219,7 @@ Every feature traced to its reference implementation.
 
 ## Reference Documents
 
-- `docs/specs/WASM_3_0_REFERENCE.md` — Wasm 3.0 opcodes and adoption priorities
-- `docs/specs/wasm-3.0-full.txt` — Full Wasm 3.0 specification (25K lines)
-- `docs/ROADMAP_1_0.md` — Road to 1.0, version trajectory, feature waves
-- `docs/PIPELINE_ARCHITECTURE.md` — Full compiler pipeline reference map
+- `claude/specs/WASM_3_0_REFERENCE.md` — Wasm 3.0 opcodes and adoption priorities
+- `claude/specs/wasm-3.0-full.txt` — Full Wasm 3.0 specification (25K lines)
+- `claude/ROADMAP_1_0.md` — Road to 1.0, version trajectory, feature waves
+- `claude/PIPELINE_ARCHITECTURE.md` — Full compiler pipeline reference map

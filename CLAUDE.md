@@ -15,14 +15,14 @@ See `TROUBLESHOOTING.md` for full methodology.
 
 ### 2. Check Wasm 3.0 Before Adding Features
 
-**Read `docs/specs/WASM_3_0_REFERENCE.md`** before implementing anything touching Wasm codegen. Cot currently emits Wasm 1.0 but Wasm 3.0 (released Sep 2025) may offer better solutions:
+**Read `claude/specs/WASM_3_0_REFERENCE.md`** before implementing anything touching Wasm codegen. Cot currently emits Wasm 1.0 but Wasm 3.0 (released Sep 2025) may offer better solutions:
 - Recursive functions → `return_call` (0x12) instead of `call` + `return`
 - Closures/function pointers → `call_ref` (0x14) instead of `call_indirect`
 - Error propagation → `try_table`/`throw` instead of manual checks
 
 ### 3. br_table is Intentional
 
-Read `docs/BR_TABLE_ARCHITECTURE.md` if confused. br_table is copied from Go's dispatch loop pattern. Do NOT try to remove it.
+Read `claude/BR_TABLE_ARCHITECTURE.md` if confused. br_table is copied from Go's dispatch loop pattern. Do NOT try to remove it.
 
 ---
 
@@ -149,7 +149,7 @@ cot test test/cases/<category>.cot                # Targeted: specific category
 - `test/cases/` — Category unit tests (21 files, ~106 tests)
 - `test/e2e/` — Comprehensive feature tests (25 files, ~904 tests)
 - All tests use inline `test "name" { @assert_eq(...) }` format
-- See `docs/TESTING.md` for full details
+- See `claude/TESTING.md` for full details
 
 **Every new feature must:**
 1. Work on Wasm (`--target=wasm32`)
@@ -188,8 +188,8 @@ try list.append(allocator, 42);
 - After changing `compiler/lsp/`: run `zig build` to update the LSP binary
 - After changing `editors/vscode/`: rebuild + reinstall extension (see Editor Extensions & LSP section)
 - After changing either: do BOTH — `zig build` AND reinstall extension
-- Check `docs/specs/WASM_3_0_REFERENCE.md` when touching Wasm codegen
-- Check `docs/PIPELINE_ARCHITECTURE.md` for full pipeline reference map
+- Check `claude/specs/WASM_3_0_REFERENCE.md` when touching Wasm codegen
+- Check `claude/PIPELINE_ARCHITECTURE.md` for full pipeline reference map
 - Reference `bootstrap-0.2/` for working code examples
 - Make incremental changes, verify each one
 
@@ -236,13 +236,13 @@ cursor --uninstall-extension cot-lang.cot-lang 2>/dev/null; cursor --install-ext
 |----------|---------|
 | `VERSION` | **Version single source of truth** (edit to bump) |
 | `TROUBLESHOOTING.md` | **Debugging methodology — read before any debugging** |
-| `docs/PIPELINE_ARCHITECTURE.md` | **Full pipeline map, reference for every stage** |
-| `docs/BR_TABLE_ARCHITECTURE.md` | Why br_table appears in generated code |
-| `docs/specs/WASM_3_0_REFERENCE.md` | Wasm 3.0 opcodes and adoption plan |
-| `docs/ROADMAP_1_0.md` | Road to 1.0: versioning, feature waves, outstanding work items |
-| `docs/VERSION_TRAJECTORY.md` | Version plan benchmarked against Zig's history (self-hosting at 0.11) |
-| `docs/COT_SYNTAX.md` | Complete language syntax reference with examples |
+| `claude/PIPELINE_ARCHITECTURE.md` | **Full pipeline map, reference for every stage** |
+| `claude/BR_TABLE_ARCHITECTURE.md` | Why br_table appears in generated code |
+| `claude/specs/WASM_3_0_REFERENCE.md` | Wasm 3.0 opcodes and adoption plan |
+| `claude/ROADMAP_1_0.md` | Road to 1.0: versioning, feature waves, outstanding work items |
+| `claude/VERSION_TRAJECTORY.md` | Version plan benchmarked against Zig's history (self-hosting at 0.11) |
+| `docs/syntax.md` | Complete language syntax reference with examples |
 | `VISION.md` | Language vision, design principles, execution roadmap |
-| `docs/CONCURRENCY_DESIGN.md` | Concurrency roadmap: spawn, channels, work-stealing, atomic ARC |
-| `docs/BUSINESS_MODEL.md` | Licensing, trademark, revenue model, funding strategy |
-| `docs/archive/` | Historical: completed milestones, past bug fixes, postmortems |
+| `claude/CONCURRENCY_DESIGN.md` | Concurrency roadmap: spawn, channels, work-stealing, atomic ARC |
+| `claude/BUSINESS_MODEL.md` | Licensing, trademark, revenue model, funding strategy |
+| `claude/archive/` | Historical: completed milestones, past bug fixes, postmortems |

@@ -1,0 +1,40 @@
+// Generics — type-parameterized functions and structs.
+//
+// Run: cot run examples/generics.cot
+
+fn max(T)(a: T, b: T) T {
+    if (a > b) { return a }
+    return b
+}
+
+fn min(T)(a: T, b: T) T {
+    if (a < b) { return a }
+    return b
+}
+
+struct Pair(T) { first: T, second: T }
+
+impl Pair(T) {
+    fn sum(self: *Pair(T)) T {
+        return self.first + self.second
+    }
+}
+
+fn main() i64 {
+    println("max(10, 20):")
+    println(max(i64)(10, 20))
+
+    println("min(10, 20):")
+    println(min(i64)(10, 20))
+
+    var p = Pair(i64) { .first = 3, .second = 7 }
+    println("Sum of pair:")
+    println(p.sum())
+
+    println("Pair first:")
+    println(p.first)
+    println("Pair second:")
+    println(p.second)
+
+    return 0
+}

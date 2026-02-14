@@ -241,7 +241,7 @@ Both together prove the full-stack story — the same language, shared types, cl
 
 ## Execution Roadmap
 
-See [docs/ROADMAP_1_0.md](docs/ROADMAP_1_0.md) for the detailed roadmap.
+See [claude/ROADMAP_1_0.md](claude/ROADMAP_1_0.md) for the detailed roadmap.
 
 **Approach:** Zig-style versioning. Versions mark architectural milestones, not feature checklists. 1.0 will take multiple years, but Cot should be viable for projects well before 1.0.
 

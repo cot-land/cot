@@ -121,7 +121,7 @@ All tests passing across Wasm E2E, native E2E, and unit tests.
 | Native AOT (Cranelift-port: CLIF IR → regalloc2 → ARM64/x64) | Complete |
 | ARC runtime (retain/release, heap, destructors) | Complete |
 
-**Next:** Browser async, `std/crypto`, database driver, web framework. See [docs/ROADMAP_1_0.md](docs/ROADMAP_1_0.md).
+**Next:** Browser async, `std/crypto`, database driver, web framework. See [claude/ROADMAP_1_0.md](claude/ROADMAP_1_0.md).
 
 ## Design Decisions
 
@@ -143,12 +143,12 @@ All tests passing across Wasm E2E, native E2E, and unit tests.
 | [VISION.md](VISION.md) | Language vision, design principles |
 | [CLAUDE.md](CLAUDE.md) | AI session instructions |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Debugging methodology |
-| [docs/ROADMAP_1_0.md](docs/ROADMAP_1_0.md) | Road to 1.0 |
-| [docs/PIPELINE_ARCHITECTURE.md](docs/PIPELINE_ARCHITECTURE.md) | Full pipeline reference map |
-| [docs/BR_TABLE_ARCHITECTURE.md](docs/BR_TABLE_ARCHITECTURE.md) | br_table dispatch pattern |
-| [docs/COT_SYNTAX.md](docs/COT_SYNTAX.md) | Complete language syntax reference |
-| [docs/specs/WASM_3_0_REFERENCE.md](docs/specs/WASM_3_0_REFERENCE.md) | Wasm 3.0 features |
-| [docs/archive/](docs/archive/) | Historical milestones and postmortems |
+| [docs/syntax.md](docs/syntax.md) | Complete language syntax reference |
+| [claude/ROADMAP_1_0.md](claude/ROADMAP_1_0.md) | Road to 1.0 |
+| [claude/PIPELINE_ARCHITECTURE.md](claude/PIPELINE_ARCHITECTURE.md) | Full pipeline reference map |
+| [claude/BR_TABLE_ARCHITECTURE.md](claude/BR_TABLE_ARCHITECTURE.md) | br_table dispatch pattern |
+| [claude/specs/WASM_3_0_REFERENCE.md](claude/specs/WASM_3_0_REFERENCE.md) | Wasm 3.0 features |
+| [claude/archive/](claude/archive/) | Historical milestones and postmortems |
 
 ## Repository Structure
 
@@ -190,7 +190,10 @@ cot/
 ├── runtime/               # Native runtime (.o files)
 ├── test/cases/            # .cot test files
 ├── VERSION                # Semantic version (single source of truth)
-└── docs/                  # Architecture docs, specs, roadmap
+├── docs/                  # Developer documentation (→ cot.dev)
+│   └── syntax.md          # Language syntax reference
+├── claude/                # Internal: AI session docs, architecture, specs
+└── ...
 ```
 
 ## For AI Sessions

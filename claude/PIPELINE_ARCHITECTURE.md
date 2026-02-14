@@ -598,7 +598,7 @@ These patterns have confused Claude repeatedly. Read before debugging.
 
 ### Wasm Codegen
 
-6. **br_table dispatch loop is intentional.** Go wraps functions with calls in: `loop $entryPointLoop { block $b0 { ... br_table } }`. All block-to-block jumps route through a single dispatch loop. This is NOT a bug. Read `docs/BR_TABLE_ARCHITECTURE.md`.
+6. **br_table dispatch loop is intentional.** Go wraps functions with calls in: `loop $entryPointLoop { block $b0 { ... br_table } }`. All block-to-block jumps route through a single dispatch loop. This is NOT a bug. Read `claude/BR_TABLE_ARCHITECTURE.md`.
 
 7. **Local variable offsets sum actual sizes.** `getLocalOffset()` sums `local_sizes` array entries — it does NOT multiply slot index by 8. String locals are 16 bytes. Two strings at slots 0,1 have offsets 0 and 16, not 0 and 8.
 

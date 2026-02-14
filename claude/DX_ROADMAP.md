@@ -94,7 +94,7 @@ The old Cot-written MCP (`mcp/cot-mcp.cot`) remains as a stdlib dogfooding examp
 
 **Goal:** Replace the Cot-written MCP with a compiler-integrated Zig MCP (`cot mcp`). Give Claude deep compiler context for writing Cot code.
 
-**Spec:** `docs/specs/MCP_SERVER_SPEC.md` (already written, 308 lines)
+**Spec:** `claude/specs/MCP_SERVER_SPEC.md` (already written, 308 lines)
 
 | # | Task | Files | Status | Notes |
 |---|------|-------|--------|-------|

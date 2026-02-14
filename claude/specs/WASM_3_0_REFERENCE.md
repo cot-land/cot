@@ -1,8 +1,8 @@
 # WebAssembly 3.0 Reference for Cot Compiler
 
 **Released:** September 17, 2025 (live standard, evergreen updates)
-**Full spec:** `docs/specs/wasm-3.0-full.txt` (25,919 lines)
-**Binary format detail:** `docs/specs/wasm-3.0-binary-format.txt`
+**Full spec:** `claude/specs/wasm-3.0-full.txt` (25,919 lines)
+**Binary format detail:** `claude/specs/wasm-3.0-binary-format.txt`
 **Browser support:** All 10 features shipped in Chrome/Firefox/Safari as of 2025
 
 This document extracts the parts of Wasm 3.0 that matter for the Cot compiler. Read this instead of the full spec.

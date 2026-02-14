@@ -1,0 +1,48 @@
+// Structs and Methods — defining types with behavior.
+//
+// Run: cot run examples/structs.cot
+
+struct Point { x: i64, y: i64 }
+
+impl Point {
+    fn add(self: *Point, other: *Point) Point {
+        return Point { .x = self.x + other.x, .y = self.y + other.y }
+    }
+
+    fn distanceSq(self: *Point, other: *Point) i64 {
+        var dx = self.x - other.x
+        var dy = self.y - other.y
+        return dx * dx + dy * dy
+    }
+}
+
+struct Rectangle { width: i64, height: i64 }
+
+impl Rectangle {
+    fn area(self: *Rectangle) i64 {
+        return self.width * self.height
+    }
+
+    fn perimeter(self: *Rectangle) i64 {
+        return 2 * (self.width + self.height)
+    }
+}
+
+fn main() i64 {
+    var a = Point { .x = 3, .y = 4 }
+    var b = Point { .x = 1, .y = 2 }
+    var c = a.add(&b)
+    println("Point sum:")
+    println(c.x)
+    println(c.y)
+    println("Distance squared:")
+    println(a.distanceSq(&b))
+
+    var r = Rectangle { .width = 10, .height = 5 }
+    println("Area:")
+    println(r.area())
+    println("Perimeter:")
+    println(r.perimeter())
+
+    return 0
+}

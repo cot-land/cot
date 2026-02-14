@@ -1,0 +1,41 @@
+// Collections — List, Map, and Set usage.
+//
+// Run: cot run examples/collections.cot
+
+import "std/list"
+import "std/map"
+import "std/set"
+
+fn main() i64 {
+    // List — dynamic array
+    var numbers: List(i64) = .{}
+    numbers.append(10)
+    numbers.append(20)
+    numbers.append(30)
+    println("List length:")
+    println(numbers.len())
+    println("First element:")
+    println(numbers.get(0))
+    println("Last element:")
+    println(numbers.last())
+
+    // Map — hash map
+    var scores: Map(i64, i64) = .{}
+    scores.set(1, 100)
+    scores.set(2, 85)
+    scores.set(3, 92)
+    println("Player 1 score:")
+    println(scores.get(1))
+    println("Has player 4?")
+    println(scores.has(4))
+
+    // Set — unique values
+    var seen: Set(i64) = .{}
+    seen.add(42)
+    seen.add(17)
+    seen.add(42)
+    println("Set size (should be 2):")
+    println(seen.len())
+
+    return 0
+}

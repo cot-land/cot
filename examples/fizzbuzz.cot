@@ -1,0 +1,20 @@
+// FizzBuzz — classic programming exercise.
+//
+// Run: cot run examples/fizzbuzz.cot
+
+fn main() i64 {
+    var i = 1
+    while (i <= 100) {
+        if (i % 15 == 0) {
+            println("FizzBuzz")
+        } else if (i % 3 == 0) {
+            println("Fizz")
+        } else if (i % 5 == 0) {
+            println("Buzz")
+        } else {
+            println(i)
+        }
+        i = i + 1
+    }
+    return 0
+}

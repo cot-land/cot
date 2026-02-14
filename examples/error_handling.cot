@@ -1,0 +1,65 @@
+// Error Handling — error unions, try, and catch.
+//
+// Run: cot run examples/error_handling.cot
+
+const MathError = error { DivisionByZero, Overflow }
+
+fn safeDivide(a: i64, b: i64) MathError!i64 {
+    if (b == 0) {
+        return error.DivisionByZero
+    }
+    return a / b
+}
+
+fn factorial(n: i64) MathError!i64 {
+    if (n < 0) {
+        return error.Overflow
+    }
+    if (n <= 1) {
+        return 1
+    }
+    var result: i64 = 1
+    var i: i64 = 2
+    while (i <= n) {
+        result = result * i
+        i = i + 1
+    }
+    return result
+}
+
+fn compute() MathError!i64 {
+    // try — propagate error to caller
+    var result = try safeDivide(100, 4)
+    println("100 / 4 =")
+    println(result)
+
+    // Factorial with try
+    var f5 = try factorial(5)
+    println("5! =")
+    println(f5)
+
+    return result + f5
+}
+
+fn main() i64 {
+    // Call the error-returning function
+    var total = compute() catch 0
+    println("Total:")
+    println(total)
+
+    // catch — handle error with fallback
+    var safe = safeDivide(10, 0) catch 0
+    println("10 / 0 (with catch) =")
+    println(safe)
+
+    // catch with capture
+    var handled = safeDivide(10, 0) catch |err| { -1 }
+    println("Caught error, handled =")
+    println(handled)
+
+    var bad = factorial(-1) catch 0
+    println("(-1)! (with catch) =")
+    println(bad)
+
+    return 0
+}

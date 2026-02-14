@@ -152,7 +152,7 @@ This is the right architecture for 0.x. It simplifies the compiler (one backend)
 
 Both approaches stay within the existing Wasm-first architecture — no IR split was required.
 
-Everything else (including tail calls, exceptions, and typed function references) was resolved by Wasm 3.0 (released September 2025). See `docs/specs/WASM_3_0_REFERENCE.md` for details.
+Everything else (including tail calls, exceptions, and typed function references) was resolved by Wasm 3.0 (released September 2025). See `claude/specs/WASM_3_0_REFERENCE.md` for details.
 
 ### The IR Split (If Ever Needed)
 
@@ -499,11 +499,11 @@ The release where Cot becomes safe and observable enough for production services
 
 | Feature | Description | Reference |
 |---------|-------------|-----------|
-| Spawn + channels | Go-style concurrency: `spawn { }` blocks, `Channel(T)` with send/recv/close, `select` statement. Work-stealing scheduler. See `docs/CONCURRENCY_DESIGN.md`. | Go goroutines/channels |
+| Spawn + channels | Go-style concurrency: `spawn { }` blocks, `Channel(T)` with send/recv/close, `select` statement. Work-stealing scheduler. See `claude/CONCURRENCY_DESIGN.md`. | Go goroutines/channels |
 | Atomic ARC | Thread-safe reference counting for concurrent programs. | Swift atomic refcounting |
 | Permission system | Sandboxed execution: `--allow-read`, `--allow-net`, `--allow-env`. Deny overrides. Config-based permissions in `cot.json`. | Deno permissions |
 | OpenTelemetry | Built-in tracing: auto-instrument HTTP servers, fetch calls. Export to OTLP collector. | Deno 2.2 OTel |
-| `std/sync` | `Mutex`, `RwLock`, `Atomic(T)`, `WaitGroup`, `Once` — low-level concurrency primitives. See `docs/CONCURRENCY_DESIGN.md`. | Go `sync`, Zig `std.Thread` |
+| `std/sync` | `Mutex`, `RwLock`, `Atomic(T)`, `WaitGroup`, `Once` — low-level concurrency primitives. See `claude/CONCURRENCY_DESIGN.md`. | Go `sync`, Zig `std.Thread` |
 | SIMD vectors | `@Vector(N, T)` mapped to hardware SIMD. Element-wise arithmetic, `@shuffle`, `@reduce`. | Zig `@Vector` |
 | Sentinel-terminated types | `[:0]u8` for null-terminated strings, `[*:0]const u8` for C interop. Sentinel in the type. | Zig sentinel types |
 | Subprocess management | `Process.spawn("cmd", args)` — pipe stdin/stdout/stderr, wait, kill. | Deno `Deno.Command` |
@@ -602,7 +602,7 @@ These don't need answers now, but should be resolved before 1.0:
 
 1. ~~**Async model:**~~ **Answered** — async/await with dual backend.
 2. **Module system:** File-based (Go) or explicit exports (Rust/Zig)?
-3. ~~**Concurrency:**~~ **Answered** — spawn + channels. See `docs/CONCURRENCY_DESIGN.md`.
+3. ~~**Concurrency:**~~ **Answered** — spawn + channels. See `claude/CONCURRENCY_DESIGN.md`.
 4. **FFI beyond C:** Interop with JS npm packages? Rust crates?
 5. ~~**Standard library scope:**~~ **Answered** — Batteries-included (Deno model). 20+ stdlib modules by 0.5.
 6. **Governance:** BDFL, RFC process, or foundation?

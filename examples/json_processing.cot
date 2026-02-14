@@ -1,0 +1,41 @@
+// JSON Processing — parsing and building JSON.
+//
+// Run: cot run examples/json_processing.cot
+
+import "std/json"
+
+fn main() i64 {
+    // Parse a JSON string
+    var data = parse("{\"name\": \"Cot\", \"version\": 3, \"compiled\": true}")
+
+    println("Language:")
+    println(jsonObjectGetString(data, "name"))
+
+    println("Version:")
+    println(jsonObjectGetInt(data, "version"))
+
+    // Build JSON programmatically
+    var user = jsonObject()
+    jsonObjectPut(user, "id", jsonInt(42))
+    jsonObjectPut(user, "username", jsonString("alice"))
+    jsonObjectPut(user, "active", jsonBool(true))
+
+    // Build a tags array
+    var tags = jsonArray()
+    jsonArrayPush(tags, jsonString("admin"))
+    jsonArrayPush(tags, jsonString("developer"))
+    jsonObjectPut(user, "tags", tags)
+
+    // Serialize to string
+    println("Generated JSON:")
+    println(encode(user))
+
+    // Parse and access arrays
+    var arr = parse("[10, 20, 30]")
+    println("Array length:")
+    println(jsonArrayLen(arr))
+    println("Second element:")
+    println(jsonGetInt(jsonArrayGet(arr, 1)))
+
+    return 0
+}

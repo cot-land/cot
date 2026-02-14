@@ -1,0 +1,60 @@
+// String Processing — using std/string functions.
+//
+// Run: cot run examples/string_processing.cot
+
+import "std/string"
+
+fn main() i64 {
+    var s = "  Hello, World!  "
+
+    println("Original:")
+    println(s)
+
+    println("Trimmed:")
+    println(trim(s))
+
+    println("Uppercase:")
+    println(toUpper("hello"))
+
+    println("Lowercase:")
+    println(toLower("HELLO"))
+
+    // Search
+    var text = "the quick brown fox jumps over the lazy dog"
+    println("Contains 'fox':")
+    if (contains(text, "fox")) {
+        println("yes")
+    } else {
+        println("no")
+    }
+
+    println("Index of 'brown':")
+    println(indexOf(text, "brown"))
+
+    println("Starts with 'the':")
+    if (startsWith(text, "the")) {
+        println("yes")
+    } else {
+        println("no")
+    }
+
+    // Replace
+    println("Replace 'fox' with 'cat':")
+    println(replace(text, "fox", "cat"))
+
+    // StringBuilder
+    var sb = StringBuilder { .buf = 0, .len = 0, .cap = 0 }
+    sb.append("Count: ")
+    var i = 0
+    while (i < 5) {
+        if (i > 0) {
+            sb.append(", ")
+        }
+        sb.appendInt(i)
+        i = i + 1
+    }
+    println(sb.toString())
+    sb.free()
+
+    return 0
+}
