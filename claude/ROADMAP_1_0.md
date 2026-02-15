@@ -308,12 +308,12 @@ Language features that make Cot a more capable and ergonomic language, ported fr
 | 33 | Doc comments (`///`) | **DONE** — Parse `///` comments above declarations, store in AST. | Zig `///`, Rust `///` |
 | 34 | `cot doc` | **DONE** — Generate API documentation from doc comments. HTML output. | `deno doc`, `zig doc` |
 | 35 | `@embedFile("path")` | **DONE** — Compile-time file embedding — returns `string`. Path relative to source file. 10MB limit. | Zig `@embedFile` |
-| 36 | `@TypeOf(expr)` | Get the type of any expression at comptime. Needed for type-level programming. | Zig `@TypeOf` |
-| 37 | `@hasField(T, "name")` | Comptime query: does struct T have this field? Enables generic serialization. | Zig `@hasField` |
-| 38 | `@field(value, "name")` | Access struct field by comptime string. Key enabler for JSON derive, ORM, reflection. | Zig `@field` |
-| 39 | `inline for` | Comptime loop unrolling — iterate struct fields at compile time. Combined with `@typeInfo`, enables derive-like patterns. | Zig `inline for` |
-| 40 | Runtime safety (debug mode) | Integer overflow, array bounds, null unwrap, unreachable — panic in debug builds, unchecked in release. `cot build --release` disables checks. | Zig ReleaseSafe |
-| 41 | Error set merge (`\|\|`) | `const AllErrors = FileError \|\| NetworkError` — compose error sets from multiple sources. | Zig error set merge |
+| 36 | `@TypeOf(expr)` | **DONE** — Get the type of any expression at comptime. Needed for type-level programming. | Zig `@TypeOf` |
+| 37 | `@hasField(T, "name")` | **DONE** — Comptime query: does struct T have this field? Enables generic serialization. | Zig `@hasField` |
+| 38 | `@field(value, "name")` | **DONE** — Access struct field by comptime string. Key enabler for JSON derive, ORM, reflection. | Zig `@field` |
+| 39 | `inline for` | **DONE** — Comptime loop unrolling — iterate struct fields at compile time. Combined with `@typeInfo`, enables derive-like patterns. | Zig `inline for` |
+| 40 | Runtime safety (debug mode) | **DONE** — Integer overflow, array bounds, null unwrap, unreachable — panic in debug builds, unchecked in release. `cot build --release` disables checks. | Zig ReleaseSafe |
+| 41 | Error set merge (`\|\|`) | **DONE** — `const AllErrors = FileError \|\| NetworkError` — compose error sets from multiple sources. | Zig error set merge |
 
 #### Wave 6: Standard Library Expansion (ported from Deno)
 
@@ -323,7 +323,7 @@ Batteries-included standard library matching Deno's breadth. Every module is pur
 |---|---------|-------------|-----------|
 | 42 | `std/path` | **DONE** — `join`, `dirname`, `basename`, `extname`, `isAbsolute`, `relative`, `clean`. Ported from Go `path/filepath`. 38 tests. | Deno `@std/path`, Go `path/filepath` |
 | 43 | `std/crypto` | **DONE** — SHA-256 (FIPS 180-4) + HMAC-SHA256 (RFC 2104). Pure Cot, no C deps. 17 tests including NIST vectors. | Deno `@std/crypto`, Go `crypto/sha256` |
-| 44 | `std/regex` | Regular expression engine. NFA-based (Thompson's construction). `match`, `find`, `findAll`, `replace`, `split`. | Go `regexp`, Rust `regex` |
+| 44 | `std/regex` | **DONE** — Regular expression engine. NFA-based (Thompson's construction). `match`, `find`, `findAll`, `replace`, `split`. | Go `regexp`, Rust `regex` |
 | 45 | `std/fmt` | **DONE** — ANSI colors (red/green/yellow/blue/magenta/cyan/gray/white), text styles (bold/dim/italic/underline/strikethrough), stripAnsi, formatBytes, formatDuration, padLeft/padRight/center, zeroPad, hex. 36 tests. | Deno `@std/fmt`, Go `fmt` |
 | 46 | `std/log` | **DONE** — Structured logging with levels (debug/info/warn/logError). Configurable timestamps, level tags. Key-value pairs. 14 tests. | Deno `@std/log`, Go `log/slog` |
 | 47 | `std/dotenv` | **DONE** — Parse `.env` files into key-value pairs. `parseEnv(text)`, `get`/`has`/`entryCount`/`entryKey`/`entryValue`. 12 tests. | Deno `@std/dotenv` |
@@ -331,7 +331,7 @@ Batteries-included standard library matching Deno's breadth. Every module is pur
 | 49 | `std/uuid` | **DONE** — UUID v4 generation (random-based), `isValid`, `version`. Uses `@random` builtin. 10 tests. | Deno `@std/uuid` |
 | 50 | `std/semver` | **DONE** — Parse, compare (`cmp`/`gt`/`gte`/`lt`/`lte`/`eq`), `format`, `incMajor`/`incMinor`/`incPatch`. 28 tests. | Deno `@std/semver` |
 | 51 | `std/testing` | **DONE** — `assertContains`, `assertStartsWith`, `assertEndsWith`, `assertStrEq`, `assertGt`/`assertGte`/`assertLt`/`assertLte`, `assertInRange`, `assertTrue`/`assertFalse`, `assertEmpty`/`assertNotEmpty`/`assertLen`. 21 tests. | Deno `@std/testing`, Zig testing |
-| 52 | `std/process` | Subprocess spawning: `exec("ls", ["-la"])` → output string. Pipe stdin/stdout. Exit code. | Deno `Deno.Command`, Go `os/exec` |
+| 52 | `std/process` | **DONE** — Subprocess spawning: `exec("ls", ["-la"])` → output string. Pipe stdin/stdout. Exit code. | Deno `Deno.Command`, Go `os/exec` |
 
 #### Wave 5 (legacy): Production Capabilities
 
@@ -339,7 +339,7 @@ Batteries-included standard library matching Deno's breadth. Every module is pur
 |---|---------|--------|-----------|
 | 53 | `async fn` / `await` | **DONE** — Dual backend: Wasm state machine (Rust) + native eager eval (Zig). `try await` for error unions across await points. 18 tests. | Rust coroutine.rs, Zig async |
 | 54 | Native event loop | **DONE** — 9 builtins (kqueue/epoll/fcntl), `std/async` with platform-abstracted API, async I/O wrappers (asyncAccept/Read/Write/Connect). 14 tests. | Go netpoll, Zig Kqueue.zig |
-| 55 | Browser async | JS Promise interop for `async fn` on `--target=wasm32`. | wasm-bindgen futures |
+| 55 | Browser async | **DONE** — JS glue generation for `--target=wasm32`. Auto-detects `_poll` pairs, wraps in Promises. | wasm-bindgen futures |
 | 56 | IR split (`lower_clif.zig`) | **NOT NEEDED** — Async implemented within Wasm-first architecture. Deferred indefinitely. | — |
 
 #### Deferred Wasm Work (post-0.4)
@@ -403,10 +403,10 @@ Batteries-included standard library matching Deno's breadth. Every module is pur
 | `@sizeOf` / `@alignOf` / casts | Done | |
 | `@embedFile` | Done | Compile-time file embedding |
 | Destructuring | Done | `const a, b = getTuple()` |
-| `@TypeOf` / `@hasField` / `@field` | — | Wave 5 |
-| `inline for` | — | Wave 5 |
+| `@TypeOf` / `@hasField` / `@field` | Done | Reflection builtins for type-level programming |
+| `inline for` | Done | Comptime loop unrolling over struct fields |
 | Inferred error sets (`!T`) | Done | `fn read() ![]u8` |
-| Runtime safety (debug mode) | — | Wave 5 |
+| Runtime safety (debug mode) | Done | Overflow, bounds, null checks in debug; `--release` disables |
 | `noreturn` type | Done | Bottom type for @exit, @trap |
 | Doc comments (`///`) | Done | `///` parsed, stored in AST, used by `cot doc` |
 | Packed structs / bitfields | — | 0.5 |
@@ -442,9 +442,9 @@ A developer should be able to:
 - **Wave 2 (DX):** 6/6 done
 - **Wave 3 (maturity + project system + DX):** 8/9 done (multi-value cleanup deferred)
 - **Wave 4 (ecosystem polish):** 7/7 done
-- **Wave 5 (language maturity — Zig ports):** 6/12 (doc comments, cot doc, noreturn, !T, destructuring, @embedFile done)
-- **Wave 6 (stdlib expansion — Deno ports):** 9/11 (path, uuid, semver, dotenv, crypto, fmt, log, cli, testing done)
-- **Wave 5-legacy (production):** 2/4 (async/await, event loop done; browser async, IR split remaining)
+- **Wave 5 (language maturity — Zig ports):** 12/12 done
+- **Wave 6 (stdlib expansion — Deno ports):** 11/11 done
+- **Wave 5-legacy (production):** 3/4 (async/await, event loop, browser async done; IR split not needed)
 
 ---
 

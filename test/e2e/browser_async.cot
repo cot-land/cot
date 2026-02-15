@@ -1,0 +1,29 @@
+// Browser async test file.
+// Used to verify JS glue generation for --target=wasm32.
+// These async functions produce _poll exports that the JS glue detects.
+
+async fn compute(x: i64) i64 {
+    return x * 2 + 1
+}
+
+async fn add(a: i64, b: i64) i64 {
+    return a + b
+}
+
+fn multiply(a: i64, b: i64) i64 {
+    return a * b
+}
+
+test "await compute" {
+    const result = await compute(5)
+    @assert_eq(result, 11)
+}
+
+test "await add" {
+    const result = await add(3, 7)
+    @assert_eq(result, 10)
+}
+
+test "sync multiply" {
+    @assert_eq(multiply(4, 5), 20)
+}

@@ -58,6 +58,7 @@ pub const wasm_gen = @import("codegen/wasm_gen.zig");
 pub const test_runtime = @import("codegen/test_runtime.zig");
 pub const bench_runtime = @import("codegen/bench_runtime.zig");
 pub const file_watcher = @import("file_watcher.zig");
+pub const js_glue = @import("codegen/js_glue.zig");
 
 const Target = core_target.Target;
 const Driver = driver.Driver;
@@ -1201,6 +1202,34 @@ fn compileAndLinkFull(
             std.process.exit(1);
         };
         if (!quiet) std.debug.print("Success: {s} ({d} bytes)\n", .{ wasm_path, code.len });
+
+        // Generate JS glue for browser Wasm targets (not WASI)
+        if (!compile_target.isWasi()) {
+            const js_path = blk: {
+                if (std.mem.endsWith(u8, wasm_path, ".wasm")) {
+                    break :blk std.fmt.allocPrint(allocator, "{s}.js", .{wasm_path[0 .. wasm_path.len - 5]}) catch {
+                        std.debug.print("Error: Allocation failed\n", .{});
+                        std.process.exit(1);
+                    };
+                } else {
+                    break :blk std.fmt.allocPrint(allocator, "{s}.js", .{wasm_path}) catch {
+                        std.debug.print("Error: Allocation failed\n", .{});
+                        std.process.exit(1);
+                    };
+                }
+            };
+            const wasm_basename = std.fs.path.basename(wasm_path);
+            const glue = js_glue.generate(allocator, wasm_basename) catch {
+                std.debug.print("Error: Failed to generate JS glue\n", .{});
+                std.process.exit(1);
+            };
+            std.fs.cwd().writeFile(.{ .sub_path = js_path, .data = glue }) catch |e| {
+                std.debug.print("Failed to write JS glue: {any}\n", .{e});
+                std.process.exit(1);
+            };
+            if (!quiet) std.debug.print("Generated: {s}\n", .{js_path});
+        }
+
         return;
     }
 

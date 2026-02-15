@@ -216,9 +216,12 @@ These run in parallel with Phases 1-3. Some are already in progress from the oth
 | 33 | Doc comments (`///`) | **DONE** | Parse `///`, store in AST (11e676f) |
 | 34 | `cot doc` | **DONE** | Generate HTML API docs from `///` comments (11e676f) |
 | 35 | `@embedFile("path")` | **DONE** | Compile-time file embedding, path relative to source file |
-| 36-39 | Reflection builtins | Low | `@TypeOf`, `@hasField`, `@field`, `inline for` |
-| 40 | Runtime safety | Medium | Overflow/bounds checks in debug |
-| 41 | Error set merge | Low | `const All = A || B` |
+| 36 | `@TypeOf(expr)` | **DONE** | Comptime type of any expression |
+| 37 | `@hasField(T, "name")` | **DONE** | Comptime struct field query |
+| 38 | `@field(value, "name")` | **DONE** | Comptime struct field access |
+| 39 | `inline for` | **DONE** | Comptime loop unrolling over struct fields |
+| 40 | Runtime safety | **DONE** | Overflow, bounds, null checks in debug; `--release` disables |
+| 41 | Error set merge | **DONE** | `const All = A || B` |
 
 **Wave 6 (stdlib expansion — Deno ports):**
 
@@ -226,7 +229,7 @@ These run in parallel with Phases 1-3. Some are already in progress from the oth
 |---|---------|----------|-------|
 | 42 | `std/path` | **DONE** | basename, dirname, extname, isAbsolute, join, clean, relative. 38 tests (d363cc5) |
 | 43 | `std/crypto` | **DONE** | SHA-256 (FIPS 180-4), HMAC-SHA256 (RFC 2104). 17 tests |
-| 44 | `std/regex` | Medium | NFA-based, match/find/replace |
+| 44 | `std/regex` | **DONE** | NFA-based Thompson engine, match/find/findAll/replace/split |
 | 45 | `std/fmt` | **DONE** | ANSI colors, text styles, stripAnsi, formatBytes, formatDuration, padding, hex. 36 tests |
 | 46 | `std/log` | **DONE** | Structured logging with levels, timestamps, key-value. 14 tests |
 | 47 | `std/dotenv` | **DONE** | parseEnv, get/has/entryCount/entryKey/entryValue. 12 tests (d363cc5) |
@@ -234,7 +237,7 @@ These run in parallel with Phases 1-3. Some are already in progress from the oth
 | 49 | `std/uuid` | **DONE** | UUID v4 generation, isValid, version. 10 tests (d363cc5) |
 | 50 | `std/semver` | **DONE** | parse, cmp, gt/gte/lt/lte/eq, format, incMajor/Minor/Patch. 28 tests (d363cc5) |
 | 51 | `std/testing` | **DONE** | assertContains, assertStartsWith/EndsWith, assertGt/Lt/InRange, assertTrue/False, assertEmpty/Len. 21 tests |
-| 52 | `std/process` | High | Subprocess spawning |
+| 52 | `std/process` | **DONE** | fork/exec/waitpid/pipe/dup2, high-level run/output API |
 
 ### 0.4 Release Criteria
 
