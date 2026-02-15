@@ -585,6 +585,11 @@ pub const Checker = struct {
             }
             try self.scope.define(Symbol.init(v.name, if (v.is_const) .constant else .variable, var_type, idx, !v.is_const));
         }
+        // Register error set consts as named types for use in type positions
+        // Enables: const AllErrors = FileError || NetError
+        if (v.is_const and var_type != invalid_type and self.types.get(var_type) == .error_set) {
+            try self.types.registerNamed(v.name, var_type);
+        }
     }
 
     fn isUndefinedLit(self: *Checker, idx: NodeIndex) bool {
@@ -650,6 +655,31 @@ pub const Checker = struct {
                     const type_idx = self.resolveTypeExpr(bc.type_arg) catch return null;
                     if (type_idx == invalid_type) return null;
                     return @as(i64, @intCast(self.types.sizeOf(type_idx)));
+                }
+                if (bc.kind == .has_field) {
+                    const type_idx = self.resolveTypeExpr(bc.type_arg) catch return null;
+                    if (type_idx == invalid_type) return null;
+                    const name_str = self.evalConstString(bc.args[0]) orelse return null;
+                    const info = self.types.get(type_idx);
+                    if (info == .struct_type) {
+                        for (info.struct_type.fields) |sf| {
+                            if (std.mem.eql(u8, sf.name, name_str)) return 1;
+                        }
+                        return 0;
+                    }
+                    if (info == .enum_type) {
+                        for (info.enum_type.variants) |v| {
+                            if (std.mem.eql(u8, v.name, name_str)) return 1;
+                        }
+                        return 0;
+                    }
+                    if (info == .union_type) {
+                        for (info.union_type.variants) |v| {
+                            if (std.mem.eql(u8, v.name, name_str)) return 1;
+                        }
+                        return 0;
+                    }
+                    return 0;
                 }
                 return null;
             },
@@ -788,8 +818,9 @@ pub const Checker = struct {
     fn checkIdentifier(self: *Checker, id: ast.Ident) TypeIndex {
         if (self.types.lookupByName(id.name)) |type_idx| {
             const t = self.types.get(type_idx);
-            // Allow enum and union types to be used as expressions (for variant access)
-            if (t == .enum_type or t == .union_type) return type_idx;
+            // Allow enum, union, and error_set types to be used as expressions
+            // (enum/union for variant access, error_set for merge with ||)
+            if (t == .enum_type or t == .union_type or t == .error_set) return type_idx;
             self.err.errorWithCode(id.span.start, .e301, "type name cannot be used as expression");
             return invalid_type;
         }
@@ -855,9 +886,42 @@ pub const Checker = struct {
                 if (!types.isInteger(left) or !types.isInteger(right)) { self.err.errorWithCode(bin.span.start, .e300, "invalid operation"); return invalid_type; }
                 return self.materializeType(left_type);
             },
+            .land => {
+                if (!types.isBool(left) or !types.isBool(right)) { self.err.errorWithCode(bin.span.start, .e300, "invalid operation"); return invalid_type; }
+                return TypeRegistry.BOOL;
+            },
+            .lor => {
+                // Error set merge: FileError || NetError — Zig Sema.zig:8299
+                if (left == .error_set and right == .error_set) {
+                    return try self.mergeErrorSets(left.error_set, right.error_set);
+                }
+                // Bool logical OR
+                if (types.isBool(left) and types.isBool(right)) return TypeRegistry.BOOL;
+                self.err.errorWithCode(bin.span.start, .e300, "invalid operation");
+                return invalid_type;
+            },
             .coalesce => return if (left == .optional) left.optional.elem else left_type,
             else => return invalid_type,
         }
+    }
+
+    /// Merge two error sets into a new error set with deduplicated variants.
+    /// Zig Sema.zig:8299 — union variant names, anyerror absorbs.
+    fn mergeErrorSets(self: *Checker, a: types.ErrorSetType, b: types.ErrorSetType) !TypeIndex {
+        var merged = std.ArrayListUnmanaged([]const u8){};
+        defer merged.deinit(self.allocator);
+        // Add all from a
+        for (a.variants) |v| try merged.append(self.allocator, v);
+        // Add from b, dedup
+        for (b.variants) |v| {
+            var found = false;
+            for (a.variants) |av| {
+                if (std.mem.eql(u8, av, v)) { found = true; break; }
+            }
+            if (!found) try merged.append(self.allocator, v);
+        }
+        const name = try std.fmt.allocPrint(self.allocator, "{s}||{s}", .{ a.name, b.name });
+        return self.types.add(.{ .error_set = .{ .name = name, .variants = try self.allocator.dupe([]const u8, merged.items) } });
     }
 
     fn checkUnary(self: *Checker, un: ast.Unary) CheckError!TypeIndex {
@@ -1130,6 +1194,46 @@ pub const Checker = struct {
                     return invalid_type;
                 }
                 return TypeRegistry.F64;
+            },
+            .has_field => {
+                // @hasField(T, "name") — comptime bool, Zig Sema.zig:13785
+                const type_idx = try self.resolveTypeExpr(bc.type_arg);
+                if (type_idx == invalid_type) {
+                    self.err.errorWithCode(bc.span.start, .e300, "@hasField requires valid type");
+                    return invalid_type;
+                }
+                // Validate second arg is a string literal
+                const name_str = self.evalConstString(bc.args[0]) orelse {
+                    self.err.errorWithCode(bc.span.start, .e300, "@hasField requires string literal field name");
+                    return invalid_type;
+                };
+                _ = name_str;
+                return TypeRegistry.BOOL;
+            },
+            .type_of => {
+                // @TypeOf(expr) — resolve operand type, return it
+                // In expression position, just check the arg and return its type
+                return try self.checkExpr(bc.args[0]);
+            },
+            .field => {
+                // @field(value, "name") — comptime field access, Zig Sema.zig:26769
+                var base_type = try self.checkExpr(bc.args[0]);
+                // Auto-deref pointers (Zig pattern)
+                while (self.types.get(base_type) == .pointer) base_type = self.types.get(base_type).pointer.elem;
+                const name_str = self.evalConstString(bc.args[1]) orelse {
+                    self.err.errorWithCode(bc.span.start, .e300, "@field requires string literal field name");
+                    return invalid_type;
+                };
+                const info = self.types.get(base_type);
+                if (info == .struct_type) {
+                    for (info.struct_type.fields) |sf| {
+                        if (std.mem.eql(u8, sf.name, name_str)) return sf.type_idx;
+                    }
+                    self.err.errorWithCode(bc.span.start, .e300, "struct has no field with this name");
+                    return invalid_type;
+                }
+                self.err.errorWithCode(bc.span.start, .e300, "@field requires struct type");
+                return invalid_type;
             },
         }
     }
@@ -1791,6 +1895,10 @@ pub const Checker = struct {
     }
 
     fn checkForStmt(self: *Checker, fs: ast.ForStmt) CheckError!void {
+        // Inline for: unroll at compile time — Zig AstGen.zig:6863
+        if (fs.is_inline) {
+            return self.checkInlineFor(fs);
+        }
         var elem_type: TypeIndex = invalid_type;
         var idx_type: TypeIndex = TypeRegistry.I64;
         if (fs.isRange()) {
@@ -1850,6 +1958,34 @@ pub const Checker = struct {
         self.in_loop = old_in_loop;
     }
 
+    /// Check inline for — unroll at compile time with comptime-known range bounds.
+    /// Zig AstGen.zig:6863: block_inline tag, Sema materializes each iteration.
+    fn checkInlineFor(self: *Checker, fs: ast.ForStmt) CheckError!void {
+        if (!fs.isRange()) {
+            self.err.errorWithCode(fs.span.start, .e300, "inline for requires comptime range (start..end)");
+            return;
+        }
+        const start_val = self.evalConstExpr(fs.range_start) orelse {
+            self.err.errorWithCode(fs.span.start, .e300, "inline for range start must be comptime-known");
+            return;
+        };
+        const end_val = self.evalConstExpr(fs.range_end) orelse {
+            self.err.errorWithCode(fs.span.start, .e300, "inline for range end must be comptime-known");
+            return;
+        };
+        // Unroll: check body once per iteration with const binding
+        var i = start_val;
+        while (i < end_val) : (i += 1) {
+            var iter_scope = Scope.init(self.allocator, self.scope);
+            defer iter_scope.deinit();
+            try iter_scope.define(Symbol.initConst(fs.binding, TypeRegistry.I64, null_node, i));
+            const old_scope = self.scope;
+            self.scope = &iter_scope;
+            try self.checkStmt(fs.body);
+            self.scope = old_scope;
+        }
+    }
+
     fn checkBlockStmt(self: *Checker, bs: ast.BlockStmt) CheckError!void {
         var block_scope = Scope.init(self.allocator, self.scope);
         defer block_scope.deinit();
@@ -1872,6 +2008,10 @@ pub const Checker = struct {
             if (self.scope.lookup(expr.ident.name)) |sym| if (sym.kind == .type_name) return sym.type_idx;
             self.errWithSuggestion(expr.ident.span.start, "undefined type", self.findSimilarType(expr.ident.name));
             return invalid_type;
+        }
+        // @TypeOf(expr) in type position — Zig Sema.zig:18007
+        if (expr == .builtin_call and expr.builtin_call.kind == .type_of) {
+            return try self.checkExpr(expr.builtin_call.args[0]);
         }
         if (expr != .type_expr) return invalid_type;
         return self.resolveType(expr.type_expr);

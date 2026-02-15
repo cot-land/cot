@@ -356,6 +356,8 @@ pub const Parser = struct {
         if (is_const and self.check(.assign)) {
             const saved_tok = self.tok;
             const saved_peek = self.peek_tok;
+            const saved_scan_pos = self.scan.pos;
+            const saved_scan_ch = self.scan.ch;
             self.advance(); // consume '='
             if (self.check(.kw_error) and self.peekToken().tok == .lbrace) {
                 self.advance(); // consume 'error'
@@ -371,9 +373,11 @@ pub const Parser = struct {
                 if (!self.expect(.rbrace)) return null;
                 return try self.tree.addDecl(.{ .error_set_decl = .{ .name = name, .variants = try self.allocator.dupe([]const u8, variants.items), .doc_comment = doc_comment, .span = Span.init(start, self.pos()) } });
             }
-            // Not an error set, restore state and continue as normal var decl
+            // Not an error set, restore full parser+scanner state
             self.tok = saved_tok;
             self.peek_tok = saved_peek;
+            self.scan.pos = saved_scan_pos;
+            self.scan.ch = saved_scan_ch;
         }
 
         var type_expr: NodeIndex = null_node;
@@ -649,6 +653,11 @@ pub const Parser = struct {
                 const elem = try self.parseType() orelse return null;
                 return try self.tree.addExpr(.{ .type_expr = .{ .kind = .{ .array = .{ .size = size, .elem = elem } }, .span = Span.init(start, self.pos()) } });
             }
+        }
+
+        // @TypeOf(expr) in type position — Zig Sema.zig:18007
+        if (self.check(.at)) {
+            return try self.parseBuiltinCall(start);
         }
 
         if (self.check(.ident) or self.tok.tok.isTypeKeyword()) {
@@ -1249,7 +1258,7 @@ pub const Parser = struct {
                 return try self.tree.addExpr(.{ .builtin_call = .{ .kind = kind, .type_arg = t, .args = .{ null_node, null_node, null_node }, .span = Span.init(start, self.pos()) } });
             },
             // 1 type + 1 value arg
-            .int_cast, .ptr_cast, .int_to_ptr => {
+            .int_cast, .ptr_cast, .int_to_ptr, .has_field => {
                 const t = try self.parseType() orelse return null;
                 if (!self.expect(.comma)) return null;
                 const v = try self.parseExpr() orelse return null;
@@ -1265,6 +1274,7 @@ pub const Parser = struct {
             .set_nonblocking,
             .waitpid,
             .embed_file,
+            .type_of,
             => {
                 const arg = try self.parseExpr() orelse return null;
                 if (!self.expect(.rparen)) return null;
@@ -1274,6 +1284,7 @@ pub const Parser = struct {
             .string, .assert_eq, .realloc, .random, .fmin, .fmax, .net_listen,
             .epoll_del,
             .dup2,
+            .field,
             => {
                 const a1 = try self.parseExpr() orelse return null;
                 if (!self.expect(.comma)) return null;
@@ -1449,7 +1460,13 @@ pub const Parser = struct {
             .kw_const => return self.parseVarStmt(true),
             .kw_if => return self.parseIfStmt(),
             .kw_while => return self.parseWhileStmt(null),
-            .kw_for => return self.parseForStmt(null),
+            .kw_for => return self.parseForStmt(null, false),
+            .kw_inline => {
+                self.advance();
+                if (self.check(.kw_for)) return self.parseForStmt(null, true);
+                self.syntaxError("expected 'for' after 'inline'");
+                return null;
+            },
             .kw_break => {
                 self.advance();
                 var label: ?[]const u8 = null;
@@ -1496,7 +1513,7 @@ pub const Parser = struct {
                     self.advance();
                     self.advance();
                     if (self.check(.kw_while)) return self.parseWhileStmt(label);
-                    if (self.check(.kw_for)) return self.parseForStmt(label);
+                    if (self.check(.kw_for)) return self.parseForStmt(label, false);
                     self.err.errorWithCode(self.pos(), .e201, "expected 'while' or 'for' after label");
                     return null;
                 }
@@ -1597,7 +1614,7 @@ pub const Parser = struct {
         return try self.tree.addStmt(.{ .while_stmt = .{ .condition = cond, .body = body, .label = label, .span = Span.init(start, self.pos()) } });
     }
 
-    fn parseForStmt(self: *Parser, label: ?[]const u8) ParseError!?NodeIndex {
+    fn parseForStmt(self: *Parser, label: ?[]const u8, is_inline: bool) ParseError!?NodeIndex {
         const start = self.pos();
         self.advance();
         if (!self.check(.ident)) {
@@ -1655,6 +1672,7 @@ pub const Parser = struct {
             .range_end = range_end,
             .body = body,
             .label = label,
+            .is_inline = is_inline,
             .span = Span.init(start, self.pos()),
         } });
     }

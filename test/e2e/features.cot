@@ -2213,3 +2213,101 @@ test "embed file content" {
     const data = @embedFile("embed_data.txt")
     @assert_eq(@lenOf(data), 22)
 }
+
+// -- @hasField --
+
+struct HFPoint { x: i64, y: i64 }
+
+test "hasField true" {
+    @assert(@hasField(HFPoint, "x"))
+    @assert(@hasField(HFPoint, "y"))
+}
+
+test "hasField false" {
+    @assert(!@hasField(HFPoint, "z"))
+    @assert(!@hasField(HFPoint, "w"))
+}
+
+test "hasField comptime branch" {
+    if (@hasField(HFPoint, "x")) {
+        @assert(true)
+    } else {
+        @compileError("unreachable")
+    }
+}
+
+// -- @TypeOf --
+
+test "typeof var decl" {
+    const x: i64 = 42
+    var y: @TypeOf(x) = 10
+    @assert_eq(y, 10)
+}
+
+test "typeof in expression" {
+    var a: i64 = 5
+    var b: i64 = @TypeOf(a)  // should be i64 type, 0 at runtime (returns the type, not value)
+    @assert_eq(a, 5)
+}
+
+// -- @field --
+
+struct FPoint { x: i64, y: i64 }
+
+test "field access" {
+    var p = FPoint { .x = 10, .y = 20 }
+    @assert_eq(@field(p, "x"), 10)
+    @assert_eq(@field(p, "y"), 20)
+}
+
+test "field with hasField" {
+    if (@hasField(FPoint, "x")) {
+        var p = FPoint { .x = 42, .y = 0 }
+        @assert_eq(@field(p, "x"), 42)
+    }
+}
+
+// -- Error set merge --
+
+const MergeFileError = error { NotFound, PermDenied }
+const MergeNetError = error { Timeout, Refused }
+const AllErrors = MergeFileError || MergeNetError
+
+fn doFileErr() MergeFileError!i64 { return error.NotFound }
+
+fn doAllErr() AllErrors!i64 {
+    var x = try doFileErr()
+    return x
+}
+
+test "error set merge" {
+    var r = doAllErr() catch 99
+    @assert_eq(r, 99)
+}
+
+// -- inline for --
+
+test "inline for range" {
+    var sum: i64 = 0
+    inline for i in 0..5 { sum = sum + i }
+    @assert_eq(sum, 10)
+}
+
+test "inline for comptime" {
+    var product: i64 = 1
+    inline for i in 1..6 { product = product * i }
+    @assert_eq(product, 120)
+}
+
+// -- Runtime safety (bounds check) --
+
+test "bounds check valid" {
+    var arr = [10, 20, 30]
+    @assert_eq(arr[0], 10)
+    @assert_eq(arr[2], 30)
+}
+
+test "null unwrap valid" {
+    var x: ?i64 = 42
+    @assert_eq(x.?, 42)
+}

@@ -588,6 +588,7 @@ pub const Formatter = struct {
                     self.write(label) catch {};
                     self.write(": ") catch {};
                 }
+                if (s.is_inline) self.write("inline ") catch {};
                 self.write("for ") catch {};
                 if (s.index_binding) |idx| {
                     self.write(idx) catch {};

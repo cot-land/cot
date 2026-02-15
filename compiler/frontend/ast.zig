@@ -234,6 +234,10 @@ pub const BuiltinKind = enum {
     dup2,
     // Compile-time file embedding
     embed_file,
+    // Reflection builtins
+    has_field,
+    type_of,
+    field,
 
     const map = std.StaticStringMap(BuiltinKind).initComptime(.{
         .{ "sizeOf", .size_of },
@@ -299,6 +303,9 @@ pub const BuiltinKind = enum {
         .{ "pipe", .pipe },
         .{ "dup2", .dup2 },
         .{ "embedFile", .embed_file },
+        .{ "hasField", .has_field },
+        .{ "TypeOf", .type_of },
+        .{ "field", .field },
     });
 
     pub fn fromString(s: []const u8) ?BuiltinKind {
@@ -370,6 +377,9 @@ pub const BuiltinKind = enum {
             .pipe => "pipe",
             .dup2 => "dup2",
             .embed_file => "embedFile",
+            .has_field => "hasField",
+            .type_of => "TypeOf",
+            .field => "field",
         };
     }
 };
@@ -445,6 +455,7 @@ pub const ForStmt = struct {
     range_end: NodeIndex = null_node, // For `for i in start..end`
     body: NodeIndex,
     label: ?[]const u8 = null, // Optional label for labeled break/continue (Zig: `outer: for ...`)
+    is_inline: bool = false, // inline for — unrolled at compile time
     span: Span,
 
     /// Check if this is a numeric range loop (for i in 0..10)

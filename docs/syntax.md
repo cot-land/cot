@@ -180,6 +180,23 @@ var y = mayFail(-1) catch 99
 var z = mayFail(-1) catch |err| { 0 }
 ```
 
+### Error Set Merge
+
+Combine error sets with `||` (Zig pattern):
+
+```cot
+const FileError = error { NotFound, PermDenied }
+const NetError = error { Timeout, Refused }
+const AllErrors = FileError || NetError    // merged: NotFound, PermDenied, Timeout, Refused
+
+fn doAll() AllErrors!i64 {
+    var x = try doFile()
+    return x
+}
+```
+
+Duplicate variants are automatically deduplicated.
+
 ## Type Aliases
 
 ```cot
@@ -236,6 +253,9 @@ for i, item in collection { ... }    // indexed
 
 // For-in (range)
 for i in 0..10 { ... }
+
+// Inline for — unrolled at compile time (Zig pattern)
+inline for i in 0..5 { sum = sum + i }
 
 // Break / Continue
 break
@@ -322,6 +342,7 @@ var msg = "Value is ${x}, next is ${y + 1}"
 ### Logical
 `and` `or` `not` (keywords)
 `&&` `||` `!` (symbol alternatives)
+`||` on two error sets performs **error set merge** instead of logical OR
 
 ### Bitwise
 `&` `|` `^` `<<` `>>` `~` (unary NOT)
@@ -473,6 +494,37 @@ var addr = @ptrToInt(ptr)
 | `@time()` | Wall clock time in nanoseconds |
 | `@random(buf, len)` | Fill buffer with random bytes |
 | `@trap()` | Unconditional trap / unreachable |
+
+### Reflection
+
+| Builtin | Purpose |
+|---------|---------|
+| `@hasField(T, "name")` | Comptime bool: true if struct/enum/union T has field/variant "name" |
+| `@TypeOf(expr)` | Returns the type of expr (usable in type position or expression) |
+| `@field(value, "name")` | Access struct field by string name at compile time |
+
+```cot
+struct Point { x: i64, y: i64 }
+
+// @hasField — comptime reflection
+@assert(@hasField(Point, "x"))        // true
+@assert(!@hasField(Point, "z"))       // false
+
+// @hasField enables dead branch elimination with @compileError
+if (@hasField(Point, "x")) {
+    @assert(true)
+} else {
+    @compileError("unreachable")
+}
+
+// @TypeOf — type-position builtin
+const x: i64 = 42
+var y: @TypeOf(x) = 10               // y is i64
+
+// @field — comptime field access by name
+var p = Point { .x = 10, .y = 20 }
+@assert_eq(@field(p, "x"), 10)
+```
 
 ### Comptime
 
@@ -696,6 +748,37 @@ const template = @embedFile("templates/page.html")
 ```
 
 The path is resolved **relative to the source file**, not the working directory. Maximum file size is 10MB.
+
+## Inline For
+
+`inline for` unrolls a loop at compile time. The loop variable becomes a comptime-known constant on each iteration. Requires comptime-known range bounds.
+
+```cot
+// Sum 0..5 unrolled at compile time
+var sum: i64 = 0
+inline for i in 0..5 { sum = sum + i }
+@assert_eq(sum, 10)
+
+// Factorial via inline for
+var product: i64 = 1
+inline for i in 1..6 { product = product * i }
+@assert_eq(product, 120)
+```
+
+## Runtime Safety
+
+In debug mode (default), Cot inserts runtime safety checks. Use `--release` to disable them for performance.
+
+**Checks enabled in debug mode:**
+- **Array bounds checking** — traps on out-of-bounds array access
+- **Slice/string bounds checking** — traps on out-of-bounds slice or string indexing
+- **Optional null unwrap** — `x.?` traps if x is null
+
+```bash
+cot build file.cot              # debug mode (safety checks ON)
+cot build file.cot --release    # release mode (safety checks OFF)
+cot run file.cot --release      # also works with run and test
+```
 
 ## No Semicolons
 

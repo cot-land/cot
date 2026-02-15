@@ -66,6 +66,7 @@ pub const Driver = struct {
     bench_mode: bool = false,
     bench_filter: ?[]const u8 = null,
     bench_n: ?i64 = null,
+    release_mode: bool = false,
 
     pub fn init(allocator: Allocator) Driver {
         return .{ .allocator = allocator };
@@ -244,6 +245,7 @@ pub const Driver = struct {
         // Lower to IR
         var lowerer = lower_mod.Lowerer.init(self.allocator, &tree, &type_reg, &err_reporter, &chk, self.target);
         defer lowerer.deinit();
+        lowerer.release_mode = self.release_mode;
         if (self.test_mode) lowerer.setTestMode(true);
         try lowerer.lowerToBuilder();
         if (err_reporter.hasErrors()) return error.LowerError;
@@ -337,6 +339,7 @@ pub const Driver = struct {
         for (parsed_files.items, 0..) |*pf, i| {
             var lower_err = errors_mod.ErrorReporter.init(&pf.source, null);
             var lowerer = lower_mod.Lowerer.initWithBuilder(self.allocator, &pf.tree, &type_reg, &lower_err, &checkers.items[i], shared_builder, self.target);
+            lowerer.release_mode = self.release_mode;
             if (self.test_mode) lowerer.setTestMode(true);
             if (self.bench_mode) lowerer.setBenchMode(true);
 

@@ -62,6 +62,9 @@ pub const Lowerer = struct {
     /// Reference: Zig compiler uses a global error value table for @intFromError/@errorName.
     global_error_table: std.StringHashMap(i64) = undefined,
     next_error_idx: i64 = 0,
+    /// Release mode: when false (default/debug), emit runtime safety checks.
+    /// When true (--release), skip safety checks for performance.
+    release_mode: bool = false,
 
     pub const Error = error{OutOfMemory};
 
@@ -2214,6 +2217,12 @@ pub const Lowerer = struct {
     fn lowerFor(self: *Lowerer, for_stmt: ast.ForStmt) !void {
         const fb = self.current_func orelse return;
 
+        // Inline for: unroll at compile time — Zig AstGen.zig:6863
+        if (for_stmt.is_inline) {
+            try self.lowerInlineFor(for_stmt);
+            return;
+        }
+
         // Handle numeric range: for i in start..end { }
         if (for_stmt.isRange()) {
             try self.lowerForRange(for_stmt);
@@ -2361,6 +2370,22 @@ pub const Lowerer = struct {
 
     /// Lower numeric range for loop: for i in start..end { }
     /// Reference: Go's range lowering (walk/range.go:162-208)
+    /// Inline for: unroll loop body at compile time with comptime-known range.
+    /// Each iteration binds the loop variable as a const in const_values.
+    fn lowerInlineFor(self: *Lowerer, for_stmt: ast.ForStmt) !void {
+        if (!for_stmt.isRange()) return;
+        const start_val = self.chk.evalConstExpr(for_stmt.range_start) orelse return;
+        const end_val = self.chk.evalConstExpr(for_stmt.range_end) orelse return;
+        var i = start_val;
+        while (i < end_val) : (i += 1) {
+            // Bind iteration variable as comptime const
+            try self.const_values.put(for_stmt.binding, i);
+            _ = try self.lowerBlockNode(for_stmt.body);
+        }
+        // Clean up binding after unrolling
+        _ = self.const_values.remove(for_stmt.binding);
+    }
+
     fn lowerForRange(self: *Lowerer, for_stmt: ast.ForStmt) !void {
         const fb = self.current_func orelse return;
 
@@ -2788,6 +2813,17 @@ pub const Lowerer = struct {
             const operand_type = self.type_reg.get(operand_type_idx);
             break :blk if (operand_type == .optional) operand_type.optional.elem else operand_type_idx;
         } else operand_type_idx;
+        // Runtime safety: null unwrap check in debug mode — Zig Sema.zig:26482
+        if (un.op == .question and !self.release_mode) {
+            const null_val = try fb.emit(ir.Node.init(.const_null, TypeRegistry.UNTYPED_NULL, un.span));
+            const is_non_null = try fb.emitBinary(.ne, operand, null_val, TypeRegistry.BOOL, un.span);
+            const ok_block = try fb.newBlock("unwrap.ok");
+            const fail_block = try fb.newBlock("unwrap.fail");
+            _ = try fb.emitBranch(is_non_null, ok_block, fail_block, un.span);
+            fb.setBlock(fail_block);
+            _ = try fb.emitTrap(un.span);
+            fb.setBlock(ok_block);
+        }
         return try fb.emitUnary(tokenToUnaryOp(un.op), operand, result_type, un.span);
     }
 
@@ -3085,18 +3121,37 @@ pub const Lowerer = struct {
             if (base_expr == .ident) {
                 if (fb.lookupLocal(base_expr.ident.name)) |local_idx| {
                     const str_val = try fb.emitLoadLocal(local_idx, TypeRegistry.STRING, idx.span);
+                    // Runtime safety: string bounds check — Zig Sema.zig:26482
+                    if (!self.release_mode) {
+                        const len_node = try fb.emitSliceLen(str_val, idx.span);
+                        try self.emitBoundsCheck(fb, index_node, len_node, idx.span);
+                    }
                     const ptr_type = self.type_reg.makePointer(TypeRegistry.U8) catch TypeRegistry.I64;
                     const ptr_val = try fb.emitSlicePtr(str_val, ptr_type, idx.span);
                     return try fb.emitIndexValue(ptr_val, index_node, elem_size, elem_type, idx.span);
                 }
             }
             const base_val = try self.lowerExprNode(idx.base);
+            // Runtime safety: string bounds check — Zig Sema.zig:26482
+            if (!self.release_mode) {
+                const len_node = try fb.emitSliceLen(base_val, idx.span);
+                try self.emitBoundsCheck(fb, index_node, len_node, idx.span);
+            }
             const ptr_type = self.type_reg.makePointer(TypeRegistry.U8) catch TypeRegistry.I64;
             const ptr_val = try fb.emitSlicePtr(base_val, ptr_type, idx.span);
             return try fb.emitIndexValue(ptr_val, index_node, elem_size, elem_type, idx.span);
         }
 
         const index_node = try self.lowerExprNode(idx.idx);
+
+        // Runtime safety: bounds check in debug mode — Zig Sema.zig:26482
+        if (!self.release_mode) {
+            if (base_type == .array) {
+                const len_node = try fb.emitConstInt(@intCast(base_type.array.length), TypeRegistry.I64, idx.span);
+                try self.emitBoundsCheck(fb, index_node, len_node, idx.span);
+            }
+        }
+
         const base_node = self.tree.getNode(idx.base) orelse return ir.null_node;
         const base_expr = base_node.asExpr() orelse return ir.null_node;
 
@@ -3106,6 +3161,11 @@ pub const Lowerer = struct {
                 const local_type = self.type_reg.get(local.type_idx);
                 if (local_type == .slice) {
                     const slice_val = try fb.emitLoadLocal(local_idx, local.type_idx, idx.span);
+                    // Runtime safety: slice bounds check — Zig Sema.zig:26482
+                    if (!self.release_mode) {
+                        const len_node = try fb.emitSliceLen(slice_val, idx.span);
+                        try self.emitBoundsCheck(fb, index_node, len_node, idx.span);
+                    }
                     const ptr_type = self.type_reg.makePointer(elem_type) catch TypeRegistry.I64;
                     const ptr_val = try fb.emitSlicePtr(slice_val, ptr_type, idx.span);
                     return try fb.emitIndexValue(ptr_val, index_node, elem_size, elem_type, idx.span);
@@ -5110,7 +5170,65 @@ pub const Lowerer = struct {
                 const b = try self.lowerExprNode(bc.args[1]);
                 return fb.emit(ir.Node.init(.{ .binary = .{ .op = .fmax, .left = a, .right = b } }, TypeRegistry.F64, bc.span));
             },
+            .has_field => {
+                // @hasField(T, "name") — comptime bool, resolved at compile time
+                const type_idx = self.resolveTypeNode(bc.type_arg);
+                const name_str = self.getStringLiteral(bc.args[0]) orelse return fb.emitConstInt(0, TypeRegistry.BOOL, bc.span);
+                const info = self.type_reg.get(type_idx);
+                if (info == .struct_type) {
+                    for (info.struct_type.fields) |sf| {
+                        if (std.mem.eql(u8, sf.name, name_str)) return fb.emitConstInt(1, TypeRegistry.BOOL, bc.span);
+                    }
+                    return fb.emitConstInt(0, TypeRegistry.BOOL, bc.span);
+                }
+                if (info == .enum_type) {
+                    for (info.enum_type.variants) |v| {
+                        if (std.mem.eql(u8, v.name, name_str)) return fb.emitConstInt(1, TypeRegistry.BOOL, bc.span);
+                    }
+                    return fb.emitConstInt(0, TypeRegistry.BOOL, bc.span);
+                }
+                if (info == .union_type) {
+                    for (info.union_type.variants) |v| {
+                        if (std.mem.eql(u8, v.name, name_str)) return fb.emitConstInt(1, TypeRegistry.BOOL, bc.span);
+                    }
+                    return fb.emitConstInt(0, TypeRegistry.BOOL, bc.span);
+                }
+                return fb.emitConstInt(0, TypeRegistry.BOOL, bc.span);
+            },
+            .type_of => {
+                // @TypeOf(expr) — no runtime effect, type resolved at checker level
+                return ir.null_node;
+            },
+            .field => {
+                // @field(value, "name") — comptime field access, delegate to lowerFieldAccess
+                const name_str = self.getStringLiteral(bc.args[1]) orelse return ir.null_node;
+                return self.lowerFieldAccess(.{ .base = bc.args[0], .field = name_str, .span = bc.span });
+            },
         }
+    }
+
+    /// Extract string literal value from a node, stripping surrounding quotes.
+    fn getStringLiteral(self: *Lowerer, idx: NodeIndex) ?[]const u8 {
+        const node = self.tree.getNode(idx) orelse return null;
+        const expr = node.asExpr() orelse return null;
+        if (expr != .literal or expr.literal.kind != .string) return null;
+        const v = expr.literal.value;
+        if (v.len >= 2 and v[0] == '"' and v[v.len - 1] == '"') return v[1 .. v.len - 1];
+        return v;
+    }
+
+    /// Emit a bounds check: if index >= length, trap.
+    /// Zig Sema.zig:26482 — addSafetyCheck pattern.
+    fn emitBoundsCheck(self: *Lowerer, fb: *ir.FuncBuilder, index_node: ir.NodeIndex, length_node: ir.NodeIndex, span: Span) !void {
+        _ = self;
+        // index < length → ok, else trap
+        const in_bounds = try fb.emitBinary(.lt, index_node, length_node, TypeRegistry.BOOL, span);
+        const ok_block = try fb.newBlock("bounds.ok");
+        const fail_block = try fb.newBlock("bounds.fail");
+        _ = try fb.emitBranch(in_bounds, ok_block, fail_block, span);
+        fb.setBlock(fail_block);
+        _ = try fb.emitTrap(span);
+        fb.setBlock(ok_block);
     }
 
     // ============================================================================

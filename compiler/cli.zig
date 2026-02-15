@@ -24,6 +24,7 @@ pub const BuildOptions = struct {
     output_name: ?[]const u8 = null,
     target: Target = Target.native(),
     watch: bool = false,
+    release: bool = false,
 };
 
 pub const RunOptions = struct {
@@ -31,6 +32,7 @@ pub const RunOptions = struct {
     target: Target = Target.native(),
     program_args: []const []const u8 = &.{},
     watch: bool = false,
+    release: bool = false,
 };
 
 pub const CheckOptions = struct {
@@ -49,6 +51,7 @@ pub const TestOptions = struct {
     filter: ?[]const u8 = null,
     verbose: bool = false,
     watch: bool = false,
+    release: bool = false,
 };
 
 pub const BenchOptions = struct {
@@ -160,6 +163,8 @@ fn parseBuild(args: *std.process.ArgIterator) ?Command {
             opts.target = parseTarget(arg, args) orelse return null;
         } else if (std.mem.eql(u8, arg, "--watch") or std.mem.eql(u8, arg, "-w")) {
             opts.watch = true;
+        } else if (std.mem.eql(u8, arg, "--release")) {
+            opts.release = true;
         } else if (!std.mem.startsWith(u8, arg, "-")) {
             opts.input_file = arg;
             has_input = true;
@@ -191,6 +196,8 @@ fn parseRun(allocator: std.mem.Allocator, args: *std.process.ArgIterator) ?Comma
             opts.target = parseTarget(arg, args) orelse return null;
         } else if (std.mem.eql(u8, arg, "--watch") or std.mem.eql(u8, arg, "-w")) {
             opts.watch = true;
+        } else if (std.mem.eql(u8, arg, "--release")) {
+            opts.release = true;
         } else if (!std.mem.startsWith(u8, arg, "-")) {
             opts.input_file = arg;
             has_input = true;
@@ -226,6 +233,8 @@ fn parseTest(args: *std.process.ArgIterator) ?Command {
             opts.verbose = true;
         } else if (std.mem.eql(u8, arg, "--watch") or std.mem.eql(u8, arg, "-w")) {
             opts.watch = true;
+        } else if (std.mem.eql(u8, arg, "--release")) {
+            opts.release = true;
         } else if (!std.mem.startsWith(u8, arg, "-")) {
             opts.input_file = arg;
             has_input = true;

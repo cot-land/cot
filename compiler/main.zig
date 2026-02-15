@@ -176,7 +176,7 @@ fn buildCommand(allocator: std.mem.Allocator, opts: cli.BuildOptions) void {
         }
         watchLoop(allocator, input_file, argv.items);
     } else {
-        compileAndLink(allocator, input_file, output_name, compile_target, false, false, null);
+        compileAndLinkFull(allocator, input_file, output_name, compile_target, false, false, null, false, null, null, opts.release);
     }
 }
 
@@ -198,10 +198,10 @@ fn runCommand(allocator: std.mem.Allocator, opts: cli.RunOptions) void {
         return;
     }
 
-    runOnce(allocator, input_file, opts.target, opts.program_args);
+    runOnce(allocator, input_file, opts.target, opts.program_args, opts.release);
 }
 
-fn runOnce(allocator: std.mem.Allocator, input_file: []const u8, compile_target: Target, program_args: []const []const u8) void {
+fn runOnce(allocator: std.mem.Allocator, input_file: []const u8, compile_target: Target, program_args: []const []const u8, release: bool) void {
     // Compile to temp directory
     const tmp_dir = "/tmp/cot-run";
     std.fs.cwd().makePath(tmp_dir) catch {
@@ -221,7 +221,7 @@ fn runOnce(allocator: std.mem.Allocator, input_file: []const u8, compile_target:
         std.process.exit(1);
     };
 
-    compileAndLink(allocator, input_file, tmp_output, compile_target, false, true, null);
+    compileAndLinkFull(allocator, input_file, tmp_output, compile_target, false, true, null, false, null, null, release);
 
     // Run the compiled executable
     var run_args = std.ArrayListUnmanaged([]const u8){};
@@ -294,7 +294,7 @@ fn testCommand(allocator: std.mem.Allocator, opts: cli.TestOptions) void {
         std.process.exit(1);
     };
 
-    compileAndLink(allocator, input_file, tmp_output, opts.target, true, true, opts.filter);
+    compileAndLinkFull(allocator, input_file, tmp_output, opts.target, true, true, opts.filter, false, null, null, opts.release);
 
     // Run the test: wasmtime for wasm targets, direct execution for native
     const run_path = if (opts.target.isWasm())
@@ -369,7 +369,7 @@ fn benchCommand(allocator: std.mem.Allocator, opts: cli.BenchOptions) void {
         std.process.exit(1);
     };
 
-    compileAndLinkFull(allocator, input_file, tmp_output, opts.target, false, true, null, true, opts.filter, opts.n);
+    compileAndLinkFull(allocator, input_file, tmp_output, opts.target, false, true, null, true, opts.filter, opts.n, false);
 
     // Run the benchmark: wasmtime for wasm targets, direct execution for native
     const run_path = if (opts.target.isWasm())
@@ -1145,7 +1145,7 @@ fn compileAndLink(
     quiet: bool,
     test_filter: ?[]const u8,
 ) void {
-    compileAndLinkFull(allocator, input_file, output_name, compile_target, test_mode, quiet, test_filter, false, null, null);
+    compileAndLinkFull(allocator, input_file, output_name, compile_target, test_mode, quiet, test_filter, false, null, null, false);
 }
 
 fn compileAndLinkFull(
@@ -1159,9 +1159,11 @@ fn compileAndLinkFull(
     bench_mode: bool,
     bench_filter: ?[]const u8,
     bench_n: ?i64,
+    release_mode: bool,
 ) void {
     var compile_driver = Driver.init(allocator);
     compile_driver.setTarget(compile_target);
+    compile_driver.release_mode = release_mode;
     if (test_mode) compile_driver.setTestMode(true);
     if (test_filter) |f| compile_driver.setTestFilter(f);
     if (bench_mode) compile_driver.setBenchMode(true);
