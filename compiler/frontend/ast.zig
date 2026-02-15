@@ -57,7 +57,8 @@ pub const FnDecl = struct {
     span: Span,
 };
 pub const VarDecl = struct { name: []const u8, type_expr: NodeIndex, value: NodeIndex, is_const: bool, doc_comment: []const u8 = "", span: Span };
-pub const StructDecl = struct { name: []const u8, type_params: []const []const u8 = &.{}, fields: []const Field, doc_comment: []const u8 = "", span: Span };
+pub const StructLayout = enum { auto, @"packed", @"extern" };
+pub const StructDecl = struct { name: []const u8, type_params: []const []const u8 = &.{}, fields: []const Field, layout: StructLayout = .auto, nested_decls: []const NodeIndex = &.{}, doc_comment: []const u8 = "", span: Span };
 pub const ImplBlock = struct { type_name: []const u8, type_params: []const []const u8 = &.{}, methods: []const NodeIndex, doc_comment: []const u8 = "", span: Span };
 pub const TraitDecl = struct { name: []const u8, methods: []const NodeIndex, doc_comment: []const u8 = "", span: Span };
 pub const ImplTraitBlock = struct { trait_name: []const u8, target_type: []const u8, type_params: []const []const u8 = &.{}, methods: []const NodeIndex, doc_comment: []const u8 = "", span: Span };
@@ -521,6 +522,7 @@ pub const Ast = struct {
                     .struct_decl => |s| {
                         if (s.fields.len > 0) self.allocator.free(s.fields);
                         if (s.type_params.len > 0) self.allocator.free(s.type_params);
+                        if (s.nested_decls.len > 0) self.allocator.free(s.nested_decls);
                     },
                     .enum_decl => |e| if (e.variants.len > 0) self.allocator.free(e.variants),
                     .union_decl => |u| if (u.variants.len > 0) self.allocator.free(u.variants),

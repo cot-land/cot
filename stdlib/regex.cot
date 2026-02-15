@@ -432,13 +432,13 @@ fn compileHandleAtom(nfa: i64, stack_buf: i64, cs: i64, pat: string, plen: i64, 
         stack_top = pushAtom(nfa, stack_buf, stack_top, STATE_DOT, 0, 0)
         new_pos = pos + 1
     } else if (c == 91) {
-        var packed = compileCharClass(nfa, stack_buf, stack_top, pat, plen, pos + 1)
-        stack_top = (packed >> 32) & 4294967295
-        new_pos = packed & 4294967295
+        var packed_val =compileCharClass(nfa, stack_buf, stack_top, pat, plen, pos + 1)
+        stack_top = (packed_val >> 32) & 4294967295
+        new_pos = packed_val & 4294967295
     } else if (c == 92) {
-        var packed = compileEscape(nfa, stack_buf, stack_top, pat, plen, pos + 1)
-        stack_top = (packed >> 32) & 4294967295
-        new_pos = packed & 4294967295
+        var packed_val =compileEscape(nfa, stack_buf, stack_top, pat, plen, pos + 1)
+        stack_top = (packed_val >> 32) & 4294967295
+        new_pos = packed_val & 4294967295
     } else {
         stack_top = pushAtom(nfa, stack_buf, stack_top, STATE_LITERAL, c, 0)
         new_pos = pos + 1

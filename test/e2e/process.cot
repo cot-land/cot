@@ -85,9 +85,9 @@ test "dup2 returns new fd" {
 
 test "pipeReadFd extracts low 32" {
     // Simulate packed value: write_fd=5 (<<32) | read_fd=3
-    var packed = (5 << 32) | 3
-    @assert_eq(pipeReadFd(packed), 3)
-    @assert_eq(pipeWriteFd(packed), 5)
+    var packed_val = (5 << 32) | 3
+    @assert_eq(pipeReadFd(packed_val), 3)
+    @assert_eq(pipeWriteFd(packed_val), 5)
 }
 
 // ============================================================================

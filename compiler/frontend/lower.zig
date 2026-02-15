@@ -707,6 +707,21 @@ pub const Lowerer = struct {
         if (struct_decl.type_params.len > 0) return; // Skip generic struct defs — instantiated on demand
         const struct_type_idx = self.type_reg.lookupByName(struct_decl.name) orelse TypeRegistry.VOID;
         try self.builder.addStruct(.{ .name = struct_decl.name, .type_idx = struct_type_idx, .span = struct_decl.span });
+        // Nested declarations: most types (enum, error set, type alias) don't generate
+        // code — they're registered during checking. Nested structs need addStruct.
+        for (struct_decl.nested_decls) |nested_idx| {
+            const nested_node = self.tree.getNode(nested_idx) orelse continue;
+            const nested_decl = nested_node.asDecl() orelse continue;
+            switch (nested_decl) {
+                .struct_decl => |ns| {
+                    const qualified = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ struct_decl.name, ns.name });
+                    const ns_type = self.type_reg.lookupByName(qualified) orelse TypeRegistry.VOID;
+                    try self.builder.addStruct(.{ .name = qualified, .type_idx = ns_type, .span = ns.span });
+                },
+                .fn_decl => |fd| try self.lowerFnDecl(fd),
+                else => {},
+            }
+        }
     }
 
     fn lowerImplBlock(self: *Lowerer, impl_block: ast.ImplBlock) !void {
@@ -1600,7 +1615,10 @@ pub const Lowerer = struct {
         const value_expr = value_node.asExpr() orelse return;
         if (value_expr != .struct_init) return;
         const struct_init = value_expr.struct_init;
-        const struct_type_idx = if (struct_init.type_args.len > 0)
+        const struct_type_idx: TypeIndex = if (struct_init.type_name.len == 0) blk: {
+            if (self.chk.expr_types.get(value_idx)) |resolved| break :blk resolved;
+            return;
+        } else if (struct_init.type_args.len > 0)
             self.resolveGenericTypeName(struct_init.type_name, struct_init.type_args)
         else
             self.type_reg.lookupByName(struct_init.type_name) orelse return;
@@ -2712,6 +2730,10 @@ pub const Lowerer = struct {
     fn lowerExprNode(self: *Lowerer, idx: NodeIndex) Error!ir.NodeIndex {
         const node = self.tree.getNode(idx) orelse return ir.null_node;
         const expr = node.asExpr() orelse return ir.null_node;
+        // Pass node index for anonymous struct init resolution
+        if (expr == .struct_init and expr.struct_init.type_name.len == 0) {
+            return try self.lowerStructInitExpr(expr.struct_init, idx);
+        }
         return try self.lowerExpr(expr);
     }
 
@@ -2742,7 +2764,7 @@ pub const Lowerer = struct {
             .error_literal => |el| return try self.lowerErrorLiteral(el),
             .builtin_call => |bc| return try self.lowerBuiltinCall(bc),
             .switch_expr => |se| return try self.lowerSwitchExpr(se),
-            .struct_init => |si| return try self.lowerStructInitExpr(si),
+            .struct_init => |si| return try self.lowerStructInitExpr(si, null),
             .tuple_literal => |tl| return try self.lowerTupleLiteral(tl),
             .new_expr => |ne| return try self.lowerNewExpr(ne),
             .closure_expr => |ce| return try self.lowerClosureExpr(ce),
@@ -3368,9 +3390,15 @@ pub const Lowerer = struct {
         return try fb.emitMakeSlice(base_val, start_node, end_node orelse return ir.null_node, elem_size, slice_type, se.span);
     }
 
-    fn lowerStructInitExpr(self: *Lowerer, si: ast.StructInit) Error!ir.NodeIndex {
+    fn lowerStructInitExpr(self: *Lowerer, si: ast.StructInit, node_idx: ?NodeIndex) Error!ir.NodeIndex {
         const fb = self.current_func orelse return ir.null_node;
-        const struct_type_idx = if (si.type_args.len > 0)
+        const struct_type_idx: TypeIndex = if (si.type_name.len == 0) blk: {
+            // Anonymous struct literal: resolve from expr_types (set by checker)
+            if (node_idx) |nidx| {
+                if (self.chk.expr_types.get(nidx)) |resolved| break :blk resolved;
+            }
+            return ir.null_node;
+        } else if (si.type_args.len > 0)
             self.resolveGenericTypeName(si.type_name, si.type_args)
         else
             self.type_reg.lookupByName(si.type_name) orelse return ir.null_node;

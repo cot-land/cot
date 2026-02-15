@@ -275,7 +275,11 @@ pub const Formatter = struct {
     fn printStructDecl(self: *Formatter, d: ast_mod.StructDecl) void {
         self.printDocComment(d.doc_comment);
         self.writeIndent();
-        self.write("struct ") catch {};
+        switch (d.layout) {
+            .@"packed" => self.write("packed struct ") catch {},
+            .@"extern" => self.write("extern struct ") catch {},
+            .auto => self.write("struct ") catch {},
+        }
         self.write(d.name) catch {};
         if (d.type_params.len > 0) {
             self.write("(") catch {};

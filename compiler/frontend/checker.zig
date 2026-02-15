@@ -186,6 +186,8 @@ pub const Checker = struct {
     allocator: std.mem.Allocator,
     expr_types: std.AutoHashMap(NodeIndex, TypeIndex),
     current_return_type: TypeIndex = TypeRegistry.VOID,
+    /// Expected type for anonymous struct literal resolution
+    expected_type: TypeIndex = invalid_type,
     in_loop: bool = false,
     in_async_fn: bool = false,
     // Generics support (Zig-style lazy monomorphization + Go checker flow)
@@ -358,9 +360,44 @@ pub const Checker = struct {
                     try self.scope.define(Symbol.init(s.name, .type_name, invalid_type, idx, false));
                     return;
                 }
-                const struct_type = try self.buildStructType(s.name, s.fields);
+                const struct_type = try self.buildStructTypeWithLayout(s.name, s.fields, s.layout);
                 try self.scope.define(Symbol.init(s.name, .type_name, struct_type, idx, false));
                 try self.types.registerNamed(s.name, struct_type);
+                // Register nested declarations with qualified names (e.g. Parser.Error → Parser_Error)
+                for (s.nested_decls) |nested_idx| {
+                    const nested = (self.tree.getNode(nested_idx) orelse continue).asDecl() orelse continue;
+                    switch (nested) {
+                        .error_set_decl => |es| {
+                            const qualified = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ s.name, es.name });
+                            const es_type = try self.types.add(.{ .error_set = .{ .name = qualified, .variants = es.variants } });
+                            try self.scope.define(Symbol.init(qualified, .type_name, es_type, nested_idx, false));
+                            try self.types.registerNamed(qualified, es_type);
+                        },
+                        .enum_decl => |e| {
+                            const qualified = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ s.name, e.name });
+                            const enum_type = try self.buildEnumType(e);
+                            try self.scope.define(Symbol.init(qualified, .type_name, enum_type, nested_idx, false));
+                            try self.types.registerNamed(qualified, enum_type);
+                        },
+                        .struct_decl => |ns| {
+                            const qualified = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ s.name, ns.name });
+                            const ns_type = try self.buildStructTypeWithLayout(qualified, ns.fields, ns.layout);
+                            try self.scope.define(Symbol.init(qualified, .type_name, ns_type, nested_idx, false));
+                            try self.types.registerNamed(qualified, ns_type);
+                        },
+                        .type_alias => |t| {
+                            const qualified = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ s.name, t.name });
+                            const target_type = self.resolveTypeExpr(t.target) catch invalid_type;
+                            try self.scope.define(Symbol.init(qualified, .type_name, target_type, nested_idx, false));
+                            try self.types.registerNamed(qualified, target_type);
+                        },
+                        .var_decl => |v| {
+                            const qualified = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ s.name, v.name });
+                            try self.scope.define(Symbol.init(qualified, if (v.is_const) .constant else .variable, invalid_type, nested_idx, !v.is_const));
+                        },
+                        else => {},
+                    }
+                }
             },
             .enum_decl => |e| {
                 if (self.scope.isDefined(e.name)) { self.err.errorWithCode(e.span.start, .e302, "redefined identifier"); return; }
@@ -1275,6 +1312,25 @@ pub const Checker = struct {
 
     fn checkFieldAccess(self: *Checker, f: ast.FieldAccess) CheckError!TypeIndex {
         if (f.base == null_node) return invalid_type;
+
+        // Nested type namespace: TypeName.NestedType (e.g. Parser.Error)
+        // Check if base is a struct type name before calling checkExpr (which would error)
+        // Uses stack buffer to avoid heap allocation for lookups (Zig Sema pattern)
+        if (self.tree.getNode(f.base)) |base_node| {
+            if (base_node.asExpr()) |base_expr| {
+                if (base_expr == .ident) {
+                    const base_name = base_expr.ident.name;
+                    var buf: [512]u8 = undefined;
+                    const qualified = std.fmt.bufPrint(&buf, "{s}_{s}", .{ base_name, f.field }) catch "";
+                    if (qualified.len > 0) {
+                        if (self.types.lookupByName(qualified)) |nested_type_idx| {
+                            return nested_type_idx;
+                        }
+                    }
+                }
+            }
+        }
+
         var base_type = try self.checkExpr(f.base);
 
         // Auto-deref: unwrap pointer(s) before field lookup (Zig pattern)
@@ -1393,7 +1449,14 @@ pub const Checker = struct {
     }
 
     fn checkStructInit(self: *Checker, si: ast.StructInit) CheckError!TypeIndex {
-        const struct_type_idx = if (si.type_args.len > 0)
+        const struct_type_idx = if (si.type_name.len == 0) blk: {
+            // Anonymous struct literal: .{ .x = 1, .y = 2 } — resolve from expected type
+            if (self.expected_type != invalid_type and self.types.get(self.expected_type) == .struct_type) {
+                break :blk self.expected_type;
+            }
+            self.err.errorWithCode(si.span.start, .e300, "cannot infer type for anonymous struct literal");
+            return invalid_type;
+        } else if (si.type_args.len > 0)
             try self.resolveGenericInstance(.{ .name = si.type_name, .type_args = si.type_args }, si.span)
         else
             self.types.lookupByName(si.type_name) orelse {
@@ -1736,6 +1799,24 @@ pub const Checker = struct {
                 }
             }
         }
+        // Check expected_type (for var init context): var e: MyError!i64 = error.Foo
+        if (self.expected_type != invalid_type) {
+            const exp_info = self.types.get(self.expected_type);
+            if (exp_info == .error_union and exp_info.error_union.error_set != types.invalid_type) {
+                const es_info = self.types.get(exp_info.error_union.error_set);
+                if (es_info == .error_set) {
+                    for (es_info.error_set.variants) |v| {
+                        if (std.mem.eql(u8, v, el.error_name)) return exp_info.error_union.error_set;
+                    }
+                }
+            }
+            // expected_type might be an error_set directly
+            if (exp_info == .error_set) {
+                for (exp_info.error_set.variants) |v| {
+                    if (std.mem.eql(u8, v, el.error_name)) return self.expected_type;
+                }
+            }
+        }
         // Also check all error set types in scope (for switch on caught errors)
         // This allows error.X in switch patterns when catching from different error sets
         return self.current_return_type;
@@ -1773,6 +1854,9 @@ pub const Checker = struct {
             return;
         }
         if (rs.value != null_node) {
+            const saved_expected = self.expected_type;
+            self.expected_type = self.current_return_type;
+            defer self.expected_type = saved_expected;
             const val_type = try self.checkExpr(rs.value);
             if (self.current_return_type == TypeRegistry.VOID) self.err.errorWithCode(rs.span.start, .e300, "void function should not return a value")
             else if (!self.types.isAssignable(val_type, self.current_return_type)) self.err.errorWithCode(rs.span.start, .e300, "type mismatch");
@@ -1789,6 +1873,9 @@ pub const Checker = struct {
         }
         var var_type: TypeIndex = if (vs.type_expr != null_node) try self.resolveTypeExpr(vs.type_expr) else invalid_type;
         if (vs.value != null_node and !self.isUndefinedLit(vs.value) and !self.isZeroInitLit(vs.value)) {
+            const saved_expected = self.expected_type;
+            if (var_type != invalid_type) self.expected_type = var_type;
+            defer self.expected_type = saved_expected;
             const val_type = try self.checkExpr(vs.value);
             if (var_type == invalid_type) var_type = self.materializeType(val_type)
             else if (!self.types.isAssignable(val_type, var_type)) {
@@ -2433,18 +2520,50 @@ pub const Checker = struct {
     }
 
     fn buildStructType(self: *Checker, name: []const u8, fields: []const ast.Field) CheckError!TypeIndex {
+        return self.buildStructTypeWithLayout(name, fields, .auto);
+    }
+
+    fn buildStructTypeWithLayout(self: *Checker, name: []const u8, fields: []const ast.Field, layout: ast.StructLayout) CheckError!TypeIndex {
         var struct_fields = std.ArrayListUnmanaged(types.StructField){};
         defer struct_fields.deinit(self.allocator);
         var offset: u32 = 0;
+        var max_align: u32 = 1;
         for (fields) |field| {
             const field_type = try self.resolveTypeExpr(field.type_expr);
-            const field_align = self.types.alignmentOf(field_type);
-            if (field_align > 0) offset = (offset + field_align - 1) & ~(field_align - 1);
-            try struct_fields.append(self.allocator, .{ .name = field.name, .type_idx = field_type, .offset = offset, .default_value = field.default_value });
-            offset += self.types.sizeOf(field_type);
+            switch (layout) {
+                .@"packed" => {
+                    // Packed: no alignment, contiguous fields
+                    try struct_fields.append(self.allocator, .{ .name = field.name, .type_idx = field_type, .offset = offset, .default_value = field.default_value });
+                    offset += self.types.sizeOf(field_type);
+                },
+                .@"extern" => {
+                    // Extern: C ABI layout, align each field to its natural alignment
+                    const field_align = self.types.alignmentOf(field_type);
+                    if (field_align > max_align) max_align = field_align;
+                    if (field_align > 0) offset = (offset + field_align - 1) & ~(field_align - 1);
+                    try struct_fields.append(self.allocator, .{ .name = field.name, .type_idx = field_type, .offset = offset, .default_value = field.default_value });
+                    offset += self.types.sizeOf(field_type);
+                },
+                .auto => {
+                    // Auto: existing behavior (align each field, 8-byte struct alignment)
+                    const field_align = self.types.alignmentOf(field_type);
+                    if (field_align > 0) offset = (offset + field_align - 1) & ~(field_align - 1);
+                    try struct_fields.append(self.allocator, .{ .name = field.name, .type_idx = field_type, .offset = offset, .default_value = field.default_value });
+                    offset += self.types.sizeOf(field_type);
+                },
+            }
         }
-        offset = (offset + 7) & ~@as(u32, 7);
-        return try self.types.add(.{ .struct_type = .{ .name = name, .fields = try self.allocator.dupe(types.StructField, struct_fields.items), .size = offset, .alignment = 8 } });
+        // Final padding: packed = none, extern = align to max field alignment, auto = 8-byte
+        const alignment: u8 = switch (layout) {
+            .@"packed" => 1,
+            .@"extern" => @intCast(max_align),
+            .auto => 8,
+        };
+        if (layout != .@"packed" and alignment > 1) {
+            const a = @as(u32, alignment);
+            offset = (offset + a - 1) & ~(a - 1);
+        }
+        return try self.types.add(.{ .struct_type = .{ .name = name, .fields = try self.allocator.dupe(types.StructField, struct_fields.items), .size = offset, .alignment = alignment, .layout = layout } });
     }
 
     fn buildEnumType(self: *Checker, e: ast.EnumDecl) CheckError!TypeIndex {

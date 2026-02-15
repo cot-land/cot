@@ -2480,3 +2480,99 @@ test "switch with else branch" {
     var r = Color.Red
     @assert_eq(colorWithElse(r), 10)
 }
+
+// ============================================================================
+// Extern structs (Tier 1.10)
+// ============================================================================
+
+// ============================================================================
+// Extern structs (Tier 1.10)
+// ============================================================================
+
+extern struct CHeader { magic: u32, version: u32 }
+extern struct MixedExtern { a: u8, b: u32, c: u8 }
+extern struct ExternI64 { x: i64, y: i64 }
+
+test "extern struct layout" {
+    @assert_eq(@sizeOf(CHeader), 8)
+}
+
+test "extern struct mixed alignment" {
+    @assert_eq(@sizeOf(MixedExtern), 12)
+}
+
+test "extern struct i64 field access" {
+    var h = ExternI64 { .x = 42, .y = 100 }
+    @assert_eq(h.x, 42)
+    @assert_eq(h.y, 100)
+}
+
+// ============================================================================
+// Packed structs (Tier 1.9)
+// ============================================================================
+
+packed struct PackedSmall { a: u8, b: u32, c: u8 }
+packed struct PackedTwo { x: i64, y: i64 }
+
+test "packed struct size" {
+    @assert_eq(@sizeOf(PackedSmall), 6)
+}
+
+test "packed struct i64 field access" {
+    var p = PackedTwo { .x = 10, .y = 20 }
+    @assert_eq(p.x, 10)
+    @assert_eq(p.y, 20)
+}
+
+// ============================================================================
+// Nested type namespaces (Tier 1.6)
+// ============================================================================
+
+struct Lexer {
+    const Error = error { UnexpectedToken, EndOfInput }
+    pos: i64
+}
+
+fn lexerMayFail(x: i64) Lexer.Error!i64 {
+    if (x < 0) {
+        return error.UnexpectedToken
+    }
+    return x * 2
+}
+
+test "nested error set error value" {
+    var e = lexerMayFail(-1) catch 99
+    @assert_eq(e, 99)
+}
+
+test "nested error set success" {
+    var e = lexerMayFail(5) catch 0
+    @assert_eq(e, 10)
+}
+
+test "nested type with struct field" {
+    var l = Lexer { .pos = 42 }
+    @assert_eq(l.pos, 42)
+}
+
+// ============================================================================
+// Anonymous struct literals (Tier 1.7)
+// ============================================================================
+
+struct AnonPoint { x: i64, y: i64 }
+
+fn makeOrigin() AnonPoint {
+    return .{ .x = 0, .y = 0 }
+}
+
+test "anonymous struct var init" {
+    var p: AnonPoint = .{ .x = 10, .y = 20 }
+    @assert_eq(p.x, 10)
+    @assert_eq(p.y, 20)
+}
+
+test "anonymous struct return" {
+    var p = makeOrigin()
+    @assert_eq(p.x, 0)
+    @assert_eq(p.y, 0)
+}

@@ -23,12 +23,12 @@ fn pipe() i64 {
     return @pipe()
 }
 
-fn pipeReadFd(packed: i64) i64 {
-    return packed & 4294967295
+fn pipeReadFd(packed_fds: i64) i64 {
+    return packed_fds & 4294967295
 }
 
-fn pipeWriteFd(packed: i64) i64 {
-    return (packed >> 32) & 4294967295
+fn pipeWriteFd(packed_fds: i64) i64 {
+    return (packed_fds >> 32) & 4294967295
 }
 
 fn dup2(oldfd: i64, newfd: i64) i64 {

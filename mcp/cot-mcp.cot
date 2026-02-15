@@ -647,7 +647,7 @@ fn stdlibDocs(module: string) string {
         sb.append("Process management (native only, WASI stubs return -1).\n\n")
         sb.append("## Low-level (POSIX)\n")
         sb.append("fork() i64  waitpid(pid: i64) i64\n")
-        sb.append("pipe() i64  pipeReadFd(packed: i64) i64  pipeWriteFd(packed: i64) i64\n")
+        sb.append("pipe() i64  pipeReadFd(packed_fds: i64) i64  pipeWriteFd(packed_fds: i64) i64\n")
         sb.append("dup2(oldfd: i64, newfd: i64) i64\n\n")
         sb.append("## High-level\n")
         sb.append("run(cmd: string, arg1: string) i64     // fork+exec, return exit code\n")

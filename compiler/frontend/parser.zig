@@ -202,12 +202,19 @@ pub const Parser = struct {
 
     fn parseDecl(self: *Parser) ParseError!?NodeIndex {
         return switch (self.tok.tok) {
-            .kw_extern => self.parseExternFn(),
+            .kw_extern => blk: {
+                // extern struct or extern fn
+                if (self.peekToken().tok == .kw_struct) {
+                    break :blk self.parseStructDeclWithLayout(.@"extern");
+                }
+                break :blk self.parseExternFn();
+            },
+            .kw_packed => self.parseStructDeclWithLayout(.@"packed"),
             .kw_fn => self.parseFnDecl(false, false),
             .kw_async => self.parseAsyncFn(),
             .kw_var => self.parseVarDecl(false),
             .kw_const => self.parseVarDecl(true),
-            .kw_struct => self.parseStructDecl(),
+            .kw_struct => self.parseStructDeclWithLayout(.auto),
             .kw_trait => self.parseTraitDecl(),
             .kw_impl => self.parseImplBlock(),
             .kw_enum => self.parseEnumDecl(),
@@ -388,9 +395,13 @@ pub const Parser = struct {
         return try self.tree.addDecl(.{ .var_decl = .{ .name = name, .type_expr = type_expr, .value = value, .is_const = is_const, .doc_comment = doc_comment, .span = Span.init(start, self.pos()) } });
     }
 
-    fn parseStructDecl(self: *Parser) ParseError!?NodeIndex {
+    fn parseStructDeclWithLayout(self: *Parser, layout: ast.StructLayout) ParseError!?NodeIndex {
         const doc_comment = self.consumeDocComment();
         const start = self.pos();
+        // Skip layout keyword (extern/packed) if present
+        if (layout != .auto) self.advance();
+        // Skip 'struct' keyword
+        if (!self.check(.kw_struct)) { self.syntaxError("expected 'struct'"); return null; }
         self.advance();
         if (!self.check(.ident)) { self.err.errorWithCode(self.pos(), .e203, "expected struct name"); return null; }
         const name = self.tok.text;
@@ -413,9 +424,32 @@ pub const Parser = struct {
         }
 
         if (!self.expect(.lbrace)) return null;
+
+        // Parse nested declarations (const, enum, struct, type, fn) before fields
+        var nested_decls = std.ArrayListUnmanaged(NodeIndex){};
+        defer nested_decls.deinit(self.allocator);
+        while (!self.check(.rbrace) and !self.check(.eof)) {
+            // Nested decls start with declaration keywords; fields start with ident followed by ':'
+            if (self.check(.kw_const) or self.check(.kw_enum) or self.check(.kw_type) or
+                self.check(.kw_fn) or (self.check(.kw_struct) and self.peekToken().tok == .ident))
+            {
+                if (try self.parseDecl()) |nested_idx| {
+                    try nested_decls.append(self.allocator, nested_idx);
+                }
+            } else break;
+        }
+
         const fields = try self.parseFieldList(.rbrace);
         if (!self.expect(.rbrace)) return null;
-        return try self.tree.addDecl(.{ .struct_decl = .{ .name = name, .type_params = type_params, .fields = fields, .doc_comment = doc_comment, .span = Span.init(start, self.pos()) } });
+        return try self.tree.addDecl(.{ .struct_decl = .{
+            .name = name,
+            .type_params = type_params,
+            .fields = fields,
+            .layout = layout,
+            .nested_decls = if (nested_decls.items.len > 0) try self.allocator.dupe(NodeIndex, nested_decls.items) else &.{},
+            .doc_comment = doc_comment,
+            .span = Span.init(start, self.pos()),
+        } });
     }
 
     fn parseImplBlock(self: *Parser) ParseError!?NodeIndex {
@@ -661,8 +695,16 @@ pub const Parser = struct {
         }
 
         if (self.check(.ident) or self.tok.tok.isTypeKeyword()) {
-            const type_name = if (self.tok.text.len > 0) self.tok.text else self.tok.tok.string();
+            var type_name = if (self.tok.text.len > 0) self.tok.text else self.tok.tok.string();
             self.advance();
+            // Nested type namespace: Outer.Inner → Outer_Inner (Zig pattern)
+            if (self.check(.period) and self.peekToken().tok == .ident) {
+                const outer = type_name;
+                self.advance(); // consume '.'
+                const inner = self.tok.text;
+                self.advance(); // consume inner name
+                type_name = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ outer, inner });
+            }
             // Generic type instantiation: Name(arg1, arg2, ...) or legacy Map<K,V> / List<T>
             if (self.match(.lss)) {
                 // Legacy angle bracket syntax for Map<K,V> and List<T>
@@ -1151,10 +1193,33 @@ pub const Parser = struct {
                 return try self.tree.addExpr(.{ .error_literal = .{ .error_name = error_name, .span = Span.init(start, self.pos()) } });
             },
             .period => {
-                // Check for .{} zero init
                 if (self.peekToken().tok == .lbrace) {
                     self.advance(); // consume .
                     self.advance(); // consume {
+                    // .{} zero init vs .{ .field = value, ... } anonymous struct literal
+                    if (self.check(.rbrace)) {
+                        self.advance(); // consume }
+                        return try self.tree.addExpr(.{ .zero_init = .{ .span = Span.init(start, self.pos()) } });
+                    }
+                    // Anonymous struct literal: .{ .x = 1, .y = 2 }
+                    if (self.check(.period)) {
+                        var fields = std.ArrayListUnmanaged(ast.FieldInit){};
+                        defer fields.deinit(self.allocator);
+                        while (!self.check(.rbrace) and !self.check(.eof)) {
+                            if (!self.expect(.period)) return null;
+                            if (!self.check(.ident)) { self.syntaxError("expected field name"); return null; }
+                            const fname = self.tok.text;
+                            const fstart = self.pos();
+                            self.advance();
+                            if (!self.expect(.assign)) return null;
+                            const val = try self.parseExpr() orelse return null;
+                            try fields.append(self.allocator, .{ .name = fname, .value = val, .span = Span.init(fstart, self.pos()) });
+                            if (!self.match(.comma)) break;
+                        }
+                        if (!self.expect(.rbrace)) return null;
+                        return try self.tree.addExpr(.{ .struct_init = .{ .type_name = "", .fields = try self.allocator.dupe(ast.FieldInit, fields.items), .span = Span.init(start, self.pos()) } });
+                    }
+                    // Fallback: treat as zero init with error for unexpected token
                     if (!self.expect(.rbrace)) return null;
                     return try self.tree.addExpr(.{ .zero_init = .{ .span = Span.init(start, self.pos()) } });
                 }
