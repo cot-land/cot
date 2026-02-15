@@ -21,3 +21,8 @@
 [submodule "references/rust"]
 	path = references/rust
 	url = https://github.com/rust-lang/rust.git
+	shallow = true
+[submodule "references/deno"]
+	path = references/deno
+	url = https://github.com/denoland/deno.git
+	shallow = true
