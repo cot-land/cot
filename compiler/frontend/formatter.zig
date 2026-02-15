@@ -55,8 +55,11 @@ pub fn collectComments(allocator: std.mem.Allocator, content: []const u8) ![]Com
             if (i < content.len and content[i] == '\'') i += 1;
         } else if (c == '/' and i + 1 < content.len and content[i + 1] == '/') {
             const start = i;
+            // Check if this is a doc comment (///) — skip it, handled by AST doc_comment field
+            const is_doc = (i + 2 < content.len and content[i + 2] == '/');
             i += 2;
             while (i < content.len and content[i] != '\n') : (i += 1) {}
+            if (is_doc) continue; // Doc comments are stored in AST, not in comment list
             // Trim trailing whitespace
             var end = i;
             while (end > start + 2 and (content[end - 1] == ' ' or content[end - 1] == '\t' or content[end - 1] == '\r')) : (end -= 1) {}
@@ -172,6 +175,22 @@ pub const Formatter = struct {
     // Declarations
     // ====================================================================
 
+    /// Print doc comment lines (/// prefix) before a declaration.
+    fn printDocComment(self: *Formatter, doc: []const u8) void {
+        if (doc.len == 0) return;
+        // Split on newlines and emit each line as /// line
+        var start: usize = 0;
+        while (start < doc.len) {
+            var end = start;
+            while (end < doc.len and doc[end] != '\n') : (end += 1) {}
+            self.writeIndent();
+            self.write("/// ") catch {};
+            self.write(doc[start..end]) catch {};
+            self.write("\n") catch {};
+            start = if (end < doc.len) end + 1 else end;
+        }
+    }
+
     fn printDecl(self: *Formatter, decl: Decl) void {
         switch (decl) {
             .import_decl => |d| self.printImport(d),
@@ -199,6 +218,7 @@ pub const Formatter = struct {
     }
 
     fn printFnDecl(self: *Formatter, d: ast_mod.FnDecl) void {
+        self.printDocComment(d.doc_comment);
         self.writeIndent();
         if (d.is_extern) self.write("extern ") catch {};
         self.write("fn ") catch {};
@@ -238,6 +258,7 @@ pub const Formatter = struct {
     }
 
     fn printVarDecl(self: *Formatter, d: ast_mod.VarDecl) void {
+        self.printDocComment(d.doc_comment);
         self.writeIndent();
         self.write(if (d.is_const) "const " else "var ") catch {};
         self.write(d.name) catch {};
@@ -252,6 +273,7 @@ pub const Formatter = struct {
     }
 
     fn printStructDecl(self: *Formatter, d: ast_mod.StructDecl) void {
+        self.printDocComment(d.doc_comment);
         self.writeIndent();
         self.write("struct ") catch {};
         self.write(d.name) catch {};
@@ -283,6 +305,7 @@ pub const Formatter = struct {
             self.newline() catch {};
             self.indent += 1;
             for (d.fields, 0..) |f, i| {
+                self.printDocComment(f.doc_comment);
                 self.writeIndent();
                 self.write(f.name) catch {};
                 self.write(": ") catch {};
@@ -301,6 +324,7 @@ pub const Formatter = struct {
     }
 
     fn printEnumDecl(self: *Formatter, d: ast_mod.EnumDecl) void {
+        self.printDocComment(d.doc_comment);
         self.writeIndent();
         self.write("enum ") catch {};
         self.write(d.name) catch {};
@@ -327,6 +351,7 @@ pub const Formatter = struct {
     }
 
     fn printUnionDecl(self: *Formatter, d: ast_mod.UnionDecl) void {
+        self.printDocComment(d.doc_comment);
         self.writeIndent();
         self.write("union ") catch {};
         self.write(d.name) catch {};
@@ -349,6 +374,7 @@ pub const Formatter = struct {
     }
 
     fn printTypeAlias(self: *Formatter, d: ast_mod.TypeAlias) void {
+        self.printDocComment(d.doc_comment);
         self.writeIndent();
         self.write("type ") catch {};
         self.write(d.name) catch {};
@@ -357,6 +383,7 @@ pub const Formatter = struct {
     }
 
     fn printImplBlock(self: *Formatter, d: ast_mod.ImplBlock) void {
+        self.printDocComment(d.doc_comment);
         self.writeIndent();
         self.write("impl ") catch {};
         self.write(d.type_name) catch {};
@@ -384,6 +411,7 @@ pub const Formatter = struct {
     }
 
     fn printTraitDecl(self: *Formatter, d: ast_mod.TraitDecl) void {
+        self.printDocComment(d.doc_comment);
         self.writeIndent();
         self.write("trait ") catch {};
         self.write(d.name) catch {};
@@ -401,6 +429,7 @@ pub const Formatter = struct {
     }
 
     fn printImplTrait(self: *Formatter, d: ast_mod.ImplTraitBlock) void {
+        self.printDocComment(d.doc_comment);
         self.writeIndent();
         self.write("impl ") catch {};
         self.write(d.trait_name) catch {};
@@ -428,6 +457,7 @@ pub const Formatter = struct {
     }
 
     fn printErrorSet(self: *Formatter, d: ast_mod.ErrorSetDecl) void {
+        self.printDocComment(d.doc_comment);
         self.writeIndent();
         self.write("const ") catch {};
         self.write(d.name) catch {};

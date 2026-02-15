@@ -4,7 +4,7 @@ const std = @import("std");
 
 pub const Token = enum(u8) {
     // Special
-    illegal, eof, comment,
+    illegal, eof, comment, doc_comment,
 
     // Literals (literal_beg..literal_end)
     literal_beg,
@@ -98,6 +98,7 @@ const token_strings = blk: {
     s[@intFromEnum(Token.illegal)] = "ILLEGAL";
     s[@intFromEnum(Token.eof)] = "EOF";
     s[@intFromEnum(Token.comment)] = "COMMENT";
+    s[@intFromEnum(Token.doc_comment)] = "DOC_COMMENT";
     s[@intFromEnum(Token.ident)] = "IDENT";
     s[@intFromEnum(Token.int_lit)] = "INT";
     s[@intFromEnum(Token.float_lit)] = "FLOAT";

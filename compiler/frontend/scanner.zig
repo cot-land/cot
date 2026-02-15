@@ -53,6 +53,11 @@ pub const Scanner = struct {
 
         if (self.ch == null) return .{ .tok = .eof, .span = Span.fromPos(start), .text = "" };
 
+        // Doc comment: /// ... (Zig pattern — returns token, not skipped)
+        if (self.ch == '/' and self.peek(1) == '/' and self.peek(2) == '/') {
+            return self.scanDocComment(start);
+        }
+
         const c = self.ch.?;
         if (isAlpha(c) or c == '_') return self.scanIdentifier(start);
         if (isDigit(c)) return self.scanNumber(start);
@@ -61,11 +66,36 @@ pub const Scanner = struct {
         return self.scanOperator(start);
     }
 
+    /// Scan a doc comment line (/// ...). Returns the text after "/// " (trimmed).
+    /// Multiple consecutive /// lines are returned as separate tokens — the parser
+    /// concatenates them (Zig pattern: each line is a separate doc_comment token).
+    fn scanDocComment(self: *Scanner, start: Pos) TokenInfo {
+        // Skip the "///" prefix
+        self.advance(); // /
+        self.advance(); // /
+        self.advance(); // /
+        // Skip optional single space after ///
+        if (self.ch == ' ') self.advance();
+        const text_start = self.pos.offset;
+        // Consume until end of line
+        while (self.ch) |cc| {
+            if (cc == '\n') {
+                break;
+            }
+            self.advance();
+        }
+        const text = self.src.content[text_start..self.pos.offset];
+        // Consume the newline so next call starts fresh
+        if (self.ch == '\n') self.advance();
+        return .{ .tok = .doc_comment, .span = Span.init(start, self.pos), .text = text };
+    }
+
     fn skipWhitespaceAndComments(self: *Scanner) void {
         while (self.ch) |c| {
             if (c == ' ' or c == '\t' or c == '\n' or c == '\r') {
                 self.advance();
-            } else if (c == '/' and self.peek(1) == '/') {
+            } else if (c == '/' and self.peek(1) == '/' and self.peek(2) != '/') {
+                // Regular comment (not doc comment) — skip
                 self.advance();
                 self.advance();
                 while (self.ch) |cc| {
@@ -75,6 +105,9 @@ pub const Scanner = struct {
                     }
                     self.advance();
                 }
+            } else if (c == '/' and self.peek(1) == '/' and self.peek(2) == '/') {
+                // Doc comment — stop skipping so next() can return doc_comment token
+                break;
             } else if (c == '/' and self.peek(1) == '*') {
                 self.advance();
                 self.advance();

@@ -1239,12 +1239,13 @@ pub fn Lower(comptime I: type) type {
         }
 
         fn lowerBranchBlockparamArgs(self: *Self, block: BlockIndex) !void {
-            var branch_arg_vregs: abi_mod.BoundedArray(Reg, 16) = .{};
+            var branch_arg_vregs: std.ArrayListUnmanaged(Reg) = .{};
+            defer branch_arg_vregs.deinit(self.allocator);
             const succs = self.block_order.succIndices(block).succs;
 
             for (0..succs.len) |succ_idx| {
-                branch_arg_vregs.len = 0;
-                const result = self.collectBlockCall(block, succ_idx, &branch_arg_vregs);
+                branch_arg_vregs.clearRetainingCapacity();
+                const result = try self.collectBlockCall(block, succ_idx, &branch_arg_vregs);
                 try self.vcode.addSucc(result.succ, result.args);
             }
         }
@@ -1279,8 +1280,8 @@ pub fn Lower(comptime I: type) type {
             self: *Self,
             block: BlockIndex,
             succ_idx: usize,
-            buffer: *abi_mod.BoundedArray(Reg, 16),
-        ) struct { succ: BlockIndex, args: []const Reg } {
+            buffer: *std.ArrayListUnmanaged(Reg),
+        ) !struct { succ: BlockIndex, args: []const Reg } {
             const block_order = self.block_order;
             const succs = block_order.succIndices(block).succs;
             const succ = succs[succ_idx];
@@ -1322,12 +1323,12 @@ pub fn Lower(comptime I: type) type {
                 for (values) |val| {
                     const regs = self.value_regs.get(val);
                     for (regs.regs()) |r| {
-                        buffer.appendAssumeCapacity(r);
+                        try buffer.append(self.allocator, r);
                     }
                 }
             }
 
-            return .{ .succ = succ, .args = buffer.slice() };
+            return .{ .succ = succ, .args = buffer.items };
         }
 
         // =====================================================================

@@ -50,6 +50,41 @@ pub const LoadedConfig = struct {
         return self.parsed.value;
     }
 
+    /// Look up a task command by name from the "tasks" object in cot.json.
+    /// Re-parses the raw JSON to extract the tasks map (Deno pattern).
+    pub fn getTask(self: *const LoadedConfig, allocator: std.mem.Allocator, name: []const u8) ?[]const u8 {
+        if (self.file_contents.len == 0) return null;
+        const parsed = std.json.parseFromSlice(std.json.Value, allocator, self.file_contents, .{}) catch return null;
+        defer parsed.deinit();
+        const root = parsed.value;
+        if (root != .object) return null;
+        const tasks = root.object.get("tasks") orelse return null;
+        if (tasks != .object) return null;
+        const cmd = tasks.object.get(name) orelse return null;
+        if (cmd != .string) return null;
+        // Dupe so it outlives the parsed JSON
+        return allocator.dupe(u8, cmd.string) catch null;
+    }
+
+    /// List all available task names from "tasks" object.
+    pub fn listTasks(self: *const LoadedConfig, allocator: std.mem.Allocator) ?[]const []const u8 {
+        if (self.file_contents.len == 0) return null;
+        const parsed = std.json.parseFromSlice(std.json.Value, allocator, self.file_contents, .{}) catch return null;
+        defer parsed.deinit();
+        const root = parsed.value;
+        if (root != .object) return null;
+        const tasks = root.object.get("tasks") orelse return null;
+        if (tasks != .object) return null;
+        var names = std.ArrayListUnmanaged([]const u8){};
+        var it = tasks.object.iterator();
+        while (it.next()) |entry| {
+            // Only include tasks whose value is a string (Deno validates at parse time)
+            if (entry.value_ptr.* != .string) continue;
+            names.append(allocator, allocator.dupe(u8, entry.key_ptr.*) catch continue) catch continue;
+        }
+        return names.toOwnedSlice(allocator) catch null;
+    }
+
     pub fn deinit(self: *LoadedConfig) void {
         self.parsed.deinit();
         if (self.file_contents.len > 0) {

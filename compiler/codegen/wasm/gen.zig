@@ -1216,6 +1216,11 @@ pub const GenState = struct {
             }
         } else if (v.uses > 0) {
             try self.setReg(v);
+        } else if (v.op.info().call and v.type_idx != TypeRegistry.VOID) {
+            // Side-effect call with discarded non-void return: drop from Wasm stack.
+            // Without this, the return value remains on the Wasm value stack and
+            // causes "values remaining on stack at end of block" validation errors.
+            _ = try self.builder.append(.drop);
         }
     }
 

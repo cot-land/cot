@@ -9,11 +9,14 @@ const Source = source.Source;
 
 pub const Severity = enum { err, warning };
 
-/// Warning codes for lint rules: W001=unused var, W002=unused param, W003=shadowing.
+/// Warning codes for lint rules: W001=unused var, W002=unused param, W003=shadowing,
+/// W004=unreachable code, W005=empty block.
 pub const WarningCode = enum(u16) {
     w001 = 1,
     w002 = 2,
     w003 = 3,
+    w004 = 4,
+    w005 = 5,
 
     pub fn code(self: WarningCode) u16 {
         return @intFromEnum(self);
@@ -24,6 +27,8 @@ pub const WarningCode = enum(u16) {
             .w001 => "unused variable",
             .w002 => "unused parameter",
             .w003 => "variable shadowing",
+            .w004 => "unreachable code",
+            .w005 => "empty block",
         };
     }
 };

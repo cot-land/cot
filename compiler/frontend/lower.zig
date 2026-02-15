@@ -4637,7 +4637,40 @@ pub const Lowerer = struct {
                 const left = try self.lowerExprNode(bc.args[0]);
                 const right = try self.lowerExprNode(bc.args[1]);
                 const left_type = self.inferExprType(bc.args[0]);
-                const cond = if (left_type == TypeRegistry.STRING) blk: {
+                const is_string = left_type == TypeRegistry.STRING;
+
+                // Store values to locals BEFORE branch (br_table can't carry values across blocks)
+                var left_local: ir.LocalIdx = undefined;
+                var right_local: ir.LocalIdx = undefined;
+                var l_ptr_local: ir.LocalIdx = undefined;
+                var l_len_local: ir.LocalIdx = undefined;
+                var r_ptr_local: ir.LocalIdx = undefined;
+                var r_len_local: ir.LocalIdx = undefined;
+
+                if (self.current_test_name != null) {
+                    if (is_string) {
+                        const ptr_type = try self.type_reg.makePointer(TypeRegistry.U8);
+                        const l_p = try fb.emitSlicePtr(left, ptr_type, bc.span);
+                        const l_l = try fb.emitSliceLen(left, bc.span);
+                        const r_p = try fb.emitSlicePtr(right, ptr_type, bc.span);
+                        const r_l = try fb.emitSliceLen(right, bc.span);
+                        l_ptr_local = try fb.addLocalWithSize("__fail_lptr", TypeRegistry.I64, false, 8);
+                        _ = try fb.emitStoreLocal(l_ptr_local, l_p, bc.span);
+                        l_len_local = try fb.addLocalWithSize("__fail_llen", TypeRegistry.I64, false, 8);
+                        _ = try fb.emitStoreLocal(l_len_local, l_l, bc.span);
+                        r_ptr_local = try fb.addLocalWithSize("__fail_rptr", TypeRegistry.I64, false, 8);
+                        _ = try fb.emitStoreLocal(r_ptr_local, r_p, bc.span);
+                        r_len_local = try fb.addLocalWithSize("__fail_rlen", TypeRegistry.I64, false, 8);
+                        _ = try fb.emitStoreLocal(r_len_local, r_l, bc.span);
+                    } else {
+                        left_local = try fb.addLocalWithSize("__fail_left", TypeRegistry.I64, false, 8);
+                        _ = try fb.emitStoreLocal(left_local, left, bc.span);
+                        right_local = try fb.addLocalWithSize("__fail_right", TypeRegistry.I64, false, 8);
+                        _ = try fb.emitStoreLocal(right_local, right, bc.span);
+                    }
+                }
+
+                const cond = if (is_string) blk: {
                     const ptr_type = try self.type_reg.makePointer(TypeRegistry.U8);
                     const l_ptr = try fb.emitSlicePtr(left, ptr_type, bc.span);
                     const l_len = try fb.emitSliceLen(left, bc.span);
@@ -4652,6 +4685,22 @@ pub const Lowerer = struct {
                 _ = try fb.emitBranch(cond, then_block, fail_block, bc.span);
                 fb.setBlock(fail_block);
                 if (self.current_test_name != null) {
+                    // Reload values from locals and store in globals (Deno pattern: expected vs received)
+                    const is_str_val = try fb.emitConstInt(if (is_string) @as(i64, 1) else 0, TypeRegistry.I64, bc.span);
+                    if (is_string) {
+                        const lp = try fb.emitLoadLocal(l_ptr_local, TypeRegistry.I64, bc.span);
+                        const rp = try fb.emitLoadLocal(r_ptr_local, TypeRegistry.I64, bc.span);
+                        const ll = try fb.emitLoadLocal(l_len_local, TypeRegistry.I64, bc.span);
+                        const rl = try fb.emitLoadLocal(r_len_local, TypeRegistry.I64, bc.span);
+                        var store_args = [_]ir.NodeIndex{ lp, rp, is_str_val, ll, rl };
+                        _ = try fb.emitCall("__test_store_fail_values", &store_args, false, TypeRegistry.VOID, bc.span);
+                    } else {
+                        const lv = try fb.emitLoadLocal(left_local, TypeRegistry.I64, bc.span);
+                        const rv = try fb.emitLoadLocal(right_local, TypeRegistry.I64, bc.span);
+                        const zero_len = try fb.emitConstInt(0, TypeRegistry.I64, bc.span);
+                        var store_args = [_]ir.NodeIndex{ lv, rv, is_str_val, zero_len, zero_len };
+                        _ = try fb.emitCall("__test_store_fail_values", &store_args, false, TypeRegistry.VOID, bc.span);
+                    }
                     const ret_type = fb.return_type;
                     const eu_size = self.type_reg.sizeOf(ret_type);
                     const tmp_local = try fb.addLocalWithSize("__assert_eq_err", ret_type, false, eu_size);

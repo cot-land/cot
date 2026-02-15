@@ -53,23 +53,24 @@ pub const FnDecl = struct {
     body: NodeIndex,
     is_extern: bool,
     is_async: bool = false,
+    doc_comment: []const u8 = "",
     span: Span,
 };
-pub const VarDecl = struct { name: []const u8, type_expr: NodeIndex, value: NodeIndex, is_const: bool, span: Span };
-pub const StructDecl = struct { name: []const u8, type_params: []const []const u8 = &.{}, fields: []const Field, span: Span };
-pub const ImplBlock = struct { type_name: []const u8, type_params: []const []const u8 = &.{}, methods: []const NodeIndex, span: Span };
-pub const TraitDecl = struct { name: []const u8, methods: []const NodeIndex, span: Span };
-pub const ImplTraitBlock = struct { trait_name: []const u8, target_type: []const u8, type_params: []const []const u8 = &.{}, methods: []const NodeIndex, span: Span };
+pub const VarDecl = struct { name: []const u8, type_expr: NodeIndex, value: NodeIndex, is_const: bool, doc_comment: []const u8 = "", span: Span };
+pub const StructDecl = struct { name: []const u8, type_params: []const []const u8 = &.{}, fields: []const Field, doc_comment: []const u8 = "", span: Span };
+pub const ImplBlock = struct { type_name: []const u8, type_params: []const []const u8 = &.{}, methods: []const NodeIndex, doc_comment: []const u8 = "", span: Span };
+pub const TraitDecl = struct { name: []const u8, methods: []const NodeIndex, doc_comment: []const u8 = "", span: Span };
+pub const ImplTraitBlock = struct { trait_name: []const u8, target_type: []const u8, type_params: []const []const u8 = &.{}, methods: []const NodeIndex, doc_comment: []const u8 = "", span: Span };
 pub const TestDecl = struct { name: []const u8, body: NodeIndex, span: Span };
 pub const BenchDecl = struct { name: []const u8, body: NodeIndex, span: Span };
-pub const EnumDecl = struct { name: []const u8, backing_type: NodeIndex, variants: []const EnumVariant, span: Span };
-pub const UnionDecl = struct { name: []const u8, variants: []const UnionVariant, span: Span };
-pub const TypeAlias = struct { name: []const u8, target: NodeIndex, span: Span };
+pub const EnumDecl = struct { name: []const u8, backing_type: NodeIndex, variants: []const EnumVariant, doc_comment: []const u8 = "", span: Span };
+pub const UnionDecl = struct { name: []const u8, variants: []const UnionVariant, doc_comment: []const u8 = "", span: Span };
+pub const TypeAlias = struct { name: []const u8, target: NodeIndex, doc_comment: []const u8 = "", span: Span };
 pub const ImportDecl = struct { path: []const u8, span: Span };
-pub const ErrorSetDecl = struct { name: []const u8, variants: []const []const u8, span: Span };
+pub const ErrorSetDecl = struct { name: []const u8, variants: []const []const u8, doc_comment: []const u8 = "", span: Span };
 pub const BadDecl = struct { span: Span };
 
-pub const Field = struct { name: []const u8, type_expr: NodeIndex, default_value: NodeIndex, span: Span };
+pub const Field = struct { name: []const u8, type_expr: NodeIndex, default_value: NodeIndex, doc_comment: []const u8 = "", span: Span };
 pub const EnumVariant = struct { name: []const u8, value: NodeIndex, span: Span };
 pub const UnionVariant = struct { name: []const u8, type_expr: NodeIndex, span: Span };
 

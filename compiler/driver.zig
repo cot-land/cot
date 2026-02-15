@@ -2874,6 +2874,7 @@ pub const Driver = struct {
         try func_indices.put(self.allocator, test_runtime.TEST_PASS_NAME, test_funcs.test_pass_idx);
         try func_indices.put(self.allocator, test_runtime.TEST_FAIL_NAME, test_funcs.test_fail_idx);
         try func_indices.put(self.allocator, test_runtime.TEST_SUMMARY_NAME, test_funcs.test_summary_idx);
+        try func_indices.put(self.allocator, test_runtime.TEST_STORE_FAIL_VALUES_NAME, test_funcs.test_store_fail_values_idx);
 
         // Add bench function names to index map (Go testing.B)
         try func_indices.put(self.allocator, bench_runtime.BENCH_PRINT_NAME_NAME, bench_funcs.bench_print_name_idx);

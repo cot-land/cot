@@ -23,12 +23,14 @@ pub const BuildOptions = struct {
     input_file: []const u8,
     output_name: ?[]const u8 = null,
     target: Target = Target.native(),
+    watch: bool = false,
 };
 
 pub const RunOptions = struct {
     input_file: []const u8,
     target: Target = Target.native(),
     program_args: []const []const u8 = &.{},
+    watch: bool = false,
 };
 
 pub const CheckOptions = struct {
@@ -46,6 +48,7 @@ pub const TestOptions = struct {
     target: Target = Target.native(),
     filter: ?[]const u8 = null,
     verbose: bool = false,
+    watch: bool = false,
 };
 
 pub const BenchOptions = struct {
@@ -63,6 +66,16 @@ pub const FmtOptions = struct {
 
 pub const InitOptions = struct {
     project_name: ?[]const u8 = null,
+    lib: bool = false,
+};
+
+pub const DocOptions = struct {
+    input_file: []const u8 = "",
+    output: []const u8 = "docs",
+};
+
+pub const TaskOptions = struct {
+    task_name: []const u8 = "",
 };
 
 pub const HelpOptions = struct {
@@ -77,6 +90,9 @@ pub const Command = union(enum) {
     check: CheckOptions,
     lint: LintOptions,
     fmt: FmtOptions,
+    doc: DocOptions,
+    task: TaskOptions,
+    info,
     init: InitOptions,
     lsp,
     mcp,
@@ -98,6 +114,14 @@ pub fn parseArgs(allocator: std.mem.Allocator) ?Command {
     if (std.mem.eql(u8, first, "check")) return parseCheck(&args);
     if (std.mem.eql(u8, first, "lint")) return parseLint(&args);
     if (std.mem.eql(u8, first, "fmt")) return parseFmt(&args);
+    if (std.mem.eql(u8, first, "doc")) return parseDoc(&args);
+    if (std.mem.eql(u8, first, "task")) {
+        const name = args.next() orelse {
+            return .{ .task = .{} };
+        };
+        return .{ .task = .{ .task_name = name } };
+    }
+    if (std.mem.eql(u8, first, "info")) return .info;
     if (std.mem.eql(u8, first, "init")) return parseInit(&args);
     if (std.mem.eql(u8, first, "lsp")) return .lsp;
     if (std.mem.eql(u8, first, "mcp")) return .mcp;
@@ -134,6 +158,8 @@ fn parseBuild(args: *std.process.ArgIterator) ?Command {
             };
         } else if (isTargetFlag(arg)) {
             opts.target = parseTarget(arg, args) orelse return null;
+        } else if (std.mem.eql(u8, arg, "--watch") or std.mem.eql(u8, arg, "-w")) {
+            opts.watch = true;
         } else if (!std.mem.startsWith(u8, arg, "-")) {
             opts.input_file = arg;
             has_input = true;
@@ -163,6 +189,8 @@ fn parseRun(allocator: std.mem.Allocator, args: *std.process.ArgIterator) ?Comma
             break;
         } else if (isTargetFlag(arg)) {
             opts.target = parseTarget(arg, args) orelse return null;
+        } else if (std.mem.eql(u8, arg, "--watch") or std.mem.eql(u8, arg, "-w")) {
+            opts.watch = true;
         } else if (!std.mem.startsWith(u8, arg, "-")) {
             opts.input_file = arg;
             has_input = true;
@@ -196,6 +224,8 @@ fn parseTest(args: *std.process.ArgIterator) ?Command {
             };
         } else if (std.mem.eql(u8, arg, "--verbose") or std.mem.eql(u8, arg, "-v")) {
             opts.verbose = true;
+        } else if (std.mem.eql(u8, arg, "--watch") or std.mem.eql(u8, arg, "-w")) {
+            opts.watch = true;
         } else if (!std.mem.startsWith(u8, arg, "-")) {
             opts.input_file = arg;
             has_input = true;
@@ -328,10 +358,35 @@ fn parseFmt(args: *std.process.ArgIterator) ?Command {
     return .{ .fmt = opts };
 }
 
+fn parseDoc(args: *std.process.ArgIterator) ?Command {
+    var opts = DocOptions{};
+    while (args.next()) |arg| {
+        if (std.mem.startsWith(u8, arg, "-o") or std.mem.startsWith(u8, arg, "--output")) {
+            if (std.mem.startsWith(u8, arg, "-o=") or std.mem.startsWith(u8, arg, "--output=")) {
+                const eq_pos = std.mem.indexOf(u8, arg, "=") orelse continue;
+                opts.output = arg[eq_pos + 1 ..];
+            } else {
+                opts.output = args.next() orelse {
+                    std.debug.print("Error: -o requires an argument\n", .{});
+                    return null;
+                };
+            }
+        } else if (!std.mem.startsWith(u8, arg, "-")) {
+            opts.input_file = arg;
+        } else {
+            std.debug.print("Error: Unknown option '{s}'\n", .{arg});
+            return null;
+        }
+    }
+    return .{ .doc = opts };
+}
+
 fn parseInit(args: *std.process.ArgIterator) ?Command {
     var opts = InitOptions{};
-    if (args.next()) |arg| {
-        if (!std.mem.startsWith(u8, arg, "-")) {
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--lib")) {
+            opts.lib = true;
+        } else if (!std.mem.startsWith(u8, arg, "-")) {
             opts.project_name = arg;
         } else {
             std.debug.print("Error: Unknown option '{s}'\n", .{arg});
@@ -459,8 +514,12 @@ pub fn printHelp(subcommand: ?[]const u8) void {
             printLintHelp();
         } else if (std.mem.eql(u8, sub, "fmt")) {
             printFmtHelp();
+        } else if (std.mem.eql(u8, sub, "doc")) {
+            printDocHelp();
         } else if (std.mem.eql(u8, sub, "init")) {
             printInitHelp();
+        } else if (std.mem.eql(u8, sub, "task")) {
+            printTaskHelp();
         } else if (std.mem.eql(u8, sub, "mcp")) {
             printMcpHelp();
         } else {
@@ -484,6 +543,9 @@ fn printUsage() void {
         \\  cot check <file.cot>            Type-check without compiling
         \\  cot lint <file.cot>             Check for warnings
         \\  cot fmt <file.cot>              Format source code (in-place)
+        \\  cot doc <file.cot>              Generate HTML documentation
+        \\  cot task <name>                 Run a task from cot.json
+        \\  cot info                        Show project information
         \\  cot init [name]                 Create a new project
         \\  cot lsp                         Start language server (LSP)
         \\  cot mcp                         Start MCP server for AI tools
@@ -499,36 +561,39 @@ fn printUsage() void {
 
 fn printBuildHelp() void {
     std.debug.print(
-        \\Usage: cot build <file.cot> [-o name] [--target=<t>]
+        \\Usage: cot build <file.cot> [-o name] [--target=<t>] [--watch]
         \\
         \\Compile a Cot source file to an executable or Wasm module.
         \\
         \\Flags:
         \\  -o <name>       Output name (default: input filename without .cot)
         \\  --target=<t>    Target: wasm32, wasm32-wasi, arm64-macos, amd64-linux
+        \\  --watch, -w     Recompile on file changes
         \\
         \\Examples:
         \\  cot build app.cot               Produces ./app
         \\  cot build app.cot -o myapp      Produces ./myapp
+        \\  cot build app.cot --watch       Recompile on save
         \\  cot build app.cot --target=wasm32  Produces ./app.wasm
-        \\  cot build app.cot --target=wasm32-wasi  Produces ./app.wasm (with WASI imports)
         \\
     , .{});
 }
 
 fn printRunHelp() void {
     std.debug.print(
-        \\Usage: cot run <file.cot> [--target=<t>] [-- args...]
+        \\Usage: cot run <file.cot> [--target=<t>] [--watch] [-- args...]
         \\
         \\Compile and run a Cot source file. The executable is placed in a
         \\temporary directory and cleaned up after execution.
         \\
         \\Flags:
         \\  --target=<t>    Target: arm64-macos, amd64-linux (wasm32 not supported)
+        \\  --watch, -w     Recompile and rerun on file changes
         \\  -- args...      Arguments passed to the program
         \\
         \\Examples:
         \\  cot run app.cot                 Compile and run
+        \\  cot run app.cot --watch         Rerun on save
         \\  cot run app.cot -- hello world  Pass arguments to program
         \\
     , .{});
@@ -536,7 +601,7 @@ fn printRunHelp() void {
 
 fn printTestHelp() void {
     std.debug.print(
-        \\Usage: cot test <file.cot> [--target=<t>] [--filter=<str>] [--verbose]
+        \\Usage: cot test <file.cot> [--target=<t>] [--filter=<str>] [--verbose] [--watch]
         \\
         \\Compile and run a Cot source file in test mode.
         \\
@@ -544,11 +609,12 @@ fn printTestHelp() void {
         \\  --target=<t>    Target: arm64-macos, amd64-linux
         \\  --filter=<str>  Only run tests whose name contains <str>
         \\  --verbose, -v   Show detailed test output
+        \\  --watch, -w     Retest on file changes
         \\
         \\Examples:
         \\  cot test app.cot                    Run all tests in app.cot
         \\  cot test app.cot --filter=math       Run only tests matching "math"
-        \\  cot test app.cot --verbose           Run with detailed output
+        \\  cot test app.cot --watch             Retest on save
         \\
     , .{});
 }
@@ -594,8 +660,7 @@ fn printLintHelp() void {
     std.debug.print(
         \\Usage: cot lint <file.cot> [--target=<t>]
         \\
-        \\Check a Cot source file for common issues: unused variables,
-        \\unused parameters, and variable shadowing.
+        \\Check a Cot source file for common issues.
         \\
         \\Flags:
         \\  --target=<t>    Target: wasm32, arm64-macos, amd64-linux
@@ -604,6 +669,8 @@ fn printLintHelp() void {
         \\  W001  Unused variable        Local variable defined but never used
         \\  W002  Unused parameter        Function parameter never referenced
         \\  W003  Variable shadowing      Local shadows an outer scope variable
+        \\  W004  Unreachable code        Code after return/break/continue
+        \\  W005  Empty block             Empty if/while/for body
         \\
         \\Examples:
         \\  cot lint app.cot                    Lint app.cot
@@ -612,18 +679,48 @@ fn printLintHelp() void {
     , .{});
 }
 
+fn printTaskHelp() void {
+    const help =
+        "Usage: cot task <name>\n" ++
+        "\n" ++
+        "Run a named task defined in cot.json.\n" ++
+        "\n" ++
+        "Tasks are shell commands defined in the \"tasks\" object:\n" ++
+        "\n" ++
+        "  {\n" ++
+        "    \"tasks\": {\n" ++
+        "      \"dev\": \"cot run --watch src/main.cot\",\n" ++
+        "      \"build\": \"cot build src/main.cot -o app\",\n" ++
+        "      \"test\": \"cot test test/main.cot\"\n" ++
+        "    }\n" ++
+        "  }\n" ++
+        "\n" ++
+        "Run without a name to list available tasks:\n" ++
+        "  cot task\n" ++
+        "\n" ++
+        "Examples:\n" ++
+        "  cot task dev                     Run the \"dev\" task\n" ++
+        "  cot task build                   Run the \"build\" task\n" ++
+        "  cot task                         List available tasks\n";
+    std.debug.print("{s}", .{help});
+}
+
 fn printInitHelp() void {
     std.debug.print(
-        \\Usage: cot init [name]
+        \\Usage: cot init [name] [--lib]
         \\
-        \\Create a new Cot project with cot.json, src/main.cot, and .gitignore.
+        \\Create a new Cot project with cot.json, source files, tests, and .gitignore.
         \\
         \\Arguments:
         \\  name            Project name and directory (default: current directory)
         \\
+        \\Options:
+        \\  --lib           Create a library project (src/lib.cot instead of src/main.cot)
+        \\
         \\Examples:
         \\  cot init                        Initialize in current directory
         \\  cot init myapp                  Create myapp/ directory with project
+        \\  cot init mylib --lib            Create a library project
         \\
     , .{});
 }
@@ -674,6 +771,22 @@ fn printFmtHelp() void {
         \\  cot fmt app.cot                 Format file in-place
         \\  cot fmt --check app.cot         Check formatting (CI mode)
         \\  cot fmt --stdout app.cot        Print formatted output to stdout
+        \\
+    , .{});
+}
+
+fn printDocHelp() void {
+    std.debug.print(
+        \\Usage: cot doc <file.cot> [-o dir]
+        \\
+        \\Generate HTML documentation from /// doc comments.
+        \\
+        \\Flags:
+        \\  -o <dir>        Output directory (default: docs/)
+        \\
+        \\Examples:
+        \\  cot doc src/main.cot             Generate docs in docs/
+        \\  cot doc lib.cot -o api           Generate docs in api/
         \\
     , .{});
 }

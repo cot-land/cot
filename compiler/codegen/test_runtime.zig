@@ -36,6 +36,7 @@ pub const TEST_PRINT_NAME_NAME = "__test_print_name";
 pub const TEST_PASS_NAME = "__test_pass";
 pub const TEST_FAIL_NAME = "__test_fail";
 pub const TEST_SUMMARY_NAME = "__test_summary";
+pub const TEST_STORE_FAIL_VALUES_NAME = "__test_store_fail_values";
 
 // =============================================================================
 // Return Type
@@ -47,6 +48,7 @@ pub const TestFunctions = struct {
     test_pass_idx: u32,
     test_fail_idx: u32,
     test_summary_idx: u32,
+    test_store_fail_values_idx: u32,
 };
 
 // =============================================================================
@@ -61,6 +63,20 @@ pub fn addToLinker(allocator: std.mem.Allocator, linker: *@import("wasm/link.zig
     const total_start_dynamic = try linker.addGlobal(.{ .val_type = .i64, .mutable = true, .init_i64 = 0 });
     const test_start_global = test_start_dynamic + 1; // Offset by SP
     const total_start_global = total_start_dynamic + 1; // Offset by SP
+
+    // Add globals for storing assert_eq failure values (Deno pattern: show expected vs actual)
+    // fail_left_val: left value (i64 for ints, ptr for strings)
+    // fail_right_val: right value (i64 for ints, ptr for strings)
+    // fail_left_len: 0 for ints, string length for strings
+    // fail_right_len: 0 for ints, string length for strings
+    // fail_is_string: 0 = integer, 1 = string
+    // fail_has_values: 0 = no values stored, 1 = values pending display
+    const fail_left_val_global = (try linker.addGlobal(.{ .val_type = .i64, .mutable = true, .init_i64 = 0 })) + 1;
+    const fail_right_val_global = (try linker.addGlobal(.{ .val_type = .i64, .mutable = true, .init_i64 = 0 })) + 1;
+    const fail_left_len_global = (try linker.addGlobal(.{ .val_type = .i64, .mutable = true, .init_i64 = 0 })) + 1;
+    const fail_right_len_global = (try linker.addGlobal(.{ .val_type = .i64, .mutable = true, .init_i64 = 0 })) + 1;
+    const fail_is_string_global = (try linker.addGlobal(.{ .val_type = .i64, .mutable = true, .init_i64 = 0 })) + 1;
+    const fail_has_values_global = (try linker.addGlobal(.{ .val_type = .i64, .mutable = true, .init_i64 = 0 })) + 1;
 
     // __test_begin: () -> void
     const void_type = try linker.addType(
@@ -98,11 +114,24 @@ pub fn addToLinker(allocator: std.mem.Allocator, linker: *@import("wasm/link.zig
     });
 
     // __test_fail: () -> void
-    const fail_body = try generateTestFailBody(allocator, write_func_idx, eprint_int_func_idx, time_func_idx, test_start_global);
+    const fail_body = try generateTestFailBody(allocator, write_func_idx, eprint_int_func_idx, time_func_idx, test_start_global, fail_has_values_global, fail_left_val_global, fail_right_val_global, fail_left_len_global, fail_right_len_global, fail_is_string_global);
     const test_fail_idx = try linker.addFunc(.{
         .name = TEST_FAIL_NAME,
         .type_idx = void_type,
         .code = fail_body,
+        .exported = false,
+    });
+
+    // __test_store_fail_values: (left: i64, right: i64, is_string: i64, left_len: i64, right_len: i64) -> void
+    const store_fail_type = try linker.addType(
+        &[_]ValType{ .i64, .i64, .i64, .i64, .i64 },
+        &[_]ValType{},
+    );
+    const store_fail_body = try generateTestStoreFailValuesBody(allocator, fail_left_val_global, fail_right_val_global, fail_is_string_global, fail_left_len_global, fail_right_len_global, fail_has_values_global);
+    const test_store_fail_values_idx = try linker.addFunc(.{
+        .name = TEST_STORE_FAIL_VALUES_NAME,
+        .type_idx = store_fail_type,
+        .code = store_fail_body,
         .exported = false,
     });
 
@@ -125,6 +154,7 @@ pub fn addToLinker(allocator: std.mem.Allocator, linker: *@import("wasm/link.zig
         .test_pass_idx = test_pass_idx,
         .test_fail_idx = test_fail_idx,
         .test_summary_idx = test_summary_idx,
+        .test_store_fail_values_idx = test_store_fail_values_idx,
     };
 }
 
@@ -284,7 +314,19 @@ fn generateTestPassBody(allocator: std.mem.Allocator, write_func_idx: u32, eprin
 // __test_fail — computes elapsed, writes "\x1b[1;31mFAIL\x1b[0m (Nms)\n"
 // =============================================================================
 
-fn generateTestFailBody(allocator: std.mem.Allocator, write_func_idx: u32, eprint_int_func_idx: u32, time_func_idx: u32, test_start_global: u32) ![]const u8 {
+fn generateTestFailBody(
+    allocator: std.mem.Allocator,
+    write_func_idx: u32,
+    eprint_int_func_idx: u32,
+    time_func_idx: u32,
+    test_start_global: u32,
+    fail_has_values_global: u32,
+    fail_left_val_global: u32,
+    fail_right_val_global: u32,
+    fail_left_len_global: u32,
+    fail_right_len_global: u32,
+    fail_is_string_global: u32,
+) ![]const u8 {
     var code = wasm.CodeBuilder.init(allocator);
     defer code.deinit();
 
@@ -295,9 +337,9 @@ fn generateTestFailBody(allocator: std.mem.Allocator, write_func_idx: u32, eprin
     try emitComputeElapsedMs(&code, time_func_idx, test_start_global);
     try code.emitLocalSet(1);
 
-    // Allocate 24 bytes on stack
+    // Allocate 32 bytes on stack (need extra for value display)
     try code.emitGlobalGet(0);
-    try code.emitI32Const(24);
+    try code.emitI32Const(32);
     try code.emitI32Sub();
     try code.emitLocalTee(0);
     try code.emitGlobalSet(0);
@@ -312,9 +354,62 @@ fn generateTestFailBody(allocator: std.mem.Allocator, write_func_idx: u32, eprin
     // Write "ms)\n"
     try emitWriteString(&code, write_func_idx, 0, "ms)\n");
 
+    // If fail values are stored, print expected vs actual (Deno pattern)
+    try code.emitGlobalGet(fail_has_values_global);
+    try code.emitI64Const(0);
+    try code.emitI64Ne();
+    try code.emitIf(BLOCK_VOID);
+    {
+        // Check if string comparison
+        try code.emitGlobalGet(fail_is_string_global);
+        try code.emitI64Const(0);
+        try code.emitI64Ne();
+        try code.emitIf(BLOCK_VOID);
+        {
+            // String values: write "  expected: " + left string + "\n"
+            try emitWriteString(&code, write_func_idx, 0, "  expected: \"");
+            // Write left string (ptr, len)
+            try code.emitI64Const(2); // fd = stderr
+            try code.emitGlobalGet(fail_left_val_global); // ptr
+            try code.emitGlobalGet(fail_left_len_global); // len
+            try code.emitCall(write_func_idx);
+            try code.emitDrop();
+            try emitWriteString(&code, write_func_idx, 0, "\"\n");
+
+            // Write "  received: " + right string + "\n"
+            try emitWriteString(&code, write_func_idx, 0, "  received: \"");
+            try code.emitI64Const(2); // fd = stderr
+            try code.emitGlobalGet(fail_right_val_global); // ptr
+            try code.emitGlobalGet(fail_right_len_global); // len
+            try code.emitCall(write_func_idx);
+            try code.emitDrop();
+            try emitWriteString(&code, write_func_idx, 0, "\"\n");
+        }
+        try code.emitElse();
+        {
+            // Integer values: write "  expected: " + int + "\n"
+            try emitWriteString(&code, write_func_idx, 0, "  expected: ");
+            try code.emitGlobalGet(fail_left_val_global);
+            try code.emitCall(eprint_int_func_idx);
+            try emitWriteString(&code, write_func_idx, 0, "\n");
+
+            // Write "  received: " + int + "\n"
+            try emitWriteString(&code, write_func_idx, 0, "  received: ");
+            try code.emitGlobalGet(fail_right_val_global);
+            try code.emitCall(eprint_int_func_idx);
+            try emitWriteString(&code, write_func_idx, 0, "\n");
+        }
+        try code.emitEnd();
+
+        // Reset fail_has_values
+        try code.emitI64Const(0);
+        try code.emitGlobalSet(fail_has_values_global);
+    }
+    try code.emitEnd();
+
     // Restore stack pointer
     try code.emitLocalGet(0);
-    try code.emitI32Const(24);
+    try code.emitI32Const(32);
     try code.emitI32Add();
     try code.emitGlobalSet(0);
 
@@ -398,6 +493,49 @@ fn generateTestSummaryBody(allocator: std.mem.Allocator, write_func_idx: u32, ep
     try code.emitI32Const(32);
     try code.emitI32Add();
     try code.emitGlobalSet(0);
+
+    return try code.finish();
+}
+
+// =============================================================================
+// __test_store_fail_values — stores assert_eq left/right values in globals
+// Called from @assert_eq fail path before returning error union.
+// Params: left_val, right_val, is_string, left_len, right_len
+// =============================================================================
+
+fn generateTestStoreFailValuesBody(
+    allocator: std.mem.Allocator,
+    fail_left_val_global: u32,
+    fail_right_val_global: u32,
+    fail_is_string_global: u32,
+    fail_left_len_global: u32,
+    fail_right_len_global: u32,
+    fail_has_values_global: u32,
+) ![]const u8 {
+    var code = wasm.CodeBuilder.init(allocator);
+    defer code.deinit();
+
+    // param 0: left_val, param 1: right_val, param 2: is_string
+    // param 3: left_len, param 4: right_len
+
+    try code.emitLocalGet(0); // left_val
+    try code.emitGlobalSet(fail_left_val_global);
+
+    try code.emitLocalGet(1); // right_val
+    try code.emitGlobalSet(fail_right_val_global);
+
+    try code.emitLocalGet(2); // is_string
+    try code.emitGlobalSet(fail_is_string_global);
+
+    try code.emitLocalGet(3); // left_len
+    try code.emitGlobalSet(fail_left_len_global);
+
+    try code.emitLocalGet(4); // right_len
+    try code.emitGlobalSet(fail_right_len_global);
+
+    // Mark that values are available
+    try code.emitI64Const(1);
+    try code.emitGlobalSet(fail_has_values_global);
 
     return try code.finish();
 }

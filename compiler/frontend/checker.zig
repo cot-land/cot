@@ -252,6 +252,49 @@ pub const Checker = struct {
         }
     }
 
+    /// Check a statement list for unreachable code after return/break/continue.
+    /// Zig pattern: compiler warns on statements after `return` in a block.
+    fn checkStmtsWithReachability(self: *Checker, stmts: []const NodeIndex) void {
+        var seen_terminal = false;
+        var warned = false;
+        for (stmts) |stmt_idx| {
+            if (seen_terminal and self.lint_mode and !warned) {
+                // Warn once on the first unreachable statement (Zig pattern)
+                const pos = if (self.tree.getNode(stmt_idx)) |n| n.span().start else Pos.zero;
+                self.err.warningWithCode(pos, .w004, "unreachable code after return");
+                warned = true;
+            }
+            if (!seen_terminal) {
+                self.checkStmt(stmt_idx) catch {};
+            }
+            // Check if this statement is terminal (return, break, continue)
+            if (!seen_terminal) {
+                if (self.tree.getNode(stmt_idx)) |node| {
+                    if (node.asStmt()) |stmt| {
+                        switch (stmt) {
+                            .return_stmt, .break_stmt, .continue_stmt => {
+                                seen_terminal = true;
+                            },
+                            else => {},
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Check if a node is an empty block (for lint W005).
+    fn isEmptyBlock(self: *Checker, idx: NodeIndex) bool {
+        const node = self.tree.getNode(idx) orelse return false;
+        if (node.asStmt()) |stmt| {
+            if (stmt == .block_stmt) return stmt.block_stmt.stmts.len == 0;
+        }
+        if (node.asExpr()) |expr| {
+            if (expr == .block_expr) return expr.block_expr.stmts.len == 0 and expr.block_expr.expr == ast.null_node;
+        }
+        return false;
+    }
+
     pub fn checkFile(self: *Checker) CheckError!void {
         const file = self.tree.file orelse return;
         self.safe_mode = file.safe_mode;
@@ -1457,7 +1500,7 @@ pub const Checker = struct {
         defer block_scope.deinit();
         const old_scope = self.scope;
         self.scope = &block_scope;
-        for (b.stmts) |stmt_idx| try self.checkStmt(stmt_idx);
+        self.checkStmtsWithReachability(b.stmts);
         if (self.lint_mode) self.checkScopeUnused(&block_scope);
         self.scope = old_scope;
         return if (b.expr != null_node) try self.checkExpr(b.expr) else TypeRegistry.VOID;
@@ -1661,13 +1704,26 @@ pub const Checker = struct {
             if (is.else_branch != null_node) { try self.checkStmt(is.else_branch); return; }
             return;
         }
+        // Lint: empty block detection (W005)
+        if (self.lint_mode and self.isEmptyBlock(is.then_branch)) {
+            self.err.warningWithCode(is.span.start, .w005, "empty if body");
+        }
         try self.checkStmt(is.then_branch);
-        if (is.else_branch != null_node) try self.checkStmt(is.else_branch);
+        if (is.else_branch != null_node) {
+            if (self.lint_mode and self.isEmptyBlock(is.else_branch)) {
+                self.err.warningWithCode(is.span.start, .w005, "empty else body");
+            }
+            try self.checkStmt(is.else_branch);
+        }
     }
 
     fn checkWhileStmt(self: *Checker, ws: ast.WhileStmt) CheckError!void {
         const cond_type = try self.checkExpr(ws.condition);
         if (!types.isBool(self.types.get(cond_type))) self.err.errorWithCode(ws.span.start, .e300, "condition must be bool");
+        // Lint: empty block detection (W005)
+        if (self.lint_mode and self.isEmptyBlock(ws.body)) {
+            self.err.warningWithCode(ws.span.start, .w005, "empty while body");
+        }
         const old_in_loop = self.in_loop;
         self.in_loop = true;
         try self.checkStmt(ws.body);
@@ -1721,6 +1777,10 @@ pub const Checker = struct {
         if (fs.index_binding) |idx_binding| {
             try loop_scope.define(Symbol.init(idx_binding, .variable, idx_type, null_node, false));
         }
+        // Lint: empty block detection (W005)
+        if (self.lint_mode and self.isEmptyBlock(fs.body)) {
+            self.err.warningWithCode(fs.span.start, .w005, "empty for body");
+        }
         const old_scope = self.scope;
         const old_in_loop = self.in_loop;
         self.scope = &loop_scope;
@@ -1735,7 +1795,7 @@ pub const Checker = struct {
         defer block_scope.deinit();
         const old_scope = self.scope;
         self.scope = &block_scope;
-        for (bs.stmts) |stmt_idx| try self.checkStmt(stmt_idx);
+        self.checkStmtsWithReachability(bs.stmts);
         if (self.lint_mode) self.checkScopeUnused(&block_scope);
         self.scope = old_scope;
     }

@@ -285,12 +285,22 @@ fn resolveToStruct(reg: *const TypeRegistry, type_idx: TypeIndex) ?types_mod.Str
     }
 }
 
+/// Append doc comment to a hover string (markdown format).
+/// If doc_comment is non-empty, appends "\n\n---\n\n" separator then the comment text.
+fn appendDocComment(allocator: std.mem.Allocator, code_block: []const u8, doc_comment: []const u8) []const u8 {
+    if (doc_comment.len == 0) return code_block;
+    return std.fmt.allocPrint(allocator, "{s}\n\n---\n\n{s}", .{ code_block, doc_comment }) catch code_block;
+}
+
 fn declHover(allocator: std.mem.Allocator, result: *AnalysisResult, decl: Decl) ?MarkupContent {
     switch (decl) {
         .fn_decl => |f| {
             // Look up the function's resolved type for full signature
             if (result.global_scope.lookup(f.name)) |sym| {
-                return funcTypeHover(allocator, &result.type_reg, f.name, result.type_reg.get(sym.type_idx));
+                var hover = funcTypeHover(allocator, &result.type_reg, f.name, result.type_reg.get(sym.type_idx));
+                if (hover != null and f.doc_comment.len > 0)
+                    hover.?.value = appendDocComment(allocator, hover.?.value, f.doc_comment);
+                return hover;
             }
             // Fallback: build from AST params (no types)
             var sig = std.ArrayListUnmanaged(u8){};
@@ -302,36 +312,43 @@ fn declHover(allocator: std.mem.Allocator, result: *AnalysisResult, decl: Decl) 
                 sig.appendSlice(allocator, param.name) catch return null;
             }
             sig.appendSlice(allocator, ")\n```") catch return null;
-            return .{ .kind = "markdown", .value = sig.toOwnedSlice(allocator) catch return null };
+            const code = sig.toOwnedSlice(allocator) catch return null;
+            return .{ .kind = "markdown", .value = appendDocComment(allocator, code, f.doc_comment) };
         },
         .var_decl => |v| {
             const keyword: []const u8 = if (v.is_const) "const" else "var";
             if (result.global_scope.lookup(v.name)) |sym| {
                 const type_name = result.type_reg.typeName(sym.type_idx);
-                const value = std.fmt.allocPrint(allocator, "```cot\n{s} {s}: {s}\n```", .{ keyword, v.name, type_name }) catch return null;
-                return .{ .kind = "markdown", .value = value };
+                const code = std.fmt.allocPrint(allocator, "```cot\n{s} {s}: {s}\n```", .{ keyword, v.name, type_name }) catch return null;
+                return .{ .kind = "markdown", .value = appendDocComment(allocator, code, v.doc_comment) };
             }
-            const value = std.fmt.allocPrint(allocator, "```cot\n{s} {s}\n```", .{ keyword, v.name }) catch return null;
-            return .{ .kind = "markdown", .value = value };
+            const code = std.fmt.allocPrint(allocator, "```cot\n{s} {s}\n```", .{ keyword, v.name }) catch return null;
+            return .{ .kind = "markdown", .value = appendDocComment(allocator, code, v.doc_comment) };
         },
         .struct_decl => |s| {
             // Show struct with fields
             if (result.type_reg.lookupByName(s.name)) |type_idx| {
-                return typeHover(allocator, &result.type_reg, s.name, result.type_reg.get(type_idx));
+                var hover = typeHover(allocator, &result.type_reg, s.name, result.type_reg.get(type_idx));
+                if (hover != null and s.doc_comment.len > 0)
+                    hover.?.value = appendDocComment(allocator, hover.?.value, s.doc_comment);
+                return hover;
             }
-            const value = std.fmt.allocPrint(allocator, "```cot\nstruct {s}\n```", .{s.name}) catch return null;
-            return .{ .kind = "markdown", .value = value };
+            const code = std.fmt.allocPrint(allocator, "```cot\nstruct {s}\n```", .{s.name}) catch return null;
+            return .{ .kind = "markdown", .value = appendDocComment(allocator, code, s.doc_comment) };
         },
         .enum_decl => |e| {
             if (result.type_reg.lookupByName(e.name)) |type_idx| {
-                return typeHover(allocator, &result.type_reg, e.name, result.type_reg.get(type_idx));
+                var hover = typeHover(allocator, &result.type_reg, e.name, result.type_reg.get(type_idx));
+                if (hover != null and e.doc_comment.len > 0)
+                    hover.?.value = appendDocComment(allocator, hover.?.value, e.doc_comment);
+                return hover;
             }
-            const value = std.fmt.allocPrint(allocator, "```cot\nenum {s}\n```", .{e.name}) catch return null;
-            return .{ .kind = "markdown", .value = value };
+            const code = std.fmt.allocPrint(allocator, "```cot\nenum {s}\n```", .{e.name}) catch return null;
+            return .{ .kind = "markdown", .value = appendDocComment(allocator, code, e.doc_comment) };
         },
         .trait_decl => |t| {
-            const value = std.fmt.allocPrint(allocator, "```cot\ntrait {s}\n```", .{t.name}) catch return null;
-            return .{ .kind = "markdown", .value = value };
+            const code = std.fmt.allocPrint(allocator, "```cot\ntrait {s}\n```", .{t.name}) catch return null;
+            return .{ .kind = "markdown", .value = appendDocComment(allocator, code, t.doc_comment) };
         },
         else => return null,
     }

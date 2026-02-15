@@ -32,6 +32,8 @@ pub const Parser = struct {
     current_impl_type: ?[]const u8 = null,
     /// Whether current impl block is generic (skip implicit self for generics)
     current_impl_is_generic: bool = false,
+    /// Pending doc comment text (accumulated from consecutive /// lines)
+    pending_doc_comment: []const u8 = "",
 
     const max_nest_lev: u32 = 10000;
     pub const ParseError = error{OutOfMemory};
@@ -134,6 +136,34 @@ pub const Parser = struct {
 
     fn decNest(self: *Parser) void { self.nest_lev -= 1; }
 
+    /// Collect consecutive /// doc comment tokens into pending_doc_comment.
+    /// Zig pattern: multiple consecutive doc_comment tokens are joined with newlines.
+    fn collectDocComment(self: *Parser) void {
+        if (!self.check(.doc_comment)) {
+            self.pending_doc_comment = "";
+            return;
+        }
+        // First doc comment line
+        var buf = std.ArrayListUnmanaged(u8){};
+        defer buf.deinit(self.allocator);
+        buf.appendSlice(self.allocator, self.tok.text) catch return;
+        self.advance();
+        // Accumulate consecutive doc comment lines
+        while (self.check(.doc_comment)) {
+            buf.append(self.allocator, '\n') catch return;
+            buf.appendSlice(self.allocator, self.tok.text) catch return;
+            self.advance();
+        }
+        self.pending_doc_comment = self.allocator.dupe(u8, buf.items) catch "";
+    }
+
+    /// Consume and return the pending doc comment, resetting it to empty.
+    fn consumeDocComment(self: *Parser) []const u8 {
+        const doc = self.pending_doc_comment;
+        self.pending_doc_comment = "";
+        return doc;
+    }
+
     // File parsing
 
     pub fn parseFile(self: *Parser) ParseError!void {
@@ -154,6 +184,9 @@ pub const Parser = struct {
         }
 
         while (!self.check(.eof)) {
+            // Collect consecutive doc comment lines before declarations
+            self.collectDocComment();
+            if (self.check(.eof)) break;
             if (try self.parseDecl()) |decl_idx| try decls.append(self.allocator, decl_idx) else self.advance();
         }
 
@@ -200,6 +233,7 @@ pub const Parser = struct {
     }
 
     fn parseFnDecl(self: *Parser, is_extern: bool, is_async: bool) ParseError!?NodeIndex {
+        const doc_comment = self.consumeDocComment();
         const start = self.pos();
         self.advance();
         if (!self.check(.ident)) { self.err.errorWithCode(self.pos(), .e203, "expected function name"); return null; }
@@ -286,7 +320,7 @@ pub const Parser = struct {
             body = try self.parseBlock() orelse return null;
         }
 
-        return try self.tree.addDecl(.{ .fn_decl = .{ .name = name, .type_params = type_params, .type_param_bounds = type_param_bounds, .params = params, .return_type = return_type, .body = body, .is_extern = is_extern, .is_async = is_async, .span = Span.init(start, self.pos()) } });
+        return try self.tree.addDecl(.{ .fn_decl = .{ .name = name, .type_params = type_params, .type_param_bounds = type_param_bounds, .params = params, .return_type = return_type, .body = body, .is_extern = is_extern, .is_async = is_async, .doc_comment = doc_comment, .span = Span.init(start, self.pos()) } });
     }
 
     fn parseFieldList(self: *Parser, end_tok: Token) ParseError![]const ast.Field {
@@ -294,6 +328,8 @@ pub const Parser = struct {
         defer fields.deinit(self.allocator);
 
         while (!self.check(end_tok) and !self.check(.eof)) {
+            self.collectDocComment();
+            const field_doc = self.consumeDocComment();
             const field_start = self.pos();
             if (!self.check(.ident)) break;
             const field_name = self.tok.text;
@@ -302,13 +338,14 @@ pub const Parser = struct {
             const type_expr = try self.parseType() orelse break;
             var default_value: NodeIndex = null_node;
             if (self.match(.assign)) default_value = try self.parseExpr() orelse break;
-            try fields.append(self.allocator, .{ .name = field_name, .type_expr = type_expr, .default_value = default_value, .span = Span.init(field_start, self.pos()) });
+            try fields.append(self.allocator, .{ .name = field_name, .type_expr = type_expr, .default_value = default_value, .doc_comment = field_doc, .span = Span.init(field_start, self.pos()) });
             if (!self.match(.comma)) break;
         }
         return try self.allocator.dupe(ast.Field, fields.items);
     }
 
     fn parseVarDecl(self: *Parser, is_const: bool) ParseError!?NodeIndex {
+        const doc_comment = self.consumeDocComment();
         const start = self.pos();
         self.advance();
         if (!self.check(.ident)) { self.err.errorWithCode(self.pos(), .e203, "expected variable name"); return null; }
@@ -332,7 +369,7 @@ pub const Parser = struct {
                     if (!self.match(.comma)) break;
                 }
                 if (!self.expect(.rbrace)) return null;
-                return try self.tree.addDecl(.{ .error_set_decl = .{ .name = name, .variants = try self.allocator.dupe([]const u8, variants.items), .span = Span.init(start, self.pos()) } });
+                return try self.tree.addDecl(.{ .error_set_decl = .{ .name = name, .variants = try self.allocator.dupe([]const u8, variants.items), .doc_comment = doc_comment, .span = Span.init(start, self.pos()) } });
             }
             // Not an error set, restore state and continue as normal var decl
             self.tok = saved_tok;
@@ -344,10 +381,11 @@ pub const Parser = struct {
         var value: NodeIndex = null_node;
         if (self.match(.assign)) value = try self.parseExpr() orelse null_node;
         _ = self.match(.semicolon);
-        return try self.tree.addDecl(.{ .var_decl = .{ .name = name, .type_expr = type_expr, .value = value, .is_const = is_const, .span = Span.init(start, self.pos()) } });
+        return try self.tree.addDecl(.{ .var_decl = .{ .name = name, .type_expr = type_expr, .value = value, .is_const = is_const, .doc_comment = doc_comment, .span = Span.init(start, self.pos()) } });
     }
 
     fn parseStructDecl(self: *Parser) ParseError!?NodeIndex {
+        const doc_comment = self.consumeDocComment();
         const start = self.pos();
         self.advance();
         if (!self.check(.ident)) { self.err.errorWithCode(self.pos(), .e203, "expected struct name"); return null; }
@@ -373,10 +411,11 @@ pub const Parser = struct {
         if (!self.expect(.lbrace)) return null;
         const fields = try self.parseFieldList(.rbrace);
         if (!self.expect(.rbrace)) return null;
-        return try self.tree.addDecl(.{ .struct_decl = .{ .name = name, .type_params = type_params, .fields = fields, .span = Span.init(start, self.pos()) } });
+        return try self.tree.addDecl(.{ .struct_decl = .{ .name = name, .type_params = type_params, .fields = fields, .doc_comment = doc_comment, .span = Span.init(start, self.pos()) } });
     }
 
     fn parseImplBlock(self: *Parser) ParseError!?NodeIndex {
+        const doc_comment = self.consumeDocComment();
         const start = self.pos();
         self.advance();
         if (!self.check(.ident)) { self.err.errorWithCode(self.pos(), .e203, "expected type name after 'impl'"); return null; }
@@ -400,7 +439,7 @@ pub const Parser = struct {
         }
 
         // impl Trait for Type { ... } — trait implementation
-        if (self.check(.kw_for)) return self.parseImplTraitBlock(start, type_name, type_params);
+        if (self.check(.kw_for)) return self.parseImplTraitBlock(start, type_name, type_params, doc_comment);
 
         if (!self.expect(.lbrace)) return null;
 
@@ -417,15 +456,17 @@ pub const Parser = struct {
         var methods = std.ArrayListUnmanaged(NodeIndex){};
         defer methods.deinit(self.allocator);
         while (!self.check(.rbrace) and !self.check(.eof)) {
+            self.collectDocComment();
             if (self.check(.kw_fn)) {
                 if (try self.parseFnDecl(false, false)) |idx| try methods.append(self.allocator, idx);
             } else { self.syntaxError("expected 'fn' in impl block"); self.advance(); }
         }
         if (!self.expect(.rbrace)) return null;
-        return try self.tree.addDecl(.{ .impl_block = .{ .type_name = type_name, .type_params = type_params, .methods = try self.allocator.dupe(NodeIndex, methods.items), .span = Span.init(start, self.pos()) } });
+        return try self.tree.addDecl(.{ .impl_block = .{ .type_name = type_name, .type_params = type_params, .methods = try self.allocator.dupe(NodeIndex, methods.items), .doc_comment = doc_comment, .span = Span.init(start, self.pos()) } });
     }
 
     fn parseTraitDecl(self: *Parser) ParseError!?NodeIndex {
+        const doc_comment = self.consumeDocComment();
         const start = self.pos();
         self.advance(); // consume 'trait'
         if (!self.check(.ident)) { self.err.errorWithCode(self.pos(), .e203, "expected trait name"); return null; }
@@ -436,16 +477,17 @@ pub const Parser = struct {
         var methods = std.ArrayListUnmanaged(NodeIndex){};
         defer methods.deinit(self.allocator);
         while (!self.check(.rbrace) and !self.check(.eof)) {
+            self.collectDocComment();
             if (self.check(.kw_fn)) {
                 // Parse method signature (fn_decl with body = null_node)
                 if (try self.parseFnDecl(false, false)) |idx| try methods.append(self.allocator, idx);
             } else { self.syntaxError("expected 'fn' in trait declaration"); self.advance(); }
         }
         if (!self.expect(.rbrace)) return null;
-        return try self.tree.addDecl(.{ .trait_decl = .{ .name = name, .methods = try self.allocator.dupe(NodeIndex, methods.items), .span = Span.init(start, self.pos()) } });
+        return try self.tree.addDecl(.{ .trait_decl = .{ .name = name, .methods = try self.allocator.dupe(NodeIndex, methods.items), .doc_comment = doc_comment, .span = Span.init(start, self.pos()) } });
     }
 
-    fn parseImplTraitBlock(self: *Parser, start: Pos, trait_name: []const u8, type_params: []const []const u8) ParseError!?NodeIndex {
+    fn parseImplTraitBlock(self: *Parser, start: Pos, trait_name: []const u8, type_params: []const []const u8, doc_comment: []const u8) ParseError!?NodeIndex {
         self.advance(); // consume 'for'
         // Target type: identifier or type keyword (i64, i32, etc.)
         var target_type: []const u8 = "";
@@ -474,15 +516,17 @@ pub const Parser = struct {
         var methods = std.ArrayListUnmanaged(NodeIndex){};
         defer methods.deinit(self.allocator);
         while (!self.check(.rbrace) and !self.check(.eof)) {
+            self.collectDocComment();
             if (self.check(.kw_fn)) {
                 if (try self.parseFnDecl(false, false)) |idx| try methods.append(self.allocator, idx);
             } else { self.syntaxError("expected 'fn' in impl block"); self.advance(); }
         }
         if (!self.expect(.rbrace)) return null;
-        return try self.tree.addDecl(.{ .impl_trait = .{ .trait_name = trait_name, .target_type = target_type, .type_params = type_params, .methods = try self.allocator.dupe(NodeIndex, methods.items), .span = Span.init(start, self.pos()) } });
+        return try self.tree.addDecl(.{ .impl_trait = .{ .trait_name = trait_name, .target_type = target_type, .type_params = type_params, .methods = try self.allocator.dupe(NodeIndex, methods.items), .doc_comment = doc_comment, .span = Span.init(start, self.pos()) } });
     }
 
     fn parseEnumDecl(self: *Parser) ParseError!?NodeIndex {
+        const doc_comment = self.consumeDocComment();
         const start = self.pos();
         self.advance();
         if (!self.check(.ident)) { self.err.errorWithCode(self.pos(), .e203, "expected enum name"); return null; }
@@ -505,10 +549,11 @@ pub const Parser = struct {
             if (!self.match(.comma)) break;
         }
         if (!self.expect(.rbrace)) return null;
-        return try self.tree.addDecl(.{ .enum_decl = .{ .name = name, .backing_type = backing_type, .variants = try self.allocator.dupe(ast.EnumVariant, variants.items), .span = Span.init(start, self.pos()) } });
+        return try self.tree.addDecl(.{ .enum_decl = .{ .name = name, .backing_type = backing_type, .variants = try self.allocator.dupe(ast.EnumVariant, variants.items), .doc_comment = doc_comment, .span = Span.init(start, self.pos()) } });
     }
 
     fn parseUnionDecl(self: *Parser) ParseError!?NodeIndex {
+        const doc_comment = self.consumeDocComment();
         const start = self.pos();
         self.advance();
         if (!self.check(.ident)) { self.err.errorWithCode(self.pos(), .e203, "expected union name"); return null; }
@@ -529,10 +574,11 @@ pub const Parser = struct {
             if (!self.match(.comma)) break;
         }
         if (!self.expect(.rbrace)) return null;
-        return try self.tree.addDecl(.{ .union_decl = .{ .name = name, .variants = try self.allocator.dupe(ast.UnionVariant, variants.items), .span = Span.init(start, self.pos()) } });
+        return try self.tree.addDecl(.{ .union_decl = .{ .name = name, .variants = try self.allocator.dupe(ast.UnionVariant, variants.items), .doc_comment = doc_comment, .span = Span.init(start, self.pos()) } });
     }
 
     fn parseTypeAlias(self: *Parser) ParseError!?NodeIndex {
+        const doc_comment = self.consumeDocComment();
         const start = self.pos();
         self.advance();
         if (!self.check(.ident)) { self.err.errorWithCode(self.pos(), .e203, "expected type name"); return null; }
@@ -541,7 +587,7 @@ pub const Parser = struct {
         if (!self.expect(.assign)) return null;
         const target = try self.parseType() orelse return null;
         _ = self.match(.semicolon);
-        return try self.tree.addDecl(.{ .type_alias = .{ .name = name, .target = target, .span = Span.init(start, self.pos()) } });
+        return try self.tree.addDecl(.{ .type_alias = .{ .name = name, .target = target, .doc_comment = doc_comment, .span = Span.init(start, self.pos()) } });
     }
 
     fn parseImportDecl(self: *Parser) ParseError!?NodeIndex {
