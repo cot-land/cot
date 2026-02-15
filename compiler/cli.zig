@@ -57,7 +57,8 @@ pub const BenchOptions = struct {
 
 pub const FmtOptions = struct {
     input_file: []const u8,
-    write: bool = false,
+    check: bool = false,
+    stdout: bool = false,
 };
 
 pub const InitOptions = struct {
@@ -143,8 +144,7 @@ fn parseBuild(args: *std.process.ArgIterator) ?Command {
     }
 
     if (!has_input) {
-        std.debug.print("Error: No input file\nUsage: cot build <file.cot> [-o name] [--target=<t>]\n", .{});
-        return null;
+        opts.input_file = "";
     }
     return .{ .build = opts };
 }
@@ -175,8 +175,7 @@ fn parseRun(allocator: std.mem.Allocator, args: *std.process.ArgIterator) ?Comma
     opts.program_args = program_args.items;
 
     if (!has_input) {
-        std.debug.print("Error: No input file\nUsage: cot run <file.cot> [--target=<t>] [-- args...]\n", .{});
-        return null;
+        opts.input_file = "";
     }
     return .{ .run = opts };
 }
@@ -207,8 +206,7 @@ fn parseTest(args: *std.process.ArgIterator) ?Command {
     }
 
     if (!has_input) {
-        std.debug.print("Error: No input file\nUsage: cot test <file.cot> [--target=<t>] [--filter=<str>] [--verbose]\n", .{});
-        return null;
+        opts.input_file = "";
     }
     return .{ .@"test" = opts };
 }
@@ -252,8 +250,7 @@ fn parseBench(args: *std.process.ArgIterator) ?Command {
     }
 
     if (!has_input) {
-        std.debug.print("Error: No input file\nUsage: cot bench <file.cot> [--target=<t>] [--filter=<str>] [--n=<count>]\n", .{});
-        return null;
+        opts.input_file = "";
     }
     return .{ .bench = opts };
 }
@@ -275,8 +272,7 @@ fn parseCheck(args: *std.process.ArgIterator) ?Command {
     }
 
     if (!has_input) {
-        std.debug.print("Error: No input file\nUsage: cot check <file.cot> [--target=<t>]\n", .{});
-        return null;
+        opts.input_file = "";
     }
     return .{ .check = opts };
 }
@@ -298,8 +294,7 @@ fn parseLint(args: *std.process.ArgIterator) ?Command {
     }
 
     if (!has_input) {
-        std.debug.print("Error: No input file\nUsage: cot lint <file.cot> [--target=<t>]\n", .{});
-        return null;
+        opts.input_file = "";
     }
     return .{ .lint = opts };
 }
@@ -309,8 +304,10 @@ fn parseFmt(args: *std.process.ArgIterator) ?Command {
     var has_input = false;
 
     while (args.next()) |arg| {
-        if (std.mem.eql(u8, arg, "-w") or std.mem.eql(u8, arg, "--write")) {
-            opts.write = true;
+        if (std.mem.eql(u8, arg, "--check")) {
+            opts.check = true;
+        } else if (std.mem.eql(u8, arg, "--stdout")) {
+            opts.stdout = true;
         } else if (!std.mem.startsWith(u8, arg, "-")) {
             opts.input_file = arg;
             has_input = true;
@@ -320,9 +317,13 @@ fn parseFmt(args: *std.process.ArgIterator) ?Command {
         }
     }
 
-    if (!has_input) {
-        std.debug.print("Error: No input file\nUsage: cot fmt [-w] <file.cot>\n", .{});
+    if (opts.check and opts.stdout) {
+        std.debug.print("Error: --check and --stdout are mutually exclusive\n", .{});
         return null;
+    }
+
+    if (!has_input) {
+        opts.input_file = "";
     }
     return .{ .fmt = opts };
 }
@@ -482,7 +483,7 @@ fn printUsage() void {
         \\  cot bench <file.cot>            Run benchmarks
         \\  cot check <file.cot>            Type-check without compiling
         \\  cot lint <file.cot>             Check for warnings
-        \\  cot fmt <file.cot> [-w]         Format source code
+        \\  cot fmt <file.cot>              Format source code (in-place)
         \\  cot init [name]                 Create a new project
         \\  cot lsp                         Start language server (LSP)
         \\  cot mcp                         Start MCP server for AI tools
@@ -661,16 +662,18 @@ fn printMcpHelp() void {
 
 fn printFmtHelp() void {
     std.debug.print(
-        \\Usage: cot fmt [-w] <file.cot>
+        \\Usage: cot fmt <file.cot> [--check] [--stdout]
         \\
-        \\Format a Cot source file. Output goes to stdout by default.
+        \\Format a Cot source file in-place (like go fmt, rustfmt).
         \\
         \\Flags:
-        \\  -w, --write     Write result back to source file (in-place)
+        \\  --check         Check if file is formatted (exit 1 if not, for CI)
+        \\  --stdout        Write formatted output to stdout instead of in-place
         \\
         \\Examples:
-        \\  cot fmt app.cot                 Print formatted output to stdout
-        \\  cot fmt -w app.cot              Format file in-place
+        \\  cot fmt app.cot                 Format file in-place
+        \\  cot fmt --check app.cot         Check formatting (CI mode)
+        \\  cot fmt --stdout app.cot        Print formatted output to stdout
         \\
     , .{});
 }

@@ -25,10 +25,11 @@ pub fn loadConfig(allocator: std.mem.Allocator, dir: ?[]const u8) !?LoadedConfig
         if (e == error.FileNotFound) return null;
         return e;
     };
-    defer allocator.free(file_contents);
+    // Don't free file_contents here — parsed string fields (name, version, main)
+    // are slices into this buffer. Stored in LoadedConfig, freed in deinit().
 
     const result = try parseConfig(allocator, file_contents);
-    return result;
+    return .{ .parsed = result.parsed, .file_contents = file_contents, .file_allocator = allocator };
 }
 
 fn parseConfig(allocator: std.mem.Allocator, json_text: []const u8) !LoadedConfig {
@@ -42,6 +43,8 @@ fn parseConfig(allocator: std.mem.Allocator, json_text: []const u8) !LoadedConfi
 
 pub const LoadedConfig = struct {
     parsed: std.json.Parsed(ProjectConfig),
+    file_contents: []const u8 = &.{},
+    file_allocator: std.mem.Allocator = undefined,
 
     pub fn value(self: *const LoadedConfig) ProjectConfig {
         return self.parsed.value;
@@ -49,6 +52,9 @@ pub const LoadedConfig = struct {
 
     pub fn deinit(self: *LoadedConfig) void {
         self.parsed.deinit();
+        if (self.file_contents.len > 0) {
+            self.file_allocator.free(self.file_contents);
+        }
     }
 };
 

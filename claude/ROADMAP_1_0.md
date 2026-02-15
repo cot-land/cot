@@ -9,7 +9,7 @@ The compiler handles a real programming language — generics, closures, ARC, er
 - **Working I/O** — `print`, `println`, `eprint`, `eprintln` with native syscalls
 - **Standard library** — `List(T)` with ~35 methods, `Map(K,V)` with splitmix64 hash via `import "std/map"`
 - **Cross-file generics** — `SharedGenericContext` enables multi-file programs with generics
-- **CLI** — `cot build`, `cot run`, `cot test`, `cot version`, `cot help`
+- **CLI** — `cot build`, `cot run`, `cot test`, `cot bench`, `cot check`, `cot lint`, `cot fmt`, `cot init`, `cot version`, `cot help` — all with `cot.json` fallback
 - **Test framework** — inline `test "name" { }` blocks with `@assert`/`@assert_eq`, summary output
 - **Basic LSP** — diagnostics, hover, goto definition, document symbols
 - **VS Code/Cursor extension** — TextMate syntax highlighting + LSP client

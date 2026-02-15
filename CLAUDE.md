@@ -41,6 +41,10 @@ cot <file.cot>                  # Implicit build (shorthand for cot build)
 cot build <file.cot> [-o name]  # Compile to executable (or .wasm)
 cot run <file.cot> [-- args]    # Compile, run in /tmp, clean up, forward exit code
 cot test <file.cot>             # Compile + run in test mode
+cot bench <file.cot>            # Run benchmarks
+cot check <file.cot>            # Type-check without compiling
+cot lint <file.cot>             # Check for warnings
+cot fmt <file.cot>              # Format source code in-place (--check for CI, --stdout for pipe)
 cot init [name]                 # Create new project (cot.json, src/main.cot, .gitignore)
 cot lsp                         # Start language server (LSP over stdio)
 cot version                     # Print version: cot 0.3.1 (arm64-macos)
@@ -48,6 +52,8 @@ cot help [command]              # Print help (per-subcommand help available)
 ```
 
 **Key files:** `compiler/cli.zig` (arg parsing, help text), `compiler/main.zig` (command dispatch + compileAndLink), `compiler/project.zig` (cot.json manifest loading).
+
+**cot.json integration:** All file-requiring commands (`build`, `run`, `test`, `bench`, `check`, `lint`, `fmt`) read `cot.json` from CWD when no input file is given. If `main` field is set, it's used as the input file. `cot init myapp && cd myapp && cot run` just works.
 
 **Output naming:** Strip path, strip `.cot`, append `.wasm` for wasm targets. `app.cot` → `./app` (native) or `./app.wasm` (wasm). Override with `-o`.
 

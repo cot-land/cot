@@ -764,7 +764,7 @@ pub const Checker = struct {
         if (self.type_substitution) |sub| {
             if (sub.get(id.name)) |_| return invalid_type;
         }
-        self.err.errorWithCode(id.span.start, .e301, "undefined identifier");
+        self.errWithSuggestion(id.span.start, "undefined identifier", self.findSimilarName(id.name));
         return invalid_type;
     }
 
@@ -1115,12 +1115,12 @@ pub const Checker = struct {
             .struct_type => |st| {
                 for (st.fields) |field| if (std.mem.eql(u8, field.name, f.field)) return field.type_idx;
                 if (self.lookupMethod(st.name, f.field)) |m| return m.func_type;
-                self.err.errorWithCode(f.span.start, .e301, "undefined field");
+                self.errWithSuggestion(f.span.start, "undefined field", findSimilarField(f.field, st.fields));
                 return invalid_type;
             },
             .enum_type => |et| {
                 for (et.variants) |v| if (std.mem.eql(u8, v.name, f.field)) return base_type;
-                self.err.errorWithCode(f.span.start, .e301, "undefined variant");
+                self.errWithSuggestion(f.span.start, "undefined variant", findSimilarVariant(f.field, et.variants));
                 return invalid_type;
             },
             .union_type => |ut| {
@@ -1150,7 +1150,7 @@ pub const Checker = struct {
                     params[0] = .{ .name = "payload", .type_idx = v.payload_type };
                     return try self.types.add(.{ .func = .{ .params = params, .return_type = base_type } });
                 };
-                self.err.errorWithCode(f.span.start, .e301, "undefined variant");
+                self.errWithSuggestion(f.span.start, "undefined variant", findSimilarVariant(f.field, ut.variants));
                 return invalid_type;
             },
             .map => |mt| {
@@ -1168,7 +1168,7 @@ pub const Checker = struct {
                     params[0] = .{ .name = "key", .type_idx = mt.key };
                     return try self.types.add(.{ .func = .{ .params = params, .return_type = TypeRegistry.BOOL } });
                 }
-                self.err.errorWithCode(f.span.start, .e301, "undefined field");
+                self.errWithSuggestion(f.span.start, "undefined field", editDistSuggest(f.field, &.{ "set", "get", "has" }));
                 return invalid_type;
             },
             .list => |lt| {
@@ -1183,13 +1183,13 @@ pub const Checker = struct {
                 } else if (std.mem.eql(u8, f.field, "len")) {
                     return try self.types.add(.{ .func = .{ .params = &.{}, .return_type = TypeRegistry.INT } });
                 }
-                self.err.errorWithCode(f.span.start, .e301, "undefined field");
+                self.errWithSuggestion(f.span.start, "undefined field", editDistSuggest(f.field, &.{ "push", "get", "len" }));
                 return invalid_type;
             },
             .slice => |sl| {
                 if (std.mem.eql(u8, f.field, "ptr")) return try self.types.add(.{ .pointer = .{ .elem = sl.elem } })
                 else if (std.mem.eql(u8, f.field, "len")) return TypeRegistry.I64;
-                self.err.errorWithCode(f.span.start, .e301, "undefined field");
+                self.errWithSuggestion(f.span.start, "undefined field", editDistSuggest(f.field, &.{ "ptr", "len" }));
                 return invalid_type;
             },
             .tuple => |tup| {
@@ -1220,7 +1220,7 @@ pub const Checker = struct {
             try self.resolveGenericInstance(.{ .name = si.type_name, .type_args = si.type_args }, si.span)
         else
             self.types.lookupByName(si.type_name) orelse {
-                self.err.errorWithCode(si.span.start, .e301, "undefined type");
+                self.errWithSuggestion(si.span.start, "undefined type", self.findSimilarType(si.type_name));
                 return invalid_type;
             };
         const struct_type = self.types.get(struct_type_idx);
@@ -1233,7 +1233,7 @@ pub const Checker = struct {
                 if (!self.types.isAssignable(vt, sf.type_idx)) self.err.errorWithCode(fi.span.start, .e300, "type mismatch in field");
                 break;
             };
-            if (!found) self.err.errorWithCode(fi.span.start, .e301, "unknown field");
+            if (!found) self.errWithSuggestion(fi.span.start, "unknown field", findSimilarField(fi.name, struct_type.struct_type.fields));
         }
         return struct_type_idx;
     }
@@ -1246,7 +1246,7 @@ pub const Checker = struct {
             try self.resolveGenericInstance(.{ .name = ne.type_name, .type_args = ne.type_args }, ne.span)
         else
             self.types.lookupByName(ne.type_name) orelse {
-                self.err.errorWithCode(ne.span.start, .e301, "undefined type");
+                self.errWithSuggestion(ne.span.start, "undefined type", self.findSimilarType(ne.type_name));
                 return invalid_type;
             };
         const struct_type = self.types.get(struct_type_idx);
@@ -1294,7 +1294,7 @@ pub const Checker = struct {
                 }
                 break;
             };
-            if (!found) self.err.errorWithCode(fi.span.start, .e301, "unknown field");
+            if (!found) self.errWithSuggestion(fi.span.start, "unknown field", findSimilarField(fi.name, struct_type.struct_type.fields));
         }
         // Return pointer to struct (heap-allocated object)
         return self.types.makePointer(struct_type_idx) catch invalid_type;
@@ -1750,7 +1750,7 @@ pub const Checker = struct {
             }
             if (self.types.lookupByName(expr.ident.name)) |tidx| return tidx;
             if (self.scope.lookup(expr.ident.name)) |sym| if (sym.kind == .type_name) return sym.type_idx;
-            self.err.errorWithCode(expr.ident.span.start, .e301, "undefined type");
+            self.errWithSuggestion(expr.ident.span.start, "undefined type", self.findSimilarType(expr.ident.name));
             return invalid_type;
         }
         if (expr != .type_expr) return invalid_type;
@@ -1765,7 +1765,7 @@ pub const Checker = struct {
                     if (sub.get(n)) |substituted| break :blk substituted;
                 }
                 break :blk self.types.lookupByName(n) orelse if (self.scope.lookup(n)) |s| if (s.kind == .type_name) s.type_idx else invalid_type else {
-                    self.err.errorWithCode(te.span.start, .e301, "undefined type");
+                    self.errWithSuggestion(te.span.start, "undefined type", self.findSimilarType(n));
                     return invalid_type;
                 };
             },
@@ -1809,7 +1809,7 @@ pub const Checker = struct {
     /// Creates concrete struct type with substituted fields, deduplicates via cache.
     fn resolveGenericInstance(self: *Checker, gi: ast.GenericInstance, span: Span) CheckError!TypeIndex {
         const gen_info = self.generics.generic_structs.get(gi.name) orelse {
-            self.err.errorWithCode(span.start, .e301, "undefined generic type");
+            self.errWithSuggestion(span.start, "undefined generic type", self.findSimilarType(gi.name));
             return invalid_type;
         };
 
@@ -2179,6 +2179,194 @@ pub const Checker = struct {
         if (tb == .pointer and ta == .basic and ta.basic == .untyped_null) return true;
         return false;
     }
+
+    // ========================================================================
+    // "Did you mean X?" — Levenshtein edit distance suggestions
+    // Zig heuristic: distance <= 2 AND distance <= len/2
+    // ========================================================================
+
+    const MAX_EDIT_LEN = 64;
+
+    /// Levenshtein edit distance. Stack-allocated, O(min(m,n)) space.
+    /// Returns maxInt for names longer than MAX_EDIT_LEN.
+    fn editDistance(a: []const u8, b: []const u8) usize {
+        if (a.len > MAX_EDIT_LEN or b.len > MAX_EDIT_LEN) return std.math.maxInt(usize);
+        if (a.len == 0) return b.len;
+        if (b.len == 0) return a.len;
+        if (std.mem.eql(u8, a, b)) return 0;
+
+        // Use shorter string for the row to minimize stack usage
+        const s1 = if (a.len <= b.len) a else b;
+        const s2 = if (a.len <= b.len) b else a;
+
+        var prev: [MAX_EDIT_LEN + 1]usize = undefined;
+        var curr: [MAX_EDIT_LEN + 1]usize = undefined;
+
+        for (0..s1.len + 1) |i| prev[i] = i;
+
+        for (s2, 0..) |c2, j| {
+            curr[0] = j + 1;
+            for (s1, 0..) |c1, i| {
+                const cost: usize = if (c1 == c2) 0 else 1;
+                curr[i + 1] = @min(@min(curr[i] + 1, prev[i + 1] + 1), prev[i] + cost);
+            }
+            @memcpy(prev[0 .. s1.len + 1], curr[0 .. s1.len + 1]);
+        }
+        return prev[s1.len];
+    }
+
+    /// Check if a name is a valid suggestion candidate (not internal/generated).
+    fn isUserVisibleName(name: []const u8) bool {
+        if (name.len == 0) return false;
+        // Skip generic instantiation names like "List_append(5)"
+        if (std.mem.indexOfScalar(u8, name, '(') != null) return false;
+        // Skip names starting with __ (internal)
+        if (name.len >= 2 and name[0] == '_' and name[1] == '_') return false;
+        return true;
+    }
+
+    /// Search scope chain + global scope for the closest match to `name`.
+    fn findSimilarName(self: *Checker, name: []const u8) ?[]const u8 {
+        var best: ?[]const u8 = null;
+        var best_dist: usize = std.math.maxInt(usize);
+
+        // Walk scope chain
+        var scope: ?*const Scope = self.scope;
+        while (scope) |s| {
+            var it = s.symbols.iterator();
+            while (it.next()) |entry| {
+                const candidate = entry.key_ptr.*;
+                if (std.mem.eql(u8, candidate, name)) continue;
+                if (!isUserVisibleName(candidate)) continue;
+                const d = editDistance(name, candidate);
+                if (d < best_dist and d <= 2 and d * 2 <= name.len) {
+                    best_dist = d;
+                    best = candidate;
+                }
+            }
+            scope = s.parent;
+        }
+
+        // Also check global scope (may not be in chain if we're in a nested scope)
+        {
+            var it = self.global_scope.symbols.iterator();
+            while (it.next()) |entry| {
+                const candidate = entry.key_ptr.*;
+                if (std.mem.eql(u8, candidate, name)) continue;
+                if (!isUserVisibleName(candidate)) continue;
+                const d = editDistance(name, candidate);
+                if (d < best_dist and d <= 2 and d * 2 <= name.len) {
+                    best_dist = d;
+                    best = candidate;
+                }
+            }
+        }
+
+        // Check builtin function names
+        const builtins = [_][]const u8{
+            "print", "println", "eprint", "eprintln", "len", "append",
+        };
+        for (builtins) |candidate| {
+            if (std.mem.eql(u8, candidate, name)) continue;
+            const d = editDistance(name, candidate);
+            if (d < best_dist and d <= 2 and d * 2 <= name.len) {
+                best_dist = d;
+                best = candidate;
+            }
+        }
+
+        return best;
+    }
+
+    /// Search struct fields for the closest match to `name`.
+    fn findSimilarField(name: []const u8, fields: []const types.StructField) ?[]const u8 {
+        var best: ?[]const u8 = null;
+        var best_dist: usize = std.math.maxInt(usize);
+        for (fields) |field| {
+            if (std.mem.eql(u8, field.name, name)) continue;
+            const d = editDistance(name, field.name);
+            if (d < best_dist and d <= 2 and d * 2 <= name.len) {
+                best_dist = d;
+                best = field.name;
+            }
+        }
+        return best;
+    }
+
+    /// Search enum/union variants for the closest match to `name`.
+    fn findSimilarVariant(name: []const u8, variants: anytype) ?[]const u8 {
+        var best: ?[]const u8 = null;
+        var best_dist: usize = std.math.maxInt(usize);
+        for (variants) |v| {
+            if (std.mem.eql(u8, v.name, name)) continue;
+            const d = editDistance(name, v.name);
+            if (d < best_dist and d <= 2 and d * 2 <= name.len) {
+                best_dist = d;
+                best = v.name;
+            }
+        }
+        return best;
+    }
+
+    /// Search type names for the closest match.
+    fn findSimilarType(self: *Checker, name: []const u8) ?[]const u8 {
+        var best: ?[]const u8 = null;
+        var best_dist: usize = std.math.maxInt(usize);
+
+        var it = self.types.name_map.iterator();
+        while (it.next()) |entry| {
+            const candidate = entry.key_ptr.*;
+            if (std.mem.eql(u8, candidate, name)) continue;
+            if (!isUserVisibleName(candidate)) continue;
+            const d = editDistance(name, candidate);
+            if (d < best_dist and d <= 2 and d * 2 <= name.len) {
+                best_dist = d;
+                best = candidate;
+            }
+        }
+
+        // Also check generic struct names
+        var git = self.generics.generic_structs.iterator();
+        while (git.next()) |entry| {
+            const candidate = entry.key_ptr.*;
+            if (std.mem.eql(u8, candidate, name)) continue;
+            const d = editDistance(name, candidate);
+            if (d < best_dist and d <= 2 and d * 2 <= name.len) {
+                best_dist = d;
+                best = candidate;
+            }
+        }
+
+        return best;
+    }
+
+    /// Search a static list of names for the closest match.
+    fn editDistSuggest(name: []const u8, candidates: []const []const u8) ?[]const u8 {
+        var best: ?[]const u8 = null;
+        var best_dist: usize = std.math.maxInt(usize);
+        for (candidates) |c| {
+            if (std.mem.eql(u8, c, name)) continue;
+            const d = editDistance(name, c);
+            if (d < best_dist and d <= 2 and d * 2 <= name.len) {
+                best_dist = d;
+                best = c;
+            }
+        }
+        return best;
+    }
+
+    /// Format an error message with a "did you mean" suggestion.
+    fn errWithSuggestion(self: *Checker, pos: Pos, msg: []const u8, suggestion: ?[]const u8) void {
+        if (suggestion) |s| {
+            const full_msg = std.fmt.allocPrint(self.allocator, "{s}; did you mean '{s}'?", .{ msg, s }) catch {
+                self.err.errorWithCode(pos, .e301, msg);
+                return;
+            };
+            self.err.errorWithCode(pos, .e301, full_msg);
+        } else {
+            self.err.errorWithCode(pos, .e301, msg);
+        }
+    }
 };
 
 // ============================================================================
@@ -2227,4 +2415,37 @@ test "checker type registry lookup" {
     defer type_reg.deinit();
     try std.testing.expectEqual(TypeRegistry.INT, type_reg.lookupByName("int").?);
     try std.testing.expectEqual(TypeRegistry.BOOL, type_reg.lookupByName("bool").?);
+}
+
+test "editDistance: basic cases" {
+    try std.testing.expectEqual(@as(usize, 0), Checker.editDistance("hello", "hello"));
+    try std.testing.expectEqual(@as(usize, 1), Checker.editDistance("hello", "helo"));
+    try std.testing.expectEqual(@as(usize, 1), Checker.editDistance("hello", "hullo"));
+    try std.testing.expectEqual(@as(usize, 1), Checker.editDistance("hello", "hllo"));
+    try std.testing.expectEqual(@as(usize, 2), Checker.editDistance("pritnln", "println"));
+    try std.testing.expectEqual(@as(usize, 4), Checker.editDistance("hello", "world"));
+}
+
+test "editDistance: edge cases" {
+    try std.testing.expectEqual(@as(usize, 0), Checker.editDistance("", ""));
+    try std.testing.expectEqual(@as(usize, 3), Checker.editDistance("", "abc"));
+    try std.testing.expectEqual(@as(usize, 3), Checker.editDistance("abc", ""));
+    try std.testing.expectEqual(@as(usize, 1), Checker.editDistance("a", "b"));
+}
+
+test "editDistSuggest: finds closest match" {
+    const result = Checker.editDistSuggest("pritnln", &.{ "print", "println", "eprint" });
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("println", result.?);
+}
+
+test "editDistSuggest: no match when too distant" {
+    const result = Checker.editDistSuggest("xyz", &.{ "print", "println" });
+    try std.testing.expect(result == null);
+}
+
+test "editDistSuggest: no match for short names with distant candidates" {
+    // "ab" vs "xy" = distance 2, but 2 * 2 > 2 (len), so rejected by threshold
+    const result = Checker.editDistSuggest("ab", &.{ "xy", "zz" });
+    try std.testing.expect(result == null);
 }

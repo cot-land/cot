@@ -61,6 +61,39 @@ pub const bench_runtime = @import("codegen/bench_runtime.zig");
 const Target = core_target.Target;
 const Driver = driver.Driver;
 
+/// Resolve input file: if explicit file given, use it. Otherwise try cot.json.
+/// Returns the input file path or exits with an error message.
+fn resolveInputFile(allocator: std.mem.Allocator, explicit: []const u8, usage: []const u8) []const u8 {
+    if (explicit.len > 0) return explicit;
+
+    // Try cot.json in current directory.
+    // Read the file ourselves (don't use loadConfig which frees the buffer
+    // that parsed JSON strings may reference).
+    const json_text = std.fs.cwd().readFileAlloc(allocator, "cot.json", 64 * 1024) catch |e| {
+        if (e == error.FileNotFound) {
+            std.debug.print("Error: No input file\n{s}\n", .{usage});
+            std.process.exit(1);
+        }
+        std.debug.print("Error: Failed to read cot.json: {any}\n", .{e});
+        std.process.exit(1);
+    };
+    // Don't free json_text — parsed strings reference it (arena allocator reclaims all at exit)
+
+    const parsed = std.json.parseFromSlice(project.ProjectConfig, allocator, json_text, .{
+        .ignore_unknown_fields = true,
+    }) catch {
+        std.debug.print("Error: Failed to parse cot.json\n", .{});
+        std.process.exit(1);
+    };
+
+    if (parsed.value.main) |main_file| {
+        return main_file;
+    } else {
+        std.debug.print("Error: cot.json found but has no \"main\" field\n", .{});
+        std.process.exit(1);
+    }
+}
+
 /// Find runtime library in known locations.
 fn findRuntimePath(allocator: std.mem.Allocator, tgt: Target) ![]const u8 {
     const runtime_name: []const u8 = if (tgt.os == .linux) "cot_runtime_linux.o" else "cot_runtime.o";
@@ -119,16 +152,19 @@ pub fn main() !void {
 }
 
 fn buildCommand(allocator: std.mem.Allocator, opts: cli.BuildOptions) void {
+    const input_file = resolveInputFile(allocator, opts.input_file, "Usage: cot build <file.cot> [-o name] [--target=<t>]");
     const compile_target = opts.target;
-    const output_name = opts.output_name orelse (cli.deriveOutputName(allocator, opts.input_file, compile_target) catch {
+    const output_name = opts.output_name orelse (cli.deriveOutputName(allocator, input_file, compile_target) catch {
         std.debug.print("Error: Failed to derive output name\n", .{});
         std.process.exit(1);
     });
 
-    compileAndLink(allocator, opts.input_file, output_name, compile_target, false, false, null);
+    compileAndLink(allocator, input_file, output_name, compile_target, false, false, null);
 }
 
 fn runCommand(allocator: std.mem.Allocator, opts: cli.RunOptions) void {
+    const input_file = resolveInputFile(allocator, opts.input_file, "Usage: cot run <file.cot> [--target=<t>] [-- args...]");
+
     if (opts.target.isWasm()) {
         std.debug.print("Error: 'cot run' does not support --target=wasm32\nUse 'cot build --target=wasm32' to produce a .wasm file\n", .{});
         std.process.exit(1);
@@ -142,7 +178,7 @@ fn runCommand(allocator: std.mem.Allocator, opts: cli.RunOptions) void {
     };
 
     const stem = blk: {
-        const basename = std.fs.path.basename(opts.input_file);
+        const basename = std.fs.path.basename(input_file);
         break :blk if (std.mem.endsWith(u8, basename, ".cot"))
             basename[0 .. basename.len - 4]
         else
@@ -153,7 +189,7 @@ fn runCommand(allocator: std.mem.Allocator, opts: cli.RunOptions) void {
         std.process.exit(1);
     };
 
-    compileAndLink(allocator, opts.input_file, tmp_output, opts.target, false, true, null);
+    compileAndLink(allocator, input_file, tmp_output, opts.target, false, true, null);
 
     // Run the compiled executable
     var run_args = std.ArrayListUnmanaged([]const u8){};
@@ -191,6 +227,8 @@ fn runCommand(allocator: std.mem.Allocator, opts: cli.RunOptions) void {
 }
 
 fn testCommand(allocator: std.mem.Allocator, opts: cli.TestOptions) void {
+    const input_file = resolveInputFile(allocator, opts.input_file, "Usage: cot test <file.cot> [--target=<t>] [--filter=<str>] [--verbose]");
+
     // Compile to temp directory
     const tmp_dir = "/tmp/cot-run";
     std.fs.cwd().makePath(tmp_dir) catch {
@@ -199,7 +237,7 @@ fn testCommand(allocator: std.mem.Allocator, opts: cli.TestOptions) void {
     };
 
     const stem = blk: {
-        const basename = std.fs.path.basename(opts.input_file);
+        const basename = std.fs.path.basename(input_file);
         break :blk if (std.mem.endsWith(u8, basename, ".cot"))
             basename[0 .. basename.len - 4]
         else
@@ -210,7 +248,7 @@ fn testCommand(allocator: std.mem.Allocator, opts: cli.TestOptions) void {
         std.process.exit(1);
     };
 
-    compileAndLink(allocator, opts.input_file, tmp_output, opts.target, true, true, opts.filter);
+    compileAndLink(allocator, input_file, tmp_output, opts.target, true, true, opts.filter);
 
     // Run the test: wasmtime for wasm targets, direct execution for native
     const run_path = if (opts.target.isWasm())
@@ -264,6 +302,8 @@ fn testCommand(allocator: std.mem.Allocator, opts: cli.TestOptions) void {
 }
 
 fn benchCommand(allocator: std.mem.Allocator, opts: cli.BenchOptions) void {
+    const input_file = resolveInputFile(allocator, opts.input_file, "Usage: cot bench <file.cot> [--target=<t>] [--filter=<str>] [--n=<count>]");
+
     // Compile to temp directory
     const tmp_dir = "/tmp/cot-run";
     std.fs.cwd().makePath(tmp_dir) catch {
@@ -272,7 +312,7 @@ fn benchCommand(allocator: std.mem.Allocator, opts: cli.BenchOptions) void {
     };
 
     const stem = blk: {
-        const basename = std.fs.path.basename(opts.input_file);
+        const basename = std.fs.path.basename(input_file);
         break :blk if (std.mem.endsWith(u8, basename, ".cot"))
             basename[0 .. basename.len - 4]
         else
@@ -283,7 +323,7 @@ fn benchCommand(allocator: std.mem.Allocator, opts: cli.BenchOptions) void {
         std.process.exit(1);
     };
 
-    compileAndLinkFull(allocator, opts.input_file, tmp_output, opts.target, false, true, null, true, opts.filter, opts.n);
+    compileAndLinkFull(allocator, input_file, tmp_output, opts.target, false, true, null, true, opts.filter, opts.n);
 
     // Run the benchmark: wasmtime for wasm targets, direct execution for native
     const run_path = if (opts.target.isWasm())
@@ -335,10 +375,12 @@ fn benchCommand(allocator: std.mem.Allocator, opts: cli.BenchOptions) void {
 }
 
 fn checkCommand(allocator: std.mem.Allocator, opts: cli.CheckOptions) void {
+    const input_file = resolveInputFile(allocator, opts.input_file, "Usage: cot check <file.cot> [--target=<t>]");
+
     var compile_driver = Driver.init(allocator);
     compile_driver.setTarget(opts.target);
 
-    compile_driver.checkFile(opts.input_file) catch |e| {
+    compile_driver.checkFile(input_file) catch |e| {
         if (e != error.ParseError and e != error.TypeCheckError) {
             std.debug.print("Check failed: {any}\n", .{e});
         }
@@ -348,14 +390,16 @@ fn checkCommand(allocator: std.mem.Allocator, opts: cli.CheckOptions) void {
     const is_tty = std.posix.isatty(2);
     const green = if (is_tty) "\x1b[1;32m" else "";
     const reset = if (is_tty) "\x1b[0m" else "";
-    std.debug.print("{s}Check{s} {s}\n", .{ green, reset, opts.input_file });
+    std.debug.print("{s}Check{s} {s}\n", .{ green, reset, input_file });
 }
 
 fn lintCommand(allocator: std.mem.Allocator, opts: cli.LintOptions) void {
+    const input_file = resolveInputFile(allocator, opts.input_file, "Usage: cot lint <file.cot> [--target=<t>]");
+
     var compile_driver = Driver.init(allocator);
     compile_driver.setTarget(opts.target);
 
-    const warning_count = compile_driver.lintFile(opts.input_file) catch |e| {
+    const warning_count = compile_driver.lintFile(input_file) catch |e| {
         if (e != error.ParseError and e != error.TypeCheckError) {
             std.debug.print("Lint failed: {any}\n", .{e});
         }
@@ -367,18 +411,19 @@ fn lintCommand(allocator: std.mem.Allocator, opts: cli.LintOptions) void {
     const reset = if (is_tty) "\x1b[0m" else "";
 
     if (warning_count == 0) {
-        std.debug.print("{s}Checked{s} {s}\n", .{ green, reset, opts.input_file });
+        std.debug.print("{s}Checked{s} {s}\n", .{ green, reset, input_file });
     } else {
         std.debug.print("\nFound {d} warning{s}\n", .{ warning_count, if (warning_count == 1) "" else "s" });
     }
 }
 
 fn fmtCommand(allocator: std.mem.Allocator, opts: cli.FmtOptions) void {
+    const input_file = resolveInputFile(allocator, opts.input_file, "Usage: cot fmt <file.cot> [--check] [--stdout]");
     const fmt_mod = @import("frontend/formatter.zig");
 
     // Read source file
-    const source_text = std.fs.cwd().readFileAlloc(allocator, opts.input_file, 1024 * 1024) catch |e| {
-        std.debug.print("Error: Failed to read {s}: {any}\n", .{ opts.input_file, e });
+    const source_text = std.fs.cwd().readFileAlloc(allocator, input_file, 1024 * 1024) catch |e| {
+        std.debug.print("Error: Failed to read {s}: {any}\n", .{ input_file, e });
         std.process.exit(1);
     };
     defer allocator.free(source_text);
@@ -391,7 +436,7 @@ fn fmtCommand(allocator: std.mem.Allocator, opts: cli.FmtOptions) void {
     defer allocator.free(comments);
 
     // Parse
-    var src = source.Source.init(allocator, opts.input_file, source_text);
+    var src = source.Source.init(allocator, input_file, source_text);
     defer src.deinit();
     var err_reporter = errors.ErrorReporter.init(&src, null);
     var tree = ast.Ast.init(allocator);
@@ -399,7 +444,7 @@ fn fmtCommand(allocator: std.mem.Allocator, opts: cli.FmtOptions) void {
     var scan = scanner.Scanner.initWithErrors(&src, &err_reporter);
     var parser_inst = parser.Parser.init(allocator, &scan, &tree, &err_reporter);
     parser_inst.parseFile() catch {
-        std.debug.print("Error: Parse failed\n", .{});
+        std.debug.print("Error: Parse failed for {s}\n", .{input_file});
         std.process.exit(1);
     };
     if (err_reporter.hasErrors()) {
@@ -414,19 +459,30 @@ fn fmtCommand(allocator: std.mem.Allocator, opts: cli.FmtOptions) void {
     };
     defer allocator.free(output);
 
-    if (opts.write) {
-        // Write back to file
-        std.fs.cwd().writeFile(.{ .sub_path = opts.input_file, .data = output }) catch |e| {
-            std.debug.print("Error: Failed to write {s}: {any}\n", .{ opts.input_file, e });
-            std.process.exit(1);
-        };
-    } else {
-        // Write to stdout
-        const stdout = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-        stdout.writeAll(output) catch {
+    if (opts.stdout) {
+        // --stdout: write to stdout, don't modify file
+        const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        stdout_file.writeAll(output) catch {
             std.debug.print("Error: Failed to write to stdout\n", .{});
             std.process.exit(1);
         };
+    } else if (opts.check) {
+        // --check: compare and exit 0 (formatted) or 1 (not formatted)
+        if (std.mem.eql(u8, source_text, output)) {
+            std.process.exit(0);
+        } else {
+            std.debug.print("{s}\n", .{input_file});
+            std.process.exit(1);
+        }
+    } else {
+        // Default: format in-place (gofmt/rustfmt/zig fmt pattern: only write if changed)
+        if (!std.mem.eql(u8, source_text, output)) {
+            std.fs.cwd().writeFile(.{ .sub_path = input_file, .data = output }) catch |e| {
+                std.debug.print("Error: Failed to write {s}: {any}\n", .{ input_file, e });
+                std.process.exit(1);
+            };
+            std.debug.print("Formatted {s}\n", .{input_file});
+        }
     }
 }
 
@@ -537,10 +593,10 @@ fn initCommand(allocator: std.mem.Allocator, opts: cli.InitOptions) void {
     // Print success
     if (in_subdir) {
         std.debug.print("Created project '{s}' in {s}/\n", .{ display_name, project_name.? });
-        std.debug.print("\n  cd {s}\n  cot run src/main.cot\n\n", .{project_name.?});
+        std.debug.print("\n  cd {s}\n  cot run\n\n", .{project_name.?});
     } else {
         std.debug.print("Initialized project '{s}'\n", .{display_name});
-        std.debug.print("\n  cot run src/main.cot\n\n", .{});
+        std.debug.print("\n  cot run\n\n", .{});
     }
 }
 
