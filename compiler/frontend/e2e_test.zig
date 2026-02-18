@@ -383,7 +383,7 @@ test "e2e: struct field mutation" {
 
 test "e2e: enum definition" {
     var result = try runPipeline(std.testing.allocator,
-        \\enum Color { red, green, blue }
+        \\const Color = enum { red, green, blue }
         \\fn get_red() Color { return Color.red }
     );
     defer result.deinit();
@@ -392,7 +392,7 @@ test "e2e: enum definition" {
 
 test "e2e: enum comparison" {
     var result = try runPipeline(std.testing.allocator,
-        \\enum Color { red, green, blue }
+        \\const Color = enum { red, green, blue }
         \\fn is_red(c: Color) bool { return c == Color.red }
     );
     defer result.deinit();

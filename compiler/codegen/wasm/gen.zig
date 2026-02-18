@@ -1085,7 +1085,19 @@ pub const GenState = struct {
                 const from_is_32 = (from_type == 4); // I32
                 const to_is_32 = (to_type == 4); // I32
 
-                if (from_is_float and !to_is_float) {
+                if (from_is_float and to_is_float) {
+                    // float -> float: precision conversion
+                    // Cot stores all floats as f64 on the stack. For @floatCast(f32, val),
+                    // we demote then promote to get f32 precision loss while keeping f64 type.
+                    // Ref: Wasm spec f32.demote_f64 (0xB6), f64.promote_f32 (0xBB)
+                    const to_is_f32 = (to_type == 10); // TypeRegistry.F32
+                    if (to_is_f32) {
+                        // f64 -> f32 precision: demote then promote (round-trip loses precision)
+                        _ = try self.builder.append(.f32_demote_f64);
+                        _ = try self.builder.append(.f64_promote_f32);
+                    }
+                    // f32 -> f64 or same type: no-op (values are already f64 on stack)
+                } else if (from_is_float and !to_is_float) {
                     // f64 -> i64: saturating truncate float to signed integer (Wasm 2.0)
                     // trunc_sat returns 0 for NaN, min/max for overflow (never traps)
                     if (to_is_32) {

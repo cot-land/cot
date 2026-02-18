@@ -139,9 +139,11 @@ return new Foo { x: val }
 
 ## Enums
 
+Zig-style: `const Name = enum { ... }`
+
 ```cot
-enum Color { Red, Green, Blue }
-enum Status { Ok = 0, Warning = 50, Error = 100 }
+const Color = enum { Red, Green, Blue }
+const Status = enum { Ok = 0, Warning = 50, Error = 100 }
 ```
 
 Access: `Color.Red`, `Status.Ok`

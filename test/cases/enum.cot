@@ -1,10 +1,10 @@
-enum CeColor {
+const CeColor = enum {
     Red,
     Green,
     Blue
 }
 
-enum CeStatus {
+const CeStatus = enum {
     Ok = 0,
     Warning = 50,
     Error = 100

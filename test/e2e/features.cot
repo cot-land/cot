@@ -15,9 +15,9 @@ struct Config { width: i64 = 800, height: i64 = 600, debug: i64 = 0 }
 struct Partial { name: string, score: i64 = 100 }
 type Coord = Point;
 
-enum Color { Red, Green, Blue }
-enum Status { Ok = 0, Warning = 50, Error = 100 }
-enum Level { Low = 10, Medium = 50, High = 100 }
+const Color = enum { Red, Green, Blue }
+const Status = enum { Ok = 0, Warning = 50, Error = 100 }
+const Level = enum { Low = 10, Medium = 50, High = 100 }
 
 union State { Init, Running, Done }
 union Result { Ok: i64, Err: i32 }
@@ -2583,7 +2583,7 @@ test "anonymous struct return" {
 
 // --- @intFromEnum / @enumFromInt (Zig Sema.zig:8420) ---
 
-enum BuiltinColor { red, green, blue }
+const BuiltinColor = enum { red, green, blue }
 
 test "@intFromEnum" {
     var c = BuiltinColor.green
@@ -2866,4 +2866,75 @@ test "memset zeros memory" {
 test "isatty on non-tty fd" {
     // fd 99 is not open, so not a tty
     @assert_eq(@isatty(99), 0)
+}
+
+// ============================================================================
+// Optional comparison (?T == value)
+// ============================================================================
+
+test "optional eq value" {
+    var x: ?i64 = 42
+    if (x == 42) {
+        @assert_eq(1, 1)
+    } else {
+        @assert_eq(1, 0)
+    }
+}
+
+test "optional eq null" {
+    var x: ?i64 = null
+    if (x == null) {
+        @assert_eq(1, 1)
+    } else {
+        @assert_eq(1, 0)
+    }
+}
+
+test "optional neq value" {
+    var x: ?i64 = 42
+    if (x != 99) {
+        @assert_eq(1, 1)
+    } else {
+        @assert_eq(1, 0)
+    }
+}
+
+// ============================================================================
+// @floatCast builtin
+// ============================================================================
+
+test "floatCast f64 to f32" {
+    var x: f64 = 3.14
+    var y: f32 = @floatCast(f32, x)
+    @assert_eq(1, 1)
+}
+
+test "floatCast f32 to f64" {
+    var x: f32 = 2.5
+    var y: f64 = @floatCast(f64, x)
+    @assert_eq(1, 1)
+}
+
+test "floatCast identity f64" {
+    var x: f64 = 1.0
+    var y: f64 = @floatCast(f64, x)
+    @assert_eq(1, 1)
+}
+
+// ============================================================================
+// @enumLen(T) — comptime enum variant count
+// ============================================================================
+
+test "enumLen basic" {
+    @assert_eq(@enumLen(Color), 3)
+}
+
+test "enumLen iterate with enumFromInt" {
+    var i: i64 = 0
+    var count: i64 = 0
+    while (i < @enumLen(Color)) {
+        count += 1
+        i += 1
+    }
+    @assert_eq(count, 3)
 }

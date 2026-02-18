@@ -1,4 +1,4 @@
-enum CswLevel {
+const CswLevel = enum {
     Low = 10,
     Medium = 50,
     High = 100

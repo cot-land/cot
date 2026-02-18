@@ -5025,11 +5025,24 @@ pub const Lowerer = struct {
                 const type_idx = self.resolveTypeNode(bc.type_arg);
                 return try fb.emitConstInt(@intCast(self.type_reg.sizeOf(type_idx)), TypeRegistry.I64, bc.span);
             },
+            .enum_len => {
+                // Ref: Zig @typeInfo(.Enum).fields.len — comptime variant count
+                const type_idx = self.resolveTypeNode(bc.type_arg);
+                const info = self.type_reg.get(type_idx);
+                const count: i64 = if (info == .enum_type) @intCast(info.enum_type.variants.len) else 0;
+                return try fb.emitConstInt(count, TypeRegistry.I64, bc.span);
+            },
             .align_of => {
                 const type_idx = self.resolveTypeNode(bc.type_arg);
                 return try fb.emitConstInt(@intCast(self.type_reg.alignOf(type_idx)), TypeRegistry.I64, bc.span);
             },
             .int_cast => {
+                const target_type = self.resolveTypeNode(bc.type_arg);
+                const value = try self.lowerExprNode(bc.args[0]);
+                return try fb.emitIntCast(value, target_type, bc.span);
+            },
+            .float_cast => {
+                // Ref: Zig @floatCast — float-to-float conversion (f64→f32 demote, f32→f64 promote)
                 const target_type = self.resolveTypeNode(bc.type_arg);
                 const value = try self.lowerExprNode(bc.args[0]);
                 return try fb.emitIntCast(value, target_type, bc.span);
@@ -6913,7 +6926,7 @@ test "E2E: void function" {
 test "E2E: enum definition" {
     const allocator = std.testing.allocator;
     const code =
-        \\enum Color { red, green, blue }
+        \\const Color = enum { red, green, blue }
         \\fn get_red() Color { return Color.red }
     ;
     var result = try testPipeline(allocator, code);

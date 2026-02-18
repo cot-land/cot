@@ -156,8 +156,10 @@ pub const BuiltinKind = enum {
     // Type intrinsics
     size_of,
     align_of,
+    enum_len,
     // Casts
     int_cast,
+    float_cast,
     float_from_int,
     ptr_cast,
     int_to_ptr,
@@ -276,7 +278,9 @@ pub const BuiltinKind = enum {
     const map = std.StaticStringMap(BuiltinKind).initComptime(.{
         .{ "sizeOf", .size_of },
         .{ "alignOf", .align_of },
+        .{ "enumLen", .enum_len },
         .{ "intCast", .int_cast },
+        .{ "floatCast", .float_cast },
         .{ "floatFromInt", .float_from_int },
         .{ "ptrCast", .ptr_cast },
         .{ "intToPtr", .int_to_ptr },
@@ -372,7 +376,9 @@ pub const BuiltinKind = enum {
         return switch (self) {
             .size_of => "sizeOf",
             .align_of => "alignOf",
+            .enum_len => "enumLen",
             .int_cast => "intCast",
+            .float_cast => "floatCast",
             .float_from_int => "floatFromInt",
             .ptr_cast => "ptrCast",
             .int_to_ptr => "intToPtr",

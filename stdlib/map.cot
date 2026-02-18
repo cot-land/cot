@@ -39,6 +39,26 @@ impl Hashable for i64 {
     }
 }
 
+// FNV-1a 64-bit hash for strings.
+// Ref: Zig std.hash.Fnv1a_64, Go hash/fnv, Rust core::hash::SipHash
+// Constants: offset_basis = 14695981039346656037 = -(3750763034362895579) signed
+//            prime = 1099511628211
+impl Hashable for string {
+    fn hash(self: *string) i64 {
+        var s = self.*
+        var ptr = @ptrOf(s)
+        var slen = @lenOf(s)
+        var h: i64 = 0 - 3750763034362895579
+        var i: i64 = 0
+        while (i < slen) {
+            var b = @intToPtr(*i64, ptr + i).* & 255
+            h = (h ^ b) * 1099511628211
+            i += 1
+        }
+        return h
+    }
+}
+
 struct Map(K, V) {
     keys: i64,
     values: i64,

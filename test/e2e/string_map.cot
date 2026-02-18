@@ -1,0 +1,126 @@
+// StringMap end-to-end tests.
+// Tests hash map with string keys: set, get, has, delete, grow, keyword lookup.
+
+import "std/string_map"
+
+test "string_map_set_and_get" {
+    var m: StringMap = .{}
+    m.set("hello", 42)
+    @assert_eq(m.get("hello"), 42)
+    m.free()
+}
+
+test "string_map_has" {
+    var m: StringMap = .{}
+    m.set("foo", 1)
+    @assert_eq(m.has("foo"), 1)
+    @assert_eq(m.has("bar"), 0)
+    m.free()
+}
+
+test "string_map_update" {
+    var m: StringMap = .{}
+    m.set("key", 10)
+    m.set("key", 20)
+    @assert_eq(m.get("key"), 20)
+    @assert_eq(m.len(), 1)
+    m.free()
+}
+
+test "string_map_getOrDefault" {
+    var m: StringMap = .{}
+    m.set("a", 1)
+    @assert_eq(m.getOrDefault("a", 0), 1)
+    @assert_eq(m.getOrDefault("z", 99), 99)
+    m.free()
+}
+
+test "string_map_delete" {
+    var m: StringMap = .{}
+    m.set("a", 1)
+    m.set("b", 2)
+    m.delete("a")
+    @assert_eq(m.has("a"), 0)
+    @assert_eq(m.has("b"), 1)
+    @assert_eq(m.len(), 1)
+    m.free()
+}
+
+test "string_map_keyword_lookup" {
+    var m: StringMap = .{}
+    m.set("const", 1)
+    m.set("var", 2)
+    m.set("fn", 3)
+    m.set("return", 4)
+    m.set("if", 5)
+    m.set("else", 6)
+    m.set("while", 7)
+    m.set("struct", 8)
+    m.set("enum", 9)
+    m.set("union", 10)
+    m.set("import", 11)
+    m.set("test", 12)
+    @assert_eq(m.get("const"), 1)
+    @assert_eq(m.get("fn"), 3)
+    @assert_eq(m.get("while"), 7)
+    @assert_eq(m.get("test"), 12)
+    @assert_eq(m.has("break"), 0)
+    @assert_eq(m.len(), 12)
+    m.free()
+}
+
+test "string_map_grow" {
+    var m: StringMap = .{}
+    m.set("a", 1)
+    m.set("b", 2)
+    m.set("c", 3)
+    m.set("d", 4)
+    m.set("e", 5)
+    m.set("f", 6)
+    m.set("g", 7)
+    m.set("h", 8)
+    m.set("i", 9)
+    m.set("j", 10)
+    m.set("k", 11)
+    m.set("l", 12)
+    m.set("m", 13)
+    m.set("n", 14)
+    m.set("o", 15)
+    m.set("p", 16)
+    m.set("q", 17)
+    m.set("r", 18)
+    m.set("s", 19)
+    m.set("t", 20)
+    @assert_eq(m.len(), 20)
+    @assert_eq(m.get("a"), 1)
+    @assert_eq(m.get("t"), 20)
+    m.free()
+}
+
+test "string_map_empty_operations" {
+    var m: StringMap = .{}
+    @assert_eq(m.has("anything"), 0)
+    @assert_eq(m.len(), 0)
+    @assert_eq(m.isEmpty(), 1)
+    m.free()
+}
+
+test "string_map_clear" {
+    var m: StringMap = .{}
+    m.set("a", 1)
+    m.set("b", 2)
+    m.clear()
+    @assert_eq(m.len(), 0)
+    @assert_eq(m.has("a"), 0)
+    m.set("c", 3)
+    @assert_eq(m.get("c"), 3)
+    m.free()
+}
+
+test "string_map_double_free" {
+    var m: StringMap = .{}
+    m.set("x", 1)
+    m.free()
+    m.free()
+    @assert_eq(m.len(), 0)
+}

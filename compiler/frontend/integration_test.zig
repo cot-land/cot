@@ -255,7 +255,7 @@ test "integration: enum definition" {
     const allocator = arena.allocator();
 
     const code =
-        \\enum Color { red, green, blue }
+        \\const Color = enum { red, green, blue }
         \\
         \\fn get_color() Color {
         \\    return Color.red

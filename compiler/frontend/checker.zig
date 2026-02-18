@@ -1150,6 +1150,14 @@ pub const Checker = struct {
                 if (type_idx == invalid_type) { self.err.errorWithCode(bc.span.start, .e300, "requires valid type"); return invalid_type; }
                 return TypeRegistry.I64;
             },
+            .enum_len => {
+                // Ref: Zig @typeInfo(.Enum).fields.len — returns number of enum variants
+                const type_idx = try self.resolveTypeExpr(bc.type_arg);
+                if (type_idx == invalid_type) { self.err.errorWithCode(bc.span.start, .e300, "@enumLen requires valid type"); return invalid_type; }
+                const info = self.types.get(type_idx);
+                if (info != .enum_type) { self.err.errorWithCode(bc.span.start, .e300, "@enumLen requires enum type"); return invalid_type; }
+                return TypeRegistry.I64;
+            },
             .string => {
                 _ = try self.checkExpr(bc.args[0]);
                 _ = try self.checkExpr(bc.args[1]);
@@ -1159,6 +1167,17 @@ pub const Checker = struct {
                 const target_type = try self.resolveTypeExpr(bc.type_arg);
                 // Ref: Zig zirIntCast (Sema.zig:9867) — only accepts integer targets (use @floatFromInt for floats)
                 if (!types.isInteger(self.types.get(target_type))) { self.err.errorWithCode(bc.span.start, .e300, "@intCast target must be integer type"); return invalid_type; }
+                _ = try self.checkExpr(bc.args[0]);
+                return target_type;
+            },
+            .float_cast => {
+                // Ref: Zig @floatCast (Sema.zig:9820) — converts float to float (f64→f32 or f32→f64)
+                const target_type = try self.resolveTypeExpr(bc.type_arg);
+                const target_info = self.types.get(target_type);
+                if (target_info != .basic or !target_info.basic.isFloat()) {
+                    self.err.errorWithCode(bc.span.start, .e300, "@floatCast target must be float type");
+                    return invalid_type;
+                }
                 _ = try self.checkExpr(bc.args[0]);
                 return target_type;
             },
@@ -2858,6 +2877,10 @@ pub const Checker = struct {
         // Enum values are comparable to their backing type (integer) — Zig: @intFromEnum
         if (ta == .enum_type and types.isInteger(tb)) return true;
         if (tb == .enum_type and types.isInteger(ta)) return true;
+        // Optional-to-value comparison — Zig Sema.zig:analyzeCmp resolvePeerTypes coerces
+        // T to ?T then compares. In Cot, null sentinel means raw value compare works directly.
+        if (ta == .optional and self.isComparable(ta.optional.elem, b)) return true;
+        if (tb == .optional and self.isComparable(a, tb.optional.elem)) return true;
         return false;
     }
 

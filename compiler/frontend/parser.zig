@@ -217,7 +217,7 @@ pub const Parser = struct {
             .kw_struct => self.parseStructDeclWithLayout(.auto),
             .kw_trait => self.parseTraitDecl(),
             .kw_impl => self.parseImplBlock(),
-            .kw_enum => self.parseEnumDecl(),
+            .kw_enum => { self.err.errorWithCode(self.pos(), .e203, "use 'const Name = enum { ... }' syntax (Zig style)"); return null; },
             .kw_union => self.parseUnionDecl(),
             .kw_type => self.parseTypeAlias(),
             .kw_import => self.parseImportDecl(),
@@ -359,7 +359,7 @@ pub const Parser = struct {
         const name = self.tok.text;
         self.advance();
 
-        // Check for error set declaration: const MyError = error { Fail, NotFound }
+        // Check for type declarations: const Name = error { ... } or const Name = enum { ... }
         if (is_const and self.check(.assign)) {
             const saved_tok = self.tok;
             const saved_peek = self.peek_tok;
@@ -380,7 +380,32 @@ pub const Parser = struct {
                 if (!self.expect(.rbrace)) return null;
                 return try self.tree.addDecl(.{ .error_set_decl = .{ .name = name, .variants = try self.allocator.dupe([]const u8, variants.items), .doc_comment = doc_comment, .span = Span.init(start, self.pos()) } });
             }
-            // Not an error set, restore full parser+scanner state
+            // Zig-style enum: const Color = enum { Red, Green, Blue }
+            if (self.check(.kw_enum)) {
+                const peek = self.peekToken();
+                if (peek.tok == .lbrace or peek.tok == .colon) {
+                    // Reuse parseEnumDecl logic: name already captured, advance past 'enum'
+                    self.advance(); // consume 'enum'
+                    var backing_type: NodeIndex = null_node;
+                    if (self.match(.colon)) backing_type = try self.parseType() orelse null_node;
+                    if (!self.expect(.lbrace)) return null;
+                    var enum_variants = std.ArrayListUnmanaged(ast.EnumVariant){};
+                    defer enum_variants.deinit(self.allocator);
+                    while (!self.check(.rbrace) and !self.check(.eof)) {
+                        const var_start = self.pos();
+                        if (!self.check(.ident)) break;
+                        const var_name = self.tok.text;
+                        self.advance();
+                        var value: NodeIndex = null_node;
+                        if (self.match(.assign)) value = try self.parseExpr() orelse break;
+                        try enum_variants.append(self.allocator, .{ .name = var_name, .value = value, .span = Span.init(var_start, self.pos()) });
+                        if (!self.match(.comma)) break;
+                    }
+                    if (!self.expect(.rbrace)) return null;
+                    return try self.tree.addDecl(.{ .enum_decl = .{ .name = name, .backing_type = backing_type, .variants = try self.allocator.dupe(ast.EnumVariant, enum_variants.items), .doc_comment = doc_comment, .span = Span.init(start, self.pos()) } });
+                }
+            }
+            // Not a type declaration, restore full parser+scanner state
             self.tok = saved_tok;
             self.peek_tok = saved_peek;
             self.scan.pos = saved_scan_pos;
@@ -1325,14 +1350,14 @@ pub const Parser = struct {
                 if (!self.expect(.rparen)) return null;
                 return try self.tree.addExpr(.{ .builtin_call = .{ .kind = kind, .type_arg = null_node, .args = .{ null_node, null_node, null_node }, .span = Span.init(start, self.pos()) } });
             },
-            // 1 type arg (no value): @sizeOf(T), @alignOf(T)
-            .size_of, .align_of => {
+            // 1 type arg (no value): @sizeOf(T), @alignOf(T), @enumLen(T)
+            .size_of, .align_of, .enum_len => {
                 const t = try self.parseType() orelse return null;
                 if (!self.expect(.rparen)) return null;
                 return try self.tree.addExpr(.{ .builtin_call = .{ .kind = kind, .type_arg = t, .args = .{ null_node, null_node, null_node }, .span = Span.init(start, self.pos()) } });
             },
             // 1 type + 1 value arg: @intCast(T, val), @enumFromInt(T, val), @bitCast(T, val), @truncate(T, val), @as(T, val), @offsetOf(T, "field"), @alignCast(T, val)
-            .int_cast, .float_from_int, .ptr_cast, .int_to_ptr, .has_field,
+            .int_cast, .float_cast, .float_from_int, .ptr_cast, .int_to_ptr, .has_field,
             .enum_from_int, .bit_cast, .truncate, .as, .offset_of, .align_cast,
             => {
                 const t = try self.parseType() orelse return null;
@@ -1835,7 +1860,7 @@ test "parser struct declaration" {
 }
 
 test "parser enum declaration" {
-    const tree, const err, var arena = try testParse("enum Color { red, green, blue }");
+    const tree, const err, var arena = try testParse("const Color = enum { red, green, blue }");
     defer arena.deinit();
     try std.testing.expect(!err.hasErrors());
     const decl = tree.getNode(tree.file.?.decls[0]).?.asDecl().?;
