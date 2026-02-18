@@ -1187,6 +1187,15 @@ pub const Checker = struct {
                 _ = try self.checkExpr(bc.args[0]);
                 return target_type;
             },
+            .int_from_float => {
+                // Ref: Zig @intFromFloat — converts float to integer (truncates toward zero)
+                const arg_type = try self.checkExpr(bc.args[0]);
+                const info = self.types.get(arg_type);
+                if (info != .basic or !info.basic.isFloat()) {
+                    self.err.errorWithCode(bc.span.start, .e300, "@intFromFloat operand must be a float type");
+                }
+                return TypeRegistry.I64;
+            },
             .ptr_cast => {
                 const target_type = try self.resolveTypeExpr(bc.type_arg);
                 if (self.types.get(target_type) != .pointer) { self.err.errorWithCode(bc.span.start, .e300, "@ptrCast target must be pointer"); return invalid_type; }

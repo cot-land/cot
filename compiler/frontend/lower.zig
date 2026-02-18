@@ -5052,6 +5052,12 @@ pub const Lowerer = struct {
                 const value = try self.lowerExprNode(bc.args[0]);
                 return try fb.emitIntCast(value, target_type, bc.span);
             },
+            .int_from_float => {
+                // @intFromFloat(val) — convert float to i64 (truncate toward zero)
+                // Wasm: i64.trunc_f64_s (0xB0)
+                const value = try self.lowerExprNode(bc.args[0]);
+                return try fb.emitIntCast(value, TypeRegistry.I64, bc.span);
+            },
             .ptr_cast => {
                 const target_type = self.resolveTypeNode(bc.type_arg);
                 const value = try self.lowerExprNode(bc.args[0]);

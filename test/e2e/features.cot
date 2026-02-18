@@ -3,6 +3,7 @@
 
 import "std/list"
 import "std/map"
+import "std/string"
 
 // ============================================================================
 // Shared type declarations
@@ -2919,6 +2920,87 @@ test "floatCast identity f64" {
     var x: f64 = 1.0
     var y: f64 = @floatCast(f64, x)
     @assert_eq(1, 1)
+}
+
+// ============================================================================
+// @intFromFloat — convert float to integer (truncate toward zero)
+// ============================================================================
+
+test "intFromFloat positive" {
+    var x: f64 = 3.7
+    var y = @intFromFloat(x)
+    @assert_eq(y, 3)
+}
+
+test "intFromFloat negative" {
+    var x: f64 = -2.9
+    var y = @intFromFloat(x)
+    @assert_eq(y, -2)
+}
+
+test "intFromFloat zero" {
+    var x: f64 = 0.0
+    var y = @intFromFloat(x)
+    @assert_eq(y, 0)
+}
+
+test "intFromFloat whole number" {
+    var x: f64 = 42.0
+    var y = @intFromFloat(x)
+    @assert_eq(y, 42)
+}
+
+// ============================================================================
+// parseInt with radix prefixes (0x, 0b, 0o)
+// ============================================================================
+
+test "parseInt hex" {
+    @assert_eq(parseInt("0xFF"), 255)
+}
+
+test "parseInt hex uppercase" {
+    @assert_eq(parseInt("0XAB"), 171)
+}
+
+test "parseInt binary" {
+    @assert_eq(parseInt("0b1010"), 10)
+}
+
+test "parseInt octal" {
+    @assert_eq(parseInt("0o17"), 15)
+}
+
+test "parseInt negative hex" {
+    @assert_eq(parseInt("-0xFF"), -255)
+}
+
+test "parseInt decimal unchanged" {
+    @assert_eq(parseInt("12345"), 12345)
+}
+
+// ============================================================================
+// parseFloat — string to f64 conversion
+// ============================================================================
+
+test "parseFloat integer" {
+    var x = parseFloat("42")
+    @assert_eq(@intFromFloat(x), 42)
+}
+
+test "parseFloat decimal" {
+    var x = parseFloat("3.14")
+    // 3.14 truncates to 3
+    @assert_eq(@intFromFloat(x), 3)
+}
+
+test "parseFloat negative" {
+    var x = parseFloat("-2.5")
+    @assert_eq(@intFromFloat(x), -2)
+}
+
+test "parseFloat exponent" {
+    var x = parseFloat("1e3")
+    @assert_eq(@intFromFloat(x), 1000)
 }
 
 // ============================================================================
