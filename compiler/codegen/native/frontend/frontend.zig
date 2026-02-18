@@ -754,6 +754,27 @@ pub const FuncInstBuilder = struct {
         return r.result.?;
     }
 
+    /// Count leading zeros. Port of Cranelift clz.
+    pub fn clz(self: Self, arg: Value) !Value {
+        const ty = self.builder.func.dfg.valueType(arg);
+        const r = try self.Unary(.clz, ty, arg);
+        return r.result.?;
+    }
+
+    /// Count trailing zeros. Port of Cranelift ctz.
+    pub fn ctz(self: Self, arg: Value) !Value {
+        const ty = self.builder.func.dfg.valueType(arg);
+        const r = try self.Unary(.ctz, ty, arg);
+        return r.result.?;
+    }
+
+    /// Population count. Port of Cranelift popcnt.
+    pub fn popcnt(self: Self, arg: Value) !Value {
+        const ty = self.builder.func.dfg.valueType(arg);
+        const r = try self.Unary(.popcnt, ty, arg);
+        return r.result.?;
+    }
+
     // ========================================================================
     // Float Arithmetic
     // ========================================================================

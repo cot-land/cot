@@ -1121,6 +1121,27 @@ pub const FuncTranslator = struct {
         try self.state.push1(result);
     }
 
+    /// Count leading zeros. Port of Cranelift clz.
+    pub fn translateClz(self: *Self) !void {
+        const arg = self.state.pop1();
+        const result = try self.builder.ins().clz(arg);
+        try self.state.push1(result);
+    }
+
+    /// Count trailing zeros. Port of Cranelift ctz.
+    pub fn translateCtz(self: *Self) !void {
+        const arg = self.state.pop1();
+        const result = try self.builder.ins().ctz(arg);
+        try self.state.push1(result);
+    }
+
+    /// Population count. Port of Cranelift popcnt.
+    pub fn translatePopcnt(self: *Self) !void {
+        const arg = self.state.pop1();
+        const result = try self.builder.ins().popcnt(arg);
+        try self.state.push1(result);
+    }
+
     // ========================================================================
     // Comparison Translation (unified i32/i64)
     // Port of code_translator.rs:1286-1318 and translate_icmp helper (3736-3740)

@@ -354,4 +354,82 @@ impl Map(K, V) {
         }
         return result
     }
+
+    // entries() — returns parallel key and value Lists for iteration.
+    // Usage: var ek = m.entryKeys(); var ev = m.entryValues(); then index both.
+    // More efficient: use keys() + get() pattern, or keyAt/valueAt indexed access.
+    // Reference: Zig HashMap.iterator() yields Entry{.key, .value}
+
+    // keyAt(n) — returns the nth occupied key (0-indexed among live entries).
+    // Reference: Zig HashMap iterator pattern — skip empty/tombstone slots.
+    fn keyAt(self: Map(K, V), n: i64) K {
+        var count: i64 = 0
+        var i: i64 = 0
+        while (i < self.capacity) {
+            var st = @intToPtr(*i64, self.states + i * @sizeOf(i64))
+            if (st.* == 1) {
+                if (count == n) {
+                    var kp = @intToPtr(*K, self.keys + i * @sizeOf(K))
+                    return kp.*
+                }
+                count += 1
+            }
+            i += 1
+        }
+        @trap()
+        return @intToPtr(*K, 0).*
+    }
+
+    // valueAt(n) — returns the nth occupied value (0-indexed among live entries).
+    fn valueAt(self: Map(K, V), n: i64) V {
+        var count: i64 = 0
+        var i: i64 = 0
+        while (i < self.capacity) {
+            var st = @intToPtr(*i64, self.states + i * @sizeOf(i64))
+            if (st.* == 1) {
+                if (count == n) {
+                    var vp = @intToPtr(*V, self.values + i * @sizeOf(V))
+                    return vp.*
+                }
+                count += 1
+            }
+            i += 1
+        }
+        @trap()
+        return @intToPtr(*V, 0).*
+    }
+
+    // clone() — deep copy of the map. All entries re-inserted.
+    // Reference: Zig HashMap.clone(), Go maps.Clone()
+    fn clone(self: Map(K, V)) Map(K, V) {
+        var result: Map(K, V) = .{}
+        if (self.count == 0) { return result }
+        result.rehash(self.capacity)
+        var i: i64 = 0
+        while (i < self.capacity) {
+            var st = @intToPtr(*i64, self.states + i * @sizeOf(i64))
+            if (st.* == 1) {
+                var kp = @intToPtr(*K, self.keys + i * @sizeOf(K))
+                var vp = @intToPtr(*V, self.values + i * @sizeOf(V))
+                result.set(kp.*, vp.*)
+            }
+            i += 1
+        }
+        return result
+    }
+
+    // putAll(other) — merge all entries from other into self. Overwrites on key conflict.
+    // Reference: Zig HashMap.putAll(), Java HashMap.putAll()
+    fn putAll(self: Map(K, V), other: *Map(K, V)) void {
+        var i: i64 = 0
+        while (i < other.capacity) {
+            var st = @intToPtr(*i64, other.states + i * @sizeOf(i64))
+            if (st.* == 1) {
+                var kp = @intToPtr(*K, other.keys + i * @sizeOf(K))
+                var vp = @intToPtr(*V, other.values + i * @sizeOf(V))
+                self.set(kp.*, vp.*)
+            }
+            i += 1
+        }
+    }
 }

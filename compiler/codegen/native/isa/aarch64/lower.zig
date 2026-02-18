@@ -171,6 +171,11 @@ pub const AArch64LowerBackend = struct {
             .rotl => self.lowerRotl(ctx, ir_inst),
             .rotr => self.lowerRotr(ctx, ir_inst),
 
+            // Bit counting — Port of Cranelift clz/ctz/popcnt
+            .clz => self.lowerClz(ctx, ir_inst),
+            .ctz => self.lowerCtz(ctx, ir_inst),
+            .popcnt => self.lowerPopcnt(ctx, ir_inst),
+
             // Integer comparison
             .icmp => self.lowerIcmp(ctx, ir_inst),
 
@@ -1252,6 +1257,157 @@ pub const AArch64LowerBackend = struct {
                 .rd = dst_reg,
                 .rn = lhs_reg,
                 .rm = rhs_reg,
+            },
+        }) catch return null;
+
+        var output = InstOutput{};
+        output.append(ValueRegs(Reg).one(dst_reg.toReg())) catch return null;
+        return output;
+    }
+
+    // =========================================================================
+    // Count leading zeros — ARM64 CLZ instruction
+    // Port of Cranelift isa/aarch64/lower/isle.rs clz rule
+    // =========================================================================
+
+    fn lowerClz(self: *const Self, ctx: *LowerCtx, ir_inst: ClifInst) ?InstOutput {
+        _ = self;
+        const ty = ctx.outputTy(ir_inst, 0);
+        const size = operandSizeFromType(ty) orelse return null;
+
+        const src = ctx.putInputInRegs(ir_inst, 0);
+        const src_reg = src.onlyReg() orelse return null;
+
+        const dst = ctx.allocTmp(ty) catch return null;
+        const dst_reg = dst.onlyReg() orelse return null;
+
+        ctx.emit(Inst{
+            .bit_rr = .{
+                .op = .clz,
+                .size = size,
+                .rd = dst_reg,
+                .rn = src_reg,
+            },
+        }) catch return null;
+
+        var output = InstOutput{};
+        output.append(ValueRegs(Reg).one(dst_reg.toReg())) catch return null;
+        return output;
+    }
+
+    // =========================================================================
+    // Count trailing zeros — ARM64 RBIT + CLZ
+    // Port of Cranelift isa/aarch64/lower/isle.rs ctz rule
+    // CTZ(x) = CLZ(RBIT(x))
+    // =========================================================================
+
+    fn lowerCtz(self: *const Self, ctx: *LowerCtx, ir_inst: ClifInst) ?InstOutput {
+        _ = self;
+        const ty = ctx.outputTy(ir_inst, 0);
+        const size = operandSizeFromType(ty) orelse return null;
+
+        const src = ctx.putInputInRegs(ir_inst, 0);
+        const src_reg = src.onlyReg() orelse return null;
+
+        const tmp = ctx.allocTmp(ty) catch return null;
+        const tmp_reg = tmp.onlyReg() orelse return null;
+
+        const dst = ctx.allocTmp(ty) catch return null;
+        const dst_reg = dst.onlyReg() orelse return null;
+
+        // RBIT: reverse all bits
+        ctx.emit(Inst{
+            .bit_rr = .{
+                .op = .rbit,
+                .size = size,
+                .rd = tmp_reg,
+                .rn = src_reg,
+            },
+        }) catch return null;
+
+        // CLZ on reversed bits = CTZ on original
+        ctx.emit(Inst{
+            .bit_rr = .{
+                .op = .clz,
+                .size = size,
+                .rd = dst_reg,
+                .rn = tmp_reg.toReg(),
+            },
+        }) catch return null;
+
+        var output = InstOutput{};
+        output.append(ValueRegs(Reg).one(dst_reg.toReg())) catch return null;
+        return output;
+    }
+
+    // =========================================================================
+    // Population count (Hamming weight)
+    // ARM64 has no GPR popcnt. Cranelift uses FMOV+CNT+ADDV SIMD sequence.
+    // Portable ALU approach: Hamming weight parallel bit count.
+    // x = x - ((x >> 1) & 0x5555555555555555)        -- each 2-bit group
+    // x = (x & 0x3333333333333333) + ((x >> 2) & ...) -- each 4-bit group
+    // x = (x + (x >> 4)) & 0x0F0F0F0F0F0F0F0F        -- each 8-bit group
+    // return (x * 0x0101010101010101) >> 56             -- horizontal sum
+    // For now: stub returns 0 on native. @popCount works correctly on Wasm.
+    // TODO: Implement SIMD CNT+ADDV or Hamming weight ALU sequence.
+    // =========================================================================
+
+    fn lowerPopcnt(self: *const Self, ctx: *LowerCtx, ir_inst: ClifInst) ?InstOutput {
+        // ARM64 popcnt: FMOV to SIMD → CNT → ADDV → UMOV back to GPR.
+        // Port of Cranelift lower.isle popcnt_64 rule (line 2091).
+        _ = self;
+        const ty = ctx.outputTy(ir_inst, 0);
+        const input = ctx.putInputInRegs(ir_inst, 0);
+        const input_reg = input.onlyReg() orelse return null;
+
+        const VecMisc2 = inst_mod.VecMisc2;
+        const VecLanesOp = inst_mod.VecLanesOp;
+        const VectorSize = inst_mod.VectorSize;
+
+        // Step 1: FMOV Dd, Xn — move GPR to FPU register
+        const fpu_tmp = ctx.allocTmp(ClifType.F64) catch return null;
+        const fpu_reg = fpu_tmp.onlyReg() orelse return null;
+        ctx.emit(Inst{
+            .mov_to_fpu = .{
+                .rd = fpu_reg,
+                .rn = input_reg,
+                .size = .size64,
+            },
+        }) catch return null;
+
+        // Step 2: CNT Vd.8B, Vn.8B — count bits per byte
+        const cnt_tmp = ctx.allocTmp(ClifType.F64) catch return null;
+        const cnt_reg = cnt_tmp.onlyReg() orelse return null;
+        ctx.emit(Inst{
+            .vec_misc = .{
+                .op = VecMisc2.cnt,
+                .rd = cnt_reg,
+                .rn = fpu_reg.toReg(),
+                .size = VectorSize.size8x8,
+            },
+        }) catch return null;
+
+        // Step 3: ADDV Bd, Vn.8B — sum byte counts across vector
+        const addv_tmp = ctx.allocTmp(ClifType.F64) catch return null;
+        const addv_reg = addv_tmp.onlyReg() orelse return null;
+        ctx.emit(Inst{
+            .vec_lanes = .{
+                .op = VecLanesOp.addv,
+                .rd = addv_reg,
+                .rn = cnt_reg.toReg(),
+                .size = VectorSize.size8x8,
+            },
+        }) catch return null;
+
+        // Step 4: UMOV Wd, Vn.B[0] — move result byte back to GPR
+        const dst = ctx.allocTmp(ty) catch return null;
+        const dst_reg = dst.onlyReg() orelse return null;
+        ctx.emit(Inst{
+            .mov_from_vec = .{
+                .rd = dst_reg,
+                .rn = addv_reg.toReg(),
+                .idx = 0,
+                .size = VectorSize.size8x8,
             },
         }) catch return null;
 

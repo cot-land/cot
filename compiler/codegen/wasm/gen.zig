@@ -438,6 +438,20 @@ pub const GenState = struct {
                 _ = try self.builder.append(.i64_shr_u);
             },
 
+            // Bit counting (i64) — Wasm spec: clz=0x79, ctz=0x7A, popcnt=0x7B
+            .wasm_i64_clz => {
+                try self.getValue64(v.args[0]);
+                _ = try self.builder.append(.i64_clz);
+            },
+            .wasm_i64_ctz => {
+                try self.getValue64(v.args[0]);
+                _ = try self.builder.append(.i64_ctz);
+            },
+            .wasm_i64_popcnt => {
+                try self.getValue64(v.args[0]);
+                _ = try self.builder.append(.i64_popcnt);
+            },
+
             // Bitwise operations (i32)
             .wasm_i32_and => {
                 try self.getValue64(v.args[0]);

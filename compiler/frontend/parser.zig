@@ -1353,6 +1353,7 @@ pub const Parser = struct {
             .type_of,
             .int_from_enum, .tag_name, .error_name, .int_from_bool, .const_cast,
             .arc_retain, .arc_release,
+            .panic, .isatty, .ctz, .clz, .pop_count,
             => {
                 const arg = try self.parseExpr() orelse return null;
                 if (!self.expect(.rparen)) return null;
@@ -1372,7 +1373,7 @@ pub const Parser = struct {
                 return try self.tree.addExpr(.{ .builtin_call = .{ .kind = kind, .type_arg = null_node, .args = .{ a1, a2, null_node }, .span = Span.init(start, self.pos()) } });
             },
             // 3 value args
-            .memcpy, .fd_write, .fd_read, .fd_seek, .fd_open,
+            .memcpy, .memset, .fd_write, .fd_read, .fd_seek, .fd_open,
             .net_socket, .net_bind, .net_connect,
             .kevent_add, .kevent_del, .kevent_wait,
             .epoll_add, .epoll_wait,

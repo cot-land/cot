@@ -887,82 +887,92 @@ compare result against type min/max, trap if out of range). Release mode: emit
 
 ---
 
-## Implementation Order
+## Audit Status (Feb 18, 2026)
 
-Dependencies determine order. Independent features can be parallelized.
+Full re-audit against actual codebase. Every status verified by checking code + tests.
 
-### Phase 1: Foundation (no dependencies)
-All independent, can be implemented in any order:
-- 2.1 `@intFromEnum` / `@enumFromInt`
-- 2.2 `@bitCast`
-- 2.3 `@truncate`
-- 2.4 `@as`
-- 2.5 `@offsetOf`
-- 2.6 `@min` / `@max`
-- 2.7 `@tagName`
-- 2.8 `@errorName`
-- 2.9 `@intFromBool`
-- 2.10 `@alignCast`
-- 1.5 `unreachable` keyword
+### Tier 1: Language Features (10/10 VERIFIED)
 
-### Phase 2: Language Features
-- 1.1 `while (optional) |capture|`
-- 1.2 `while` continue expression
-- 1.3 Enum methods
-- 1.4 Exhaustive switch
-- 1.6 Nested type namespaces
-- 1.7 Anonymous struct literals
-- 1.8 Default struct field values (complete checker/lowerer wiring)
+All 10 features are implemented across the full pipeline (parser → checker → lowerer)
+with corresponding test cases in `test/e2e/features.cot`.
 
-### Phase 3: Advanced Structs
-- 1.9 Packed structs
-- 1.10 Extern structs
+### Tier 2: Builtins (9/11 VERIFIED, 2 PARTIAL)
 
-### Phase 4: Standard Library
-- 3.1 `std/mem` functions
-- 3.2 Writer/Reader interfaces
-- 3.3 `std/fmt` number formatting
-- 3.4 `std/debug` assertions
+| Builtin | Code | Tests | Status |
+|---------|------|-------|--------|
+| `@intFromEnum` / `@enumFromInt` | Full | 5 assertions | VERIFIED |
+| `@bitCast` | Full (incl. f64 reinterpret) | Identity only (f64 path untested) | VERIFIED |
+| `@truncate` | u8/u16/u32/i32 masks | u8, u16 | VERIFIED |
+| `@as` | Identity (correct for i64 uniform) | 1 assertion | VERIFIED |
+| `@offsetOf` | Full + comptime fold | 3 assertions | VERIFIED |
+| `@min` / `@max` | Full + unsigned-aware + comptime | 8 assertions | VERIFIED |
+| `@tagName` | Full (enum + union if-chain) | Enum only (union untested) | VERIFIED |
+| `@errorName` | Full if-chain impl | **ZERO tests** | **PARTIAL** |
+| `@intFromBool` | Identity + comptime fold | 3 assertions | VERIFIED |
+| `@alignCast` | Identity impl | **ZERO tests** | **PARTIAL** |
+| `@constCast` | Identity, preserves type | 1 assertion | VERIFIED |
 
-### Phase 5: Type System Polish
-- 4.1 Integer promotion rules
-- 4.2 Overflow detection
+### Tier 3: Standard Library (3/4 VERIFIED, 1 PARTIAL)
 
-### Phase 0 (DONE): ARC Critical Gaps
+| Module | Status | Notes |
+|--------|--------|-------|
+| `std/mem` | **PARTIAL** | Has eql, indexOfScalar, startsWith, endsWith (16 tests). Missing: multi-byte `indexOf(haystack, needle)` on byte slices, `@memcmp` builtin |
+| `std/io` Writer/Reader | VERIFIED | `trait Writer`, `trait Reader`, `BufferWriter`, `BufferReader` all implemented with tests |
+| `std/fmt` | VERIFIED | hex(), binary(), octal(), padLeft(), padRight(), sprintf() — 30+ tests |
+| `std/debug` | VERIFIED | assert(cond, msg), assertEq(a, b, msg), print/println — 5 tests |
 
-**All 4 critical ARC gaps fixed (Feb 18, 2026).**
-See `claude/ARC_AUDIT.md` for full audit details.
+### Tier 4: Type System (1/2 VERIFIED, 1 NOT IMPLEMENTED)
 
-1. **Ownership formalization** (DONE) — `lowerAssign` now checks `is_owned` before retaining, matching Swift SILGenAssign pattern. Deref assignment retains +0 sources.
-2. **Widen ARC detection** (DONE) — `couldBeARC()` now handles `*EnumType`, `*UnionType`, `?*T` (optional wrapping ARC pointer).
-3. **Collection element ARC** (DONE) — Added `@arc_retain`/`@arc_release` conditional builtins (no-op for non-ARC types, resolved at monomorphization). Updated List.free/set/clear/deleteRange/compact/removeIf and Map.free/set/clear/delete.
-4. **Weak references** (DONE) — `weak var x = expr` keyword suppresses ARC retain/cleanup. Breaks reference cycles. Tests: `test/e2e/arc.cot` (15 tests).
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Integer promotion rules | VERIFIED | `commonType()` in types.zig handles mixed width/signedness. 5 tests |
+| Overflow detection (debug) | **NOT IMPLEMENTED** | Explicitly removed from lower.zig:2973 with comment: "Go's Wasm backend does NOT emit runtime overflow checks". Tests only verify non-overflowing arithmetic |
 
 ---
 
-## Verification
+## Remaining Gaps for First 3 Files (token.zig, scanner.zig, assemble.zig)
 
-After each phase, port a section of the compiler to Cot as a proof-of-concept:
+Re-audited Feb 18, 2026 by reading each Zig file and identifying features not yet in Cot.
 
-| Phase | Proof-of-Concept |
-|-------|-----------------|
-| Phase 1 | Port `token.zig` — enum with methods, @intFromEnum, @tagName |
-| Phase 2 | Port `scanner.zig` — while-capture, switch, enum methods |
-| Phase 3 | Port `wasm/assemble.zig` — packed structs, byte-level I/O |
-| Phase 4 | Port `parser.zig` — arena allocator, writer interface |
-| Phase 5 | Port `checker.zig` — full type system in use |
+### Portable with workarounds (token.zig, scanner.zig)
+
+| Gap | File | Workaround |
+|-----|------|------------|
+| `std.meta.fields(T)` enum reflection | token.zig | Replace comptime table with 70-arm switch in `string()` |
+| `std.StaticStringMap` keyword lookup | token.zig | Replace with runtime `Map(string, Token)` or switch chain |
+| `self.ch.?` force-unwrap | scanner.zig | Restructure: `if (opt) \|v\| use(v) else @trap()` |
+| `?T == value` optional comparison | scanner.zig (~15 sites) | Expand to `if (opt) \|v\| v == x else false` |
+| One-liner while-capture bodies | scanner.zig | Wrap in braces (syntactic only) |
+
+### Needs new features (assemble.zig)
+
+| Gap | Severity | Description |
+|-----|----------|-------------|
+| **Fixed-size arrays `[N]T`** | HIGH | `[128]?RegVar`, `[4]u8`, `[8]u8` — pervasive in assemble.zig. No Cot equivalent. Workaround: write bytes individually via shift+mask, replace reg_vars with switch |
+| **`@floatCast(f32, f64_val)`** | MEDIUM | Float narrowing for f32 constant encoding. Need new builtin or manual IEEE 754 bit manipulation |
+| **`@bitCast` to byte array** | MEDIUM | `@as([4]u8, @bitCast(val))` — materializes value as byte array. Requires fixed-size arrays |
+| **`ArrayListUnmanaged(u8)` API** | LOW | Different from `List(u8)` API. Translation: `append(alloc, b)` → `push(b)`, `toOwnedSlice` → just use the list (ARC handles lifetime) |
+
+### Summary: What's needed before porting each file
+
+| File | Can port now? | Blockers |
+|------|---------------|----------|
+| `token.zig` | **YES** (with switch workaround) | No blockers — replace comptime tables with switch statements |
+| `scanner.zig` | **YES** (with refactoring) | No blockers — expand optional comparisons, add braces to one-liners |
+| `assemble.zig` | **NO** — needs `[N]T` or byte-write helpers | Fixed-size arrays are fundamental to byte-level encoding. Either add `[N]T` to the language, or add `List(u8).appendU32LE(val)` / `appendU64LE(val)` convenience methods to stdlib |
 
 ---
 
 ## Estimated Scope
 
-| Category | Features | Estimated Compiler Changes |
-|----------|----------|---------------------------|
-| Tier 1: Language | 10 features | ~2200 lines across parser/checker/lower | ✅ DONE |
-| Tier 2: Builtins | 11 features | ~800 lines across ast/checker/lower | ✅ DONE |
-| Tier 3: Stdlib | 4 modules | ~1000 lines of Cot stdlib code | ✅ DONE |
-| Tier 4: Type System | 2 features | ~400 lines in checker/lower | ✅ DONE |
-| **Total** | **27 features** | **~4400 lines** |
+| Category | Features | Status |
+|----------|----------|--------|
+| Tier 1: Language | 10 features | 10/10 VERIFIED |
+| Tier 2: Builtins | 11 features | 9/11 VERIFIED, 2 PARTIAL (missing tests only) |
+| Tier 3: Stdlib | 4 modules | 3/4 VERIFIED, 1 PARTIAL (mem.indexOf gap) |
+| Tier 4: Type System | 2 features | 1/2 VERIFIED, 1 NOT IMPLEMENTED (overflow detection removed) |
+| **Total** | **27 features** | **23 VERIFIED, 3 PARTIAL, 1 NOT IMPLEMENTED** |
 
-This brings Cot from ~75% to ~95% Zig feature parity for the compiler's needs,
-enabling a clean self-hosted Cot→Wasm compiler without workarounds.
+This brings Cot from ~75% to ~90% Zig feature parity for the compiler's needs.
+The remaining gaps are: missing tests for 2 builtins, `std/mem` multi-byte indexOf,
+and the decision to skip runtime overflow detection (matching Go's approach).

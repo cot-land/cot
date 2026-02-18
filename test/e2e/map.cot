@@ -335,3 +335,79 @@ test "map_key_zero" {
     @assert_eq(m.has(0), 0)
     m.free()
 }
+
+test "map_keyAt_valueAt" {
+    var m: Map(i64, i64) = .{}
+    m.set(10, 100)
+    m.set(20, 200)
+    m.set(30, 300)
+    // Iterate using indexed access
+    var sum_keys: i64 = 0
+    var sum_vals: i64 = 0
+    var i: i64 = 0
+    while (i < m.len()) {
+        sum_keys += m.keyAt(i)
+        sum_vals += m.valueAt(i)
+        i += 1
+    }
+    @assert_eq(sum_keys, 60)
+    @assert_eq(sum_vals, 600)
+    m.free()
+}
+
+test "map_clone" {
+    var m: Map(i64, i64) = .{}
+    m.set(1, 10)
+    m.set(2, 20)
+    m.set(3, 30)
+    var m2 = m.clone()
+    @assert_eq(m2.len(), 3)
+    @assert_eq(m2.get(1), 10)
+    @assert_eq(m2.get(2), 20)
+    @assert_eq(m2.get(3), 30)
+    // Modifying clone doesn't affect original
+    m2.set(1, 999)
+    @assert_eq(m.get(1), 10)
+    @assert_eq(m2.get(1), 999)
+    m.free()
+    m2.free()
+}
+
+test "map_clone_empty" {
+    var m: Map(i64, i64) = .{}
+    var m2 = m.clone()
+    @assert_eq(m2.len(), 0)
+    m.free()
+    m2.free()
+}
+
+test "map_putAll" {
+    var m1: Map(i64, i64) = .{}
+    m1.set(1, 10)
+    m1.set(2, 20)
+    var m2: Map(i64, i64) = .{}
+    m2.set(3, 30)
+    m2.set(4, 40)
+    m1.putAll(&m2)
+    @assert_eq(m1.len(), 4)
+    @assert_eq(m1.get(1), 10)
+    @assert_eq(m1.get(3), 30)
+    @assert_eq(m1.get(4), 40)
+    m1.free()
+    m2.free()
+}
+
+test "map_putAll_overwrite" {
+    var m1: Map(i64, i64) = .{}
+    m1.set(1, 10)
+    m1.set(2, 20)
+    var m2: Map(i64, i64) = .{}
+    m2.set(2, 200)
+    m2.set(3, 300)
+    m1.putAll(&m2)
+    @assert_eq(m1.len(), 3)
+    @assert_eq(m1.get(2), 200)
+    @assert_eq(m1.get(3), 300)
+    m1.free()
+    m2.free()
+}

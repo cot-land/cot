@@ -290,6 +290,12 @@ pub const WasmFuncTranslator = struct {
             .i32_rotl, .i64_rotl => try translator.translateRotl(),
             .i32_rotr, .i64_rotr => try translator.translateRotr(),
 
+            // Bit counting (unary) — Wasm clz/ctz/popcnt
+            // Port of Cranelift code_translator.rs clz/ctz/popcnt
+            .i32_clz, .i64_clz => try translator.translateClz(),
+            .i32_ctz, .i64_ctz => try translator.translateCtz(),
+            .i32_popcnt, .i64_popcnt => try translator.translatePopcnt(),
+
             // Comparison (unified i32/i64)
             // Port of code_translator.rs:1286-1318
             .i32_eqz, .i64_eqz => try translator.translateIEqz(),
@@ -482,6 +488,14 @@ pub const WasmOperator = union(enum) {
     i64_rotl,
     i32_rotr,
     i64_rotr,
+
+    // Bit counting (unary)
+    i32_clz,
+    i64_clz,
+    i32_ctz,
+    i64_ctz,
+    i32_popcnt,
+    i64_popcnt,
 
     // Comparison i32/i64 (unified)
     // Port of code_translator.rs:1286-1318

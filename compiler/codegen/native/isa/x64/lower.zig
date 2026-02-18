@@ -218,6 +218,11 @@ pub const X64LowerBackend = struct {
             .rotl => self.lowerRotl(ctx, ir_inst),
             .rotr => self.lowerRotr(ctx, ir_inst),
 
+            // Bit counting — Port of Cranelift clz/ctz/popcnt
+            .clz => self.lowerClz(ctx, ir_inst),
+            .ctz => self.lowerCtz(ctx, ir_inst),
+            .popcnt => self.lowerPopcnt(ctx, ir_inst),
+
             // Integer comparison
             .icmp => self.lowerIcmp(ctx, ir_inst),
 

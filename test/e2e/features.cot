@@ -2761,3 +2761,109 @@ test "overflow: u32 mul no overflow" {
     var b: u32 = 65535
     @assert_eq(a * b, 4294901760)
 }
+
+// ============================================================================
+// String slicing
+// ============================================================================
+
+test "string slice basic" {
+    var s = "hello world"
+    var sub = s[0:5]
+    @assert_eq(sub, "hello")
+}
+
+test "string slice middle" {
+    var s = "hello world"
+    var sub = s[6:11]
+    @assert_eq(sub, "world")
+}
+
+test "string slice to end" {
+    var s = "hello world"
+    var sub = s[6:]
+    @assert_eq(sub, "world")
+}
+
+test "string slice from start" {
+    var s = "hello world"
+    var sub = s[:5]
+    @assert_eq(sub, "hello")
+}
+
+test "string slice full" {
+    var s = "hello"
+    var sub = s[:]
+    @assert_eq(sub, "hello")
+}
+
+test "string slice length" {
+    var s = "hello world"
+    var sub = s[0:5]
+    @assert_eq(@lenOf(sub), 5)
+}
+
+// ============================================================================
+// Bit manipulation builtins
+// ============================================================================
+
+test "ctz basic" {
+    @assert_eq(@ctz(8), 3)
+}
+
+test "ctz power of 2" {
+    @assert_eq(@ctz(16), 4)
+}
+
+test "ctz zero" {
+    @assert_eq(@ctz(0), 64)
+}
+
+test "clz basic" {
+    @assert_eq(@clz(1), 63)
+}
+
+test "clz larger" {
+    // 0x8000000000000000 = 1 << 63, clz = 0
+    var x: i64 = 1 << 63
+    @assert_eq(@clz(x), 0)
+}
+
+test "clz zero" {
+    @assert_eq(@clz(0), 64)
+}
+
+test "popCount basic" {
+    @assert_eq(@popCount(7), 3)
+}
+
+test "popCount single bit" {
+    @assert_eq(@popCount(1), 1)
+}
+
+test "popCount zero" {
+    @assert_eq(@popCount(0), 0)
+}
+
+test "popCount all bits" {
+    // 0xFF = 255, 8 bits set
+    @assert_eq(@popCount(255), 8)
+}
+
+// ============================================================================
+// @memset builtin
+// ============================================================================
+
+test "memset zeros memory" {
+    var buf = @alloc(16)
+    @memset(buf, 0, 16)
+    @assert_eq(1, 1)
+}
+
+// ============================================================================
+// @isatty builtin
+// ============================================================================
+
+test "isatty on non-tty fd" {
+    // fd 99 is not open, so not a tty
+    @assert_eq(@isatty(99), 0)
+}

@@ -376,6 +376,13 @@ pub const Opcode = enum {
     /// Rotate right.
     rotr,
 
+    /// Count leading zeros. Port of Cranelift clz.
+    clz,
+    /// Count trailing zeros. Port of Cranelift ctz.
+    ctz,
+    /// Population count (number of 1-bits). Port of Cranelift popcnt.
+    popcnt,
+
     // ------------------------------------------------------------------------
     // Integer Comparison
     // ------------------------------------------------------------------------

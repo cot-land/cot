@@ -320,6 +320,9 @@ pub const WasmOp = union(enum) {
             .i32_shl => .i32_shl,
             .i32_shr_s => .i32_shr_s,
             .i32_shr_u => .i32_shr_u,
+            .i32_clz => .i32_clz,
+            .i32_ctz => .i32_ctz,
+            .i32_popcnt => .i32_popcnt,
 
             // Comparison i32
             .i32_eqz => .i32_eqz,
@@ -445,6 +448,9 @@ pub const WasmOp = union(enum) {
             .i64_shr_u => .i64_shr_u,
             .i64_rotl => .i64_rotl,
             .i64_rotr => .i64_rotr,
+            .i64_clz => .i64_clz,
+            .i64_ctz => .i64_ctz,
+            .i64_popcnt => .i64_popcnt,
 
             // i64 comparison (already have i32 versions)
             .i64_eqz => .i64_eqz,

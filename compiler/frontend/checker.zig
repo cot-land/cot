@@ -1501,6 +1501,28 @@ pub const Checker = struct {
                 _ = try self.checkExpr(bc.args[0]);
                 return TypeRegistry.VOID;
             },
+            // @panic("message") — Zig @panic: writes message to stderr, then traps
+            .panic => {
+                if (bc.args[0] != null_node) _ = try self.checkExpr(bc.args[0]);
+                return TypeRegistry.NORETURN;
+            },
+            // @isatty(fd) — POSIX isatty(3): returns bool
+            .isatty => {
+                _ = try self.checkExpr(bc.args[0]);
+                return TypeRegistry.BOOL;
+            },
+            // @memset(ptr, val, len) — Wasm memory.fill
+            .memset => {
+                _ = try self.checkExpr(bc.args[0]);
+                _ = try self.checkExpr(bc.args[1]);
+                _ = try self.checkExpr(bc.args[2]);
+                return TypeRegistry.VOID;
+            },
+            // @ctz(val), @clz(val), @popCount(val) — Wasm i64 bit ops
+            .ctz, .clz, .pop_count => {
+                _ = try self.checkExpr(bc.args[0]);
+                return TypeRegistry.I64;
+            },
         }
     }
 
@@ -1520,6 +1542,7 @@ pub const Checker = struct {
         if (se.end != null_node) _ = try self.checkExpr(se.end);
         while (self.types.get(base_type) == .pointer) base_type = self.types.get(base_type).pointer.elem;
         const base = self.types.get(base_type);
+        if (base_type == TypeRegistry.STRING) return TypeRegistry.STRING;
         return switch (base) { .array => |a| self.types.makeSlice(a.elem), .slice => base_type, else => blk: { self.err.errorWithCode(se.span.start, .e300, "cannot slice this type"); break :blk invalid_type; } };
     }
 

@@ -3399,6 +3399,12 @@ pub const Lowerer = struct {
     fn lowerSliceExpr(self: *Lowerer, se: ast.SliceExpr) Error!ir.NodeIndex {
         const fb = self.current_func orelse return ir.null_node;
         const base_type_idx = self.inferExprType(se.base);
+
+        // String slicing: s[a..b] → new string with ptr+start, len=end-start
+        if (base_type_idx == TypeRegistry.STRING) {
+            return try self.lowerStringSlice(se);
+        }
+
         const base_type = self.type_reg.get(base_type_idx);
         const elem_type_idx: TypeIndex = switch (base_type) {
             .array => |a| a.elem,
@@ -3454,6 +3460,63 @@ pub const Lowerer = struct {
 
         const base_val = try self.lowerExprNode(se.base);
         return try fb.emitMakeSlice(base_val, start_node, end_node orelse return ir.null_node, elem_size, slice_type, se.span);
+    }
+
+    /// String slicing: s[start..end] produces a new string (ptr+start, end-start).
+    /// Like Go string slicing — zero-copy view into the same backing memory.
+    fn lowerStringSlice(self: *Lowerer, se: ast.SliceExpr) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+
+        // Load the base string (compound: ptr + len)
+        const base_node = self.tree.getNode(se.base) orelse return ir.null_node;
+        const base_expr = base_node.asExpr() orelse return ir.null_node;
+
+        var str_val: ir.NodeIndex = ir.null_node;
+        if (base_expr == .ident) {
+            if (fb.lookupLocal(base_expr.ident.name)) |local_idx| {
+                str_val = try fb.emitLoadLocal(local_idx, TypeRegistry.STRING, se.span);
+            }
+        }
+        if (str_val == ir.null_node) {
+            str_val = try self.lowerExprNode(se.base);
+        }
+
+        // Extract ptr and len from the string
+        const ptr_type = self.type_reg.makePointer(TypeRegistry.U8) catch TypeRegistry.I64;
+        const str_ptr = try fb.emitSlicePtr(str_val, ptr_type, se.span);
+        const str_len = try fb.emitSliceLen(str_val, se.span);
+
+        // Compute start (default 0) and end (default len)
+        var start_val: ir.NodeIndex = undefined;
+        if (se.start != null_node) {
+            start_val = try self.lowerExprNode(se.start);
+        } else {
+            start_val = try fb.emitConstInt(0, TypeRegistry.I64, se.span);
+        }
+
+        var end_val: ir.NodeIndex = undefined;
+        if (se.end != null_node) {
+            end_val = try self.lowerExprNode(se.end);
+        } else {
+            end_val = str_len;
+        }
+
+        // Runtime safety: bounds check — Zig Sema.zig pattern
+        if (!self.release_mode) {
+            try self.emitBoundsCheck(fb, start_val, str_len, se.span);
+            try self.emitBoundsCheck(fb, end_val, str_len, se.span);
+        }
+
+        // new_ptr = str_ptr + start
+        const new_ptr = try fb.emitBinary(.add, str_ptr, start_val, TypeRegistry.I64, se.span);
+        // new_len = end - start
+        const new_len = try fb.emitBinary(.sub, end_val, start_val, TypeRegistry.I64, se.span);
+
+        // Construct string compound value: store ptr and len into result local
+        const result_local = try fb.addLocalWithSize("__str_slice", TypeRegistry.STRING, false, 16);
+        _ = try fb.emitStoreLocalField(result_local, 0, 0, new_ptr, se.span);
+        _ = try fb.emitStoreLocalField(result_local, 1, 8, new_len, se.span);
+        return try fb.emitLoadLocal(result_local, TypeRegistry.STRING, se.span);
     }
 
     fn lowerStructInitExpr(self: *Lowerer, si: ast.StructInit, node_idx: ?NodeIndex) Error!ir.NodeIndex {
@@ -5758,6 +5821,61 @@ pub const Lowerer = struct {
                     _ = try fb.emitCall("cot_release", &args, false, TypeRegistry.VOID, bc.span);
                 }
                 return ir.null_node;
+            },
+            // @panic("message") — Zig @panic: write message to stderr (fd 2), then trap
+            // Reference: Zig std/debug.zig panic(), Go runtime.gopanic
+            .panic => {
+                if (bc.args[0] != null_node) {
+                    const msg_arg = try self.lowerExprNode(bc.args[0]);
+                    const fd_arg = try fb.emitConstInt(2, TypeRegistry.I64, bc.span); // stderr
+                    // cot_write(fd, ptr, len) — string is decomposed at call site
+                    var write_args = [_]ir.NodeIndex{ fd_arg, msg_arg };
+                    _ = try fb.emitCall("cot_write", &write_args, true, TypeRegistry.I64, bc.span);
+                    // Write newline
+                    const nl_idx = try fb.addStringLiteral(try self.allocator.dupe(u8, "\n"));
+                    const nl_val = try fb.emitConstSlice(nl_idx, bc.span);
+                    var nl_args = [_]ir.NodeIndex{ fd_arg, nl_val };
+                    _ = try fb.emitCall("cot_write", &nl_args, true, TypeRegistry.I64, bc.span);
+                }
+                _ = try fb.emitTrap(bc.span);
+                const dead_block = try fb.newBlock("panic.dead");
+                fb.setBlock(dead_block);
+                return ir.null_node;
+            },
+            // @isatty(fd) — POSIX isatty(3): runtime function
+            // Reference: Go term.IsTerminal, POSIX isatty(3)
+            .isatty => {
+                const fd_arg = try self.lowerExprNode(bc.args[0]);
+                var args = [_]ir.NodeIndex{fd_arg};
+                return try fb.emitCall("cot_isatty", &args, false, TypeRegistry.BOOL, bc.span);
+            },
+            // @memset(ptr, val, len) — Wasm memory.fill (0xFC 0x0B)
+            // Reference: Wasm bulk memory spec, Zig @memset
+            .memset => {
+                const ptr_arg = try self.lowerExprNode(bc.args[0]);
+                const val_arg = try self.lowerExprNode(bc.args[1]);
+                const len_arg = try self.lowerExprNode(bc.args[2]);
+                var memset_args = [_]ir.NodeIndex{ ptr_arg, val_arg, len_arg };
+                _ = try fb.emitCall("cot_memset_zero", &memset_args, false, TypeRegistry.VOID, bc.span);
+                return ir.null_node;
+            },
+            // @ctz(val) — Wasm i64.ctz (0x7A)
+            // Reference: Wasm spec, Zig @ctz
+            .ctz => {
+                const val_arg = try self.lowerExprNode(bc.args[0]);
+                return try fb.emitUnary(.ctz, val_arg, TypeRegistry.I64, bc.span);
+            },
+            // @clz(val) — Wasm i64.clz (0x79)
+            // Reference: Wasm spec, Zig @clz
+            .clz => {
+                const val_arg = try self.lowerExprNode(bc.args[0]);
+                return try fb.emitUnary(.clz, val_arg, TypeRegistry.I64, bc.span);
+            },
+            // @popCount(val) — Wasm i64.popcnt (0x7B)
+            // Reference: Wasm spec, Zig @popCount
+            .pop_count => {
+                const val_arg = try self.lowerExprNode(bc.args[0]);
+                return try fb.emitUnary(.popcnt, val_arg, TypeRegistry.I64, bc.span);
             },
         }
     }

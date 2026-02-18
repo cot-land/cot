@@ -918,7 +918,8 @@ pub const Driver = struct {
                         std.mem.eql(u8, exp.name, "cot_execve") or
                         std.mem.eql(u8, exp.name, "cot_waitpid") or
                         std.mem.eql(u8, exp.name, "cot_pipe") or
-                        std.mem.eql(u8, exp.name, "cot_dup2"))
+                        std.mem.eql(u8, exp.name, "cot_dup2") or
+                        std.mem.eql(u8, exp.name, "cot_isatty"))
                     {
                         override_name = exp.name;
                         break;
@@ -1621,6 +1622,42 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_dup2, &.{});
+                } else if (std.mem.eql(u8, name, "cot_isatty")) {
+                    // ARM64 macOS: isatty(fd) via ioctl(fd, TIOCGETA, &termios_buf)
+                    // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=fd
+                    // Reference: POSIX isatty(3), macOS SYS_ioctl=54, TIOCGETA=0x40487413
+                    // Returns 1 if terminal, 0 if not.
+                    const arm64_isatty = [_]u8{
+                        // 0: stp x29, x30, [sp, #-32]!  (save frame + 16 bytes for termios)
+                        0xFD, 0x7B, 0xBE, 0xA9,
+                        // 1: mov x29, sp
+                        0xFD, 0x03, 0x00, 0x91,
+                        // 2: mov x0, x2                  (fd)
+                        0xE0, 0x03, 0x02, 0xAA,
+                        // 3: movz x1, #0x8413            (TIOCGETA low half)
+                        0x61, 0x82, 0x90, 0xD2,
+                        // 4: movk x1, #0x4048, lsl #16   (TIOCGETA high half = 0x40487413)
+                        0x01, 0x09, 0xA8, 0xF2,
+                        // 5: add x2, sp, #16              (&termios buf on stack)
+                        0xE2, 0x43, 0x00, 0x91,
+                        // 6: movz x16, #54                (SYS_ioctl)
+                        0xD0, 0x06, 0x80, 0xD2,
+                        // 7: svc #0x80
+                        0x01, 0x10, 0x00, 0xD4,
+                        // 8: b.cs +3                      (carry set = error → not tty, jump to 11)
+                        0x62, 0x00, 0x00, 0x54,
+                        // 9: movz x0, #1                  (success: is a tty)
+                        0x20, 0x00, 0x80, 0xD2,
+                        // 10: b +2                        (jump to 12: ldp+ret)
+                        0x02, 0x00, 0x00, 0x14,
+                        // 11: movz x0, #0                 (error: not a tty)
+                        0x00, 0x00, 0x80, 0xD2,
+                        // 12: ldp x29, x30, [sp], #32
+                        0xFD, 0x7B, 0xC2, 0xA8,
+                        // 13: ret
+                        0xC0, 0x03, 0x5F, 0xD6,
+                    };
+                    try module.defineFunctionBytes(func_ids[i], &arm64_isatty, &.{});
                 } else if (std.mem.eql(u8, name, "cot_execve")) {
                     // ARM64 macOS: execve(path, argv, envp) syscall
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=path_ptr, x3=argv_ptr, x4=envp_ptr
@@ -2006,7 +2043,8 @@ pub const Driver = struct {
                         std.mem.eql(u8, exp.name, "cot_execve") or
                         std.mem.eql(u8, exp.name, "cot_waitpid") or
                         std.mem.eql(u8, exp.name, "cot_pipe") or
-                        std.mem.eql(u8, exp.name, "cot_dup2"))
+                        std.mem.eql(u8, exp.name, "cot_dup2") or
+                        std.mem.eql(u8, exp.name, "cot_isatty"))
                     {
                         override_name = exp.name;
                         break;
@@ -2683,6 +2721,30 @@ pub const Driver = struct {
                         0xC3, // ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_dup2, &.{});
+                } else if (std.mem.eql(u8, name, "cot_isatty")) {
+                    // x86-64 Linux: isatty(fd) via ioctl(fd, TCGETS, &termios_buf)
+                    // Cranelift CC: rdi=vmctx, rsi=caller_vmctx, rdx=fd
+                    // Reference: POSIX isatty(3), Linux SYS_ioctl=16, TCGETS=0x5401
+                    // Returns 1 if terminal, 0 if not.
+                    const x64_isatty = [_]u8{
+                        0x55, //  0: push rbp
+                        0x48, 0x89, 0xE5, //  1: mov rbp, rsp
+                        0x48, 0x83, 0xEC, 0x40, //  4: sub rsp, 64      (termios buf)
+                        0x48, 0x89, 0xD7, //  8: mov rdi, rdx           (fd)
+                        0x48, 0xC7, 0xC6, 0x01, 0x54, 0x00, 0x00, // 11: mov rsi, 0x5401  (TCGETS)
+                        0x48, 0x89, 0xE2, // 18: mov rdx, rsp           (&termios buf)
+                        0x48, 0xC7, 0xC0, 0x10, 0x00, 0x00, 0x00, // 21: mov rax, 16  (SYS_ioctl)
+                        0x0F, 0x05, // 28: syscall
+                        0x48, 0x85, 0xC0, // 30: test rax, rax
+                        0x78, 0x09, // 33: js +9 → 44 (error: not tty)
+                        0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00, // 35: mov rax, 1   (is tty)
+                        0xEB, 0x07, // 42: jmp +7 → 51 (cleanup)
+                        0x48, 0xC7, 0xC0, 0x00, 0x00, 0x00, 0x00, // 44: mov rax, 0   (not tty)
+                        0x48, 0x83, 0xC4, 0x40, // 51: add rsp, 64
+                        0x5D, // 55: pop rbp
+                        0xC3, // 56: ret
+                    };
+                    try module.defineFunctionBytes(elf_func_ids[i], &x64_isatty, &.{});
                 } else if (std.mem.eql(u8, name, "cot_execve")) {
                     // x86-64 Linux: execve(path, argv, envp) (SYS_execve = 59)
                     // Cranelift CC: rdi=vmctx, rsi=caller_vmctx, rdx=path, rcx=argv, r8=envp
@@ -3118,6 +3180,7 @@ pub const Driver = struct {
         try func_indices.put(self.allocator, wasi_runtime.WAITPID_NAME, wasi_funcs.waitpid_idx);
         try func_indices.put(self.allocator, wasi_runtime.PIPE_NAME, wasi_funcs.pipe_idx);
         try func_indices.put(self.allocator, wasi_runtime.DUP2_NAME, wasi_funcs.dup2_idx);
+        try func_indices.put(self.allocator, wasi_runtime.ISATTY_NAME, wasi_funcs.isatty_idx);
 
         // Add test function names to index map (Zig)
         try func_indices.put(self.allocator, test_runtime.TEST_BEGIN_NAME, test_funcs.test_begin_idx);

@@ -262,6 +262,16 @@ pub const BuiltinKind = enum {
     // Resolves at monomorphization: emit cot_retain/cot_release only when arg is ARC-managed.
     arc_retain,
     arc_release,
+    // Panic with message — Zig @panic, Go panic() — writes to stderr then traps
+    panic,
+    // Terminal detection — POSIX isatty(3)
+    isatty,
+    // Memory fill — Wasm memory.fill (0xFC 0x0B)
+    memset,
+    // Bit manipulation — Wasm i64.ctz/i64.clz/i64.popcnt
+    ctz,
+    clz,
+    pop_count,
 
     const map = std.StaticStringMap(BuiltinKind).initComptime(.{
         .{ "sizeOf", .size_of },
@@ -346,6 +356,12 @@ pub const BuiltinKind = enum {
         .{ "constCast", .const_cast },
         .{ "arc_retain", .arc_retain },
         .{ "arc_release", .arc_release },
+        .{ "panic", .panic },
+        .{ "isatty", .isatty },
+        .{ "memset", .memset },
+        .{ "ctz", .ctz },
+        .{ "clz", .clz },
+        .{ "popCount", .pop_count },
     });
 
     pub fn fromString(s: []const u8) ?BuiltinKind {
@@ -436,6 +452,12 @@ pub const BuiltinKind = enum {
             .const_cast => "constCast",
             .arc_retain => "arc_retain",
             .arc_release => "arc_release",
+            .panic => "panic",
+            .isatty => "isatty",
+            .memset => "memset",
+            .ctz => "ctz",
+            .clz => "clz",
+            .pop_count => "popCount",
         };
     }
 };

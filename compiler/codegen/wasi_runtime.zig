@@ -62,6 +62,8 @@ pub const EXECVE_NAME = "cot_execve";
 pub const WAITPID_NAME = "cot_waitpid";
 pub const PIPE_NAME = "cot_pipe";
 pub const DUP2_NAME = "cot_dup2";
+// Terminal
+pub const ISATTY_NAME = "cot_isatty";
 
 // WASI scratch memory addresses in linear memory
 // Used by adapter shims to build iov structs and read WASI output params
@@ -116,6 +118,8 @@ pub const WasiFunctions = struct {
     waitpid_idx: u32,
     pipe_idx: u32,
     dup2_idx: u32,
+    // Terminal
+    isatty_idx: u32,
 };
 
 // =============================================================================
@@ -477,6 +481,10 @@ fn addWasiImports(allocator: std.mem.Allocator, linker: *@import("wasm/link.zig"
     const dup2_body = try generateStubReturnsNegOne(allocator);
     const dup2_idx = try linker.addFunc(.{ .name = DUP2_NAME, .type_idx = net_2arg_type, .code = dup2_body, .exported = false });
 
+    // isatty stub for WASI (WASI has no isatty — return 0/false)
+    const isatty_body = try generateStubReturnsZero(allocator);
+    const isatty_idx = try linker.addFunc(.{ .name = ISATTY_NAME, .type_idx = arg_one_type, .code = isatty_body, .exported = false });
+
     // Return indices: addFunc returns 0-based func indices.
     // Actual Wasm function index = import_count + func_local_index.
     return WasiFunctions{
@@ -515,6 +523,7 @@ fn addWasiImports(allocator: std.mem.Allocator, linker: *@import("wasm/link.zig"
         .waitpid_idx = waitpid_idx + import_count,
         .pipe_idx = pipe_idx + import_count,
         .dup2_idx = dup2_idx + import_count,
+        .isatty_idx = isatty_idx + import_count,
     };
 }
 
@@ -720,6 +729,10 @@ fn addNativeStubs(allocator: std.mem.Allocator, linker: *@import("wasm/link.zig"
     const dup2_body = try generateStubReturnsNegOne(allocator);
     const dup2_idx = try linker.addFunc(.{ .name = DUP2_NAME, .type_idx = net_2arg_type, .code = dup2_body, .exported = true });
 
+    // isatty stub: (fd:i64) -> i64 (0=false on freestanding, native override in driver.zig)
+    const isatty_body = try generateStubReturnsZero(allocator);
+    const isatty_idx = try linker.addFunc(.{ .name = ISATTY_NAME, .type_idx = fd_close_type, .code = isatty_body, .exported = true });
+
     return WasiFunctions{
         .fd_write_idx = fd_write_idx,
         .fd_write_simple_idx = fd_write_simple_idx,
@@ -756,6 +769,7 @@ fn addNativeStubs(allocator: std.mem.Allocator, linker: *@import("wasm/link.zig"
         .waitpid_idx = waitpid_idx,
         .pipe_idx = pipe_idx,
         .dup2_idx = dup2_idx,
+        .isatty_idx = isatty_idx,
     };
 }
 

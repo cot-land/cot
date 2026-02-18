@@ -725,6 +725,10 @@ pub const SSABuilder = struct {
             // Reinterpret casts — Wasm 0xBD/0xBF (Zig @bitCast between f64/i64)
             .f64_reinterpret_i64 => .wasm_f64_reinterpret_i64,
             .i64_reinterpret_f64 => .wasm_i64_reinterpret_f64,
+            // Bit manipulation — Wasm i64.ctz/clz/popcnt (0x7A/0x79/0x7B)
+            .ctz => .ctz64,
+            .clz => .clz64,
+            .popcnt => .popcnt64,
         };
         const val = try self.func.newValue(op_kind, type_idx, cur, self.cur_pos);
         val.addArg(operand);
