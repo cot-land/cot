@@ -7,7 +7,7 @@ const Pos = source.Pos;
 const Span = source.Span;
 const Source = source.Source;
 
-pub const Severity = enum { err, warning };
+pub const Severity = enum { err, warning, note };
 
 /// Warning codes for lint rules: W001=unused var, W002=unused param, W003=shadowing,
 /// W004=unreachable code, W005=empty block.
@@ -80,12 +80,18 @@ pub const ErrorCode = enum(u16) {
     }
 };
 
+pub const Note = struct {
+    span: Span,
+    msg: []const u8,
+};
+
 pub const Error = struct {
     span: Span,
     msg: []const u8,
     err_code: ?ErrorCode = null,
     severity: Severity = .err,
     warning_code: ?WarningCode = null,
+    note: ?Note = null,
 
     pub fn at(pos: Pos, msg: []const u8) Error {
         return .{ .span = Span.fromPos(pos), .msg = msg };
@@ -93,6 +99,10 @@ pub const Error = struct {
 
     pub fn withCode(pos: Pos, err_code: ErrorCode, msg: []const u8) Error {
         return .{ .span = Span.fromPos(pos), .msg = msg, .err_code = err_code };
+    }
+
+    pub fn withCodeAndNote(pos: Pos, err_code: ErrorCode, msg: []const u8, note_pos: Pos, note_msg: []const u8) Error {
+        return .{ .span = Span.fromPos(pos), .msg = msg, .err_code = err_code, .note = .{ .span = Span.fromPos(note_pos), .msg = note_msg } };
     }
 
     pub fn atSpan(span: Span, msg: []const u8) Error {
@@ -129,6 +139,10 @@ pub const ErrorReporter = struct {
 
     pub fn errorAtSpan(self: *ErrorReporter, span: Span, msg: []const u8) void {
         self.report(Error.atSpan(span, msg));
+    }
+
+    pub fn errorWithCodeAndNote(self: *ErrorReporter, pos: Pos, err_code: ErrorCode, msg: []const u8, note_pos: Pos, note_msg: []const u8) void {
+        self.report(Error.withCodeAndNote(pos, err_code, msg, note_pos, note_msg));
     }
 
     pub fn warningWithCode(self: *ErrorReporter, pos: Pos, wc: WarningCode, msg: []const u8) void {
@@ -211,6 +225,27 @@ pub const ErrorReporter = struct {
                 std.debug.print("~", .{});
             }
             std.debug.print("{s}\n", .{reset});
+        }
+
+        // Print note if attached (Zig pattern: "note: ..." with source location)
+        if (err.note) |note| {
+            const note_pos = self.src.position(note.span.start);
+            const blue = if (is_tty) "\x1b[1;34m" else "";
+            std.debug.print("{s}{s}:{d}:{d}:{s} {s}note:{s} {s}\n", .{
+                cyan, note_pos.filename, note_pos.line, note_pos.column, reset,
+                blue, reset,
+                note.msg,
+            });
+            const note_line = self.src.getLine(note.span.start);
+            std.debug.print("    {s}\n", .{note_line});
+            if (note_pos.column > 0) {
+                std.debug.print("    ", .{});
+                var k: u32 = 0;
+                while (k < note_pos.column - 1) : (k += 1) {
+                    if (k < note_line.len and note_line[k] == '\t') std.debug.print("\t", .{}) else std.debug.print(" ", .{});
+                }
+                std.debug.print("{s}^{s}\n", .{ blue, reset });
+            }
         }
     }
 

@@ -52,6 +52,7 @@ pub const TestOptions = struct {
     verbose: bool = false,
     watch: bool = false,
     release: bool = false,
+    fail_fast: bool = false,
 };
 
 pub const BenchOptions = struct {
@@ -231,6 +232,8 @@ fn parseTest(args: *std.process.ArgIterator) ?Command {
             };
         } else if (std.mem.eql(u8, arg, "--verbose") or std.mem.eql(u8, arg, "-v")) {
             opts.verbose = true;
+        } else if (std.mem.eql(u8, arg, "--fail-fast") or std.mem.eql(u8, arg, "-x")) {
+            opts.fail_fast = true;
         } else if (std.mem.eql(u8, arg, "--watch") or std.mem.eql(u8, arg, "-w")) {
             opts.watch = true;
         } else if (std.mem.eql(u8, arg, "--release")) {
@@ -596,33 +599,36 @@ fn printRunHelp() void {
         \\temporary directory and cleaned up after execution.
         \\
         \\Flags:
-        \\  --target=<t>    Target: arm64-macos, amd64-linux (wasm32 not supported)
+        \\  --target=<t>    Target: arm64-macos, amd64-linux, wasm32 (via wasmtime)
         \\  --watch, -w     Recompile and rerun on file changes
         \\  -- args...      Arguments passed to the program
         \\
         \\Examples:
-        \\  cot run app.cot                 Compile and run
-        \\  cot run app.cot --watch         Rerun on save
-        \\  cot run app.cot -- hello world  Pass arguments to program
+        \\  cot run app.cot                        Compile and run
+        \\  cot run app.cot --target=wasm32         Run via wasmtime
+        \\  cot run app.cot --watch                 Rerun on save
+        \\  cot run app.cot -- hello world          Pass arguments to program
         \\
     , .{});
 }
 
 fn printTestHelp() void {
     std.debug.print(
-        \\Usage: cot test <file.cot> [--target=<t>] [--filter=<str>] [--verbose] [--watch]
+        \\Usage: cot test <file.cot> [--target=<t>] [--filter=<str>] [--fail-fast] [--watch]
         \\
         \\Compile and run a Cot source file in test mode.
         \\
         \\Flags:
-        \\  --target=<t>    Target: arm64-macos, amd64-linux
+        \\  --target=<t>    Target: arm64-macos, amd64-linux, wasm32
         \\  --filter=<str>  Only run tests whose name contains <str>
+        \\  --fail-fast, -x Stop after first test failure
         \\  --verbose, -v   Show detailed test output
         \\  --watch, -w     Retest on file changes
         \\
         \\Examples:
         \\  cot test app.cot                    Run all tests in app.cot
         \\  cot test app.cot --filter=math       Run only tests matching "math"
+        \\  cot test app.cot --fail-fast         Stop on first failure
         \\  cot test app.cot --watch             Retest on save
         \\
     , .{});
@@ -768,17 +774,19 @@ fn printMcpHelp() void {
 
 fn printFmtHelp() void {
     std.debug.print(
-        \\Usage: cot fmt <file.cot> [--check] [--stdout]
+        \\Usage: cot fmt <file-or-dir> [--check] [--stdout]
         \\
-        \\Format a Cot source file in-place (like go fmt, rustfmt).
+        \\Format Cot source files in-place (like go fmt, zig fmt).
+        \\When given a directory, recursively formats all .cot files.
         \\
         \\Flags:
-        \\  --check         Check if file is formatted (exit 1 if not, for CI)
-        \\  --stdout        Write formatted output to stdout instead of in-place
+        \\  --check         Check if files are formatted (exit 1 if not, for CI)
+        \\  --stdout        Write formatted output to stdout (single file only)
         \\
         \\Examples:
         \\  cot fmt app.cot                 Format file in-place
-        \\  cot fmt --check app.cot         Check formatting (CI mode)
+        \\  cot fmt src/                    Format all .cot files in src/
+        \\  cot fmt --check .               Check formatting for CI
         \\  cot fmt --stdout app.cot        Print formatted output to stdout
         \\
     , .{});

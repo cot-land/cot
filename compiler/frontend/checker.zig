@@ -327,7 +327,7 @@ pub const Checker = struct {
             .fn_decl => |f| {
                 if (self.scope.isDefined(f.name)) {
                     if (f.is_extern) if (self.scope.lookup(f.name)) |e| if (e.is_extern) return;
-                    self.err.errorWithCode(f.span.start, .e302, "redefined identifier");
+                    self.reportRedefined(f.span.start, f.name);
                     return;
                 }
                 // Generic functions: store definition, don't build concrete type yet
@@ -349,11 +349,11 @@ pub const Checker = struct {
                     try self.registerMethod(f.name, f.params[0].type_expr, func_type);
             },
             .var_decl => |v| {
-                if (self.scope.isDefined(v.name)) { self.err.errorWithCode(v.span.start, .e302, "redefined identifier"); return; }
+                if (self.scope.isDefined(v.name)) { self.reportRedefined(v.span.start, v.name); return; }
                 try self.scope.define(Symbol.init(v.name, if (v.is_const) .constant else .variable, invalid_type, idx, !v.is_const));
             },
             .struct_decl => |s| {
-                if (self.scope.isDefined(s.name)) { self.err.errorWithCode(s.span.start, .e302, "redefined identifier"); return; }
+                if (self.scope.isDefined(s.name)) { self.reportRedefined(s.span.start, s.name); return; }
                 // Generic structs: store definition, don't build concrete type yet
                 if (s.type_params.len > 0) {
                     try self.generics.generic_structs.put(s.name, .{ .type_params = s.type_params, .node_idx = idx, .tree = self.tree });
@@ -400,26 +400,26 @@ pub const Checker = struct {
                 }
             },
             .enum_decl => |e| {
-                if (self.scope.isDefined(e.name)) { self.err.errorWithCode(e.span.start, .e302, "redefined identifier"); return; }
+                if (self.scope.isDefined(e.name)) { self.reportRedefined(e.span.start, e.name); return; }
                 const enum_type = try self.buildEnumType(e);
                 try self.scope.define(Symbol.init(e.name, .type_name, enum_type, idx, false));
                 try self.types.registerNamed(e.name, enum_type);
             },
             .union_decl => |u| {
-                if (self.scope.isDefined(u.name)) { self.err.errorWithCode(u.span.start, .e302, "redefined identifier"); return; }
+                if (self.scope.isDefined(u.name)) { self.reportRedefined(u.span.start, u.name); return; }
                 const union_type = try self.buildUnionType(u);
                 try self.scope.define(Symbol.init(u.name, .type_name, union_type, idx, false));
                 try self.types.registerNamed(u.name, union_type);
             },
             .error_set_decl => |es| {
-                if (self.scope.isDefined(es.name)) { self.err.errorWithCode(es.span.start, .e302, "redefined identifier"); return; }
+                if (self.scope.isDefined(es.name)) { self.reportRedefined(es.span.start, es.name); return; }
                 const es_type = try self.types.add(.{ .error_set = .{ .name = es.name, .variants = es.variants } });
                 try self.scope.define(Symbol.init(es.name, .type_name, es_type, idx, false));
                 try self.types.registerNamed(es.name, es_type);
             },
             // Go reference: types2/alias.go - Alias stores RHS and resolves through it
             .type_alias => |t| {
-                if (self.scope.isDefined(t.name)) { self.err.errorWithCode(t.span.start, .e302, "redefined identifier"); return; }
+                if (self.scope.isDefined(t.name)) { self.reportRedefined(t.span.start, t.name); return; }
                 const target_type = self.resolveTypeExpr(t.target) catch invalid_type;
                 try self.scope.define(Symbol.init(t.name, .type_name, target_type, idx, false));
                 try self.types.registerNamed(t.name, target_type);
@@ -514,6 +514,17 @@ pub const Checker = struct {
 
     pub fn lookupMethod(self: *const Checker, type_name: []const u8, method_name: []const u8) ?types.MethodInfo {
         return self.types.lookupMethod(type_name, method_name);
+    }
+
+    /// Report E302 with a note pointing to the previous definition (Zig pattern).
+    fn reportRedefined(self: *Checker, span_start: source.Pos, name: []const u8) void {
+        if (self.scope.lookup(name)) |sym| {
+            if (self.tree.getNode(sym.node)) |node| {
+                self.err.errorWithCodeAndNote(span_start, .e302, "redefined identifier", node.span().start, "previously defined here");
+                return;
+            }
+        }
+        self.err.errorWithCode(span_start, .e302, "redefined identifier");
     }
 
     fn checkDecl(self: *Checker, idx: NodeIndex) CheckError!void {
@@ -2128,7 +2139,7 @@ pub const Checker = struct {
     }
 
     fn checkVarStmt(self: *Checker, vs: ast.VarStmt, idx: NodeIndex) CheckError!void {
-        if (self.scope.isDefined(vs.name)) { self.err.errorWithCode(vs.span.start, .e302, "redefined identifier"); return; }
+        if (self.scope.isDefined(vs.name)) { self.reportRedefined(vs.span.start, vs.name); return; }
         // Lint: check for variable shadowing (parent scope has same name)
         if (self.lint_mode and self.scope.parent != null) {
             if (self.scope.parent.?.lookup(vs.name) != null) {
@@ -2171,7 +2182,7 @@ pub const Checker = struct {
         // Check for redefinitions
         for (ds.bindings) |b| {
             if (self.scope.isDefined(b.name)) {
-                self.err.errorWithCode(b.span.start, .e302, "redefined identifier");
+                self.reportRedefined(b.span.start, b.name);
                 return;
             }
         }

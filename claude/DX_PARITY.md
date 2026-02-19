@@ -25,9 +25,9 @@
 |----------|-----|-----|-----|--------|
 | Exit code forwarding | Full | Full | Full | DONE |
 | Temp file cleanup | Always (unless `-work`) | `.zig-cache/` persists | Always (`/tmp/cot-run/`) | DONE |
-| Signal handling | Prints goroutine trace | SIGSEGV shown with trace | `"Program killed by signal: N"` | GAP (no trace) |
+| Signal handling | Prints goroutine trace | SIGSEGV shown with trace | `fatal error: SIGNAME` + pc + addr, exit 2 | PARTIAL (no trace) |
 | Run with no file arg | `go run .` scans package | `zig run file.zig` | Uses `cot.json` `main` | DONE |
-| Wasm run | `GOOS=js GOARCH=wasm` | `zig run -target wasm32-wasi` | Not supported (`cot run --target=wasm32` errors) | GAP |
+| Wasm run | `GOOS=js GOARCH=wasm` | `zig run -target wasm32-wasi` | `cot run --target=wasm32` (via wasmtime) | DONE |
 | Watch mode | No | `zig build --watch` (0.15+) | `cot run --watch` (300ms poll) | DONE |
 | Pass args to program | `go run . -- args` | `zig run file.zig -- args` | `cot run file.cot -- args` | DONE |
 
@@ -44,7 +44,7 @@
 | Exit code | 0 pass, 1 fail | 0 pass, 1 fail | N = number of failed tests | DONE |
 | Cross-target testing | `GOOS=... go test` | `zig build test -Dtarget=...` | `cot test file.cot --target=wasm32` (via wasmtime) | DONE |
 | Test caching | Yes (content-addressed) | No | No | ACCEPTABLE |
-| Fail-fast | `-failfast` | No | No | GAP |
+| Fail-fast | `-failfast` | No | `--fail-fast` / `-x` | DONE |
 | Parallel tests | `-parallel N` | Automatic | Sequential | GAP |
 | @assert_eq diagnostics | Custom via `t.Errorf` | `expected N, found M` + source | `expected: N` / `received: N` (ints and strings) | DONE |
 
@@ -58,7 +58,7 @@
 | Colors | None (always plain) | Auto-detect TTY | Auto-detect TTY | DONE (better than Go) |
 | Source line shown | No | Yes, with `^~~~` caret | Yes, with `^~~~` caret | DONE (matches Zig) |
 | Error codes | No | No | Yes (`E1xx`-`E4xx`, `W0xx`) | DONE (better than both) |
-| Secondary notes | No | `note:` lines with source | No | GAP |
+| Secondary notes | No | `note:` lines with source | `note:` with source + caret (E302) | DONE (matches Zig) |
 | Fix suggestions | No | Some (`help:` lines) | No | GAP |
 | Error limit | Sorted, limited | All shown | Max 10, then stops | DONE |
 | Warning categories | Via `go vet` (separate tool) | Built-in | Built-in (`cot lint`) | DONE |
@@ -69,16 +69,16 @@
 
 | Behavior | Go | Zig | Cot | Status |
 |----------|-----|-----|-----|--------|
-| Panic message | `panic: <message>` | `thread N panic: <message>` | None (SIGSEGV/SIGILL) | **CRITICAL GAP** |
-| Stack trace on crash | Full goroutine trace with `file:line +0xaddr` | Full trace with source lines + carets | None | **CRITICAL GAP** |
+| Panic message | `panic: <message>` | `thread N panic: <message>` | `fatal error: SIGSEGV` + pc + addr | PARTIAL (no user message) |
+| Stack trace on crash | Full goroutine trace with `file:line +0xaddr` | Full trace with source lines + carets | pc + fault addr (no trace) | GAP |
 | Bounds check | Runtime panic with index info | Runtime panic with index info | Wasm trap (opaque) | **CRITICAL GAP** |
-| Null deref | Panic with trace | `attempt to use null value` + trace | SIGSEGV (no message) | **CRITICAL GAP** |
+| Null deref | Panic with trace | `attempt to use null value` + trace | `fatal error: SIGBUS` + pc + addr | PARTIAL (no trace) |
 | Integer overflow | Wraps silently | Panic in debug, wraps in release | Wraps silently | ACCEPTABLE (matches Go) |
 | Stack overflow | `goroutine stack exceeds N-byte limit` | SIGSEGV | SIGSEGV | GAP |
 | Division by zero | Panic with trace | Panic with trace | Wasm trap | GAP |
 | @panic builtin | N/A | `@panic("msg")` | `@panic("msg")` — prints + exits | PARTIAL |
 
-**This is the single biggest DX gap.** When a Go program crashes, the developer gets a full stack trace pointing to the exact file and line. When a Cot native program crashes, they get `Killed by signal: 11` with no context.
+**Signal handler is now implemented.** Crashes print signal name, PC, and fault address with exit code 2 (matching Go). Remaining gap: no stack traces or source-level info yet (requires DWARF debug info).
 
 ### What "good crash output" looks like (Go):
 ```
@@ -92,21 +92,14 @@ main.main()
 exit status 2
 ```
 
-### What "good crash output" looks like (Zig):
-```
-thread 12345 panic: index out of bounds
-/home/user/app/main.zig:42:15: 0x10045973f in processItems (app)
-    items[idx] = value;
-              ^
-/home/user/app/main.zig:15:5: 0x10045966b in main (app)
-    processItems(data);
-    ^
-```
-
 ### What Cot gives today:
 ```
-Program killed by signal: 11
+fatal error: SIGBUS
+pc=0x00000001043d4d84
+addr=0x00000001e2eec010
 ```
+
+**Next steps:** Stack traces (DWARF), bounds-check panics, `@panic` with file:line.
 
 ---
 
@@ -132,7 +125,7 @@ Program killed by signal: 11
 | Local imports | Package paths, no relative | `@import("./file.zig")` | `import "file"` (relative to source) | DONE |
 | Stdlib imports | Bare: `"fmt"`, `"os"` | `@import("std")` | `import "std/list"` | DONE |
 | Package dependencies | `go.mod` + `go get` | `build.zig.zon` + `zig fetch` | None | GAP (deferred to 0.5+) |
-| Circular import detection | Compile error | Compile error | None (dedup prevents infinite loop, but no error) | GAP |
+| Circular import detection | Compile error | Compile error | `error: circular import detected: a.cot → b.cot → a.cot` | DONE |
 | Lockfile | `go.sum` | `build.zig.zon` hash | None | GAP |
 
 ---
@@ -157,7 +150,7 @@ Program killed by signal: 11
 |----------|-----|-----|-----|--------|
 | Format tool | `gofmt` / `go fmt` | `zig fmt` | `cot fmt` | DONE |
 | Format check (CI) | `gofmt -l` (list unformatted) | `zig fmt --check` | `cot fmt --check` | DONE |
-| Format directory | `go fmt ./...` | `zig fmt src/` | Single file only | GAP |
+| Format directory | `go fmt ./...` | `zig fmt src/` | `cot fmt dir/` (recursive `.cot` files) | DONE |
 | Lint tool | `go vet` (separate) | Built-in warnings | `cot lint` | DONE |
 | Lint rules | ~30 vet checks | Compile warnings | 5 warning codes (W001-W005) | GAP (few rules) |
 
@@ -166,24 +159,28 @@ Program killed by signal: 11
 ## Priority Fix Order
 
 ### P0 — Crash diagnostics (blocks real-world adoption)
-1. **Signal handler** that catches SIGSEGV/SIGBUS/SIGILL and prints a message instead of silent death
+1. ~~**Signal handler** that catches SIGSEGV/SIGBUS/SIGILL and prints a message instead of silent death~~ **DONE** — `fatal error: SIGNAME` + pc + fault addr, exit code 2. Both ARM64 macOS and x64 Linux. Ported from Go (`signal_unix.go`, `os_darwin.go`, `os_linux.go`).
 2. **Bounds checking** with meaningful panic messages (not just Wasm trap)
 3. **@panic** should print file:line (currently prints message but no location)
 4. **Stack traces** on native crashes (requires DWARF debug info — `compiler/codegen/native/dwarf.zig` exists but may not be wired)
 
 ### P1 — Build ergonomics
-5. **`cot run --target=wasm32`** via wasmtime (already works in `cot test`)
-6. **Circular import error** instead of silent dedup
-7. **`cot fmt` on directories** (format all `.cot` files)
+5. ~~**`cot run --target=wasm32`** via wasmtime~~ **DONE** — same wasmtime execution path as `cot test`, builds to `/tmp` then runs.
+6. ~~**Circular import error** instead of silent dedup~~ **DONE** — in-progress set tracks recursion stack, prints full cycle path: `a.cot → b.cot → a.cot`.
+7. ~~**`cot fmt` on directories**~~ **DONE** — `cot fmt dir/` recursively formats all `.cot` files. `--check` mode works with directories too.
+
+### P1.5 — Test ergonomics
+8. ~~**`--fail-fast` / `-x` flag for `cot test`**~~ **DONE** — stops after first failure, prints summary, exits with code 1.
 
 ### P2 — Error message quality
-8. **`note:` secondary diagnostics** ("type declared here", "previous definition here")
-9. **Larger heap** — 8MB linear memory is limiting for real apps
+9. ~~**`note:` secondary diagnostics**~~ **DONE** — E302 (redefined identifier) now shows `note: previously defined here` with source line + caret (Zig pattern). Infrastructure supports notes on any error.
+10. **Fix suggestions** ("help:" lines, e.g., "did you mean X?")
+11. **Larger heap** — 8MB linear memory is limiting for real apps
 
 ### P3 — Build performance (matters at scale)
-10. **Build cache** (content-addressed, like Go)
-11. **Incremental compilation** (recompile only changed files)
-12. **Parallel compilation** (multi-file)
+12. **Build cache** (content-addressed, like Go)
+13. **Incremental compilation** (recompile only changed files)
+14. **Parallel compilation** (multi-file)
 
 ---
 

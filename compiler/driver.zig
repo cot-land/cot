@@ -63,6 +63,7 @@ pub const Driver = struct {
     target: Target = Target.native(),
     test_mode: bool = false,
     test_filter: ?[]const u8 = null,
+    fail_fast: bool = false,
     bench_mode: bool = false,
     bench_filter: ?[]const u8 = null,
     bench_n: ?i64 = null,
@@ -82,6 +83,10 @@ pub const Driver = struct {
 
     pub fn setTestFilter(self: *Driver, filter: []const u8) void {
         self.test_filter = filter;
+    }
+
+    pub fn setFailFast(self: *Driver, enabled: bool) void {
+        self.fail_fast = enabled;
     }
 
     pub fn setBenchMode(self: *Driver, enabled: bool) void {
@@ -114,7 +119,9 @@ pub const Driver = struct {
             }
             parsed_files.deinit(self.allocator);
         }
-        try self.parseFileRecursive(path, &parsed_files, &seen_files);
+        var in_progress = std.StringHashMap(void).init(self.allocator);
+        defer in_progress.deinit();
+        try self.parseFileRecursive(path, &parsed_files, &seen_files, &in_progress);
 
         // Apply project-level @safe mode from cot.json
         {
@@ -170,7 +177,9 @@ pub const Driver = struct {
             }
             parsed_files.deinit(self.allocator);
         }
-        try self.parseFileRecursive(path, &parsed_files, &seen_files);
+        var in_progress = std.StringHashMap(void).init(self.allocator);
+        defer in_progress.deinit();
+        try self.parseFileRecursive(path, &parsed_files, &seen_files, &in_progress);
 
         // Apply project-level @safe mode from cot.json
         {
@@ -247,6 +256,7 @@ pub const Driver = struct {
         defer lowerer.deinit();
         lowerer.release_mode = self.release_mode;
         if (self.test_mode) lowerer.setTestMode(true);
+        if (self.fail_fast) lowerer.setFailFast(true);
         try lowerer.lowerToBuilder();
         if (err_reporter.hasErrors()) return error.LowerError;
 
@@ -277,7 +287,9 @@ pub const Driver = struct {
             }
             parsed_files.deinit(self.allocator);
         }
-        try self.parseFileRecursive(path, &parsed_files, &seen_files);
+        var in_progress = std.StringHashMap(void).init(self.allocator);
+        defer in_progress.deinit();
+        try self.parseFileRecursive(path, &parsed_files, &seen_files, &in_progress);
 
         // Apply project-level @safe mode from cot.json
         {
@@ -341,6 +353,7 @@ pub const Driver = struct {
             var lowerer = lower_mod.Lowerer.initWithBuilder(self.allocator, &pf.tree, &type_reg, &lower_err, &checkers.items[i], shared_builder, self.target);
             lowerer.release_mode = self.release_mode;
             if (self.test_mode) lowerer.setTestMode(true);
+            if (self.fail_fast) lowerer.setFailFast(true);
             if (self.bench_mode) lowerer.setBenchMode(true);
 
             lowerer.lowerToBuilder() catch |e| {
@@ -418,6 +431,7 @@ pub const Driver = struct {
         if (self.test_mode and all_test_names.items.len > 0) {
             var dummy_err = errors_mod.ErrorReporter.init(&parsed_files.items[0].source, null);
             var runner = lower_mod.Lowerer.initWithBuilder(self.allocator, &parsed_files.items[0].tree, &type_reg, &dummy_err, &checkers.items[0], shared_builder, self.target);
+            if (self.fail_fast) runner.setFailFast(true);
             for (all_test_names.items) |n| try runner.addTestName(n);
             for (all_test_display_names.items) |n| try runner.addTestDisplayName(n);
             try runner.generateTestRunner();
@@ -452,15 +466,24 @@ pub const Driver = struct {
         return std.fs.cwd().realpathAlloc(self.allocator, path) catch try self.allocator.dupe(u8, path);
     }
 
-    fn parseFileRecursive(self: *Driver, path: []const u8, parsed_files: *std.ArrayListUnmanaged(ParsedFile), seen_files: *std.StringHashMap(void)) !void {
+    fn parseFileRecursive(self: *Driver, path: []const u8, parsed_files: *std.ArrayListUnmanaged(ParsedFile), seen_files: *std.StringHashMap(void), in_progress: *std.StringHashMap(void)) !void {
         const canonical_path = try self.normalizePath(path);
         defer self.allocator.free(canonical_path);
+
+        // Circular import detection: file is on the recursion stack but not yet finished
+        if (in_progress.contains(canonical_path)) {
+            std.debug.print("error: circular import detected: {s}\n", .{canonical_path});
+            return error.CircularImport;
+        }
 
         if (seen_files.contains(canonical_path)) return;
 
         const path_copy = try self.allocator.dupe(u8, canonical_path);
         errdefer self.allocator.free(path_copy);
         try seen_files.put(path_copy, {});
+
+        // Mark file as in-progress (on recursion stack)
+        try in_progress.put(path_copy, {});
 
         const source_text = std.fs.cwd().readFileAlloc(self.allocator, canonical_path, 1024 * 1024) catch |e| {
             std.debug.print("Failed to read file: {s}: {any}\n", .{ canonical_path, e });
@@ -496,8 +519,11 @@ pub const Driver = struct {
                 break :blk try std.fs.path.join(self.allocator, &.{ file_dir, name });
             };
             defer self.allocator.free(full_path);
-            try self.parseFileRecursive(full_path, parsed_files, seen_files);
+            try self.parseFileRecursive(full_path, parsed_files, seen_files, in_progress);
         }
+
+        // Remove from in-progress stack (file fully processed)
+        _ = in_progress.remove(canonical_path);
 
         try parsed_files.append(self.allocator, .{ .path = path_copy, .source_text = source_text, .source = src, .tree = tree });
     }
@@ -1734,30 +1760,130 @@ pub const Driver = struct {
     }
 
     /// Generate the _main wrapper and static vmctx data for Mach-O.
-    /// The wrapper initializes vmctx and calls __wasm_main.
+    /// The wrapper initializes vmctx, installs signal handlers, and calls __wasm_main.
     fn generateMainWrapperMachO(self: *Driver, module: *object_module.ObjectModule, data_segments: []const wasm_parser.DataSegment, globals: []const wasm_parser.GlobalType, num_funcs: u32) !void {
+        // ARM64 instruction encoding helpers
+        const A64 = struct {
+            fn mov(rd: u32, rm: u32) u32 { // MOV Xd, Xm (ORR Xd, XZR, Xm)
+                return 0xAA0003E0 | (rm << 16) | rd;
+            }
+            fn movz(rd: u32, imm16: u32) u32 { // MOVZ Xd, #imm16
+                return 0xD2800000 | (imm16 << 5) | rd;
+            }
+            fn movz_w(rd: u32, imm16: u32) u32 { // MOVZ Wd, #imm16
+                return 0x52800000 | (imm16 << 5) | rd;
+            }
+            fn movn_w(rd: u32, imm16: u32) u32 { // MOVN Wd, #imm16
+                return 0x12800000 | (imm16 << 5) | rd;
+            }
+            fn movk_lsl16(rd: u32, imm16: u32) u32 { // MOVK Xd, #imm16, lsl #16
+                return 0xF2A00000 | (imm16 << 5) | rd;
+            }
+            fn add_imm(rd: u32, rn: u32, imm12: u32) u32 { // ADD Xd, Xn, #imm12
+                return 0x91000000 | (imm12 << 10) | (rn << 5) | rd;
+            }
+            fn add_imm_lsl12(rd: u32, rn: u32, imm12: u32) u32 { // ADD Xd, Xn, #imm12, lsl #12
+                return 0x91400000 | (imm12 << 10) | (rn << 5) | rd;
+            }
+            fn subs_imm(rd: u32, rn: u32, imm12: u32) u32 { // SUBS Xd, Xn, #imm12
+                return 0xF1000000 | (imm12 << 10) | (rn << 5) | rd;
+            }
+            fn cmp_imm(rn: u32, imm12: u32) u32 { // CMP Xn, #imm12
+                return subs_imm(31, rn, imm12);
+            }
+            fn stp_pre(rt1: u32, rt2: u32, rn: u32, imm_bytes: i32) u32 { // STP [Xn, #imm]!
+                const imm7: u32 = @as(u32, @bitCast(@divExact(imm_bytes, 8))) & 0x7F;
+                return 0xA9800000 | (imm7 << 15) | (rt2 << 10) | (rn << 5) | rt1;
+            }
+            fn stp_off(rt1: u32, rt2: u32, rn: u32, imm_bytes: i32) u32 { // STP [Xn, #imm]
+                const imm7: u32 = @as(u32, @bitCast(@divExact(imm_bytes, 8))) & 0x7F;
+                return 0xA9000000 | (imm7 << 15) | (rt2 << 10) | (rn << 5) | rt1;
+            }
+            fn ldp_off(rt1: u32, rt2: u32, rn: u32, imm_bytes: i32) u32 { // LDP [Xn, #imm]
+                const imm7: u32 = @as(u32, @bitCast(@divExact(imm_bytes, 8))) & 0x7F;
+                return 0xA9400000 | (imm7 << 15) | (rt2 << 10) | (rn << 5) | rt1;
+            }
+            fn ldp_post(rt1: u32, rt2: u32, rn: u32, imm_bytes: i32) u32 { // LDP [Xn], #imm
+                const imm7: u32 = @as(u32, @bitCast(@divExact(imm_bytes, 8))) & 0x7F;
+                return 0xA8C00000 | (imm7 << 15) | (rt2 << 10) | (rn << 5) | rt1;
+            }
+            fn str_imm(rt: u32, rn: u32, imm_bytes: u32) u32 { // STR Xt, [Xn, #imm]
+                return 0xF9000000 | ((imm_bytes / 8) << 10) | (rn << 5) | rt;
+            }
+            fn str_w_imm(rt: u32, rn: u32, imm_bytes: u32) u32 { // STR Wt, [Xn, #imm]
+                return 0xB9000000 | ((imm_bytes / 4) << 10) | (rn << 5) | rt;
+            }
+            fn ldr_imm(rt: u32, rn: u32, imm_bytes: u32) u32 { // LDR Xt, [Xn, #imm]
+                return 0xF9400000 | ((imm_bytes / 8) << 10) | (rn << 5) | rt;
+            }
+            fn ldrb_reg(rt: u32, rn: u32, rm: u32) u32 { // LDRB Wt, [Xn, Xm]
+                return 0x38606800 | (rm << 16) | (rn << 5) | rt;
+            }
+            fn strb_post1(rt: u32, rn: u32) u32 { // STRB Wt, [Xn], #1
+                return 0x38000400 | (1 << 12) | (rn << 5) | rt;
+            }
+            fn strb_uoff0(rt: u32, rn: u32) u32 { // STRB Wt, [Xn, #0]
+                return 0x39000000 | (rn << 5) | rt;
+            }
+            fn lsr_reg(rd: u32, rn: u32, rm: u32) u32 { // LSRV Xd, Xn, Xm
+                return 0x9AC02400 | (rm << 16) | (rn << 5) | rd;
+            }
+            fn and_0xf(rd: u32, rn: u32) u32 { // AND Xd, Xn, #0xF
+                return 0x92400C00 | (rn << 5) | rd;
+            }
+            fn b(off: i32) u32 { // B offset (in instructions)
+                return 0x14000000 | (@as(u32, @bitCast(off)) & 0x3FFFFFF);
+            }
+            fn b_eq(off: i32) u32 { // B.EQ offset
+                return 0x54000000 | ((@as(u32, @bitCast(off)) & 0x7FFFF) << 5);
+            }
+            fn b_ge(off: i32) u32 { // B.GE offset
+                return 0x54000000 | ((@as(u32, @bitCast(off)) & 0x7FFFF) << 5) | 0xA;
+            }
+            fn bl() u32 { return 0x94000000; } // BL (reloc placeholder)
+            fn svc80() u32 { return 0xD4001001; } // SVC #0x80
+            fn adrp(rd: u32) u32 { return 0x90000000 | rd; } // ADRP (reloc placeholder)
+            fn add_pageoff(rd: u32, rn: u32) u32 { // ADD Xd, Xn, #pageoff (reloc placeholder)
+                return 0x91000000 | (rn << 5) | rd;
+            }
+            fn ret() u32 { return 0xD65F03C0; }
+            fn brk1() u32 { return 0xD4200020; } // BRK #1
+        };
+
+        // Helper to append little-endian u32
+        const appendInst = struct {
+            fn f(list: *std.ArrayListUnmanaged(u8), alloc: std.mem.Allocator, inst: u32) !void {
+                try list.appendSlice(alloc, &std.mem.toBytes(std.mem.nativeToBig(u32, @byteSwap(inst))));
+            }
+        }.f;
+
+        // Relocation types
+        const FinalizedMachReloc = buffer_mod.FinalizedMachReloc;
+        const FinalizedRelocTarget = buffer_mod.FinalizedRelocTarget;
+        const Reloc = buffer_mod.Reloc;
+        const ExternalName = buffer_mod.ExternalName;
+
+        // External name indices (must not collide with function indices 0..num_funcs-1)
+        const vmctx_ext_idx: u32 = num_funcs;
+        const wasm_main_ext_idx: u32 = num_funcs + 1;
+        const panic_strings_ext_idx: u32 = num_funcs + 2;
+        const signal_handler_ext_idx: u32 = num_funcs + 3;
+        const sigaction_ext_idx: u32 = num_funcs + 4;
+
+        const vmctx_name_ref = ExternalName{ .User = .{ .namespace = 0, .index = vmctx_ext_idx } };
+        const wasm_main_name_ref = ExternalName{ .User = .{ .namespace = 0, .index = wasm_main_ext_idx } };
+        const panic_strings_name_ref = ExternalName{ .User = .{ .namespace = 0, .index = panic_strings_ext_idx } };
+        const signal_handler_name_ref = ExternalName{ .User = .{ .namespace = 0, .index = signal_handler_ext_idx } };
+        const sigaction_name_ref = ExternalName{ .User = .{ .namespace = 0, .index = sigaction_ext_idx } };
+
         // =================================================================
         // Step 1: Declare and define static vmctx data section
-        // Layout (total 16MB = 0x1000000):
-        //   0x00000 - 0x0FFFF: Padding/reserved
-        //   0x10000: Stack pointer global (i32) - initialized to 64KB
-        //   0x20000: Heap base pointer (i64) - to be filled by wrapper
-        //   0x20008: Heap bound (i64) - ~15.7MB
-        //   0x30000: argc (i64) - set by _main wrapper from OS
-        //   0x30008: argv (i64, char**) - set by _main wrapper from OS
-        //   0x30010: envp (i64, char**) - set by _main wrapper from OS
-        //   0x40000 - 0xFFFFFF: Linear memory (~15.7MB heap)
-        //     0xEF000 (linmem+0xAF000): arg string buffer for @arg_ptr
-        //     0xBF000 (linmem+0x7F000): environ string buffer for @environ_ptr
         // =================================================================
         const vmctx_size: usize = 0x1000000; // 16MB
         const vmctx_data = try self.allocator.alloc(u8, vmctx_size);
         defer self.allocator.free(vmctx_data);
-
-        // Zero initialize
         @memset(vmctx_data, 0);
 
-        // Copy Wasm data segments into linear memory (starts at 0x40000)
         const linear_memory_base: usize = 0x40000;
         for (data_segments) |segment| {
             const dest_offset = linear_memory_base + segment.offset;
@@ -1766,11 +1892,6 @@ pub const Driver = struct {
             }
         }
 
-        // Initialize globals at offset 0x10000 with fixed 16-byte stride.
-        // Reference: Cranelift vmoffsets.rs — VMGlobalDefinition is 16 bytes,
-        // and initialize_globals (allocator.rs:754-808) writes init values
-        // to vmctx before execution starts.
-        // Global 0 (SP) init_value comes from Wasm global section.
         const global_base: usize = 0x10000;
         const global_stride: usize = 16;
         for (globals, 0..) |g, i| {
@@ -1798,130 +1919,445 @@ pub const Driver = struct {
             }
         }
 
-        // Heap bound at offset 0x20008 = ~15.7MB (size of linear memory)
-        const heap_bound: u64 = 0x1000000 - 0x40000; // vmctx_size - linear_memory_base
+        const heap_bound: u64 = 0x1000000 - 0x40000;
         @memcpy(vmctx_data[0x20008..][0..8], std.mem.asBytes(&heap_bound));
-
-        // Note: heap base pointer at 0x20000 will be patched by wrapper at runtime
-        // because we need the absolute address which isn't known until load time
 
         const vmctx_data_id = try module.declareData("_vmctx_data", .Local, true);
         try module.defineData(vmctx_data_id, vmctx_data);
 
         // =================================================================
-        // Step 2: Generate _main wrapper function
-        // This wrapper:
-        //   1. Saves argc (x0), argv (x1), envp (x2) from macOS C runtime
-        //   2. Loads address of _vmctx_data
-        //   3. Initializes heap base pointer (requires runtime address)
-        //   4. Stores argc/argv/envp at vmctx+0x30000/0x30008/0x30010
-        //   5. Calls __wasm_main(vmctx, vmctx)
-        //   6. Returns result
+        // Step 1b: Panic strings data section for signal handler
+        // Offset  Content              Length
+        // 0       "fatal error: "       13
+        // 13      "SIGILL\n"             7
+        // 20      "SIGABRT\n"            8
+        // 28      "SIGFPE\n"             7
+        // 35      "SIGBUS\n"             7
+        // 42      "SIGSEGV\n"            8
+        // 50      "unknown signal\n"    15
+        // 65      "pc=0x"                5
+        // 70      "addr=0x"              7
+        // 77      "0123456789abcdef"    16
+        // 93      "\n"                   1
+        // Total: 94 bytes
+        // =================================================================
+        const panic_strings = "fatal error: " ++ "SIGILL\n" ++ "SIGABRT\n" ++ "SIGFPE\n" ++ "SIGBUS\n" ++ "SIGSEGV\n" ++ "unknown signal\n" ++ "pc=0x" ++ "addr=0x" ++ "0123456789abcdef" ++ "\n";
+        const panic_data_id = try module.declareData("_cot_panic_strings", .Local, true);
+        try module.defineData(panic_data_id, panic_strings);
+
+        // =================================================================
+        // Step 2: Signal handler function (_cot_signal_handler)
+        // Called by kernel with C ABI: x0=signo, x1=siginfo_t*, x2=ucontext_t*
+        // Writes crash diagnostics to stderr, then exits with code 2.
         //
-        // ARM64 code (22 instructions, 88 bytes):
-        //   stp     x29, x30, [sp, #-48]!
-        //   mov     x29, sp
-        //   stp     x19, x20, [sp, #16]     ; save callee-saved regs
-        //   str     x21, [sp, #32]          ; save x21
-        //   mov     x19, x0                 ; save argc
-        //   mov     x20, x1                 ; save argv
-        //   mov     x21, x2                 ; save envp
-        //   adrp    x0, _vmctx_data@PAGE    (reloc at offset 28)
-        //   add     x0, x0, _vmctx_data@PAGEOFF (reloc at offset 32)
-        //   add     x8, x0, #0x20, lsl #12  ; x8 = vmctx + 0x20000
-        //   add     x9, x0, #0x40, lsl #12  ; x9 = vmctx + 0x40000 (heap base)
-        //   str     x9, [x8]                ; Store heap base ptr
-        //   add     x10, x0, #0x30, lsl #12 ; x10 = vmctx + 0x30000 (args area)
-        //   str     x19, [x10]              ; Store argc
-        //   str     x20, [x10, #8]          ; Store argv
-        //   str     x21, [x10, #16]         ; Store envp
-        //   mov     x1, x0                  ; caller_vmctx = vmctx
-        //   bl      __wasm_main             (reloc at offset 68)
-        //   ldp     x19, x20, [sp, #16]     ; restore callee-saved regs
-        //   ldr     x21, [sp, #32]          ; restore x21
-        //   ldp     x29, x30, [sp], #48
-        //   ret
+        // Output format (simplified Go pattern):
+        //   fatal error: SIGSEGV
+        //   pc=0x0000000100001234
+        //   addr=0x0000000000000000
+        // =================================================================
+        var handler_code = std.ArrayListUnmanaged(u8){};
+        defer handler_code.deinit(self.allocator);
+
+        // Register assignments:
+        //   x19 = signo (callee-saved)
+        //   x20 = siginfo_t* (callee-saved)
+        //   x21 = ucontext_t* (callee-saved)
+        //   x22 = panic_strings base (callee-saved)
+        // Stack frame: 96 bytes (regs at 0-48, hex buffer at 64-80)
+
+        // --- Prologue ---
+        // [0]  stp x29, x30, [sp, #-96]!
+        try appendInst(&handler_code, self.allocator, A64.stp_pre(29, 30, 31, -96));
+        // [4]  mov x29, sp
+        try appendInst(&handler_code, self.allocator, A64.add_imm(29, 31, 0));
+        // [8]  stp x19, x20, [sp, #16]
+        try appendInst(&handler_code, self.allocator, A64.stp_off(19, 20, 31, 16));
+        // [12] stp x21, x22, [sp, #32]
+        try appendInst(&handler_code, self.allocator, A64.stp_off(21, 22, 31, 32));
+
+        // --- Save kernel-provided arguments ---
+        // [16] mov x19, x0 (signo)
+        try appendInst(&handler_code, self.allocator, A64.mov(19, 0));
+        // [20] mov x20, x1 (siginfo_t*)
+        try appendInst(&handler_code, self.allocator, A64.mov(20, 1));
+        // [24] mov x21, x2 (ucontext_t*)
+        try appendInst(&handler_code, self.allocator, A64.mov(21, 2));
+
+        // --- Load panic strings base address ---
+        // [28] adrp x22, _cot_panic_strings@PAGE  (reloc)
+        try appendInst(&handler_code, self.allocator, A64.adrp(22));
+        // [32] add x22, x22, _cot_panic_strings@PAGEOFF (reloc)
+        try appendInst(&handler_code, self.allocator, A64.add_pageoff(22, 22));
+
+        // --- Write "fatal error: " (13 bytes) to stderr ---
+        // [36] mov x0, #2 (stderr)
+        try appendInst(&handler_code, self.allocator, A64.movz(0, 2));
+        // [40] mov x1, x22 (buf = strings[0])
+        try appendInst(&handler_code, self.allocator, A64.mov(1, 22));
+        // [44] mov x2, #13 (len)
+        try appendInst(&handler_code, self.allocator, A64.movz(2, 13));
+        // [48] mov x16, #4 (SYS_write)
+        try appendInst(&handler_code, self.allocator, A64.movz(16, 4));
+        // [52] movk x16, #0x2000, lsl #16 (macOS syscall namespace)
+        try appendInst(&handler_code, self.allocator, A64.movk_lsl16(16, 0x2000));
+        // [56] svc #0x80
+        try appendInst(&handler_code, self.allocator, A64.svc80());
+
+        // --- Signal name dispatch (CMP chain) ---
+        // Signal numbers: SIGILL=4, SIGABRT=6, SIGFPE=8, SIGBUS=10, SIGSEGV=11
+        // Instruction indices for labels (from current position = index 15):
+        //   [60]  cmp x19, #4       ; idx 15
+        //   [64]  b.eq Lsigill      ; idx 16 → target idx 29 (off=+13)
+        //   [68]  cmp x19, #6       ; idx 17
+        //   [72]  b.eq Lsigabrt     ; idx 18 → target idx 32 (off=+14)
+        //   [76]  cmp x19, #8       ; idx 19
+        //   [80]  b.eq Lsigfpe      ; idx 20 → target idx 35 (off=+15)
+        //   [84]  cmp x19, #10      ; idx 21
+        //   [88]  b.eq Lsigbus      ; idx 22 → target idx 38 (off=+16)
+        //   [92]  cmp x19, #11      ; idx 23
+        //   [96]  b.eq Lsigsegv     ; idx 24 → target idx 41 (off=+17)
+        //   [100] add x1, x22, #50  ; idx 25  default: "unknown signal\n"
+        //   [104] mov x2, #15       ; idx 26
+        //   [108] b Lwrite_sig      ; idx 27 → target idx 43 (off=+16)
+        // Instruction index layout (Lwrite_sig = idx 42):
+        //   idx 15-24: CMP/B.EQ chain (5 signals)
+        //   idx 25-27: default (add+mov+b)
+        //   idx 28-30: SIGILL (add+mov+b)
+        //   idx 31-33: SIGABRT (add+mov+b)
+        //   idx 34-36: SIGFPE (add+mov+b)
+        //   idx 37-39: SIGBUS (add+mov+b)
+        //   idx 40-41: SIGSEGV (add+mov, fall through)
+        //   idx 42: Lwrite_sig: mov x0, #2 (stderr)
+        //   idx 43-45: mov x16 + movk + svc (SYS_write)
+
+        // cmp x19, #4 (SIGILL)
+        try appendInst(&handler_code, self.allocator, A64.cmp_imm(19, 4));
+        // b.eq +12 → Lsigill
+        try appendInst(&handler_code, self.allocator, A64.b_eq(12));
+        // cmp x19, #6 (SIGABRT)
+        try appendInst(&handler_code, self.allocator, A64.cmp_imm(19, 6));
+        // b.eq +13 → Lsigabrt
+        try appendInst(&handler_code, self.allocator, A64.b_eq(13));
+        // cmp x19, #8 (SIGFPE)
+        try appendInst(&handler_code, self.allocator, A64.cmp_imm(19, 8));
+        // b.eq +14 → Lsigfpe
+        try appendInst(&handler_code, self.allocator, A64.b_eq(14));
+        // cmp x19, #10 (SIGBUS)
+        try appendInst(&handler_code, self.allocator, A64.cmp_imm(19, 10));
+        // b.eq +15 → Lsigbus
+        try appendInst(&handler_code, self.allocator, A64.b_eq(15));
+        // cmp x19, #11 (SIGSEGV)
+        try appendInst(&handler_code, self.allocator, A64.cmp_imm(19, 11));
+        // b.eq +16 → Lsigsegv
+        try appendInst(&handler_code, self.allocator, A64.b_eq(16));
+
+        // default: "unknown signal\n" (offset 50, len 15)
+        try appendInst(&handler_code, self.allocator, A64.add_imm(1, 22, 50));
+        try appendInst(&handler_code, self.allocator, A64.movz(2, 15));
+        try appendInst(&handler_code, self.allocator, A64.b(15)); // → Lwrite_sig (idx 42)
+
+        // Lsigill: "SIGILL\n" (offset 13, len 7)
+        try appendInst(&handler_code, self.allocator, A64.add_imm(1, 22, 13));
+        try appendInst(&handler_code, self.allocator, A64.movz(2, 7));
+        try appendInst(&handler_code, self.allocator, A64.b(12)); // → Lwrite_sig (idx 42)
+
+        // Lsigabrt: "SIGABRT\n" (offset 20, len 8)
+        try appendInst(&handler_code, self.allocator, A64.add_imm(1, 22, 20));
+        try appendInst(&handler_code, self.allocator, A64.movz(2, 8));
+        try appendInst(&handler_code, self.allocator, A64.b(9)); // → Lwrite_sig (idx 42)
+
+        // Lsigfpe: "SIGFPE\n" (offset 28, len 7)
+        try appendInst(&handler_code, self.allocator, A64.add_imm(1, 22, 28));
+        try appendInst(&handler_code, self.allocator, A64.movz(2, 7));
+        try appendInst(&handler_code, self.allocator, A64.b(6)); // → Lwrite_sig (idx 42)
+
+        // Lsigbus: "SIGBUS\n" (offset 35, len 7)
+        try appendInst(&handler_code, self.allocator, A64.add_imm(1, 22, 35));
+        try appendInst(&handler_code, self.allocator, A64.movz(2, 7));
+        try appendInst(&handler_code, self.allocator, A64.b(3)); // → Lwrite_sig (idx 42)
+
+        // Lsigsegv: "SIGSEGV\n" (offset 42, len 8)
+        try appendInst(&handler_code, self.allocator, A64.add_imm(1, 22, 42));
+        try appendInst(&handler_code, self.allocator, A64.movz(2, 8));
+        // fall through to Lwrite_sig
+
+        // Lwrite_sig: write signal name to stderr (idx 42)
+        try appendInst(&handler_code, self.allocator, A64.movz(0, 2)); // fd=stderr
+        try appendInst(&handler_code, self.allocator, A64.movz(16, 4)); // SYS_write
+        try appendInst(&handler_code, self.allocator, A64.movk_lsl16(16, 0x2000));
+        try appendInst(&handler_code, self.allocator, A64.svc80());
+
+        // --- Write "pc=0x" (offset 65, len 5) ---
+        try appendInst(&handler_code, self.allocator, A64.movz(0, 2));
+        try appendInst(&handler_code, self.allocator, A64.add_imm(1, 22, 65));
+        try appendInst(&handler_code, self.allocator, A64.movz(2, 5));
+        try appendInst(&handler_code, self.allocator, A64.movz(16, 4));
+        try appendInst(&handler_code, self.allocator, A64.movk_lsl16(16, 0x2000));
+        try appendInst(&handler_code, self.allocator, A64.svc80());
+
+        // --- Extract PC from ucontext ---
+        // macOS ARM64: ucontext_t.uc_mcontext at offset 48 (pointer)
+        // mcontext64.ss.pc at offset 272 from mcontext start
+        // (exception_state=16 bytes + regs[29]*8 + fp + lr + sp = 16+232+24 = 272)
+        try appendInst(&handler_code, self.allocator, A64.ldr_imm(10, 21, 48)); // x10 = uc_mcontext
+        try appendInst(&handler_code, self.allocator, A64.ldr_imm(10, 10, 272)); // x10 = pc
+
+        // --- Convert x10 to 16 hex chars into buffer at [sp, #64] ---
+        try appendInst(&handler_code, self.allocator, A64.add_imm(6, 22, 77)); // x6 = hex table
+        try appendInst(&handler_code, self.allocator, A64.movz(3, 60)); // x3 = shift (60..0 by 4)
+        try appendInst(&handler_code, self.allocator, A64.add_imm(7, 31, 64)); // x7 = &buf[sp+64]
+        // Lhex_pc (loop, 6 instructions):
+        try appendInst(&handler_code, self.allocator, A64.lsr_reg(5, 10, 3)); // x5 = val >> shift
+        try appendInst(&handler_code, self.allocator, A64.and_0xf(5, 5)); // x5 = nibble
+        try appendInst(&handler_code, self.allocator, A64.ldrb_reg(5, 6, 5)); // w5 = hex_table[nibble]
+        try appendInst(&handler_code, self.allocator, A64.strb_post1(5, 7)); // *x7++ = w5
+        try appendInst(&handler_code, self.allocator, A64.subs_imm(3, 3, 4)); // shift -= 4
+        try appendInst(&handler_code, self.allocator, A64.b_ge(-5)); // loop while shift >= 0
+        // Store '\n' after hex digits
+        try appendInst(&handler_code, self.allocator, A64.movz_w(5, 10)); // w5 = '\n'
+        try appendInst(&handler_code, self.allocator, A64.strb_uoff0(5, 7)); // *x7 = '\n'
+        // Write 17 bytes (16 hex + \n) from [sp+64]
+        try appendInst(&handler_code, self.allocator, A64.movz(0, 2));
+        try appendInst(&handler_code, self.allocator, A64.add_imm(1, 31, 64)); // buf = sp+64
+        try appendInst(&handler_code, self.allocator, A64.movz(2, 17));
+        try appendInst(&handler_code, self.allocator, A64.movz(16, 4));
+        try appendInst(&handler_code, self.allocator, A64.movk_lsl16(16, 0x2000));
+        try appendInst(&handler_code, self.allocator, A64.svc80());
+
+        // --- Write "addr=0x" (offset 70, len 7) ---
+        try appendInst(&handler_code, self.allocator, A64.movz(0, 2));
+        try appendInst(&handler_code, self.allocator, A64.add_imm(1, 22, 70));
+        try appendInst(&handler_code, self.allocator, A64.movz(2, 7));
+        try appendInst(&handler_code, self.allocator, A64.movz(16, 4));
+        try appendInst(&handler_code, self.allocator, A64.movk_lsl16(16, 0x2000));
+        try appendInst(&handler_code, self.allocator, A64.svc80());
+
+        // --- Extract fault address from siginfo_t ---
+        // macOS: siginfo_t.si_addr at offset 24
+        try appendInst(&handler_code, self.allocator, A64.ldr_imm(10, 20, 24)); // x10 = si_addr
+
+        // --- Convert x10 to hex (same loop pattern) ---
+        try appendInst(&handler_code, self.allocator, A64.add_imm(6, 22, 77));
+        try appendInst(&handler_code, self.allocator, A64.movz(3, 60));
+        try appendInst(&handler_code, self.allocator, A64.add_imm(7, 31, 64));
+        // Lhex_addr:
+        try appendInst(&handler_code, self.allocator, A64.lsr_reg(5, 10, 3));
+        try appendInst(&handler_code, self.allocator, A64.and_0xf(5, 5));
+        try appendInst(&handler_code, self.allocator, A64.ldrb_reg(5, 6, 5));
+        try appendInst(&handler_code, self.allocator, A64.strb_post1(5, 7));
+        try appendInst(&handler_code, self.allocator, A64.subs_imm(3, 3, 4));
+        try appendInst(&handler_code, self.allocator, A64.b_ge(-5));
+        try appendInst(&handler_code, self.allocator, A64.movz_w(5, 10));
+        try appendInst(&handler_code, self.allocator, A64.strb_uoff0(5, 7));
+        try appendInst(&handler_code, self.allocator, A64.movz(0, 2));
+        try appendInst(&handler_code, self.allocator, A64.add_imm(1, 31, 64));
+        try appendInst(&handler_code, self.allocator, A64.movz(2, 17));
+        try appendInst(&handler_code, self.allocator, A64.movz(16, 4));
+        try appendInst(&handler_code, self.allocator, A64.movk_lsl16(16, 0x2000));
+        try appendInst(&handler_code, self.allocator, A64.svc80());
+
+        // --- Exit with code 2 (Go's crash exit code) ---
+        try appendInst(&handler_code, self.allocator, A64.movz(0, 2)); // exit code 2
+        try appendInst(&handler_code, self.allocator, A64.movz(16, 1)); // SYS_exit = 1
+        try appendInst(&handler_code, self.allocator, A64.movk_lsl16(16, 0x2000));
+        try appendInst(&handler_code, self.allocator, A64.svc80());
+        try appendInst(&handler_code, self.allocator, A64.brk1()); // unreachable
+
+        // Declare and define the signal handler function
+        const handler_func_id = try module.declareFunction("_cot_signal_handler", .Local);
+
+        const handler_relocs = [_]FinalizedMachReloc{
+            // ADRP x22, _cot_panic_strings@PAGE at offset 28
+            .{
+                .offset = 28,
+                .kind = Reloc.Aarch64AdrPrelPgHi21,
+                .target = FinalizedRelocTarget{ .ExternalName = panic_strings_name_ref },
+                .addend = 0,
+            },
+            // ADD x22, x22, _cot_panic_strings@PAGEOFF at offset 32
+            .{
+                .offset = 32,
+                .kind = Reloc.Aarch64AddAbsLo12Nc,
+                .target = FinalizedRelocTarget{ .ExternalName = panic_strings_name_ref },
+                .addend = 0,
+            },
+        };
+
+        try module.defineFunctionBytes(handler_func_id, handler_code.items, &handler_relocs);
+
+        // =================================================================
+        // Step 3: Generate _main wrapper function
+        // Same as before but with signal handler installation added before
+        // the call to __wasm_main. Uses _sigaction from libSystem.
+        //
+        // macOS sigaction struct (16 bytes):
+        //   [0]  sa_handler/sa_sigaction (8 bytes) - function pointer
+        //   [8]  sa_mask (4 bytes) - signal mask (0xFFFFFFFF = block all)
+        //   [12] sa_flags (4 bytes) - SA_SIGINFO|SA_ONSTACK|SA_RESTART = 0x43
         // =================================================================
         var wrapper_code = std.ArrayListUnmanaged(u8){};
         defer wrapper_code.deinit(self.allocator);
 
-        // Helper to append little-endian u32
-        const appendInst = struct {
-            fn f(list: *std.ArrayListUnmanaged(u8), alloc: std.mem.Allocator, inst: u32) !void {
-                try list.appendSlice(alloc, &std.mem.toBytes(std.mem.nativeToBig(u32, @byteSwap(inst))));
-            }
-        }.f;
+        // Frame: 80 bytes (callee-saved regs + sigaction struct on stack)
+        //   [sp+0]:  x29, x30 (16 bytes)
+        //   [sp+16]: x19, x20 (16 bytes)
+        //   [sp+32]: x21, x22 (16 bytes)
+        //   [sp+48]: sigaction struct (16 bytes) — handler(8), mask(4), flags(4)
+        //   [sp+64]: padding to 80 (16 bytes)
 
-        // stp x29, x30, [sp, #-48]! (save frame, 48 bytes for x19/x20/x21)
-        try appendInst(&wrapper_code, self.allocator, 0xA9BD7BFD);
+        // stp x29, x30, [sp, #-80]!
+        try appendInst(&wrapper_code, self.allocator, A64.stp_pre(29, 30, 31, -80));
         // mov x29, sp
-        try appendInst(&wrapper_code, self.allocator, 0x910003FD);
-        // stp x19, x20, [sp, #16] (save callee-saved regs)
-        try appendInst(&wrapper_code, self.allocator, 0xA90153F3);
-        // str x21, [sp, #32] (save x21)
-        try appendInst(&wrapper_code, self.allocator, 0xF90013F5);
-        // mov x19, x0 (save argc from OS)
-        try appendInst(&wrapper_code, self.allocator, 0xAA0003F3);
-        // mov x20, x1 (save argv from OS)
-        try appendInst(&wrapper_code, self.allocator, 0xAA0103F4);
-        // mov x21, x2 (save envp from OS)
-        try appendInst(&wrapper_code, self.allocator, 0xAA0203F5);
-        // adrp x0, _vmctx_data@PAGE (reloc at offset 28)
-        try appendInst(&wrapper_code, self.allocator, 0x90000000);
-        // add x0, x0, _vmctx_data@PAGEOFF (reloc at offset 32)
-        try appendInst(&wrapper_code, self.allocator, 0x91000000);
-        // add x8, x0, #0x20, lsl #12 (x8 = vmctx + 0x20000)
-        try appendInst(&wrapper_code, self.allocator, 0x91408008);
-        // add x9, x0, #0x40, lsl #12 (x9 = vmctx + 0x40000 = heap base)
-        try appendInst(&wrapper_code, self.allocator, 0x91410009);
-        // str x9, [x8] (store heap base pointer)
-        try appendInst(&wrapper_code, self.allocator, 0xF9000109);
-        // add x10, x0, #0x30, lsl #12 (x10 = vmctx + 0x30000, args area)
-        try appendInst(&wrapper_code, self.allocator, 0x9140C00A);
-        // str x19, [x10] (store argc)
-        try appendInst(&wrapper_code, self.allocator, 0xF9000153);
-        // str x20, [x10, #8] (store argv)
-        try appendInst(&wrapper_code, self.allocator, 0xF9000554);
-        // str x21, [x10, #16] (store envp)
-        try appendInst(&wrapper_code, self.allocator, 0xF9000955);
-        // mov x1, x0 (caller_vmctx = vmctx)
-        try appendInst(&wrapper_code, self.allocator, 0xAA0003E1);
-        // bl __wasm_main (reloc at offset 68)
-        try appendInst(&wrapper_code, self.allocator, 0x94000000);
-        // ldp x19, x20, [sp, #16] (restore callee-saved regs)
-        try appendInst(&wrapper_code, self.allocator, 0xA94153F3);
-        // ldr x21, [sp, #32] (restore x21)
-        try appendInst(&wrapper_code, self.allocator, 0xF94013F5);
-        // ldp x29, x30, [sp], #48
-        try appendInst(&wrapper_code, self.allocator, 0xA8C37BFD);
+        try appendInst(&wrapper_code, self.allocator, A64.add_imm(29, 31, 0));
+        // stp x19, x20, [sp, #16]
+        try appendInst(&wrapper_code, self.allocator, A64.stp_off(19, 20, 31, 16));
+        // stp x21, x22, [sp, #32]
+        try appendInst(&wrapper_code, self.allocator, A64.stp_off(21, 22, 31, 32));
+        // mov x19, x0 (argc)
+        try appendInst(&wrapper_code, self.allocator, A64.mov(19, 0));
+        // mov x20, x1 (argv)
+        try appendInst(&wrapper_code, self.allocator, A64.mov(20, 1));
+        // mov x21, x2 (envp)
+        try appendInst(&wrapper_code, self.allocator, A64.mov(21, 2));
+
+        // adrp x0, _vmctx_data@PAGE (reloc)
+        try appendInst(&wrapper_code, self.allocator, A64.adrp(0)); // offset 28
+        // add x0, x0, _vmctx_data@PAGEOFF (reloc)
+        try appendInst(&wrapper_code, self.allocator, A64.add_pageoff(0, 0)); // offset 32
+
+        // Initialize heap and store argc/argv/envp (same as before)
+        // add x8, x0, #0x20, lsl #12 (vmctx + 0x20000)
+        try appendInst(&wrapper_code, self.allocator, A64.add_imm_lsl12(8, 0, 0x20));
+        // add x9, x0, #0x40, lsl #12 (vmctx + 0x40000 = heap base)
+        try appendInst(&wrapper_code, self.allocator, A64.add_imm_lsl12(9, 0, 0x40));
+        // str x9, [x8] (store heap base ptr)
+        try appendInst(&wrapper_code, self.allocator, A64.str_imm(9, 8, 0));
+        // add x10, x0, #0x30, lsl #12 (vmctx + 0x30000, args area)
+        try appendInst(&wrapper_code, self.allocator, A64.add_imm_lsl12(10, 0, 0x30));
+        // str x19, [x10] (argc)
+        try appendInst(&wrapper_code, self.allocator, A64.str_imm(19, 10, 0));
+        // str x20, [x10, #8] (argv)
+        try appendInst(&wrapper_code, self.allocator, A64.str_imm(20, 10, 8));
+        // str x21, [x10, #16] (envp)
+        try appendInst(&wrapper_code, self.allocator, A64.str_imm(21, 10, 16));
+
+        // Save vmctx in x22 (callee-saved, survives sigaction calls)
+        // mov x22, x0
+        try appendInst(&wrapper_code, self.allocator, A64.mov(22, 0));
+
+        // --- Build sigaction struct on stack at [sp+48] ---
+        // Load signal handler address
+        // adrp x8, _cot_signal_handler@PAGE (reloc)
+        try appendInst(&wrapper_code, self.allocator, A64.adrp(8)); // offset 68
+        // add x8, x8, _cot_signal_handler@PAGEOFF (reloc)
+        try appendInst(&wrapper_code, self.allocator, A64.add_pageoff(8, 8)); // offset 72
+        // str x8, [sp, #48] (sa_handler)
+        try appendInst(&wrapper_code, self.allocator, A64.str_imm(8, 31, 48));
+        // movn w9, #0 (w9 = 0xFFFFFFFF, sa_mask = block all signals)
+        try appendInst(&wrapper_code, self.allocator, A64.movn_w(9, 0));
+        // str w9, [sp, #56] (sa_mask)
+        try appendInst(&wrapper_code, self.allocator, A64.str_w_imm(9, 31, 56));
+        // mov w9, #0x43 (SA_SIGINFO=0x40 | SA_ONSTACK=0x1 | SA_RESTART=0x2)
+        try appendInst(&wrapper_code, self.allocator, A64.movz_w(9, 0x43));
+        // str w9, [sp, #60] (sa_flags)
+        try appendInst(&wrapper_code, self.allocator, A64.str_w_imm(9, 31, 60));
+
+        // --- Install signal handlers via _sigaction(signo, &act, NULL) ---
+        // _sigaction is from libSystem (called via BL + BRANCH26 reloc)
+        // After each call, x0-x18 are clobbered (caller-saved), x19+ preserved
+
+        // SIGILL (4)
+        try appendInst(&wrapper_code, self.allocator, A64.movz(0, 4)); // signo
+        try appendInst(&wrapper_code, self.allocator, A64.add_imm(1, 31, 48)); // &sa
+        try appendInst(&wrapper_code, self.allocator, A64.movz(2, 0)); // NULL
+        try appendInst(&wrapper_code, self.allocator, A64.bl()); // bl _sigaction (reloc)
+        // SIGABRT (6)
+        try appendInst(&wrapper_code, self.allocator, A64.movz(0, 6));
+        try appendInst(&wrapper_code, self.allocator, A64.add_imm(1, 31, 48));
+        try appendInst(&wrapper_code, self.allocator, A64.movz(2, 0));
+        try appendInst(&wrapper_code, self.allocator, A64.bl()); // reloc
+        // SIGFPE (8)
+        try appendInst(&wrapper_code, self.allocator, A64.movz(0, 8));
+        try appendInst(&wrapper_code, self.allocator, A64.add_imm(1, 31, 48));
+        try appendInst(&wrapper_code, self.allocator, A64.movz(2, 0));
+        try appendInst(&wrapper_code, self.allocator, A64.bl()); // reloc
+        // SIGBUS (10)
+        try appendInst(&wrapper_code, self.allocator, A64.movz(0, 10));
+        try appendInst(&wrapper_code, self.allocator, A64.add_imm(1, 31, 48));
+        try appendInst(&wrapper_code, self.allocator, A64.movz(2, 0));
+        try appendInst(&wrapper_code, self.allocator, A64.bl()); // reloc
+        // SIGSEGV (11)
+        try appendInst(&wrapper_code, self.allocator, A64.movz(0, 11));
+        try appendInst(&wrapper_code, self.allocator, A64.add_imm(1, 31, 48));
+        try appendInst(&wrapper_code, self.allocator, A64.movz(2, 0));
+        try appendInst(&wrapper_code, self.allocator, A64.bl()); // reloc
+
+        // --- Call __wasm_main(vmctx, vmctx) ---
+        // mov x0, x22 (vmctx)
+        try appendInst(&wrapper_code, self.allocator, A64.mov(0, 22));
+        // mov x1, x22 (caller_vmctx = vmctx)
+        try appendInst(&wrapper_code, self.allocator, A64.mov(1, 22));
+        // bl __wasm_main (reloc)
+        try appendInst(&wrapper_code, self.allocator, A64.bl());
+
+        // --- Epilogue ---
+        // ldp x19, x20, [sp, #16]
+        try appendInst(&wrapper_code, self.allocator, A64.ldp_off(19, 20, 31, 16));
+        // ldp x21, x22, [sp, #32]
+        try appendInst(&wrapper_code, self.allocator, A64.ldp_off(21, 22, 31, 32));
+        // ldp x29, x30, [sp], #80
+        try appendInst(&wrapper_code, self.allocator, A64.ldp_post(29, 30, 31, 80));
         // ret
-        try appendInst(&wrapper_code, self.allocator, 0xD65F03C0);
+        try appendInst(&wrapper_code, self.allocator, A64.ret());
 
         // Declare _main wrapper
         const main_func_id = try module.declareFunction("_main", .Export);
 
-        // Create relocations for the wrapper code
-        // Relocation offsets: ADRP at 8, ADD at 12, BL at 32
-        const FinalizedMachReloc = buffer_mod.FinalizedMachReloc;
-        const FinalizedRelocTarget = buffer_mod.FinalizedRelocTarget;
-        const Reloc = buffer_mod.Reloc;
-        const ExternalName = buffer_mod.ExternalName;
-
-        // Use indices after all function indices to avoid collision
-        // (functions are indexed 0..num_funcs-1)
-        const vmctx_ext_idx: u32 = num_funcs;
-        const wasm_main_ext_idx: u32 = num_funcs + 1;
-
-        // Create external name references for _vmctx_data and __wasm_main
-        const vmctx_name_ref = ExternalName{ .User = .{ .namespace = 0, .index = vmctx_ext_idx } };
-        const wasm_main_name_ref = ExternalName{ .User = .{ .namespace = 0, .index = wasm_main_ext_idx } };
-
-        // Register external names for relocation resolution (indices must match the refs above)
+        // Register all external names
         try module.declareExternalName(vmctx_ext_idx, "_vmctx_data");
         try module.declareExternalName(wasm_main_ext_idx, "__wasm_main");
+        try module.declareExternalName(panic_strings_ext_idx, "_cot_panic_strings");
+        try module.declareExternalName(signal_handler_ext_idx, "_cot_signal_handler");
+        try module.declareExternalName(sigaction_ext_idx, "_sigaction");
 
-        const relocs = [_]FinalizedMachReloc{
-            // ADRP x0, _vmctx_data@PAGE at offset 28 (after 7 setup instrs)
+        // Compute relocation offsets for the wrapper
+        // Instruction layout (each 4 bytes):
+        //   [0-6]   prologue + save args (7 instrs, offset 0-24)
+        //   [7]     adrp x0, vmctx     → offset 28
+        //   [8]     add x0, x0, vmctx  → offset 32
+        //   [9-16]  heap init + store   (8 instrs, offset 36-64)
+        //   [17]    adrp x8, handler   → offset 68
+        //   [18]    add x8, x8, handler→ offset 72
+        //   [19-24] sigaction struct setup (6 instrs, offset 76-96)
+        //   [25-28] SIGILL sigaction call → BL at offset 112 (instr 28)
+        //   [29-32] SIGABRT → BL at offset 128 (instr 32)
+        //   [33-36] SIGFPE  → BL at offset 144 (instr 36)
+        //   [37-40] SIGBUS  → BL at offset 160 (instr 40)
+        //   [41-44] SIGSEGV → BL at offset 176 (instr 44)
+        //   [45]    mov x0, x22        → offset 180
+        //   [46]    mov x1, x22        → offset 184
+        // Verify wrapper code size and compute BL offsets dynamically.
+        // Each instruction is 4 bytes. Count BL instructions by scanning for 0x94000000.
+        // Layout: prologue(7) + vmctx_adrp_add(2) + heap_args(8) + save_vmctx(1) +
+        //         handler_adrp_add(2) + sa_struct(5) + 5*(3+bl) + mov_mov_bl + epilogue(4)
+        // Total: 7+2+8+1+2+5+20+3+4 = 52 instructions = 208 bytes
+
+        // Find BL instruction offsets by scanning the generated code
+        var bl_offsets: [6]u32 = undefined; // 5 sigaction + 1 wasm_main
+        var bl_count: usize = 0;
+        {
+            var off: u32 = 0;
+            while (off + 3 < wrapper_code.items.len) : (off += 4) {
+                const inst = std.mem.readInt(u32, wrapper_code.items[off..][0..4], .little);
+                if (inst == 0x94000000) { // BL placeholder
+                    bl_offsets[bl_count] = off;
+                    bl_count += 1;
+                }
+            }
+        }
+
+        const main_relocs = [_]FinalizedMachReloc{
+            // ADRP x0, _vmctx_data@PAGE at offset 28
             .{
                 .offset = 28,
                 .kind = Reloc.Aarch64AdrPrelPgHi21,
@@ -1935,16 +2371,65 @@ pub const Driver = struct {
                 .target = FinalizedRelocTarget{ .ExternalName = vmctx_name_ref },
                 .addend = 0,
             },
-            // BL __wasm_main at offset 68
+            // ADRP x8, _cot_signal_handler@PAGE at offset 68
             .{
                 .offset = 68,
+                .kind = Reloc.Aarch64AdrPrelPgHi21,
+                .target = FinalizedRelocTarget{ .ExternalName = signal_handler_name_ref },
+                .addend = 0,
+            },
+            // ADD x8, x8, _cot_signal_handler@PAGEOFF at offset 72
+            .{
+                .offset = 72,
+                .kind = Reloc.Aarch64AddAbsLo12Nc,
+                .target = FinalizedRelocTarget{ .ExternalName = signal_handler_name_ref },
+                .addend = 0,
+            },
+            // BL _sigaction for SIGILL (dynamically computed)
+            .{
+                .offset = bl_offsets[0],
+                .kind = Reloc.Arm64Call,
+                .target = FinalizedRelocTarget{ .ExternalName = sigaction_name_ref },
+                .addend = 0,
+            },
+            // BL _sigaction for SIGABRT
+            .{
+                .offset = bl_offsets[1],
+                .kind = Reloc.Arm64Call,
+                .target = FinalizedRelocTarget{ .ExternalName = sigaction_name_ref },
+                .addend = 0,
+            },
+            // BL _sigaction for SIGFPE
+            .{
+                .offset = bl_offsets[2],
+                .kind = Reloc.Arm64Call,
+                .target = FinalizedRelocTarget{ .ExternalName = sigaction_name_ref },
+                .addend = 0,
+            },
+            // BL _sigaction for SIGBUS
+            .{
+                .offset = bl_offsets[3],
+                .kind = Reloc.Arm64Call,
+                .target = FinalizedRelocTarget{ .ExternalName = sigaction_name_ref },
+                .addend = 0,
+            },
+            // BL _sigaction for SIGSEGV
+            .{
+                .offset = bl_offsets[4],
+                .kind = Reloc.Arm64Call,
+                .target = FinalizedRelocTarget{ .ExternalName = sigaction_name_ref },
+                .addend = 0,
+            },
+            // BL __wasm_main
+            .{
+                .offset = bl_offsets[5],
                 .kind = Reloc.Arm64Call,
                 .target = FinalizedRelocTarget{ .ExternalName = wasm_main_name_ref },
                 .addend = 0,
             },
         };
 
-        try module.defineFunctionBytes(main_func_id, wrapper_code.items, &relocs);
+        try module.defineFunctionBytes(main_func_id, wrapper_code.items, &main_relocs);
     }
 
     /// Generate ELF object file from compiled functions.
@@ -2823,30 +3308,35 @@ pub const Driver = struct {
     }
 
     /// Generate the main wrapper and static vmctx data for ELF (x86-64 Linux).
-    /// The wrapper initializes vmctx and calls __wasm_main.
+    /// The wrapper initializes vmctx, installs signal handlers, and calls __wasm_main.
     fn generateMainWrapperElf(self: *Driver, module: *object_module.ObjectModule, data_segments: []const wasm_parser.DataSegment, globals: []const wasm_parser.GlobalType, num_funcs: u32) !void {
+        // Relocation types
+        const FinalizedMachReloc = buffer_mod.FinalizedMachReloc;
+        const FinalizedRelocTarget = buffer_mod.FinalizedRelocTarget;
+        const Reloc = buffer_mod.Reloc;
+        const ExternalName = buffer_mod.ExternalName;
+
+        // External name indices
+        const vmctx_ext_idx: u32 = num_funcs;
+        const wasm_main_ext_idx: u32 = num_funcs + 1;
+        const panic_strings_ext_idx: u32 = num_funcs + 2;
+        const signal_handler_ext_idx: u32 = num_funcs + 3;
+        const sigreturn_ext_idx: u32 = num_funcs + 4;
+
+        const vmctx_name_ref = ExternalName{ .User = .{ .namespace = 0, .index = vmctx_ext_idx } };
+        const wasm_main_name_ref = ExternalName{ .User = .{ .namespace = 0, .index = wasm_main_ext_idx } };
+        const panic_strings_name_ref = ExternalName{ .User = .{ .namespace = 0, .index = panic_strings_ext_idx } };
+        const signal_handler_name_ref = ExternalName{ .User = .{ .namespace = 0, .index = signal_handler_ext_idx } };
+        const sigreturn_name_ref = ExternalName{ .User = .{ .namespace = 0, .index = sigreturn_ext_idx } };
+
         // =================================================================
         // Step 1: Declare and define static vmctx data section
-        // Layout (total 16MB = 0x1000000):
-        //   0x00000 - 0x0FFFF: Padding/reserved
-        //   0x10000: Globals area (16-byte stride per global)
-        //   0x20000: Heap base pointer (i64) - to be filled by wrapper
-        //   0x20008: Heap bound (i64) - ~15.7MB
-        //   0x30000: argc (i64) - set by _main wrapper from OS
-        //   0x30008: argv (i64, char**) - set by _main wrapper from OS
-        //   0x30010: envp (i64, char**) - set by _main wrapper from OS
-        //   0x40000 - 0xFFFFFF: Linear memory (~15.7MB heap)
-        //     0xBF000 (linmem+0x7F000): environ string buffer for @environ_ptr
-        //     0xEF000 (linmem+0xAF000): arg string buffer for @arg_ptr
         // =================================================================
         const vmctx_size: usize = 0x1000000; // 16MB
         const vmctx_data = try self.allocator.alloc(u8, vmctx_size);
         defer self.allocator.free(vmctx_data);
-
-        // Zero initialize
         @memset(vmctx_data, 0);
 
-        // Copy Wasm data segments into linear memory (starts at 0x40000)
         const linear_memory_base: usize = 0x40000;
         for (data_segments) |segment| {
             const dest_offset = linear_memory_base + segment.offset;
@@ -2855,8 +3345,6 @@ pub const Driver = struct {
             }
         }
 
-        // Initialize globals at offset 0x10000 with fixed 16-byte stride.
-        // Reference: Cranelift vmoffsets.rs — VMGlobalDefinition is 16 bytes.
         const global_base: usize = 0x10000;
         const global_stride: usize = 16;
         for (globals, 0..) |g, i| {
@@ -2884,149 +3372,470 @@ pub const Driver = struct {
             }
         }
 
-        // Heap bound at offset 0x20008 = ~15.7MB (size of linear memory)
-        const heap_bound: u64 = 0x1000000 - 0x40000; // vmctx_size - linear_memory_base
+        const heap_bound: u64 = 0x1000000 - 0x40000;
         @memcpy(vmctx_data[0x20008..][0..8], std.mem.asBytes(&heap_bound));
-
-        // Note: heap base pointer at 0x20000 will be patched by wrapper at runtime
-        // because we need the absolute address which isn't known until load time
 
         const vmctx_data_id = try module.declareData("vmctx_data", .Local, true);
         try module.defineData(vmctx_data_id, vmctx_data);
 
         // =================================================================
-        // Step 2: Generate main wrapper function
-        // This wrapper:
-        //   1. Saves argc/argv/envp (before lea rdi clobbers them)
-        //   2. Loads address of vmctx_data
-        //   3. Initializes heap base pointer (requires runtime address)
-        //   4. Stores argc/argv/envp into vmctx+0x30000/0x30008/0x30010
-        //   5. Calls __wasm_main(vmctx, vmctx)
-        //   6. Returns result
+        // Step 1b: Panic strings data section (same content as MachO)
+        // =================================================================
+        const panic_strings = "fatal error: " ++ "SIGILL\n" ++ "SIGABRT\n" ++ "SIGFPE\n" ++ "SIGBUS\n" ++ "SIGSEGV\n" ++ "unknown signal\n" ++ "pc=0x" ++ "addr=0x" ++ "0123456789abcdef" ++ "\n";
+        const panic_data_id = try module.declareData("cot_panic_strings", .Local, true);
+        try module.defineData(panic_data_id, panic_strings);
+
+        // =================================================================
+        // Step 2: Signal handler function (cot_signal_handler)
+        // x86-64 Linux, called by kernel: rdi=signo, rsi=siginfo_t*, rdx=ucontext_t*
+        // Uses raw syscalls: SYS_write=1, SYS_exit_group=231
         //
-        // On Linux, main(int argc, char **argv, char **envp): edi=argc, rsi=argv, rdx=envp
+        // Linux offsets:
+        //   siginfo_t.si_addr: offset 16
+        //   ucontext_t PC (REG_RIP): offset 168 (embedded, not pointer)
+        //     uc_flags(8)+uc_link(8)+uc_stack(24)+uc_mcontext.gregs offset 40
+        //     REG_RIP = index 16: 40 + 16*8 = 168
+        // =================================================================
+        var handler_code = std.ArrayListUnmanaged(u8){};
+        defer handler_code.deinit(self.allocator);
+
+        // Track relocation offsets for lea [rip + cot_panic_strings]
+        var handler_strings_reloc_offset: u32 = 0;
+
+        // --- Prologue ---
+        // push rbp
+        try handler_code.append(self.allocator, 0x55);
+        // mov rbp, rsp
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x89, 0xe5 });
+        // push rbx (callee-saved, will hold panic_strings base)
+        try handler_code.append(self.allocator, 0x53);
+        // push r12 (callee-saved, will hold signo)
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x41, 0x54 });
+        // push r13 (callee-saved, will hold siginfo_t*)
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x41, 0x55 });
+        // push r14 (callee-saved, will hold ucontext_t*)
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x41, 0x56 });
+        // sub rsp, 24 (align stack + 17 byte hex buffer)
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x83, 0xec, 0x18 });
+
+        // --- Save arguments ---
+        // mov r12d, edi (signo, 32-bit)
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x44, 0x89, 0xe7 }); // Actually: mov edi, r12d is 44 89 e7
+        // Wait, I need mov r12d, edi. That's: 41 89 FC
+        // Let me redo: mov r12, rdi would be 49 89 FC but I want just the 32-bit signo
+        // Actually let's use 64-bit mov: mov r12, rdi = 49 89 FC
+        // Hmm, let me re-emit. Clear what I just emitted for "mov r12d, edi" and redo.
+
+        // Actually the handler_code already has wrong bytes. Let me restart the handler with a cleaner approach.
+        handler_code.clearRetainingCapacity();
+
+        // Prologue: save callee-saved registers
+        try handler_code.append(self.allocator, 0x55); // push rbp
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x89, 0xe5 }); // mov rbp, rsp
+        try handler_code.append(self.allocator, 0x53); // push rbx
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x41, 0x54 }); // push r12
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x41, 0x55 }); // push r13
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x41, 0x56 }); // push r14
+        // sub rsp, 32 (hex buffer + alignment)
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x83, 0xec, 0x20 });
+
+        // Save args in callee-saved regs
+        // mov r12, rdi (signo) — 49 89 fc
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x49, 0x89, 0xfc });
+        // mov r13, rsi (siginfo_t*) — 49 89 f5
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x49, 0x89, 0xf5 });
+        // mov r14, rdx (ucontext_t*) — 49 89 d6
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x49, 0x89, 0xd6 });
+
+        // Load panic strings base into rbx
+        // lea rbx, [rip + cot_panic_strings] — 48 8d 1d XX XX XX XX
+        handler_strings_reloc_offset = @intCast(handler_code.items.len + 3); // reloc at disp32
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x8d, 0x1d, 0x00, 0x00, 0x00, 0x00 });
+
+        // --- Write "fatal error: " (13 bytes) to stderr ---
+        // mov eax, 1 (SYS_write)
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xb8, 0x01, 0x00, 0x00, 0x00 });
+        // mov edi, 2 (stderr)
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xbf, 0x02, 0x00, 0x00, 0x00 });
+        // mov rsi, rbx (buf = strings[0])
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x89, 0xde });
+        // mov edx, 13 (len)
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xba, 0x0d, 0x00, 0x00, 0x00 });
+        // syscall
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x0f, 0x05 });
+
+        // --- Signal name dispatch ---
+        // We'll use a series of cmp + je. Signal names at offsets in panic_strings:
+        // SIGILL=4→off13,len7  SIGABRT=6→off20,len8  SIGFPE=8→off28,len7
+        // SIGBUS=7(Linux)→off35,len7  SIGSEGV=11→off42,len8  default→off50,len15
         //
-        // x86-64 code (System V AMD64 ABI):
-        //   push   rbp                        ; 1  byte  (offset 0)
-        //   mov    rbp, rsp                   ; 3  bytes (offset 1)
-        //   push   rdi                        ; 1  byte  (offset 4)  save argc
-        //   push   rsi                        ; 1  byte  (offset 5)  save argv
-        //   push   rdx                        ; 1  byte  (offset 6)  save envp
-        //   lea    rdi, [rip + vmctx_data]    ; 7  bytes (offset 7, reloc at 10)
-        //   lea    rax, [rdi + 0x40000]       ; 7  bytes (offset 14)
-        //   mov    [rdi + 0x20000], rax       ; 7  bytes (offset 21)
-        //   pop    rax                        ; 1  byte  (offset 28) restore envp
-        //   mov    [rdi + 0x30010], rax       ; 7  bytes (offset 29) store envp
-        //   pop    rax                        ; 1  byte  (offset 36) restore argv
-        //   mov    [rdi + 0x30008], rax       ; 7  bytes (offset 37) store argv
-        //   pop    rax                        ; 1  byte  (offset 44) restore argc
-        //   cdqe                              ; 2  bytes (offset 45) sign-extend eax→rax
-        //   mov    [rdi + 0x30000], rax       ; 7  bytes (offset 47) store argc
-        //   mov    rsi, rdi                   ; 3  bytes (offset 54)
-        //   call   __wasm_main                ; 5  bytes (offset 57, reloc at 58)
-        //   pop    rbp                        ; 1  byte  (offset 62)
-        //   ret                               ; 1  byte  (offset 63)
-        // Total: 64 bytes
+        // Strategy: load default first, then overwrite with cmp/cmov-style branches.
+        // Actually, use cmp+je chain with forward jumps to write_sig label.
+
+        // lea rsi, [rbx + 50] (default: "unknown signal\n")
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x8d, 0x73, 0x32 }); // 0x32=50
+        // mov edx, 15
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xba, 0x0f, 0x00, 0x00, 0x00 });
+
+        // cmp r12d, 4 (SIGILL)
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x41, 0x83, 0xfc, 0x04 });
+        // je .sigill (short jump, will patch offset)
+        const sigill_jmp_off = handler_code.items.len;
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x74, 0x00 }); // placeholder
+
+        // cmp r12d, 6 (SIGABRT)
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x41, 0x83, 0xfc, 0x06 });
+        const sigabrt_jmp_off = handler_code.items.len;
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x74, 0x00 });
+
+        // cmp r12d, 8 (SIGFPE)
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x41, 0x83, 0xfc, 0x08 });
+        const sigfpe_jmp_off = handler_code.items.len;
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x74, 0x00 });
+
+        // cmp r12d, 7 (SIGBUS - Linux uses 7, not 10 like macOS)
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x41, 0x83, 0xfc, 0x07 });
+        const sigbus_jmp_off = handler_code.items.len;
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x74, 0x00 });
+
+        // cmp r12d, 11 (SIGSEGV)
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x41, 0x83, 0xfc, 0x0b });
+        const sigsegv_jmp_off = handler_code.items.len;
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x74, 0x00 });
+
+        // jmp .write_sig (default, no match)
+        const default_jmp_off = handler_code.items.len;
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xeb, 0x00 }); // placeholder
+
+        // .sigill: lea rsi, [rbx+13]; mov edx, 7; jmp .write_sig
+        handler_code.items[sigill_jmp_off + 1] = @intCast(handler_code.items.len - sigill_jmp_off - 2);
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x8d, 0x73, 0x0d }); // lea rsi,[rbx+13]
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xba, 0x07, 0x00, 0x00, 0x00 }); // mov edx,7
+        const sigill_jmp2_off = handler_code.items.len;
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xeb, 0x00 });
+
+        // .sigabrt: lea rsi, [rbx+20]; mov edx, 8; jmp .write_sig
+        handler_code.items[sigabrt_jmp_off + 1] = @intCast(handler_code.items.len - sigabrt_jmp_off - 2);
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x8d, 0x73, 0x14 }); // lea rsi,[rbx+20]
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xba, 0x08, 0x00, 0x00, 0x00 }); // mov edx,8
+        const sigabrt_jmp2_off = handler_code.items.len;
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xeb, 0x00 });
+
+        // .sigfpe: lea rsi, [rbx+28]; mov edx, 7; jmp .write_sig
+        handler_code.items[sigfpe_jmp_off + 1] = @intCast(handler_code.items.len - sigfpe_jmp_off - 2);
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x8d, 0x73, 0x1c }); // lea rsi,[rbx+28]
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xba, 0x07, 0x00, 0x00, 0x00 }); // mov edx,7
+        const sigfpe_jmp2_off = handler_code.items.len;
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xeb, 0x00 });
+
+        // .sigbus: lea rsi, [rbx+35]; mov edx, 7; jmp .write_sig
+        handler_code.items[sigbus_jmp_off + 1] = @intCast(handler_code.items.len - sigbus_jmp_off - 2);
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x8d, 0x73, 0x23 }); // lea rsi,[rbx+35]
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xba, 0x07, 0x00, 0x00, 0x00 }); // mov edx,7
+        const sigbus_jmp2_off = handler_code.items.len;
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xeb, 0x00 });
+
+        // .sigsegv: lea rsi, [rbx+42]; mov edx, 8 (fall through to write_sig)
+        handler_code.items[sigsegv_jmp_off + 1] = @intCast(handler_code.items.len - sigsegv_jmp_off - 2);
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x8d, 0x73, 0x2a }); // lea rsi,[rbx+42]
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xba, 0x08, 0x00, 0x00, 0x00 }); // mov edx,8
+
+        // .write_sig: — patch all forward jumps
+        const write_sig_off = handler_code.items.len;
+        handler_code.items[default_jmp_off + 1] = @intCast(write_sig_off - default_jmp_off - 2);
+        handler_code.items[sigill_jmp2_off + 1] = @intCast(write_sig_off - sigill_jmp2_off - 2);
+        handler_code.items[sigabrt_jmp2_off + 1] = @intCast(write_sig_off - sigabrt_jmp2_off - 2);
+        handler_code.items[sigfpe_jmp2_off + 1] = @intCast(write_sig_off - sigfpe_jmp2_off - 2);
+        handler_code.items[sigbus_jmp2_off + 1] = @intCast(write_sig_off - sigbus_jmp2_off - 2);
+
+        // Write signal name: syscall(SYS_write=1, fd=2, rsi=buf, rdx=len)
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xb8, 0x01, 0x00, 0x00, 0x00 }); // mov eax, 1
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xbf, 0x02, 0x00, 0x00, 0x00 }); // mov edi, 2
+        // rsi and rdx already set from dispatch above
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x0f, 0x05 }); // syscall
+
+        // --- Hex conversion helper (inline macro-like) ---
+        // For each of PC and addr, we:
+        //   1. Write prefix string
+        //   2. Convert 64-bit value to 16 hex chars + \n on stack
+        //   3. Write the buffer
+
+        // === Write "pc=0x" (5 bytes at offset 65) ===
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xb8, 0x01, 0x00, 0x00, 0x00 }); // mov eax, 1
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xbf, 0x02, 0x00, 0x00, 0x00 }); // mov edi, 2
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x8d, 0x73, 0x41 }); // lea rsi,[rbx+65]
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xba, 0x05, 0x00, 0x00, 0x00 }); // mov edx, 5
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x0f, 0x05 }); // syscall
+
+        // Extract PC: Linux ucontext_t REG_RIP at offset 168 (embedded)
+        // mov rax, [r14 + 168] — 49 8b 86 a8 00 00 00
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x49, 0x8b, 0x86, 0xa8, 0x00, 0x00, 0x00 });
+
+        // Convert rax to 16 hex chars at [rsp]
+        // lea rdi, [rbx + 77] (hex table "0123456789abcdef")
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x8d, 0x7b, 0x4d }); // lea rdi,[rbx+77]
+        // mov ecx, 60 (shift counter, 60..0 by 4)
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xb9, 0x3c, 0x00, 0x00, 0x00 });
+        // lea r8, [rsp] (buffer pointer)
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x4c, 0x8d, 0x04, 0x24 });
+        // .hex_loop_pc:
+        const hex_pc_loop = handler_code.items.len;
+        //   mov rdx, rax; shr rdx, cl; and edx, 0xf; movzx edx, byte [rdi+rdx]; mov [r8], dl; inc r8; sub ecx, 4; jge .hex_loop_pc
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x89, 0xc2 }); // mov rdx, rax
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0xd3, 0xea }); // shr rdx, cl
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x83, 0xe2, 0x0f }); // and edx, 0xf
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x0f, 0xb6, 0x14, 0x17 }); // movzx edx, byte [rdi+rdx]
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x41, 0x88, 0x10 }); // mov [r8], dl
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x49, 0xff, 0xc0 }); // inc r8
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x83, 0xe9, 0x04 }); // sub ecx, 4
+        // jge .hex_loop_pc
+        const hex_pc_jge_off = handler_code.items.len;
+        const hex_pc_disp: i8 = @intCast(@as(i32, @intCast(hex_pc_loop)) - @as(i32, @intCast(handler_code.items.len + 2)));
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x7d, @bitCast(hex_pc_disp) });
+
+        // Store '\n' and write 17 bytes
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x41, 0xc6, 0x00, 0x0a }); // mov byte [r8], 0x0a
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xb8, 0x01, 0x00, 0x00, 0x00 }); // mov eax, 1
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xbf, 0x02, 0x00, 0x00, 0x00 }); // mov edi, 2
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x89, 0xe6 }); // mov rsi, rsp
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xba, 0x11, 0x00, 0x00, 0x00 }); // mov edx, 17
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x0f, 0x05 }); // syscall
+
+        // === Write "addr=0x" (7 bytes at offset 70) ===
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xb8, 0x01, 0x00, 0x00, 0x00 }); // mov eax, 1
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xbf, 0x02, 0x00, 0x00, 0x00 }); // mov edi, 2
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x8d, 0x73, 0x46 }); // lea rsi,[rbx+70]
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xba, 0x07, 0x00, 0x00, 0x00 }); // mov edx, 7
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x0f, 0x05 }); // syscall
+
+        // Extract fault addr: siginfo_t.si_addr at offset 16 on Linux
+        // mov rax, [r13 + 16] — 49 8b 45 10
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x49, 0x8b, 0x45, 0x10 });
+
+        // Same hex conversion loop for addr
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x8d, 0x7b, 0x4d }); // lea rdi,[rbx+77]
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xb9, 0x3c, 0x00, 0x00, 0x00 }); // mov ecx, 60
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x4c, 0x8d, 0x04, 0x24 }); // lea r8, [rsp]
+        const hex_addr_loop = handler_code.items.len;
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x89, 0xc2 }); // mov rdx, rax
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0xd3, 0xea }); // shr rdx, cl
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x83, 0xe2, 0x0f }); // and edx, 0xf
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x0f, 0xb6, 0x14, 0x17 }); // movzx edx, byte [rdi+rdx]
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x41, 0x88, 0x10 }); // mov [r8], dl
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x49, 0xff, 0xc0 }); // inc r8
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x83, 0xe9, 0x04 }); // sub ecx, 4
+        const hex_addr_jge_off = handler_code.items.len;
+        const hex_addr_disp: i8 = @intCast(@as(i32, @intCast(hex_addr_loop)) - @as(i32, @intCast(handler_code.items.len + 2)));
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x7d, @bitCast(hex_addr_disp) });
+
+        // Store '\n' and write
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x41, 0xc6, 0x00, 0x0a }); // mov byte [r8], 0x0a
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xb8, 0x01, 0x00, 0x00, 0x00 }); // mov eax, 1
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xbf, 0x02, 0x00, 0x00, 0x00 }); // mov edi, 2
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x89, 0xe6 }); // mov rsi, rsp
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xba, 0x11, 0x00, 0x00, 0x00 }); // mov edx, 17
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x0f, 0x05 }); // syscall
+
+        // --- Exit with code 2 ---
+        // mov eax, 231 (SYS_exit_group)
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xb8, 0xe7, 0x00, 0x00, 0x00 });
+        // mov edi, 2
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0xbf, 0x02, 0x00, 0x00, 0x00 });
+        // syscall
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x0f, 0x05 });
+        // ud2 (unreachable)
+        try handler_code.appendSlice(self.allocator, &[_]u8{ 0x0f, 0x0b });
+
+        // Suppress unused variable warnings
+        _ = hex_pc_jge_off;
+        _ = hex_addr_jge_off;
+
+        // Declare and define signal handler
+        const handler_func_id = try module.declareFunction("cot_signal_handler", .Local);
+        const handler_relocs = [_]FinalizedMachReloc{
+            .{
+                .offset = handler_strings_reloc_offset,
+                .kind = Reloc.X86PCRel4,
+                .target = FinalizedRelocTarget{ .ExternalName = panic_strings_name_ref },
+                .addend = -4,
+            },
+        };
+        try module.defineFunctionBytes(handler_func_id, handler_code.items, &handler_relocs);
+
+        // =================================================================
+        // Step 2b: Sigreturn trampoline (required by Linux rt_sigaction)
+        // Just: mov rax, 15; syscall (SYS_rt_sigreturn)
+        // =================================================================
+        const sigreturn_code = [_]u8{
+            0xb8, 0x0f, 0x00, 0x00, 0x00, // mov eax, 15 (SYS_rt_sigreturn)
+            0x0f, 0x05, // syscall
+        };
+        const sigreturn_func_id = try module.declareFunction("cot_sigreturn", .Local);
+        try module.defineFunctionBytes(sigreturn_func_id, &sigreturn_code, &.{});
+
+        // =================================================================
+        // Step 3: Generate main wrapper
+        // Same as original but with rt_sigaction calls before __wasm_main.
+        //
+        // Linux kernel rt_sigaction struct (32 bytes):
+        //   [0]  sa_handler (8 bytes)
+        //   [8]  sa_flags (8 bytes) = SA_SIGINFO|SA_ONSTACK|SA_RESTART|SA_RESTORER
+        //        = 0x4|0x8000000|0x10000000|0x4000000 = 0x1C000004
+        //   [16] sa_restorer (8 bytes) = address of cot_sigreturn
+        //   [24] sa_mask (8 bytes) = 0xFFFFFFFFFFFFFFFF
+        //
+        // rt_sigaction syscall: rax=13, rdi=signo, rsi=&act, rdx=NULL, r10=8
         // =================================================================
         var wrapper_code = std.ArrayListUnmanaged(u8){};
         defer wrapper_code.deinit(self.allocator);
 
-        // push rbp (0x55)                                     offset 0
+        // Track relocation offsets
+        var reloc_list = std.ArrayListUnmanaged(FinalizedMachReloc){};
+        defer reloc_list.deinit(self.allocator);
+
+        // push rbp
         try wrapper_code.append(self.allocator, 0x55);
-
-        // mov rbp, rsp (48 89 e5)                             offset 1
+        // mov rbp, rsp
         try wrapper_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x89, 0xe5 });
-
-        // push rdi (0x57) — save argc before lea overwrites rdi   offset 4
+        // push rdi (argc)
         try wrapper_code.append(self.allocator, 0x57);
-
-        // push rsi (0x56) — save argv before mov rsi,rdi      offset 5
+        // push rsi (argv)
         try wrapper_code.append(self.allocator, 0x56);
-
-        // push rdx (0x52) — save envp                          offset 6
+        // push rdx (envp)
         try wrapper_code.append(self.allocator, 0x52);
+        // sub rsp, 32 (sigaction struct on stack, 32 bytes)
+        try wrapper_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x83, 0xec, 0x20 });
 
-        // lea rdi, [rip + vmctx_data] (48 8d 3d XX XX XX XX)  offset 7, reloc disp at 10
+        // lea rdi, [rip + vmctx_data]
+        const vmctx_reloc_off: u32 = @intCast(wrapper_code.items.len + 3);
         try wrapper_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x8d, 0x3d, 0x00, 0x00, 0x00, 0x00 });
+        try reloc_list.append(self.allocator, .{
+            .offset = vmctx_reloc_off,
+            .kind = Reloc.X86PCRel4,
+            .target = FinalizedRelocTarget{ .ExternalName = vmctx_name_ref },
+            .addend = -4,
+        });
 
-        // lea rax, [rdi + 0x40000] (48 8d 87 00 00 04 00)     offset 14
+        // lea rax, [rdi + 0x40000] (heap base)
         try wrapper_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x8d, 0x87, 0x00, 0x00, 0x04, 0x00 });
-
-        // mov [rdi + 0x20000], rax (48 89 87 00 00 02 00)     offset 21
+        // mov [rdi + 0x20000], rax (store heap base)
         try wrapper_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x89, 0x87, 0x00, 0x00, 0x02, 0x00 });
 
-        // pop rax (0x58) — restore envp                        offset 28
-        try wrapper_code.append(self.allocator, 0x58);
-
-        // mov [rdi + 0x30010], rax (48 89 87 10 00 03 00)     offset 29 store envp
+        // Restore envp, argv, argc from stack and store into vmctx
+        // We need to access the stack items above the 32-byte sigaction area
+        // Stack layout: [rsp]=sigaction(32), [rsp+32]=envp, [rsp+40]=argv, [rsp+48]=argc
+        // mov rax, [rsp+32] (envp)
+        try wrapper_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x8b, 0x44, 0x24, 0x20 });
+        // mov [rdi + 0x30010], rax
         try wrapper_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x89, 0x87, 0x10, 0x00, 0x03, 0x00 });
-
-        // pop rax (0x58) — restore argv                        offset 36
-        try wrapper_code.append(self.allocator, 0x58);
-
-        // mov [rdi + 0x30008], rax (48 89 87 08 00 03 00)     offset 37
+        // mov rax, [rsp+40] (argv)
+        try wrapper_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x8b, 0x44, 0x24, 0x28 });
+        // mov [rdi + 0x30008], rax
         try wrapper_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x89, 0x87, 0x08, 0x00, 0x03, 0x00 });
-
-        // pop rax (0x58) — restore argc                        offset 44
-        try wrapper_code.append(self.allocator, 0x58);
-
-        // cdqe (48 98) — sign-extend eax to rax                offset 45
-        try wrapper_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x98 });
-
-        // mov [rdi + 0x30000], rax (48 89 87 00 00 03 00)     offset 47
+        // mov rax, [rsp+48] (argc, originally in edi so 32-bit)
+        try wrapper_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x63, 0x44, 0x24, 0x30 }); // movsxd rax, [rsp+48]
+        // mov [rdi + 0x30000], rax
         try wrapper_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x89, 0x87, 0x00, 0x00, 0x03, 0x00 });
 
-        // mov rsi, rdi (48 89 fe)                              offset 54
+        // Save rdi (vmctx) — push it on stack (we'll need it after sigaction calls)
+        try wrapper_code.append(self.allocator, 0x57); // push rdi
+
+        // --- Build sigaction struct at [rsp+8] (rsp moved by push rdi) ---
+        // Actually, after the push, the original sigaction area is at [rsp+8].
+        // Let's use [rsp+8] for the struct.
+
+        // lea rax, [rip + cot_signal_handler]
+        const handler_reloc_off: u32 = @intCast(wrapper_code.items.len + 3);
+        try wrapper_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x8d, 0x05, 0x00, 0x00, 0x00, 0x00 });
+        try reloc_list.append(self.allocator, .{
+            .offset = handler_reloc_off,
+            .kind = Reloc.X86PCRel4,
+            .target = FinalizedRelocTarget{ .ExternalName = signal_handler_name_ref },
+            .addend = -4,
+        });
+        // mov [rsp+8], rax (sa_handler)
+        try wrapper_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x89, 0x44, 0x24, 0x08 });
+
+        // mov rax, 0x1C000004 (sa_flags = SA_SIGINFO|SA_ONSTACK|SA_RESTART|SA_RESTORER)
+        try wrapper_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0xc7, 0xc0, 0x04, 0x00, 0x00, 0x1c });
+        // mov [rsp+16], rax (sa_flags)
+        try wrapper_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x89, 0x44, 0x24, 0x10 });
+
+        // lea rax, [rip + cot_sigreturn]
+        const sigreturn_reloc_off: u32 = @intCast(wrapper_code.items.len + 3);
+        try wrapper_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x8d, 0x05, 0x00, 0x00, 0x00, 0x00 });
+        try reloc_list.append(self.allocator, .{
+            .offset = sigreturn_reloc_off,
+            .kind = Reloc.X86PCRel4,
+            .target = FinalizedRelocTarget{ .ExternalName = sigreturn_name_ref },
+            .addend = -4,
+        });
+        // mov [rsp+24], rax (sa_restorer)
+        try wrapper_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x89, 0x44, 0x24, 0x18 });
+
+        // mov qword [rsp+32], -1 (sa_mask = all bits set)
+        try wrapper_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0xc7, 0x44, 0x24, 0x20, 0xff, 0xff, 0xff, 0xff });
+
+        // --- Call rt_sigaction for each signal ---
+        // syscall(13, signo, &act, NULL, 8)
+        // rax=13, rdi=signo, rsi=&act, rdx=NULL, r10=8
+        const signals = [_]u8{ 4, 6, 8, 7, 11 }; // SIGILL, SIGABRT, SIGFPE, SIGBUS(7 on Linux), SIGSEGV
+        for (signals) |signo| {
+            // mov eax, 13 (SYS_rt_sigaction)
+            try wrapper_code.appendSlice(self.allocator, &[_]u8{ 0xb8, 0x0d, 0x00, 0x00, 0x00 });
+            // mov edi, signo
+            try wrapper_code.appendSlice(self.allocator, &[_]u8{ 0xbf, signo, 0x00, 0x00, 0x00 });
+            // lea rsi, [rsp+8] (act struct)
+            try wrapper_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x8d, 0x74, 0x24, 0x08 });
+            // xor edx, edx (NULL oact)
+            try wrapper_code.appendSlice(self.allocator, &[_]u8{ 0x31, 0xd2 });
+            // mov r10d, 8 (sigsetsize)
+            try wrapper_code.appendSlice(self.allocator, &[_]u8{ 0x41, 0xba, 0x08, 0x00, 0x00, 0x00 });
+            // syscall
+            try wrapper_code.appendSlice(self.allocator, &[_]u8{ 0x0f, 0x05 });
+        }
+
+        // --- Restore vmctx and call __wasm_main ---
+        // pop rdi (vmctx)
+        try wrapper_code.append(self.allocator, 0x5f);
+        // mov rsi, rdi (caller_vmctx = vmctx)
         try wrapper_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x89, 0xfe });
 
-        // call __wasm_main (e8 XX XX XX XX)                    offset 57, reloc disp at 58
+        // call __wasm_main
+        const wasm_main_reloc_off: u32 = @intCast(wrapper_code.items.len + 1);
         try wrapper_code.appendSlice(self.allocator, &[_]u8{ 0xe8, 0x00, 0x00, 0x00, 0x00 });
+        try reloc_list.append(self.allocator, .{
+            .offset = wasm_main_reloc_off,
+            .kind = Reloc.X86CallPCRel4,
+            .target = FinalizedRelocTarget{ .ExternalName = wasm_main_name_ref },
+            .addend = -4,
+        });
 
-        // pop rbp (5d)                                         offset 62
+        // Epilogue: clean up stack and return
+        // add rsp, 32 (remove sigaction struct)
+        try wrapper_code.appendSlice(self.allocator, &[_]u8{ 0x48, 0x83, 0xc4, 0x20 });
+        // pop rdx (discard saved envp)
+        try wrapper_code.append(self.allocator, 0x5a);
+        // pop rsi (discard saved argv)
+        try wrapper_code.append(self.allocator, 0x5e);
+        // pop rdi (discard saved argc)
+        try wrapper_code.append(self.allocator, 0x5f);
+        // pop rbp
         try wrapper_code.append(self.allocator, 0x5d);
-
-        // ret (c3)                                             offset 63
+        // ret
         try wrapper_code.append(self.allocator, 0xc3);
 
         // Declare main wrapper
         const main_func_id = try module.declareFunction("main", .Export);
 
-        // Create relocations for the wrapper code
-        const FinalizedMachReloc = buffer_mod.FinalizedMachReloc;
-        const FinalizedRelocTarget = buffer_mod.FinalizedRelocTarget;
-        const Reloc = buffer_mod.Reloc;
-        const ExternalName = buffer_mod.ExternalName;
-
-        // Use indices after all function indices to avoid collision
-        const vmctx_ext_idx: u32 = num_funcs;
-        const wasm_main_ext_idx: u32 = num_funcs + 1;
-
-        // Create external name references for vmctx_data and __wasm_main
-        const vmctx_name_ref = ExternalName{ .User = .{ .namespace = 0, .index = vmctx_ext_idx } };
-        const wasm_main_name_ref = ExternalName{ .User = .{ .namespace = 0, .index = wasm_main_ext_idx } };
-
-        // Register external names for relocation resolution
+        // Register all external names
         try module.declareExternalName(vmctx_ext_idx, "vmctx_data");
         try module.declareExternalName(wasm_main_ext_idx, "__wasm_main");
+        try module.declareExternalName(panic_strings_ext_idx, "cot_panic_strings");
+        try module.declareExternalName(signal_handler_ext_idx, "cot_signal_handler");
+        try module.declareExternalName(sigreturn_ext_idx, "cot_sigreturn");
 
-        const relocs = [_]FinalizedMachReloc{
-            // lea rdi, [rip + vmctx_data] - displacement at offset 10
-            .{
-                .offset = 10,
-                .kind = Reloc.X86PCRel4,
-                .target = FinalizedRelocTarget{ .ExternalName = vmctx_name_ref },
-                .addend = -4, // RIP-relative adjustment
-            },
-            // call __wasm_main - displacement at offset 58
-            .{
-                .offset = 58,
-                .kind = Reloc.X86CallPCRel4,
-                .target = FinalizedRelocTarget{ .ExternalName = wasm_main_name_ref },
-                .addend = -4, // Call instruction adjustment
-            },
-        };
-
-        try module.defineFunctionBytes(main_func_id, wrapper_code.items, &relocs);
+        try module.defineFunctionBytes(main_func_id, wrapper_code.items, reloc_list.items);
     }
 
     /// Generate WebAssembly binary.

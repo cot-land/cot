@@ -177,17 +177,12 @@ fn buildCommand(allocator: std.mem.Allocator, opts: cli.BuildOptions) void {
         }
         watchLoop(allocator, input_file, argv.items);
     } else {
-        compileAndLinkFull(allocator, input_file, output_name, compile_target, false, false, null, false, null, null, opts.release);
+        compileAndLinkFull(allocator, input_file, output_name, compile_target, false, false, null, false, null, null, opts.release, false);
     }
 }
 
 fn runCommand(allocator: std.mem.Allocator, opts: cli.RunOptions) void {
     const input_file = resolveInputFile(allocator, opts.input_file, "Usage: cot run <file.cot> [--target=<t>] [-- args...]");
-
-    if (opts.target.isWasm()) {
-        std.debug.print("Error: 'cot run' does not support --target=wasm32\nUse 'cot build --target=wasm32' to produce a .wasm file\n", .{});
-        std.process.exit(1);
-    }
 
     if (opts.watch) {
         var argv = std.ArrayListUnmanaged([]const u8){};
@@ -222,25 +217,41 @@ fn runOnce(allocator: std.mem.Allocator, input_file: []const u8, compile_target:
         std.process.exit(1);
     };
 
-    compileAndLinkFull(allocator, input_file, tmp_output, compile_target, false, true, null, false, null, null, release);
+    compileAndLinkFull(allocator, input_file, tmp_output, compile_target, false, true, null, false, null, null, release, false);
 
-    // Run the compiled executable
-    var run_args = std.ArrayListUnmanaged([]const u8){};
-    run_args.append(allocator, tmp_output) catch {
-        std.debug.print("Error: Allocation failed\n", .{});
-        std.process.exit(1);
-    };
-    for (program_args) |parg| {
-        run_args.append(allocator, parg) catch {
+    // Build argv: wasmtime for wasm targets, direct execution for native
+    const run_path = if (compile_target.isWasm())
+        std.fmt.allocPrint(allocator, "{s}.wasm", .{tmp_output}) catch {
             std.debug.print("Error: Allocation failed\n", .{});
             std.process.exit(1);
-        };
+        }
+    else
+        tmp_output;
+
+    var run_args = std.ArrayListUnmanaged([]const u8){};
+    if (compile_target.isWasmGC()) {
+        run_args.append(allocator, "wasmtime") catch {};
+        run_args.append(allocator, "-W") catch {};
+        run_args.append(allocator, "gc=y") catch {};
+        run_args.append(allocator, run_path) catch {};
+    } else if (compile_target.isWasm()) {
+        run_args.append(allocator, "wasmtime") catch {};
+        run_args.append(allocator, run_path) catch {};
+    } else {
+        run_args.append(allocator, run_path) catch {};
+    }
+    for (program_args) |parg| {
+        run_args.append(allocator, parg) catch {};
     }
 
     var child = std.process.Child.init(run_args.items, allocator);
     // stdin/stdout/stderr default to .Inherit
     const result = child.spawnAndWait() catch |e| {
-        std.debug.print("Error: Failed to run program: {any}\n", .{e});
+        if (compile_target.isWasm()) {
+            std.debug.print("Error: Failed to run wasmtime (is it installed?): {any}\n", .{e});
+        } else {
+            std.debug.print("Error: Failed to run program: {any}\n", .{e});
+        }
         cleanup(tmp_dir);
         std.process.exit(1);
     };
@@ -295,7 +306,7 @@ fn testCommand(allocator: std.mem.Allocator, opts: cli.TestOptions) void {
         std.process.exit(1);
     };
 
-    compileAndLinkFull(allocator, input_file, tmp_output, opts.target, true, true, opts.filter, false, null, null, opts.release);
+    compileAndLinkFull(allocator, input_file, tmp_output, opts.target, true, true, opts.filter, false, null, null, opts.release, opts.fail_fast);
 
     // Run the test: wasmtime for wasm targets, direct execution for native
     const run_path = if (opts.target.isWasm())
@@ -370,7 +381,7 @@ fn benchCommand(allocator: std.mem.Allocator, opts: cli.BenchOptions) void {
         std.process.exit(1);
     };
 
-    compileAndLinkFull(allocator, input_file, tmp_output, opts.target, false, true, null, true, opts.filter, opts.n, false);
+    compileAndLinkFull(allocator, input_file, tmp_output, opts.target, false, true, null, true, opts.filter, opts.n, false, false);
 
     // Run the benchmark: wasmtime for wasm targets, direct execution for native
     const run_path = if (opts.target.isWasm())
@@ -465,71 +476,173 @@ fn lintCommand(allocator: std.mem.Allocator, opts: cli.LintOptions) void {
 }
 
 fn fmtCommand(allocator: std.mem.Allocator, opts: cli.FmtOptions) void {
-    const input_file = resolveInputFile(allocator, opts.input_file, "Usage: cot fmt <file.cot> [--check] [--stdout]");
+    const input = resolveInputFile(allocator, opts.input_file, "Usage: cot fmt <file-or-dir> [--check] [--stdout]");
+
+    // Check if input is a directory
+    const stat = std.fs.cwd().statFile(input) catch {
+        std.debug.print("Error: Cannot access {s}\n", .{input});
+        std.process.exit(1);
+    };
+
+    if (stat.kind == .directory) {
+        if (opts.stdout) {
+            std.debug.print("Error: --stdout cannot be used with directories\n", .{});
+            std.process.exit(1);
+        }
+        fmtDirectory(allocator, input, opts.check);
+    } else {
+        fmtSingleFile(allocator, input, opts);
+    }
+}
+
+fn fmtDirectory(allocator: std.mem.Allocator, dir_path: []const u8, check: bool) void {
+    var unformatted_count: u32 = 0;
+    var formatted_count: u32 = 0;
+    var file_count: u32 = 0;
+
+    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch {
+        std.debug.print("Error: Cannot open directory {s}\n", .{dir_path});
+        std.process.exit(1);
+    };
+    defer dir.close();
+
+    var walker = dir.walk(allocator) catch {
+        std.debug.print("Error: Failed to walk directory\n", .{});
+        std.process.exit(1);
+    };
+    defer walker.deinit();
+
+    while (walker.next() catch null) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.basename, ".cot")) continue;
+
+        const full_path = std.fs.path.join(allocator, &.{ dir_path, entry.path }) catch continue;
+        defer allocator.free(full_path);
+
+        file_count += 1;
+        const result = fmtOneFile(allocator, full_path);
+        switch (result) {
+            .changed => {
+                if (check) {
+                    std.debug.print("{s}\n", .{full_path});
+                    unformatted_count += 1;
+                } else {
+                    std.fs.cwd().writeFile(.{ .sub_path = full_path, .data = result.output().? }) catch |e| {
+                        std.debug.print("Error: Failed to write {s}: {any}\n", .{ full_path, e });
+                        return;
+                    };
+                    formatted_count += 1;
+                    std.debug.print("Formatted {s}\n", .{full_path});
+                }
+            },
+            .unchanged => {},
+            .parse_error => {
+                std.debug.print("Warning: Skipping {s} (parse error)\n", .{full_path});
+            },
+        }
+        result.deinit(allocator);
+    }
+
+    if (check) {
+        if (unformatted_count > 0) {
+            std.debug.print("\n{d} file{s} need formatting\n", .{ unformatted_count, if (unformatted_count == 1) @as([]const u8, "") else "s" });
+            std.process.exit(1);
+        }
+    } else {
+        if (formatted_count > 0) {
+            std.debug.print("\nFormatted {d} of {d} file{s}\n", .{ formatted_count, file_count, if (file_count == 1) @as([]const u8, "") else "s" });
+        }
+    }
+}
+
+const FmtResult = union(enum) {
+    changed: []const u8,
+    unchanged: void,
+    parse_error: void,
+
+    fn output(self: FmtResult) ?[]const u8 {
+        return switch (self) {
+            .changed => |o| o,
+            else => null,
+        };
+    }
+
+    fn deinit(self: FmtResult, allocator: std.mem.Allocator) void {
+        switch (self) {
+            .changed => |o| allocator.free(o),
+            else => {},
+        }
+    }
+};
+
+fn fmtOneFile(allocator: std.mem.Allocator, file_path: []const u8) FmtResult {
     const fmt_mod = @import("frontend/formatter.zig");
 
-    // Read source file
-    const source_text = std.fs.cwd().readFileAlloc(allocator, input_file, 1024 * 1024) catch |e| {
-        std.debug.print("Error: Failed to read {s}: {any}\n", .{ input_file, e });
-        std.process.exit(1);
-    };
+    const source_text = std.fs.cwd().readFileAlloc(allocator, file_path, 1024 * 1024) catch return .parse_error;
     defer allocator.free(source_text);
 
-    // Collect comments from source
-    const comments = fmt_mod.collectComments(allocator, source_text) catch {
-        std.debug.print("Error: Failed to collect comments\n", .{});
-        std.process.exit(1);
-    };
+    const comments = fmt_mod.collectComments(allocator, source_text) catch return .parse_error;
     defer allocator.free(comments);
 
-    // Parse
-    var src = source.Source.init(allocator, input_file, source_text);
+    var src = source.Source.init(allocator, file_path, source_text);
     defer src.deinit();
     var err_reporter = errors.ErrorReporter.init(&src, null);
     var tree = ast.Ast.init(allocator);
     defer tree.deinit();
     var scan = scanner.Scanner.initWithErrors(&src, &err_reporter);
     var parser_inst = parser.Parser.init(allocator, &scan, &tree, &err_reporter);
-    parser_inst.parseFile() catch {
-        std.debug.print("Error: Parse failed for {s}\n", .{input_file});
-        std.process.exit(1);
-    };
-    if (err_reporter.hasErrors()) {
-        std.process.exit(1);
-    }
+    parser_inst.parseFile() catch return .parse_error;
+    if (err_reporter.hasErrors()) return .parse_error;
 
-    // Format
     var fmtr = fmt_mod.Formatter.init(allocator, &tree, source_text, comments);
-    const output = fmtr.format() catch {
-        std.debug.print("Error: Format failed\n", .{});
-        std.process.exit(1);
-    };
-    defer allocator.free(output);
+    const formatted = fmtr.format() catch return .parse_error;
 
-    if (opts.stdout) {
-        // --stdout: write to stdout, don't modify file
-        const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-        stdout_file.writeAll(output) catch {
-            std.debug.print("Error: Failed to write to stdout\n", .{});
+    if (std.mem.eql(u8, source_text, formatted)) {
+        allocator.free(formatted);
+        return .unchanged;
+    }
+    return .{ .changed = formatted };
+}
+
+fn fmtSingleFile(allocator: std.mem.Allocator, input_file: []const u8, opts: cli.FmtOptions) void {
+    const result = fmtOneFile(allocator, input_file);
+    defer result.deinit(allocator);
+
+    switch (result) {
+        .parse_error => {
+            std.debug.print("Error: Parse failed for {s}\n", .{input_file});
             std.process.exit(1);
-        };
-    } else if (opts.check) {
-        // --check: compare and exit 0 (formatted) or 1 (not formatted)
-        if (std.mem.eql(u8, source_text, output)) {
-            std.process.exit(0);
-        } else {
-            std.debug.print("{s}\n", .{input_file});
-            std.process.exit(1);
-        }
-    } else {
-        // Default: format in-place (gofmt/rustfmt/zig fmt pattern: only write if changed)
-        if (!std.mem.eql(u8, source_text, output)) {
-            std.fs.cwd().writeFile(.{ .sub_path = input_file, .data = output }) catch |e| {
-                std.debug.print("Error: Failed to write {s}: {any}\n", .{ input_file, e });
+        },
+        .unchanged => {
+            if (opts.stdout) {
+                // --stdout with unchanged file: still write original to stdout
+                const source_text = std.fs.cwd().readFileAlloc(allocator, input_file, 1024 * 1024) catch {
+                    std.process.exit(1);
+                };
+                defer allocator.free(source_text);
+                const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+                stdout_file.writeAll(source_text) catch {};
+            }
+            // --check with unchanged: exit 0 (already formatted)
+        },
+        .changed => |formatted| {
+            if (opts.stdout) {
+                const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+                stdout_file.writeAll(formatted) catch {
+                    std.debug.print("Error: Failed to write to stdout\n", .{});
+                    std.process.exit(1);
+                };
+            } else if (opts.check) {
+                std.debug.print("{s}\n", .{input_file});
                 std.process.exit(1);
-            };
-            std.debug.print("Formatted {s}\n", .{input_file});
-        }
+            } else {
+                std.fs.cwd().writeFile(.{ .sub_path = input_file, .data = formatted }) catch |e| {
+                    std.debug.print("Error: Failed to write {s}: {any}\n", .{ input_file, e });
+                    std.process.exit(1);
+                };
+                std.debug.print("Formatted {s}\n", .{input_file});
+            }
+        },
     }
 }
 
@@ -1146,7 +1259,7 @@ fn compileAndLink(
     quiet: bool,
     test_filter: ?[]const u8,
 ) void {
-    compileAndLinkFull(allocator, input_file, output_name, compile_target, test_mode, quiet, test_filter, false, null, null, false);
+    compileAndLinkFull(allocator, input_file, output_name, compile_target, test_mode, quiet, test_filter, false, null, null, false, false);
 }
 
 fn compileAndLinkFull(
@@ -1161,11 +1274,13 @@ fn compileAndLinkFull(
     bench_filter: ?[]const u8,
     bench_n: ?i64,
     release_mode: bool,
+    fail_fast: bool,
 ) void {
     var compile_driver = Driver.init(allocator);
     compile_driver.setTarget(compile_target);
     compile_driver.release_mode = release_mode;
     if (test_mode) compile_driver.setTestMode(true);
+    if (fail_fast) compile_driver.setFailFast(true);
     if (test_filter) |f| compile_driver.setTestFilter(f);
     if (bench_mode) compile_driver.setBenchMode(true);
     if (bench_filter) |f| compile_driver.setBenchFilter(f);

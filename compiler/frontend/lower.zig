@@ -37,6 +37,7 @@ pub const Lowerer = struct {
     float_const_values: std.StringHashMap(f64),
     float_const_types: std.StringHashMap(TypeIndex),
     test_mode: bool = false,
+    fail_fast: bool = false,
     test_names: std.ArrayListUnmanaged([]const u8),
     test_display_names: std.ArrayListUnmanaged([]const u8),
     current_test_name: ?[]const u8 = null,
@@ -112,6 +113,7 @@ pub const Lowerer = struct {
     }
 
     pub fn setTestMode(self: *Lowerer, enabled: bool) void { self.test_mode = enabled; }
+    pub fn setFailFast(self: *Lowerer, enabled: bool) void { self.fail_fast = enabled; }
     pub fn addTestName(self: *Lowerer, name: []const u8) !void { try self.test_names.append(self.allocator, name); }
     pub fn addTestDisplayName(self: *Lowerer, name: []const u8) !void { try self.test_display_names.append(self.allocator, name); }
     pub fn getTestNames(self: *const Lowerer) []const []const u8 { return self.test_names.items; }
@@ -218,7 +220,18 @@ pub const Lowerer = struct {
                 const one_f = try fb.emitConstInt(1, TypeRegistry.I64, span);
                 const new_fail = try fb.emitBinary(.add, cur_fail, one_f, TypeRegistry.I64, span);
                 _ = try fb.emitStoreLocal(fail_count, new_fail, span);
-                _ = try fb.emitJump(merge_block, span);
+
+                if (self.fail_fast) {
+                    // --fail-fast: print summary and exit immediately after first failure
+                    const ff_pass = try fb.emitLoadLocal(pass_count, TypeRegistry.I64, span);
+                    const ff_fail = try fb.emitLoadLocal(fail_count, TypeRegistry.I64, span);
+                    var ff_summary_args = [_]ir.NodeIndex{ ff_pass, ff_fail };
+                    _ = try fb.emitCall("__test_summary", &ff_summary_args, false, TypeRegistry.VOID, span);
+                    const ff_exit = try fb.emitLoadLocal(fail_count, TypeRegistry.I64, span);
+                    _ = try fb.emitRet(ff_exit, span);
+                } else {
+                    _ = try fb.emitJump(merge_block, span);
+                }
 
                 // Pass block: __test_pass() computes timing internally
                 fb.setBlock(pass_block);
