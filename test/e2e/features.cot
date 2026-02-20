@@ -3020,3 +3020,198 @@ test "enumLen iterate with enumFromInt" {
     }
     @assert_eq(count, 3)
 }
+
+// ============================================================================
+// Enum shorthand .variant in switch
+// ============================================================================
+
+test "enum shorthand in switch" {
+    var c = Color.Green
+    var result = switch (c) {
+        .Red => 1,
+        .Green => 2,
+        .Blue => 3,
+    }
+    @assert_eq(result, 2)
+}
+
+test "enum shorthand multi-pattern" {
+    var c = Color.Red
+    var result = switch (c) {
+        .Red, .Blue => 1,
+        .Green => 2,
+    }
+    @assert_eq(result, 1)
+}
+
+test "enum shorthand with else" {
+    var c = Color.Blue
+    var result = switch (c) {
+        .Red => 1,
+        else => 0,
+    }
+    @assert_eq(result, 0)
+}
+
+test "enum shorthand with custom values" {
+    var s = Status.Warning
+    var result = switch (s) {
+        .Ok => 0,
+        .Warning => 1,
+        .Error => 2,
+    }
+    @assert_eq(result, 1)
+}
+
+test "enum shorthand statement form" {
+    var c = Color.Blue
+    var x: i64 = 0
+    switch (c) {
+        .Red => { x = 10 },
+        .Green => { x = 20 },
+        .Blue => { x = 30 },
+    }
+    @assert_eq(x, 30)
+}
+
+// ============================================================================
+// comptime blocks with statements (Phase 2)
+// ============================================================================
+
+test "comptime block with var" {
+    const x = comptime {
+        var a: i64 = 10
+        a = a + 5
+        a
+    }
+    @assert_eq(x, 15)
+}
+
+test "comptime block multiple vars" {
+    const result = comptime {
+        var a: i64 = 3
+        var b: i64 = 7
+        a * b
+    }
+    @assert_eq(result, 21)
+}
+
+test "comptime block compound assign" {
+    const x = comptime {
+        var a: i64 = 10
+        a += 5
+        a *= 2
+        a
+    }
+    @assert_eq(x, 30)
+}
+
+// ============================================================================
+// @typeName (Phase 3)
+// ============================================================================
+
+test "typeName basic types" {
+    @assert_eq(@typeName(i64), "i64")
+    @assert_eq(@typeName(bool), "bool")
+    @assert_eq(@typeName(string), "string")
+}
+
+test "typeName enum" {
+    @assert_eq(@typeName(Color), "Color")
+}
+
+// ============================================================================
+// @enumName (Phase 3)
+// ============================================================================
+
+test "enumName" {
+    @assert_eq(@enumName(Color, 0), "Red")
+    @assert_eq(@enumName(Color, 1), "Green")
+    @assert_eq(@enumName(Color, 2), "Blue")
+}
+
+// ============================================================================
+// @typeInfo (Phase 4)
+// ============================================================================
+
+test "typeInfo enum fields length" {
+    const len = @typeInfo(Color).fields.len
+    @assert_eq(len, 3)
+}
+
+test "typeInfo enum name" {
+    const name = @typeInfo(Color).name
+    @assert_eq(name, "Color")
+}
+
+test "typeInfo enum field access" {
+    @assert_eq(@typeInfo(Color).fields[0].name, "Red")
+    @assert_eq(@typeInfo(Color).fields[0].value, 0)
+    @assert_eq(@typeInfo(Color).fields[1].name, "Green")
+    @assert_eq(@typeInfo(Color).fields[2].name, "Blue")
+}
+
+// ============================================================================
+// inline for over comptime arrays (Phase 5)
+// ============================================================================
+
+test "inline for over typeInfo fields count" {
+    var count: i64 = 0
+    inline for field in @typeInfo(Color).fields {
+        count += 1
+    }
+    @assert_eq(count, 3)
+}
+
+test "inline for field value sum" {
+    var sum: i64 = 0
+    inline for field in @typeInfo(Status).fields {
+        sum += field.value
+    }
+    @assert_eq(sum, 150)
+}
+
+// ============================================================================
+// comptime array construction + runtime indexing (Phase 6)
+// ============================================================================
+
+test "comptime array inline for construction" {
+    const arr = comptime {
+        var s: [5]i64 = undefined
+        inline for i in 0..5 {
+            s[i] = i * i
+        }
+        s
+    }
+    @assert_eq(arr[0], 0)
+    @assert_eq(arr[1], 1)
+    @assert_eq(arr[3], 9)
+    @assert_eq(arr[4], 16)
+}
+
+test "comptime int array dynamic index" {
+    const arr = comptime {
+        var s: [5]i64 = undefined
+        inline for i in 0..5 {
+            s[i] = i * i
+        }
+        s
+    }
+    var i: i64 = 3
+    @assert_eq(arr[i], 9)
+    i = 4
+    @assert_eq(arr[i], 16)
+}
+
+test "comptime string array from typeInfo" {
+    const names = comptime {
+        var s: [3]string = undefined
+        inline for field in @typeInfo(Color).fields {
+            s[field.value] = field.name
+        }
+        s
+    }
+    @assert_eq(names[0], "Red")
+    @assert_eq(names[1], "Green")
+    @assert_eq(names[2], "Blue")
+}

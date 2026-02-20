@@ -1350,15 +1350,15 @@ pub const Parser = struct {
                 if (!self.expect(.rparen)) return null;
                 return try self.tree.addExpr(.{ .builtin_call = .{ .kind = kind, .type_arg = null_node, .args = .{ null_node, null_node, null_node }, .span = Span.init(start, self.pos()) } });
             },
-            // 1 type arg (no value): @sizeOf(T), @alignOf(T), @enumLen(T)
-            .size_of, .align_of, .enum_len => {
+            // 1 type arg (no value): @sizeOf(T), @alignOf(T), @enumLen(T), @typeName(T), @typeInfo(T)
+            .size_of, .align_of, .enum_len, .type_name, .type_info => {
                 const t = try self.parseType() orelse return null;
                 if (!self.expect(.rparen)) return null;
                 return try self.tree.addExpr(.{ .builtin_call = .{ .kind = kind, .type_arg = t, .args = .{ null_node, null_node, null_node }, .span = Span.init(start, self.pos()) } });
             },
-            // 1 type + 1 value arg: @intCast(T, val), @enumFromInt(T, val), @bitCast(T, val), @truncate(T, val), @as(T, val), @offsetOf(T, "field"), @alignCast(T, val)
+            // 1 type + 1 value arg: @intCast(T, val), @enumFromInt(T, val), @bitCast(T, val), @truncate(T, val), @as(T, val), @offsetOf(T, "field"), @alignCast(T, val), @enumName(T, val)
             .int_cast, .float_cast, .float_from_int, .ptr_cast, .int_to_ptr, .has_field,
-            .enum_from_int, .bit_cast, .truncate, .as, .offset_of, .align_cast,
+            .enum_from_int, .bit_cast, .truncate, .as, .offset_of, .align_cast, .enum_name,
             => {
                 const t = try self.parseType() orelse return null;
                 if (!self.expect(.comma)) return null;

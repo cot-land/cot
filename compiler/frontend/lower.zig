@@ -7,6 +7,7 @@ const types = @import("types.zig");
 const source = @import("source.zig");
 const errors = @import("errors.zig");
 const checker = @import("checker.zig");
+const comptime_mod = @import("comptime.zig");
 const token = @import("token.zig");
 const arc = @import("arc_insertion.zig");
 const target_mod = @import("../core/target.zig");
@@ -66,6 +67,10 @@ pub const Lowerer = struct {
     /// Release mode: when false (default/debug), emit runtime safety checks.
     /// When true (--release), skip safety checks for performance.
     release_mode: bool = false,
+    /// Zig Sema pattern: current switch subject enum type for .variant shorthand resolution
+    current_switch_enum_type: TypeIndex = types.invalid_type,
+    /// Comptime structured value bindings — for inline for over comptime arrays (Phase 5)
+    comptime_value_vars: std.StringHashMap(comptime_mod.ComptimeValue),
 
     pub const Error = error{OutOfMemory};
 
@@ -109,6 +114,7 @@ pub const Lowerer = struct {
             .target = target,
             .global_error_table = std.StringHashMap(i64).init(allocator),
             .async_poll_names = std.StringHashMap([]const u8).init(allocator),
+            .comptime_value_vars = std.StringHashMap(comptime_mod.ComptimeValue).init(allocator),
         };
     }
 
@@ -136,6 +142,7 @@ pub const Lowerer = struct {
         self.bench_names.deinit(self.allocator);
         self.bench_display_names.deinit(self.allocator);
         self.lowered_generics.deinit();
+        self.comptime_value_vars.deinit();
         self.builder.deinit();
     }
 
@@ -149,6 +156,7 @@ pub const Lowerer = struct {
         self.bench_names.deinit(self.allocator);
         self.bench_display_names.deinit(self.allocator);
         self.lowered_generics.deinit();
+        self.comptime_value_vars.deinit();
     }
 
     pub fn lower(self: *Lowerer) !ir.IR {
@@ -308,6 +316,7 @@ pub const Lowerer = struct {
             fb.is_destructor = std.mem.endsWith(u8, fn_decl.name, "_deinit");
             self.current_func = fb;
             self.cleanup_stack.clear();
+            self.comptime_value_vars.clearRetainingCapacity();
             // SRET: add hidden first parameter (Zig firstParamSRet pattern)
             if (uses_sret) {
                 _ = try fb.addParam("__sret", TypeRegistry.I64, 8);
@@ -491,6 +500,7 @@ pub const Lowerer = struct {
         if (self.builder.func()) |fb| {
             self.current_func = fb;
             self.cleanup_stack.clear();
+            self.comptime_value_vars.clearRetainingCapacity();
             for (fn_decl.params) |param| {
                 var param_type = self.resolveTypeNode(param.type_expr);
                 param_type = self.chk.safeWrapType(param_type) catch param_type;
@@ -805,6 +815,7 @@ pub const Lowerer = struct {
             self.current_func = fb;
             self.current_test_name = test_decl.name;
             self.cleanup_stack.clear();
+            self.comptime_value_vars.clearRetainingCapacity();
             if (test_decl.body != null_node) {
                 _ = try self.lowerBlockNode(test_decl.body);
                 if (fb.needsTerminator()) {
@@ -1429,6 +1440,42 @@ pub const Lowerer = struct {
                     try self.maybeRegisterScopeDestroy(local_idx, type_idx);
                 }
                 return;
+            }
+
+            // Comptime blocks: evaluate at compile time and emit result directly.
+            // This must come before type-specific paths (array, slice, etc.) because
+            // comptime blocks produce values, not AST literals that those paths expect.
+            const is_comptime_block = if (value_expr) |e| e == .comptime_block else false;
+            if (is_comptime_block) {
+                if (self.chk.evalComptimeValue(var_stmt.value)) |cv| {
+                    // Store comptime value so lowerIndex/lowerIdent can resolve at index sites
+                    try self.comptime_value_vars.put(var_stmt.name, cv);
+                    if (cv == .array) {
+                        // Materialize comptime array into local variable's stack memory.
+                        // Int/bool arrays: store each element via StoreIndexLocal (elem_size=8).
+                        // String arrays not yet supported for runtime indexing (SSA compound limitation).
+                        for (cv.array.elements.items, 0..) |elem, i| {
+                            const idx_node = try fb.emitConstInt(@intCast(i), TypeRegistry.I64, var_stmt.span);
+                            switch (elem) {
+                                .int => |v| {
+                                    const val_node = try fb.emitConstInt(v, TypeRegistry.I64, var_stmt.span);
+                                    _ = try fb.emitStoreIndexLocal(local_idx, idx_node, val_node, 8, var_stmt.span);
+                                },
+                                .boolean => |b| {
+                                    const val_node = try fb.emitConstInt(if (b) 1 else 0, TypeRegistry.I64, var_stmt.span);
+                                    _ = try fb.emitStoreIndexLocal(local_idx, idx_node, val_node, 8, var_stmt.span);
+                                },
+                                else => {},
+                            }
+                        }
+                    } else {
+                        const result_node = try self.emitComptimeValue(cv, var_stmt.span);
+                        if (result_node != ir.null_node) {
+                            _ = try fb.emitStoreLocal(local_idx, result_node, var_stmt.span);
+                        }
+                    }
+                    return;
+                }
             }
 
             const is_array = self.type_reg.isArray(type_idx);
@@ -2538,20 +2585,36 @@ pub const Lowerer = struct {
 
     /// Lower numeric range for loop: for i in start..end { }
     /// Reference: Go's range lowering (walk/range.go:162-208)
-    /// Inline for: unroll loop body at compile time with comptime-known range.
+    /// Inline for: unroll loop body at compile time with comptime-known range or comptime array.
     /// Each iteration binds the loop variable as a const in const_values.
     fn lowerInlineFor(self: *Lowerer, for_stmt: ast.ForStmt) !void {
-        if (!for_stmt.isRange()) return;
-        const start_val = self.chk.evalConstExpr(for_stmt.range_start) orelse return;
-        const end_val = self.chk.evalConstExpr(for_stmt.range_end) orelse return;
-        var i = start_val;
-        while (i < end_val) : (i += 1) {
-            // Bind iteration variable as comptime const
-            try self.const_values.put(for_stmt.binding, i);
+        if (for_stmt.isRange()) {
+            const start_val = self.chk.evalConstExpr(for_stmt.range_start) orelse return;
+            const end_val = self.chk.evalConstExpr(for_stmt.range_end) orelse return;
+            var i = start_val;
+            while (i < end_val) : (i += 1) {
+                // Bind iteration variable as comptime const
+                try self.const_values.put(for_stmt.binding, i);
+                _ = try self.lowerBlockNode(for_stmt.body);
+            }
+            // Clean up binding after unrolling
+            _ = self.const_values.remove(for_stmt.binding);
+            return;
+        }
+        // Comptime array iteration: inline for field in @typeInfo(T).fields
+        const iter_val = self.chk.evalComptimeValue(for_stmt.iterable) orelse return;
+        if (iter_val != .array) return;
+        for (iter_val.array.elements.items, 0..) |elem, idx| {
+            // Store comptime value for binding resolution
+            try self.comptime_value_vars.put(for_stmt.binding, elem);
+            // For int elements, also store in const_values for direct integer access
+            if (elem.asInt()) |v| try self.const_values.put(for_stmt.binding, v);
+            if (for_stmt.index_binding) |ib| try self.const_values.put(ib, @intCast(idx));
             _ = try self.lowerBlockNode(for_stmt.body);
         }
-        // Clean up binding after unrolling
+        _ = self.comptime_value_vars.remove(for_stmt.binding);
         _ = self.const_values.remove(for_stmt.binding);
+        if (for_stmt.index_binding) |ib| _ = self.const_values.remove(ib);
     }
 
     fn lowerForRange(self: *Lowerer, for_stmt: ast.ForStmt) !void {
@@ -2823,8 +2886,27 @@ pub const Lowerer = struct {
             .string_interp => |si| return try self.lowerStringInterp(si),
             .comptime_block => |cb| {
                 // Zig Sema pattern: comptime { body } must evaluate at compile time.
-                // If evalConstExpr succeeds, emit as integer constant.
-                // If not, try comptime string. Otherwise the checker already reported the error.
+                // For blocks with statements, set up comptime context and evaluate
+                const body_node = self.tree.getNode(cb.body) orelse return try fb.emitTrap(cb.span);
+                const body_expr = body_node.asExpr() orelse return try fb.emitTrap(cb.span);
+                if (body_expr == .block_expr) {
+                    const blk = body_expr.block_expr;
+                    const old_vars = self.chk.comptime_vars;
+                    const new_vars = std.StringHashMap(checker.ComptimeValue).init(self.allocator);
+                    self.chk.comptime_vars = new_vars;
+                    defer {
+                        if (self.chk.comptime_vars) |*cv| cv.deinit();
+                        self.chk.comptime_vars = old_vars;
+                    }
+                    if (self.chk.evalComptimeBlock(blk.stmts, blk.expr)) |cv| {
+                        return try self.emitComptimeValue(cv, cb.span);
+                    }
+                    return try fb.emitTrap(cb.span);
+                }
+                // Single expression — try evalComptimeValue, then legacy paths
+                if (self.chk.evalComptimeValue(cb.body)) |cv| {
+                    return try self.emitComptimeValue(cv, cb.span);
+                }
                 if (self.chk.evalConstExpr(cb.body)) |val| {
                     return try fb.emitConstInt(val, TypeRegistry.I64, cb.span);
                 }
@@ -2880,6 +2962,10 @@ pub const Lowerer = struct {
 
     fn lowerIdent(self: *Lowerer, ident: ast.Ident) Error!ir.NodeIndex {
         const fb = self.current_func orelse return ir.null_node;
+        // Check comptime value vars first (for inline for over comptime arrays)
+        if (self.comptime_value_vars.get(ident.name)) |cv| {
+            return try self.emitComptimeValue(cv, ident.span);
+        }
         if (self.const_values.get(ident.name)) |value| return try fb.emitConstInt(value, TypeRegistry.I64, ident.span);
         if (self.float_const_values.get(ident.name)) |fvalue| {
             const ftype = self.float_const_types.get(ident.name) orelse TypeRegistry.F64;
@@ -3128,6 +3214,49 @@ pub const Lowerer = struct {
 
     fn lowerFieldAccess(self: *Lowerer, fa: ast.FieldAccess) Error!ir.NodeIndex {
         const fb = self.current_func orelse return ir.null_node;
+
+        // Check if base is a comptime value var (from inline for over comptime arrays)
+        if (self.resolveComptimeFieldAccess(fa)) |cv| return try self.emitComptimeValue(cv, fa.span);
+        // Check if base evaluates to a comptime value (e.g., @typeInfo(T).fields.len)
+        if (fa.base != ast.null_node) {
+            if (self.chk.evalComptimeValue(fa.base)) |base_cv| {
+                const field_val: ?comptime_mod.ComptimeValue = switch (base_cv) {
+                    .type_info => |ti| blk: {
+                        if (std.mem.eql(u8, fa.field, "name")) break :blk comptime_mod.ComptimeValue{ .string = ti.name };
+                        if (std.mem.eql(u8, fa.field, "fields")) break :blk comptime_mod.ComptimeValue{ .array = .{
+                            .elements = ti.fields,
+                            .elem_type_name = "EnumField",
+                        } };
+                        break :blk null;
+                    },
+                    .enum_field => |ef| blk: {
+                        if (std.mem.eql(u8, fa.field, "name")) break :blk comptime_mod.ComptimeValue{ .string = ef.name };
+                        if (std.mem.eql(u8, fa.field, "value")) break :blk comptime_mod.ComptimeValue{ .int = ef.value };
+                        break :blk null;
+                    },
+                    .array => |arr| blk: {
+                        if (std.mem.eql(u8, fa.field, "len")) break :blk comptime_mod.ComptimeValue{ .int = @intCast(arr.elements.items.len) };
+                        break :blk null;
+                    },
+                    else => null,
+                };
+                if (field_val) |fv| return try self.emitComptimeValue(fv, fa.span);
+            }
+        }
+
+        // Shorthand enum variant: .variant (base == null_node, resolved by checker)
+        if (fa.base == ast.null_node) {
+            if (self.current_switch_enum_type != types.invalid_type) {
+                const enum_info = self.type_reg.get(self.current_switch_enum_type);
+                if (enum_info == .enum_type) {
+                    for (enum_info.enum_type.variants) |variant| {
+                        if (std.mem.eql(u8, variant.name, fa.field)) return try fb.emitConstInt(variant.value, self.current_switch_enum_type, fa.span);
+                    }
+                }
+            }
+            return ir.null_node;
+        }
+
         const base_type_idx = self.inferExprType(fa.base);
         const base_type = self.type_reg.get(base_type_idx);
 
@@ -3320,6 +3449,30 @@ pub const Lowerer = struct {
 
     fn lowerIndex(self: *Lowerer, idx: ast.Index) Error!ir.NodeIndex {
         const fb = self.current_func orelse return ir.null_node;
+
+        // Comptime array indexing: resolve from lowerer's comptime_value_vars map.
+        // If base is a known comptime array and index is comptime-known, emit element directly.
+        {
+            const base_node = self.tree.getNode(idx.base);
+            const base_expr = if (base_node) |n| n.asExpr() else null;
+            if (base_expr) |be| {
+                if (be == .ident) {
+                    if (self.comptime_value_vars.get(be.ident.name)) |base_cv| {
+                        if (base_cv == .array) {
+                            if (self.chk.evalComptimeValue(idx.idx)) |iv| {
+                                if (iv.asInt()) |i_val| {
+                                    if (i_val >= 0 and i_val < @as(i64, @intCast(base_cv.array.elements.items.len))) {
+                                        const elem = base_cv.array.elements.items[@intCast(i_val)];
+                                        return try self.emitComptimeValue(elem, idx.span);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         var base_type_idx = self.inferExprType(idx.base);
         while (self.type_reg.get(base_type_idx) == .pointer) base_type_idx = self.type_reg.get(base_type_idx).pointer.elem;
         const base_type = self.type_reg.get(base_type_idx);
@@ -4115,6 +4268,10 @@ pub const Lowerer = struct {
         const subject_type = self.inferExprType(se.subject);
         const subject_info = self.type_reg.get(subject_type);
         const is_union = subject_info == .union_type;
+        // Zig Sema pattern: set current enum type for .variant shorthand resolution
+        const old_switch_enum = self.current_switch_enum_type;
+        if (subject_info == .enum_type) self.current_switch_enum_type = subject_type;
+        defer self.current_switch_enum_type = old_switch_enum;
 
         if (is_union) return try self.lowerUnionSwitch(se, subject_type, subject_info.union_type);
 
@@ -4281,6 +4438,11 @@ pub const Lowerer = struct {
 
     fn lowerSwitchAsSelect(self: *Lowerer, se: ast.SwitchExpr, result_type: TypeIndex) Error!ir.NodeIndex {
         const fb = self.current_func orelse return ir.null_node;
+        // Zig Sema pattern: set current enum type for .variant shorthand resolution
+        const old_switch_enum = self.current_switch_enum_type;
+        const sel_subject_type = self.inferExprType(se.subject);
+        if (self.type_reg.get(sel_subject_type) == .enum_type) self.current_switch_enum_type = sel_subject_type;
+        defer self.current_switch_enum_type = old_switch_enum;
         const subject = try self.lowerExprNode(se.subject);
         var result = if (se.else_body != null_node) try self.lowerExprNode(se.else_body) else try fb.emitConstNull(result_type, se.span);
         // noreturn else arm (e.g., else => unreachable): use a placeholder that gets overwritten
@@ -5937,7 +6099,136 @@ pub const Lowerer = struct {
                 const val_arg = try self.lowerExprNode(bc.args[0]);
                 return try fb.emitUnary(.popcnt, val_arg, TypeRegistry.I64, bc.span);
             },
+            .type_name => {
+                // @typeName(T) — comptime string
+                const str = self.chk.evalConstString(bc.type_arg) orelse blk: {
+                    // Resolve type and get name
+                    const type_idx = self.resolveTypeNode(bc.type_arg);
+                    break :blk self.type_reg.typeName(type_idx);
+                };
+                const copied = try self.allocator.dupe(u8, str);
+                const str_idx = try fb.addStringLiteral(copied);
+                return try fb.emitConstSlice(str_idx, bc.span);
+            },
+            .enum_name => {
+                // @enumName(T, index) — comptime string
+                if (self.chk.evalComptimeValue(bc.args[0])) |cv| {
+                    if (cv.asInt()) |idx_val| {
+                        const type_idx = self.resolveTypeNode(bc.type_arg);
+                        const info = self.type_reg.get(type_idx);
+                        if (info == .enum_type) {
+                            for (info.enum_type.variants) |v| {
+                                if (v.value == idx_val) {
+                                    const copied = try self.allocator.dupe(u8, v.name);
+                                    const str_idx = try fb.addStringLiteral(copied);
+                                    return try fb.emitConstSlice(str_idx, bc.span);
+                                }
+                            }
+                        }
+                    }
+                }
+                return ir.null_node;
+            },
+            .type_info => {
+                // @typeInfo(T) — only meaningful in comptime context.
+                // If used as standalone expression, evaluate via evalComptimeValue and emit result.
+                if (self.chk.evalComptimeValue(bc.args[0])) |cv| {
+                    return try self.emitComptimeValue(cv, bc.span);
+                }
+                return ir.null_node;
+            },
         }
+    }
+
+    /// Resolve field access on a comptime value variable.
+    /// Returns the field's ComptimeValue if base is a comptime binding, null otherwise.
+    fn resolveComptimeFieldAccess(self: *Lowerer, fa: ast.FieldAccess) ?comptime_mod.ComptimeValue {
+        if (fa.base == ast.null_node) return null;
+        const base_node = self.tree.getNode(fa.base) orelse return null;
+        const base_expr = base_node.asExpr() orelse return null;
+        if (base_expr != .ident) return null;
+        const cv = self.comptime_value_vars.get(base_expr.ident.name) orelse return null;
+        return switch (cv) {
+            .enum_field => |ef| {
+                if (std.mem.eql(u8, fa.field, "name")) return comptime_mod.ComptimeValue{ .string = ef.name };
+                if (std.mem.eql(u8, fa.field, "value")) return comptime_mod.ComptimeValue{ .int = ef.value };
+                return null;
+            },
+            .type_info => |ti| {
+                if (std.mem.eql(u8, fa.field, "name")) return comptime_mod.ComptimeValue{ .string = ti.name };
+                if (std.mem.eql(u8, fa.field, "fields")) return comptime_mod.ComptimeValue{ .array = .{
+                    .elements = ti.fields,
+                    .elem_type_name = "EnumField",
+                } };
+                return null;
+            },
+            .array => |arr| {
+                if (std.mem.eql(u8, fa.field, "len")) return comptime_mod.ComptimeValue{ .int = @intCast(arr.elements.items.len) };
+                return null;
+            },
+            else => null,
+        };
+    }
+
+    /// Emit a ComptimeValue as IR nodes.
+    /// Converts structured comptime values (int, string, bool, array) to runtime IR.
+    fn emitComptimeValue(self: *Lowerer, val: comptime_mod.ComptimeValue, span: Span) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+        return switch (val) {
+            .int => |v| try fb.emitConstInt(v, TypeRegistry.I64, span),
+            .float => |v| try fb.emitConstFloat(v, TypeRegistry.F64, span),
+            .string => |s| {
+                const copied = try self.allocator.dupe(u8, s);
+                const str_idx = try fb.addStringLiteral(copied);
+                return try fb.emitConstSlice(str_idx, span);
+            },
+            .boolean => |b| try fb.emitConstBool(b, span),
+            .array => |arr| try self.emitComptimeArray(arr, span),
+            else => ir.null_node,
+        };
+    }
+
+    /// Emit a comptime array as static data in linear memory.
+    /// For integer/bool arrays: allocate memory and store each element.
+    /// For string arrays: emit a placeholder (string arrays are resolved at index sites via comptime evaluation).
+    fn emitComptimeArray(self: *Lowerer, arr: comptime_mod.ComptimeValue.ComptimeArray, span: Span) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+        const elem_count = arr.elements.items.len;
+        if (elem_count == 0) return try fb.emitConstInt(0, TypeRegistry.I64, span);
+
+        const first = arr.elements.items[0];
+
+        // String arrays: can't emit as runtime data easily (compound type SSA issue).
+        // Instead, string array elements are resolved at index sites via comptime evaluation.
+        // Emit a placeholder value — runtime dynamic indexing of comptime string arrays
+        // is not yet supported (requires static data segment layout).
+        if (first == .string) {
+            return try fb.emitConstInt(0, TypeRegistry.I64, span);
+        }
+
+        // Integer/bool arrays: allocate memory and store each element (8 bytes each)
+        const elem_size: i64 = 8;
+        const total_size = elem_size * @as(i64, @intCast(elem_count));
+
+        const size_node = try fb.emitConstInt(total_size, TypeRegistry.I64, span);
+        const zero_node = try fb.emitConstInt(0, TypeRegistry.I64, span);
+        const base_ptr = try fb.emitCall("cot_alloc", &.{ zero_node, size_node }, true, TypeRegistry.I64, span);
+
+        for (arr.elements.items, 0..) |elem, i| {
+            const byte_offset: i64 = elem_size * @as(i64, @intCast(i));
+            switch (elem) {
+                .int => |v| {
+                    const val_node = try fb.emitConstInt(v, TypeRegistry.I64, span);
+                    _ = try fb.emitStoreField(base_ptr, @intCast(i), byte_offset, val_node, span);
+                },
+                .boolean => |b| {
+                    const val_node = try fb.emitConstInt(if (b) 1 else 0, TypeRegistry.I64, span);
+                    _ = try fb.emitStoreField(base_ptr, @intCast(i), byte_offset, val_node, span);
+                },
+                else => {},
+            }
+        }
+        return base_ptr;
     }
 
     /// Extract string literal value from a node, stripping surrounding quotes.

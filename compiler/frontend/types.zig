@@ -228,13 +228,18 @@ pub const TypeRegistry = struct {
     /// Returns the display name of a type for diagnostics and trait bound validation.
     /// Rust: ty::TyKind::to_string(). Go 1.18: types2.Type.String().
     pub fn typeName(self: *const TypeRegistry, idx: TypeIndex) []const u8 {
+        if (idx == STRING) return "string";
         return switch (self.get(idx)) {
             .basic => |bk| bk.name(),
             .struct_type => |s| s.name,
             .enum_type => |e| e.name,
+            .union_type => |u| u.name,
             .pointer => "pointer",
+            .slice => "slice",
+            .array => "array",
             .tuple => "tuple",
             .future => "Future",
+            .func => "function",
             else => "unknown",
         };
     }

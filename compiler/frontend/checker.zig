@@ -6,8 +6,11 @@ const types = @import("types.zig");
 const errors = @import("errors.zig");
 const source = @import("source.zig");
 const token = @import("token.zig");
+const comptime_mod = @import("comptime.zig");
 
 const target_mod = @import("../core/target.zig");
+
+pub const ComptimeValue = comptime_mod.ComptimeValue;
 
 const Ast = ast.Ast;
 const Node = ast.Node;
@@ -41,6 +44,7 @@ pub const Symbol = struct {
     is_extern: bool = false,
     const_value: ?i64 = null,
     float_const_value: ?f64 = null,
+    comptime_val: ?ComptimeValue = null,
     used: bool = false,
 
     pub fn init(name: []const u8, kind: SymbolKind, type_idx: TypeIndex, node: NodeIndex, mutable: bool) Symbol {
@@ -203,6 +207,11 @@ pub const Checker = struct {
     safe_mode: bool = false,
     /// Lint mode: track symbol usage for unused variable/parameter warnings
     lint_mode: bool = false,
+    /// Zig Sema pattern: current switch subject enum type for .variant shorthand resolution
+    current_switch_enum_type: TypeIndex = invalid_type,
+    /// Mutable comptime variable storage — active during comptime block evaluation.
+    /// Zig Sema: ComptimeAlloc list holds mutable values, runtime_index prevents time travel.
+    comptime_vars: ?std.StringHashMap(ComptimeValue) = null,
 
     pub fn init(allocator: std.mem.Allocator, tree: *const Ast, type_reg: *TypeRegistry, reporter: *ErrorReporter, global_scope: *Scope, generic_ctx: *SharedGenericContext, target: target_mod.Target) Checker {
         return .{
@@ -657,6 +666,510 @@ pub const Checker = struct {
         return expr == .zero_init;
     }
 
+    /// Rich comptime evaluator — returns structured values (arrays, strings, ints, bools).
+    /// Zig Sema pattern: resolveInstValue evaluates ZIR instructions to comptime values.
+    /// Delegates to evalConstExpr/evalConstString for leaf cases, adds support for
+    /// comptime blocks with statements, arrays, struct field access, etc.
+    pub fn evalComptimeValue(self: *Checker, idx: NodeIndex) ?ComptimeValue {
+        const expr = (self.tree.getNode(idx) orelse return null).asExpr() orelse return null;
+        return switch (expr) {
+            .literal => |lit| switch (lit.kind) {
+                .int => if (std.fmt.parseInt(i64, lit.value, 0) catch null) |v| ComptimeValue{ .int = v } else null,
+                .float => if (std.fmt.parseFloat(f64, lit.value) catch null) |v| ComptimeValue{ .float = v } else null,
+                .true_lit => ComptimeValue{ .boolean = true },
+                .false_lit => ComptimeValue{ .boolean = false },
+                .string => blk: {
+                    const v = lit.value;
+                    const s = if (v.len >= 2 and v[0] == '"' and v[v.len - 1] == '"') v[1 .. v.len - 1] else v;
+                    break :blk ComptimeValue{ .string = s };
+                },
+                .undefined_lit => ComptimeValue.undefined_val,
+                else => null,
+            },
+            .unary => |un| if (self.evalComptimeValue(un.operand)) |op| switch (op) {
+                .int => |v| switch (un.op) {
+                    .sub => ComptimeValue{ .int = -v },
+                    .not => ComptimeValue{ .int = ~v },
+                    .lnot => ComptimeValue{ .int = if (v == 0) @as(i64, 1) else @as(i64, 0) },
+                    else => null,
+                },
+                .boolean => |b| switch (un.op) {
+                    .lnot => ComptimeValue{ .boolean = !b },
+                    else => null,
+                },
+                else => null,
+            } else null,
+            .binary => |bin| blk: {
+                // Try integer const-fold
+                const l = self.evalComptimeValue(bin.left) orelse break :blk null;
+                const r = self.evalComptimeValue(bin.right) orelse break :blk null;
+                // Int-int binary
+                if (l.asInt()) |li| {
+                    if (r.asInt()) |ri| {
+                        const result: ?i64 = switch (bin.op) {
+                            .add => li + ri,
+                            .sub => li - ri,
+                            .mul => li * ri,
+                            .quo => if (ri != 0) @divTrunc(li, ri) else null,
+                            .rem => if (ri != 0) @rem(li, ri) else null,
+                            .@"and" => li & ri,
+                            .@"or" => li | ri,
+                            .xor => li ^ ri,
+                            .shl => li << @intCast(ri),
+                            .shr => li >> @intCast(ri),
+                            .eql => if (li == ri) @as(i64, 1) else @as(i64, 0),
+                            .neq => if (li != ri) @as(i64, 1) else @as(i64, 0),
+                            .lss => if (li < ri) @as(i64, 1) else @as(i64, 0),
+                            .leq => if (li <= ri) @as(i64, 1) else @as(i64, 0),
+                            .gtr => if (li > ri) @as(i64, 1) else @as(i64, 0),
+                            .geq => if (li >= ri) @as(i64, 1) else @as(i64, 0),
+                            else => null,
+                        };
+                        break :blk if (result) |v| ComptimeValue{ .int = v } else null;
+                    }
+                }
+                // String-string equality
+                if (l.asString()) |ls| {
+                    if (r.asString()) |rs| {
+                        if (bin.op == .eql or bin.op == .neq) {
+                            const equal = std.mem.eql(u8, ls, rs);
+                            const v: i64 = if (bin.op == .eql)
+                                (if (equal) @as(i64, 1) else @as(i64, 0))
+                            else
+                                (if (!equal) @as(i64, 1) else @as(i64, 0));
+                            break :blk ComptimeValue{ .int = v };
+                        }
+                    }
+                }
+                break :blk null;
+            },
+            .paren => |p| self.evalComptimeValue(p.inner),
+            .ident => |id| {
+                // Check comptime mutable vars first (Phase 2: ComptimeAlloc lookup)
+                if (self.comptime_vars) |*cv| {
+                    if (cv.get(id.name)) |val| return val;
+                }
+                // Fall back to const symbol lookup
+                if (self.scope.lookup(id.name)) |sym| {
+                    if (sym.kind == .constant) {
+                        if (sym.const_value) |v| return ComptimeValue{ .int = v };
+                        if (sym.float_const_value) |v| return ComptimeValue{ .float = v };
+                        // Check for comptime_value on symbol (Phase 5: inline for bindings)
+                        if (sym.comptime_val) |cv| return cv;
+                    }
+                }
+                return null;
+            },
+            .builtin_call => |bc| {
+                if (bc.kind == .size_of) {
+                    const type_idx = self.resolveTypeExpr(bc.type_arg) catch return null;
+                    if (type_idx == invalid_type) return null;
+                    return ComptimeValue{ .int = @as(i64, @intCast(self.types.sizeOf(type_idx))) };
+                }
+                if (bc.kind == .align_of) {
+                    const type_idx = self.resolveTypeExpr(bc.type_arg) catch return null;
+                    if (type_idx == invalid_type) return null;
+                    return ComptimeValue{ .int = @as(i64, @intCast(self.types.alignmentOf(type_idx))) };
+                }
+                if (bc.kind == .offset_of) {
+                    const type_idx = self.resolveTypeExpr(bc.type_arg) catch return null;
+                    if (type_idx == invalid_type) return null;
+                    const name_str = self.evalConstString(bc.args[0]) orelse return null;
+                    const info = self.types.get(type_idx);
+                    if (info == .struct_type) {
+                        var offset: i64 = 0;
+                        for (info.struct_type.fields) |sf| {
+                            if (std.mem.eql(u8, sf.name, name_str)) return ComptimeValue{ .int = offset };
+                            offset += @as(i64, @intCast(self.types.sizeOf(sf.type_idx)));
+                        }
+                    }
+                    return null;
+                }
+                if (bc.kind == .int_from_bool) {
+                    if (self.evalComptimeValue(bc.args[0])) |v| {
+                        const iv = v.asInt() orelse return null;
+                        return ComptimeValue{ .int = if (iv != 0) @as(i64, 1) else @as(i64, 0) };
+                    }
+                    return null;
+                }
+                if (bc.kind == .min) {
+                    const a = (self.evalComptimeValue(bc.args[0]) orelse return null).asInt() orelse return null;
+                    const b = (self.evalComptimeValue(bc.args[1]) orelse return null).asInt() orelse return null;
+                    return ComptimeValue{ .int = if (a < b) a else b };
+                }
+                if (bc.kind == .max) {
+                    const a = (self.evalComptimeValue(bc.args[0]) orelse return null).asInt() orelse return null;
+                    const b = (self.evalComptimeValue(bc.args[1]) orelse return null).asInt() orelse return null;
+                    return ComptimeValue{ .int = if (a > b) a else b };
+                }
+                if (bc.kind == .has_field) {
+                    const type_idx = self.resolveTypeExpr(bc.type_arg) catch return null;
+                    if (type_idx == invalid_type) return null;
+                    const name_str = self.evalConstString(bc.args[0]) orelse return null;
+                    const info = self.types.get(type_idx);
+                    if (info == .struct_type) {
+                        for (info.struct_type.fields) |sf| {
+                            if (std.mem.eql(u8, sf.name, name_str)) return ComptimeValue{ .int = 1 };
+                        }
+                        return ComptimeValue{ .int = 0 };
+                    }
+                    if (info == .enum_type) {
+                        for (info.enum_type.variants) |v| {
+                            if (std.mem.eql(u8, v.name, name_str)) return ComptimeValue{ .int = 1 };
+                        }
+                        return ComptimeValue{ .int = 0 };
+                    }
+                    if (info == .union_type) {
+                        for (info.union_type.variants) |v| {
+                            if (std.mem.eql(u8, v.name, name_str)) return ComptimeValue{ .int = 1 };
+                        }
+                        return ComptimeValue{ .int = 0 };
+                    }
+                    return ComptimeValue{ .int = 0 };
+                }
+                if (bc.kind == .enum_len) {
+                    const type_idx = self.resolveTypeExpr(bc.type_arg) catch return null;
+                    if (type_idx == invalid_type) return null;
+                    const info = self.types.get(type_idx);
+                    if (info == .enum_type) return ComptimeValue{ .int = @intCast(info.enum_type.variants.len) };
+                    return null;
+                }
+                // String-producing builtins
+                if (bc.kind == .target_os) return ComptimeValue{ .string = self.target.os.name() };
+                if (bc.kind == .target_arch) return ComptimeValue{ .string = self.target.arch.name() };
+                if (bc.kind == .target) return ComptimeValue{ .string = self.target.name() };
+                // @typeName(T) — Phase 3
+                if (bc.kind == .type_name) {
+                    const type_idx = self.resolveTypeExpr(bc.type_arg) catch return null;
+                    if (type_idx == invalid_type) return null;
+                    return ComptimeValue{ .string = self.types.typeName(type_idx) };
+                }
+                // @enumName(T, index) — Phase 3
+                if (bc.kind == .enum_name) {
+                    const type_idx = self.resolveTypeExpr(bc.type_arg) catch return null;
+                    if (type_idx == invalid_type) return null;
+                    const index_val = (self.evalComptimeValue(bc.args[0]) orelse return null).asInt() orelse return null;
+                    const info = self.types.get(type_idx);
+                    if (info == .enum_type) {
+                        for (info.enum_type.variants) |v| {
+                            if (v.value == index_val) return ComptimeValue{ .string = v.name };
+                        }
+                    }
+                    return null;
+                }
+                // @typeInfo(T) — Phase 4
+                if (bc.kind == .type_info) {
+                    const type_idx = self.resolveTypeExpr(bc.type_arg) catch return null;
+                    if (type_idx == invalid_type) return null;
+                    const info = self.types.get(type_idx);
+                    if (info == .enum_type) {
+                        var fields = std.ArrayListUnmanaged(ComptimeValue){};
+                        for (info.enum_type.variants) |v| {
+                            fields.append(self.allocator, ComptimeValue{ .enum_field = .{
+                                .name = v.name,
+                                .value = v.value,
+                            } }) catch return null;
+                        }
+                        return ComptimeValue{ .type_info = .{
+                            .kind = .enum_info,
+                            .name = info.enum_type.name,
+                            .fields = fields,
+                        } };
+                    }
+                    return null;
+                }
+                // @intFromEnum — comptime when arg is comptime-known
+                if (bc.kind == .int_from_enum) {
+                    if (self.evalConstExpr(bc.args[0])) |v| return ComptimeValue{ .int = v };
+                    return null;
+                }
+                return null;
+            },
+            .if_expr => |ie| {
+                const cond_val = (self.evalComptimeValue(ie.condition) orelse return null).asInt() orelse return null;
+                if (cond_val != 0) return self.evalComptimeValue(ie.then_branch);
+                if (ie.else_branch != null_node) return self.evalComptimeValue(ie.else_branch);
+                return null;
+            },
+            .block_expr => |blk| {
+                if (blk.stmts.len == 0) return self.evalComptimeValue(blk.expr);
+                // Phase 2: comptime blocks with statements
+                if (self.comptime_vars != null) return self.evalComptimeBlock(blk.stmts, blk.expr);
+                return null;
+            },
+            .comptime_block => |cb| {
+                // Try evaluating body as a comptime block with statements
+                const body_node = self.tree.getNode(cb.body) orelse return null;
+                const body_expr = body_node.asExpr() orelse return null;
+                if (body_expr == .block_expr) {
+                    const blk = body_expr.block_expr;
+                    // Push comptime context, evaluate block with statements
+                    const old_vars = self.comptime_vars;
+                    const new_vars = std.StringHashMap(ComptimeValue).init(self.allocator);
+                    self.comptime_vars = new_vars;
+                    defer {
+                        if (self.comptime_vars) |*cv| cv.deinit();
+                        self.comptime_vars = old_vars;
+                    }
+                    return self.evalComptimeBlock(blk.stmts, blk.expr);
+                }
+                // Single expression
+                return self.evalComptimeValue(cb.body);
+            },
+            .field_access => |fa| {
+                // Support field access on comptime values (Phase 4: @typeInfo fields)
+                const base_val = self.evalComptimeValue(fa.base) orelse return null;
+                return switch (base_val) {
+                    .type_info => |ti| {
+                        if (std.mem.eql(u8, fa.field, "fields")) {
+                            return ComptimeValue{ .array = .{
+                                .elements = ti.fields,
+                                .elem_type_name = "EnumField",
+                            } };
+                        }
+                        if (std.mem.eql(u8, fa.field, "name")) return ComptimeValue{ .string = ti.name };
+                        return null;
+                    },
+                    .enum_field => |ef| {
+                        if (std.mem.eql(u8, fa.field, "name")) return ComptimeValue{ .string = ef.name };
+                        if (std.mem.eql(u8, fa.field, "value")) return ComptimeValue{ .int = ef.value };
+                        return null;
+                    },
+                    .array => |arr| {
+                        if (std.mem.eql(u8, fa.field, "len")) return ComptimeValue{ .int = @intCast(arr.elements.items.len) };
+                        return null;
+                    },
+                    else => null,
+                };
+            },
+            .index => |ix| {
+                // Support indexing comptime arrays: arr[i]
+                const base_val = self.evalComptimeValue(ix.base) orelse return null;
+                const idx_val = (self.evalComptimeValue(ix.idx) orelse return null).asInt() orelse return null;
+                if (base_val == .array) {
+                    if (idx_val < 0 or idx_val >= @as(i64, @intCast(base_val.array.elements.items.len))) return null;
+                    return base_val.array.elements.items[@intCast(idx_val)];
+                }
+                return null;
+            },
+            else => null,
+        };
+    }
+
+    /// Evaluate a comptime block containing statements (var, assign, for, if) + final expression.
+    /// Zig Sema: ComptimeAlloc list holds mutable values, runtime_index prevents time travel.
+    pub fn evalComptimeBlock(self: *Checker, stmts: []const NodeIndex, final_expr: NodeIndex) ?ComptimeValue {
+        for (stmts) |stmt_idx| {
+            const stmt_node = self.tree.getNode(stmt_idx) orelse return null;
+            if (stmt_node.asStmt()) |stmt| {
+                switch (stmt) {
+                    .var_stmt => |vs| {
+                        // Evaluate initializer, store in comptime_vars
+                        var init_val: ComptimeValue = undefined;
+                        if (vs.value != null_node) {
+                            const raw_val = self.evalComptimeValue(vs.value) orelse return null;
+                            // If initializing an array type with undefined, create a sized array
+                            if (raw_val == .undefined_val and vs.type_expr != null_node) {
+                                if (self.evalComptimeArrayType(vs.type_expr)) |arr_info| {
+                                    var elements = std.ArrayListUnmanaged(ComptimeValue){};
+                                    elements.ensureTotalCapacity(self.allocator, @intCast(arr_info.size)) catch return null;
+                                    var j: usize = 0;
+                                    while (j < arr_info.size) : (j += 1) {
+                                        elements.appendAssumeCapacity(ComptimeValue.undefined_val);
+                                    }
+                                    init_val = ComptimeValue{ .array = .{
+                                        .elements = elements,
+                                        .elem_type_name = arr_info.elem_name,
+                                    } };
+                                } else {
+                                    init_val = raw_val;
+                                }
+                            } else {
+                                init_val = raw_val;
+                            }
+                        } else {
+                            init_val = ComptimeValue.undefined_val;
+                        }
+                        if (self.comptime_vars) |*cv| cv.put(vs.name, init_val) catch return null;
+                    },
+                    .assign_stmt => |as| {
+                        self.evalComptimeAssign(as) orelse return null;
+                    },
+                    .for_stmt => |fs| {
+                        if (fs.is_inline) {
+                            self.evalComptimeInlineFor(fs) orelse return null;
+                        } else {
+                            return null; // Non-inline for not allowed in comptime
+                        }
+                    },
+                    .expr_stmt => |es| {
+                        _ = self.evalComptimeValue(es.expr);
+                    },
+                    else => return null, // Unsupported stmt in comptime context
+                }
+            } else {
+                // Expression statement (as node)
+                _ = self.evalComptimeValue(stmt_idx);
+            }
+        }
+        return self.evalComptimeValue(final_expr);
+    }
+
+    /// Evaluate comptime assignment: x = expr, arr[i] = expr
+    fn evalComptimeAssign(self: *Checker, as: ast.AssignStmt) ?void {
+        const val = self.evalComptimeValue(as.value) orelse return null;
+        const target = (self.tree.getNode(as.target) orelse return null).asExpr() orelse return null;
+        switch (target) {
+            .ident => |id| {
+                if (self.comptime_vars) |*cv| {
+                    // Handle compound assignment operators
+                    if (as.op != .assign) {
+                        const old = cv.get(id.name) orelse return null;
+                        const old_int = old.asInt() orelse return null;
+                        const val_int = val.asInt() orelse return null;
+                        const new_val: i64 = switch (as.op) {
+                            .add_assign => old_int + val_int,
+                            .sub_assign => old_int - val_int,
+                            .mul_assign => old_int * val_int,
+                            else => return null,
+                        };
+                        cv.put(id.name, ComptimeValue{ .int = new_val }) catch return null;
+                    } else {
+                        cv.put(id.name, val) catch return null;
+                    }
+                }
+            },
+            .index => |ix| {
+                // arr[i] = val — mutate comptime array element
+                const base_name = self.getComptimeIdentName(ix.base) orelse return null;
+                const index_val = (self.evalComptimeValue(ix.idx) orelse return null).asInt() orelse return null;
+                if (self.comptime_vars) |*cv| {
+                    const arr_ptr = cv.getPtr(base_name) orelse return null;
+                    if (arr_ptr.* != .array) return null;
+                    if (index_val < 0 or index_val >= @as(i64, @intCast(arr_ptr.array.elements.items.len))) return null;
+                    arr_ptr.array.elements.items[@intCast(index_val)] = val;
+                }
+            },
+            else => return null,
+        }
+    }
+
+    /// Extract identifier name from a node (for comptime array mutation)
+    fn getComptimeIdentName(self: *Checker, idx: NodeIndex) ?[]const u8 {
+        const expr = (self.tree.getNode(idx) orelse return null).asExpr() orelse return null;
+        if (expr == .ident) return expr.ident.name;
+        return null;
+    }
+
+    const ComptimeArrayTypeInfo = struct { size: usize, elem_name: []const u8 };
+
+    /// Extract comptime array type info from a type expression node.
+    /// For `[5]i64`, returns { size: 5, elem_name: "i64" }.
+    fn evalComptimeArrayType(self: *Checker, type_node_idx: NodeIndex) ?ComptimeArrayTypeInfo {
+        const node = self.tree.getNode(type_node_idx) orelse return null;
+        const expr = node.asExpr() orelse return null;
+        if (expr != .type_expr) return null;
+        if (expr.type_expr.kind != .array) return null;
+        const arr = expr.type_expr.kind.array;
+        // Evaluate array size as comptime int
+        const size_val = self.evalConstExpr(arr.size) orelse return null;
+        if (size_val <= 0) return null;
+        // Get element type name
+        const elem_node = self.tree.getNode(arr.elem) orelse return null;
+        const elem_expr = elem_node.asExpr() orelse return null;
+        if (elem_expr == .type_expr) {
+            if (elem_expr.type_expr.kind == .named) return .{ .size = @intCast(size_val), .elem_name = elem_expr.type_expr.kind.named };
+        }
+        return .{ .size = @intCast(size_val), .elem_name = "unknown" };
+    }
+
+    /// Evaluate inline for in comptime context
+    fn evalComptimeInlineFor(self: *Checker, fs: ast.ForStmt) ?void {
+        if (fs.isRange()) {
+            // Range iteration: inline for i in 0..N
+            const start_val = (self.evalComptimeValue(fs.range_start) orelse return null).asInt() orelse return null;
+            const end_val = (self.evalComptimeValue(fs.range_end) orelse return null).asInt() orelse return null;
+            var i = start_val;
+            while (i < end_val) : (i += 1) {
+                if (self.comptime_vars) |*cv| cv.put(fs.binding, ComptimeValue{ .int = i }) catch return null;
+                // Evaluate body as comptime statements
+                const body_node = self.tree.getNode(fs.body) orelse return null;
+                if (body_node.asStmt()) |stmt| {
+                    switch (stmt) {
+                        .block_stmt => |bs| {
+                            for (bs.stmts) |stmt_idx| {
+                                const s_node = self.tree.getNode(stmt_idx) orelse return null;
+                                if (s_node.asStmt()) |inner_stmt| {
+                                    switch (inner_stmt) {
+                                        .assign_stmt => |as| self.evalComptimeAssign(as) orelse return null,
+                                        .expr_stmt => |es| {
+                                            _ = self.evalComptimeValue(es.expr);
+                                        },
+                                        .var_stmt => |vs| {
+                                            const init_val = if (vs.value != null_node)
+                                                self.evalComptimeValue(vs.value) orelse return null
+                                            else
+                                                ComptimeValue.undefined_val;
+                                            if (self.comptime_vars) |*cv2| cv2.put(vs.name, init_val) catch return null;
+                                        },
+                                        else => return null,
+                                    }
+                                }
+                            }
+                        },
+                        .assign_stmt => |as| self.evalComptimeAssign(as) orelse return null,
+                        .expr_stmt => |es| {
+                            _ = self.evalComptimeValue(es.expr);
+                        },
+                        else => return null,
+                    }
+                }
+            }
+        } else {
+            // Comptime array iteration: inline for field in @typeInfo(T).fields
+            const iter_val = self.evalComptimeValue(fs.iterable) orelse return null;
+            if (iter_val != .array) return null;
+            for (iter_val.array.elements.items, 0..) |elem, idx| {
+                if (self.comptime_vars) |*cv| {
+                    cv.put(fs.binding, elem) catch return null;
+                    if (fs.index_binding) |ib| cv.put(ib, ComptimeValue{ .int = @intCast(idx) }) catch return null;
+                }
+                // Evaluate body
+                const body_node = self.tree.getNode(fs.body) orelse return null;
+                if (body_node.asStmt()) |stmt| {
+                    switch (stmt) {
+                        .block_stmt => |bs| {
+                            for (bs.stmts) |stmt_idx| {
+                                const s_node = self.tree.getNode(stmt_idx) orelse return null;
+                                if (s_node.asStmt()) |inner_stmt| {
+                                    switch (inner_stmt) {
+                                        .assign_stmt => |as| self.evalComptimeAssign(as) orelse return null,
+                                        .expr_stmt => |es| {
+                                            _ = self.evalComptimeValue(es.expr);
+                                        },
+                                        .var_stmt => |vs| {
+                                            const init_val = if (vs.value != null_node)
+                                                self.evalComptimeValue(vs.value) orelse return null
+                                            else
+                                                ComptimeValue.undefined_val;
+                                            if (self.comptime_vars) |*cv2| cv2.put(vs.name, init_val) catch return null;
+                                        },
+                                        else => return null,
+                                    }
+                                }
+                            }
+                        },
+                        .assign_stmt => |as| self.evalComptimeAssign(as) orelse return null,
+                        .expr_stmt => |es| {
+                            _ = self.evalComptimeValue(es.expr);
+                        },
+                        else => return null,
+                    }
+                }
+            }
+        }
+    }
+
     pub fn evalConstExpr(self: *Checker, idx: NodeIndex) ?i64 {
         const expr = (self.tree.getNode(idx) orelse return null).asExpr() orelse return null;
         return switch (expr) {
@@ -904,8 +1417,36 @@ pub const Checker = struct {
             .comptime_block => |cb| {
                 // Zig Sema pattern: comptime {} body must be comptime-evaluable.
                 // Check the body for type errors, then verify it produces a comptime value.
+                const body_node = self.tree.getNode(cb.body) orelse return invalid_type;
+                const body_expr = body_node.asExpr() orelse return invalid_type;
+                if (body_expr == .block_expr) {
+                    const blk = body_expr.block_expr;
+                    // Type-check stmts in a new scope (vars defined in comptime block)
+                    var block_scope = Scope.init(self.allocator, self.scope);
+                    defer block_scope.deinit();
+                    const old_scope = self.scope;
+                    self.scope = &block_scope;
+                    for (blk.stmts) |stmt_idx| {
+                        try self.checkStmt(stmt_idx);
+                    }
+                    const body_type = if (blk.expr != null_node) try self.checkExpr(blk.expr) else TypeRegistry.VOID;
+                    self.scope = old_scope;
+                    // Verify comptime evaluability — set up comptime context
+                    const old_vars = self.comptime_vars;
+                    const new_vars = std.StringHashMap(ComptimeValue).init(self.allocator);
+                    self.comptime_vars = new_vars;
+                    defer {
+                        if (self.comptime_vars) |*cv| cv.deinit();
+                        self.comptime_vars = old_vars;
+                    }
+                    if (self.evalComptimeBlock(blk.stmts, blk.expr) == null) {
+                        self.err.errorWithCode(cb.span.start, .e300, "unable to evaluate comptime expression");
+                    }
+                    return body_type;
+                }
+                // Single expression path
                 const body_type = try self.checkExpr(cb.body);
-                if (self.evalConstExpr(cb.body) == null and self.evalConstString(cb.body) == null) {
+                if (self.evalComptimeValue(cb.body) == null) {
                     self.err.errorWithCode(cb.span.start, .e300, "unable to evaluate comptime expression");
                 }
                 return body_type;
@@ -1567,10 +2108,48 @@ pub const Checker = struct {
                 _ = try self.checkExpr(bc.args[0]);
                 return TypeRegistry.I64;
             },
+            .type_name => {
+                const type_idx = try self.resolveTypeExpr(bc.type_arg);
+                if (type_idx == invalid_type) { self.err.errorWithCode(bc.span.start, .e300, "@typeName requires valid type"); return invalid_type; }
+                return TypeRegistry.STRING;
+            },
+            .enum_name => {
+                const type_idx = try self.resolveTypeExpr(bc.type_arg);
+                if (type_idx == invalid_type) { self.err.errorWithCode(bc.span.start, .e300, "@enumName requires valid type"); return invalid_type; }
+                const info = self.types.get(type_idx);
+                if (info != .enum_type) { self.err.errorWithCode(bc.span.start, .e300, "@enumName requires enum type"); return invalid_type; }
+                _ = try self.checkExpr(bc.args[0]);
+                return TypeRegistry.STRING;
+            },
+            .type_info => {
+                // @typeInfo(T) returns a comptime-only value — for now, check that type exists.
+                // The result type is used only in comptime context (field access, array iteration).
+                // At the expression level, treat as I64 (it will only be evaluated via evalComptimeValue).
+                const type_idx = try self.resolveTypeExpr(bc.type_arg);
+                if (type_idx == invalid_type) { self.err.errorWithCode(bc.span.start, .e300, "@typeInfo requires valid type"); return invalid_type; }
+                return TypeRegistry.I64;
+            },
         }
     }
 
     fn checkIndex(self: *Checker, i: ast.Index) CheckError!TypeIndex {
+        // Check if base is a comptime array — enables @typeInfo(T).fields[0], etc.
+        if (self.evalComptimeValue(i.base)) |base_cv| {
+            if (base_cv == .array) {
+                // Indexing a comptime array — determine element type from first element
+                if (base_cv.array.elements.items.len > 0) {
+                    const first = base_cv.array.elements.items[0];
+                    return switch (first) {
+                        .int => TypeRegistry.I64,
+                        .string => TypeRegistry.STRING,
+                        .boolean => TypeRegistry.BOOL,
+                        .enum_field => TypeRegistry.I64, // Field info accessed via .name/.value
+                        else => TypeRegistry.I64,
+                    };
+                }
+                return TypeRegistry.I64;
+            }
+        }
         var base_type = try self.checkExpr(i.base);
         const index_type = try self.checkExpr(i.idx);
         if (!types.isInteger(self.types.get(index_type))) { self.err.errorWithCode(i.span.start, .e300, "index must be integer"); return invalid_type; }
@@ -1591,7 +2170,45 @@ pub const Checker = struct {
     }
 
     fn checkFieldAccess(self: *Checker, f: ast.FieldAccess) CheckError!TypeIndex {
-        if (f.base == null_node) return invalid_type;
+        // Check if base is a comptime value — enables @typeInfo(T).fields, field.name, etc.
+        if (f.base != null_node) {
+            if (self.evalComptimeValue(f.base)) |base_cv| {
+                // Field access on comptime value — determine result type
+                switch (base_cv) {
+                    .type_info => {
+                        if (std.mem.eql(u8, f.field, "fields")) return TypeRegistry.I64; // Comptime array
+                        if (std.mem.eql(u8, f.field, "name")) return TypeRegistry.STRING;
+                        self.err.errorWithCode(f.span.start, .e300, "no such field on type info");
+                        return invalid_type;
+                    },
+                    .enum_field => {
+                        if (std.mem.eql(u8, f.field, "name")) return TypeRegistry.STRING;
+                        if (std.mem.eql(u8, f.field, "value")) return TypeRegistry.I64;
+                        self.err.errorWithCode(f.span.start, .e300, "no such field on enum field");
+                        return invalid_type;
+                    },
+                    .array => {
+                        if (std.mem.eql(u8, f.field, "len")) return TypeRegistry.I64;
+                        self.err.errorWithCode(f.span.start, .e300, "no such field on array");
+                        return invalid_type;
+                    },
+                    else => {},
+                }
+            }
+        }
+        if (f.base == null_node) {
+            // Zig Sema pattern: .variant shorthand in switch — resolve from switch subject type
+            if (self.current_switch_enum_type != invalid_type) {
+                const enum_info = self.types.get(self.current_switch_enum_type);
+                if (enum_info == .enum_type) {
+                    for (enum_info.enum_type.variants) |v| {
+                        if (std.mem.eql(u8, v.name, f.field)) return self.current_switch_enum_type;
+                    }
+                    self.errWithSuggestion(f.span.start, "undefined variant", findSimilarVariant(f.field, enum_info.enum_type.variants));
+                }
+            }
+            return invalid_type;
+        }
 
         // Nested type namespace: TypeName.NestedType (e.g. Parser.Error)
         // Check if base is a struct type name before calling checkExpr (which would error)
@@ -1905,6 +2522,10 @@ pub const Checker = struct {
         const subject_info = self.types.get(subject_type);
         const is_union = subject_info == .union_type;
         const is_enum = subject_info == .enum_type;
+        // Zig Sema pattern: set current enum type for .variant shorthand resolution in case patterns
+        const old_switch_enum = self.current_switch_enum_type;
+        if (is_enum) self.current_switch_enum_type = subject_type;
+        defer self.current_switch_enum_type = old_switch_enum;
         var result_type: TypeIndex = TypeRegistry.VOID;
         var first = true;
         for (se.cases) |case| {
@@ -2388,27 +3009,53 @@ pub const Checker = struct {
         self.in_loop = old_in_loop;
     }
 
-    /// Check inline for — unroll at compile time with comptime-known range bounds.
+    /// Check inline for — unroll at compile time with comptime-known range bounds or comptime arrays.
     /// Zig AstGen.zig:6863: block_inline tag, Sema materializes each iteration.
     fn checkInlineFor(self: *Checker, fs: ast.ForStmt) CheckError!void {
-        if (!fs.isRange()) {
-            self.err.errorWithCode(fs.span.start, .e300, "inline for requires comptime range (start..end)");
+        if (fs.isRange()) {
+            const start_val = self.evalConstExpr(fs.range_start) orelse {
+                self.err.errorWithCode(fs.span.start, .e300, "inline for range start must be comptime-known");
+                return;
+            };
+            const end_val = self.evalConstExpr(fs.range_end) orelse {
+                self.err.errorWithCode(fs.span.start, .e300, "inline for range end must be comptime-known");
+                return;
+            };
+            // Unroll: check body once per iteration with const binding
+            var i = start_val;
+            while (i < end_val) : (i += 1) {
+                var iter_scope = Scope.init(self.allocator, self.scope);
+                defer iter_scope.deinit();
+                try iter_scope.define(Symbol.initConst(fs.binding, TypeRegistry.I64, null_node, i));
+                const old_scope = self.scope;
+                self.scope = &iter_scope;
+                try self.checkStmt(fs.body);
+                self.scope = old_scope;
+            }
             return;
         }
-        const start_val = self.evalConstExpr(fs.range_start) orelse {
-            self.err.errorWithCode(fs.span.start, .e300, "inline for range start must be comptime-known");
+        // Comptime array iteration: inline for field in @typeInfo(T).fields
+        const iter_val = self.evalComptimeValue(fs.iterable) orelse {
+            self.err.errorWithCode(fs.span.start, .e300, "inline for requires comptime-known iterable");
             return;
         };
-        const end_val = self.evalConstExpr(fs.range_end) orelse {
-            self.err.errorWithCode(fs.span.start, .e300, "inline for range end must be comptime-known");
+        if (iter_val != .array) {
+            self.err.errorWithCode(fs.span.start, .e300, "inline for iterable must be comptime array or range");
             return;
-        };
-        // Unroll: check body once per iteration with const binding
-        var i = start_val;
-        while (i < end_val) : (i += 1) {
+        }
+        // Unroll: check body once per element with comptime binding
+        for (iter_val.array.elements.items, 0..) |elem, idx| {
             var iter_scope = Scope.init(self.allocator, self.scope);
             defer iter_scope.deinit();
-            try iter_scope.define(Symbol.initConst(fs.binding, TypeRegistry.I64, null_node, i));
+            // Bind loop variable as comptime value
+            var sym = Symbol.init(fs.binding, .constant, TypeRegistry.I64, null_node, false);
+            sym.comptime_val = elem;
+            // For enum fields, also set const_value for integer access
+            if (elem == .int) sym.const_value = elem.int;
+            try iter_scope.define(sym);
+            if (fs.index_binding) |ib| {
+                try iter_scope.define(Symbol.initConst(ib, TypeRegistry.I64, null_node, @intCast(idx)));
+            }
             const old_scope = self.scope;
             self.scope = &iter_scope;
             try self.checkStmt(fs.body);

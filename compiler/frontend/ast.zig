@@ -275,6 +275,10 @@ pub const BuiltinKind = enum {
     ctz,
     clz,
     pop_count,
+    // Comptime reflection — Zig Sema.zig:18055, 20375
+    type_name,
+    enum_name,
+    type_info,
 
     const map = std.StaticStringMap(BuiltinKind).initComptime(.{
         .{ "sizeOf", .size_of },
@@ -368,6 +372,9 @@ pub const BuiltinKind = enum {
         .{ "ctz", .ctz },
         .{ "clz", .clz },
         .{ "popCount", .pop_count },
+        .{ "typeName", .type_name },
+        .{ "enumName", .enum_name },
+        .{ "typeInfo", .type_info },
     });
 
     pub fn fromString(s: []const u8) ?BuiltinKind {
@@ -467,6 +474,9 @@ pub const BuiltinKind = enum {
             .ctz => "ctz",
             .clz => "clz",
             .pop_count => "popCount",
+            .type_name => "typeName",
+            .enum_name => "enumName",
+            .type_info => "typeInfo",
         };
     }
 };
