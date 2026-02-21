@@ -159,10 +159,21 @@ pub fn main() !void {
 fn buildCommand(allocator: std.mem.Allocator, opts: cli.BuildOptions) void {
     const input_file = resolveInputFile(allocator, opts.input_file, "Usage: cot build <file.cot> [-o name] [--target=<t>]");
     const compile_target = opts.target;
-    const output_name = opts.output_name orelse (cli.deriveOutputName(allocator, input_file, compile_target) catch {
-        std.debug.print("Error: Failed to derive output name\n", .{});
-        std.process.exit(1);
-    });
+    const output_name = opts.output_name orelse blk: {
+        // Output to cot-out/ directory (like zig → zig-out/)
+        const stem = cli.deriveOutputName(allocator, input_file, compile_target) catch {
+            std.debug.print("Error: Failed to derive output name\n", .{});
+            std.process.exit(1);
+        };
+        std.fs.cwd().makePath("cot-out") catch {
+            std.debug.print("Error: Failed to create cot-out/ directory\n", .{});
+            std.process.exit(1);
+        };
+        break :blk std.fmt.allocPrint(allocator, "cot-out/{s}", .{stem}) catch {
+            std.debug.print("Error: Allocation failed\n", .{});
+            std.process.exit(1);
+        };
+    };
 
     if (opts.watch) {
         // Build subprocess argv: cot build <file> [-o name] [--target=X] (no --watch)

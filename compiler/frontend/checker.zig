@@ -1672,7 +1672,11 @@ pub const Checker = struct {
         if (c.args.len != expected_args) { self.err.errorWithCode(c.span.start, .e300, "wrong number of arguments"); return invalid_type; }
         const param_offset: usize = if (is_method) 1 else 0;
         for (c.args, 0..) |arg_idx, i| {
+            // Zig Sema pattern: set expected_type from parameter type for result location inference
+            const saved_expected = self.expected_type;
+            self.expected_type = ft.params[i + param_offset].type_idx;
             const arg_type = try self.checkExpr(arg_idx);
+            self.expected_type = saved_expected;
             if (!self.types.isAssignable(arg_type, ft.params[i + param_offset].type_idx))
                 self.err.errorWithCode(c.span.start, .e300, "type mismatch");
         }
@@ -1971,9 +1975,16 @@ pub const Checker = struct {
                 }
                 return TypeRegistry.I64;
             },
-            // @enumFromInt(T, i) — Zig Sema.zig:8480: validate T is enum, operand is int
+            // @enumFromInt(T, i) or @enumFromInt(i) — Zig Sema.zig:8480: validate T is enum, operand is int
             .enum_from_int => {
-                const target_type = try self.resolveTypeExpr(bc.type_arg);
+                const target_type = if (bc.type_arg != null_node)
+                    try self.resolveTypeExpr(bc.type_arg)
+                else if (self.expected_type != invalid_type)
+                    self.expected_type
+                else {
+                    self.err.errorWithCode(bc.span.start, .e300, "@enumFromInt requires type argument or type context (use @as(T, @enumFromInt(val)))");
+                    return invalid_type;
+                };
                 const target_info = self.types.get(target_type);
                 if (target_info != .enum_type) {
                     self.err.errorWithCode(bc.span.start, .e300, "@enumFromInt target must be enum type");
@@ -2058,6 +2069,10 @@ pub const Checker = struct {
             // @as(T, val) — Zig Sema.zig:9659: explicit type coercion
             .as => {
                 const target_type = try self.resolveTypeExpr(bc.type_arg);
+                // Propagate expected type to inner expression (enables 1-arg @enumFromInt)
+                const saved_expected = self.expected_type;
+                self.expected_type = target_type;
+                defer self.expected_type = saved_expected;
                 _ = try self.checkExpr(bc.args[0]);
                 return target_type;
             },

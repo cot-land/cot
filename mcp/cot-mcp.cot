@@ -362,7 +362,7 @@ fn syntaxReference() string {
     sb.append("@intFromFloat(val) @floatFromInt(T, val) @ptrCast(*T, ptr) @intToPtr(*T, addr) @ptrToInt(ptr)\n")
     sb.append("@alignCast(alignment, ptr) @constCast(ptr)\n\n")
     sb.append("// Enum / error\n")
-    sb.append("@intFromEnum(val) @enumFromInt(E, n) @enumLen(E) @tagName(val) @errorName(err) @intFromBool(b)\n\n")
+    sb.append("@intFromEnum(val) @enumFromInt(E, n) or @enumFromInt(n) with @as @enumLen(E) @tagName(val) @errorName(err) @intFromBool(b)\n\n")
     sb.append("// Memory\n")
     sb.append("@alloc(size) @dealloc(ptr) @realloc(ptr, size) @memcpy(dst, src, len) @memset(ptr, val, len)\n")
     sb.append("@arc_retain(val) @arc_release(val)\n\n")

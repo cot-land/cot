@@ -1363,9 +1363,37 @@ pub const Parser = struct {
                 if (!self.expect(.rparen)) return null;
                 return try self.tree.addExpr(.{ .builtin_call = .{ .kind = kind, .type_arg = t, .args = .{ null_node, null_node, null_node }, .span = Span.init(start, self.pos()) } });
             },
-            // 1 type + 1 value arg: @intCast(T, val), @enumFromInt(T, val), @bitCast(T, val), @truncate(T, val), @as(T, val), @offsetOf(T, "field"), @alignCast(T, val), @enumName(T, val)
+            // @enumFromInt: 2-arg @enumFromInt(T, val) or 1-arg @enumFromInt(val) with type from @as context (Zig parity)
+            .enum_from_int => {
+                // Save state for backtracking
+                const saved_tok = self.tok;
+                const saved_peek = self.peek_tok;
+                const saved_scan_pos = self.scan.pos;
+                const saved_scan_ch = self.scan.ch;
+                const saved_tree_len = self.tree.nodes.items.len;
+                // Try 2-arg form: @enumFromInt(Type, val)
+                const maybe_type = try self.parseType();
+                if (maybe_type != null and self.check(.comma)) {
+                    // 2-arg form confirmed
+                    self.advance(); // consume comma
+                    const v = try self.parseExpr() orelse return null;
+                    if (!self.expect(.rparen)) return null;
+                    return try self.tree.addExpr(.{ .builtin_call = .{ .kind = kind, .type_arg = maybe_type.?, .args = .{ v, null_node, null_node }, .span = Span.init(start, self.pos()) } });
+                }
+                // Backtrack: restore parser + scanner + tree state
+                self.tok = saved_tok;
+                self.peek_tok = saved_peek;
+                self.scan.pos = saved_scan_pos;
+                self.scan.ch = saved_scan_ch;
+                self.tree.nodes.items.len = saved_tree_len;
+                // 1-arg form: @enumFromInt(val) — type inferred from context
+                const val = try self.parseExpr() orelse return null;
+                if (!self.expect(.rparen)) return null;
+                return try self.tree.addExpr(.{ .builtin_call = .{ .kind = kind, .type_arg = null_node, .args = .{ val, null_node, null_node }, .span = Span.init(start, self.pos()) } });
+            },
+            // 1 type + 1 value arg: @intCast(T, val), @bitCast(T, val), @truncate(T, val), @as(T, val), @offsetOf(T, "field"), @alignCast(T, val), @enumName(T, val)
             .int_cast, .float_cast, .float_from_int, .ptr_cast, .int_to_ptr, .has_field,
-            .enum_from_int, .bit_cast, .truncate, .as, .offset_of, .align_cast, .enum_name,
+            .bit_cast, .truncate, .as, .offset_of, .align_cast, .enum_name,
             => {
                 const t = try self.parseType() orelse return null;
                 if (!self.expect(.comma)) return null;
@@ -1476,7 +1504,7 @@ pub const Parser = struct {
     fn parseSwitchExpr(self: *Parser) ParseError!?NodeIndex {
         const start = self.pos();
         self.advance();
-        const subj = try self.parseOperand() orelse return null;
+        const subj = try self.parsePrimaryExpr() orelse return null;
         if (!self.expect(.lbrace)) return null;
 
         var cases = std.ArrayListUnmanaged(ast.SwitchCase){};

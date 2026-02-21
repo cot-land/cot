@@ -4473,8 +4473,23 @@ pub const Lowerer = struct {
                 const payload_type = self.resolveUnionPayloadType(case.patterns, ut);
                 const payload_size = self.type_reg.sizeOf(payload_type);
                 const capture_local = try fb.addLocalWithSize(case.capture, payload_type, false, payload_size);
-                const payload_val = try fb.emitFieldLocal(subject_local, 1, 8, payload_type, se.span);
-                _ = try fb.emitStoreLocal(capture_local, payload_val, se.span);
+
+                // Copy payload from union (after 8-byte tag) to capture local.
+                // Use i64-chunk copy to handle nested structs, compound types (string),
+                // and any payload size correctly.
+                const num_chunks = (payload_size + 7) / 8;
+                if (num_chunks <= 1) {
+                    const payload_val = try fb.emitFieldLocal(subject_local, 1, 8, payload_type, se.span);
+                    _ = try fb.emitStoreLocal(capture_local, payload_val, se.span);
+                } else {
+                    for (0..num_chunks) |ci| {
+                        const union_offset: i64 = 8 + @as(i64, @intCast(ci * 8));
+                        const cap_offset: i64 = @intCast(ci * 8);
+                        const chunk_val = try fb.emitFieldLocal(subject_local, @intCast(1 + ci), union_offset, TypeRegistry.I64, se.span);
+                        _ = try fb.emitStoreLocalField(capture_local, @intCast(ci), cap_offset, chunk_val, se.span);
+                    }
+                }
+
                 if (!try self.lowerBlockNode(case.body)) _ = try fb.emitJump(merge_block, se.span);
                 fb.restoreScope(scope_depth);
             } else {

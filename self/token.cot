@@ -1,5 +1,3 @@
-@safe
-
 // token — Token definitions for the self-hosted compiler.
 // Ported from compiler/frontend/token.zig
 

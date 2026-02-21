@@ -604,7 +604,8 @@ var addr = @ptrToInt(ptr)
 | `@enumName(E, idx)` | Enum variant name by index at compile time |
 | `@enumLen(E)` | Number of variants in enum |
 | `@intFromEnum(val)` | Extract integer value from enum |
-| `@enumFromInt(E, n)` | Construct enum from integer |
+| `@enumFromInt(E, n)` | Construct enum from integer (2-arg) |
+| `@enumFromInt(n)` | Construct enum from integer (1-arg, type inferred from `@as`) |
 | `@intFromBool(b)` | Convert bool to integer (true=1, false=0) |
 | `@tagName(val)` | Tag name of enum/union value as string |
 | `@errorName(err)` | Error name as string |
@@ -652,7 +653,8 @@ const token_strings = comptime {
 
 // @intFromEnum / @enumFromInt
 @assert_eq(@intFromEnum(Color.Green), 1)
-var blue = @enumFromInt(Color, 2)
+var blue = @enumFromInt(Color, 2)                // 2-arg form
+var green = @as(Color, @enumFromInt(1))           // 1-arg form (Zig parity)
 @assert_eq(@intFromBool(true), 1)
 ```
 

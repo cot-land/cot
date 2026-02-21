@@ -4,12 +4,12 @@
 import "std/string"
 
 struct Pos {
-    offset: i64,
+    offset: int,
 }
 
 struct Span {
-    start_offset: i64,
-    end_offset: i64,
+    start_offset: int,
+    end_offset: int,
 }
 
 struct Source {
@@ -17,30 +17,30 @@ struct Source {
     content: string,
 }
 
-fn posAdvance(p: Pos, n: i64) Pos {
-    return Pos { .offset = p.offset + n }
+fn posAdvance(p: *Pos, n: int) Pos {
+    return Pos { offset: p.offset + n }
 }
 
-fn spanInit(start: i64, end: i64) Span {
-    return Span { .start_offset = start, .end_offset = end }
+fn spanInit(start: int, end: int) Span {
+    return Span { start_offset: start, end_offset: end }
 }
 
-fn spanFromPos(offset: i64) Span {
-    return Span { .start_offset = offset, .end_offset = offset }
+fn spanFromPos(offset: int) Span {
+    return Span { start_offset: offset, end_offset: offset }
 }
 
-fn spanLen(s: Span) i64 {
+fn spanLen(s: *Span) int {
     return s.end_offset - s.start_offset
 }
 
-fn sourceAt(src: *Source, offset: i64) ?i64 {
+fn sourceAt(src: *Source, offset: int) ?int {
     if (offset >= @lenOf(src.content)) {
         return null
     }
     return charAt(src.content, offset)
 }
 
-fn sourceSlice(src: *Source, start: i64, end: i64) string {
+fn sourceSlice(src: *Source, start: int, end: int) string {
     return substring(src.content, start, end)
 }
 
@@ -49,8 +49,8 @@ fn sourceSlice(src: *Source, start: i64, end: i64) string {
 // ============================================================================
 
 test "pos advance" {
-    var p = Pos { .offset = 5 }
-    var p2 = posAdvance(p, 3)
+    var p = Pos { offset: 5 }
+    var p2 = posAdvance(&p, 3)
     @assert_eq(p2.offset, 8)
 }
 
@@ -68,11 +68,11 @@ test "span from pos" {
 
 test "span len" {
     var s = spanInit(5, 10)
-    @assert_eq(spanLen(s), 5)
+    @assert_eq(spanLen(&s), 5)
 }
 
 test "source at" {
-    var src = Source { .filename = "test.cot", .content = "abc" }
+    var src = Source { filename: "test.cot", content: "abc" }
     var a = sourceAt(&src, 0)
     @assert_eq(a.?, 97)
     var b = sourceAt(&src, 1)
@@ -82,13 +82,13 @@ test "source at" {
 }
 
 test "source at past end" {
-    var src = Source { .filename = "test.cot", .content = "abc" }
+    var src = Source { filename: "test.cot", content: "abc" }
     var result = sourceAt(&src, 3)
     @assert_eq(result == null, true)
 }
 
 test "source slice" {
-    var src = Source { .filename = "test.cot", .content = "hello world" }
+    var src = Source { filename: "test.cot", content: "hello world" }
     var s = sourceSlice(&src, 0, 5)
     @assert_eq(s, "hello")
     var s2 = sourceSlice(&src, 6, 11)

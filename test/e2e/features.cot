@@ -23,6 +23,7 @@ const Level = enum { Low = 10, Medium = 50, High = 100 }
 union State { Init, Running, Done }
 union Result { Ok: i64, Err: i32 }
 union Event { Click: i64, Hover, KeyPress: i64 }
+union Container { point: Point, val: i64, none }
 
 const MyError = error { Fail, NotFound }
 
@@ -371,6 +372,23 @@ test "union_switch_capture" {
     }
     @assert_eq(matched, 1)
     @assert_eq(captured, 42)
+}
+
+test "union_struct_payload_capture" {
+    var p = Point { .x = 10, .y = 20 }
+    var c: Container = Container.point(p)
+    var cx: i64 = 0
+    var cy: i64 = 0
+    switch c {
+        Container.point |pt| => {
+            cx = pt.x
+            cy = pt.y
+        },
+        Container.val |v| => {},
+        Container.none => {},
+    }
+    @assert_eq(cx, 10)
+    @assert_eq(cy, 20)
 }
 
 // ============================================================================
@@ -2596,6 +2614,39 @@ test "@intFromEnum" {
 test "@enumFromInt" {
     var val = @enumFromInt(BuiltinColor, 2)
     @assert_eq(@intFromEnum(val), 2)
+}
+
+test "@enumFromInt single-arg with @as" {
+    var val = @as(BuiltinColor, @enumFromInt(1))
+    @assert_eq(@intFromEnum(val), 1)
+    @assert_eq(@tagName(val), "green")
+}
+
+test "@enumFromInt single-arg in expression" {
+    var idx: i64 = 0
+    var c = @as(BuiltinColor, @enumFromInt(idx))
+    @assert_eq(@tagName(c), "red")
+}
+
+fn acceptColor(c: BuiltinColor) i64 {
+    return @intFromEnum(c)
+}
+
+fn getBlue() BuiltinColor {
+    return @enumFromInt(2)
+}
+
+test "@enumFromInt single-arg in function arg" {
+    @assert_eq(acceptColor(@enumFromInt(2)), 2)
+}
+
+test "@enumFromInt single-arg from var type" {
+    var c: BuiltinColor = @enumFromInt(0)
+    @assert_eq(@tagName(c), "red")
+}
+
+test "@enumFromInt single-arg from return type" {
+    @assert_eq(@tagName(getBlue()), "blue")
 }
 
 // --- @tagName (Zig Sema.zig:20487) ---

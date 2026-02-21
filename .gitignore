@@ -1,14 +1,19 @@
 .zig-cache/
 zig-out/
+cot-out/
 
 # Build artifacts
 a.out
 a.out.o
 *.o
+*.cwasm
 *.wasm
 *.js
 test_io*
 cot-mcp
 
-# Self-hosting build output
-self/main
+# Stale binaries / temp files
+test_catch_crash
+zig_compile_error
+zig_type_err
+
