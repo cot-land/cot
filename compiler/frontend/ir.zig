@@ -481,6 +481,11 @@ pub const Builder = struct {
         }
     }
 
+    pub fn hasFunc(self: *const Builder, name: []const u8) bool {
+        for (self.funcs.items) |f| if (std.mem.eql(u8, f.name, name)) return true;
+        return false;
+    }
+
     pub fn addGlobal(self: *Builder, g: Global) !void { try self.globals.append(self.allocator, g); }
 
     pub fn lookupGlobal(self: *const Builder, name: []const u8) ?struct { idx: GlobalIdx, global: Global } {

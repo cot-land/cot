@@ -361,6 +361,11 @@ pub const Driver = struct {
         var shared_builder = ir_mod.Builder.init(self.allocator, &type_reg);
         defer shared_builder.deinit();
 
+        // Share lowered_generics across files to prevent duplicate generic instantiations.
+        // Same pattern as shared_builder — each Lowerer inherits and returns it.
+        var shared_lowered_generics = std.StringHashMap(void).init(self.allocator);
+        defer shared_lowered_generics.deinit();
+
         var all_test_names = std.ArrayListUnmanaged([]const u8){};
         defer all_test_names.deinit(self.allocator);
         var all_test_display_names = std.ArrayListUnmanaged([]const u8){};
@@ -373,16 +378,19 @@ pub const Driver = struct {
         for (parsed_files.items, 0..) |*pf, i| {
             var lower_err = errors_mod.ErrorReporter.init(&pf.source, null);
             var lowerer = lower_mod.Lowerer.initWithBuilder(self.allocator, &pf.tree, &type_reg, &lower_err, &checkers.items[i], shared_builder, self.target);
+            lowerer.lowered_generics = shared_lowered_generics;
             lowerer.release_mode = self.release_mode;
             if (self.test_mode) lowerer.setTestMode(true);
             if (self.fail_fast) lowerer.setFailFast(true);
             if (self.bench_mode) lowerer.setBenchMode(true);
 
             lowerer.lowerToBuilder() catch |e| {
+                shared_lowered_generics = lowerer.lowered_generics;
                 lowerer.deinitWithoutBuilder();
                 return e;
             };
             if (lower_err.hasErrors()) {
+                shared_lowered_generics = lowerer.lowered_generics;
                 lowerer.deinitWithoutBuilder();
                 return error.LowerError;
             }
@@ -396,6 +404,7 @@ pub const Driver = struct {
                 for (lowerer.getBenchDisplayNames()) |n| try all_bench_display_names.append(self.allocator, n);
             }
             shared_builder = lowerer.builder;
+            shared_lowered_generics = lowerer.lowered_generics;
             lowerer.deinitWithoutBuilder();
         }
 

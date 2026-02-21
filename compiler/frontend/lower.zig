@@ -159,7 +159,8 @@ pub const Lowerer = struct {
         self.test_display_names.deinit(self.allocator);
         self.bench_names.deinit(self.allocator);
         self.bench_display_names.deinit(self.allocator);
-        self.lowered_generics.deinit();
+        // NOTE: lowered_generics is NOT deinited here — it must persist across files
+        // in multi-file builds (same pattern as builder). Caller manages its lifetime.
         self.comptime_value_vars.deinit();
         self.global_comptime_values.deinit();
     }
@@ -5122,8 +5123,9 @@ pub const Lowerer = struct {
         // Zig pattern: collect-then-process to avoid iterator invalidation.
         // lowerGenericFnInstance's re-check can trigger new instantiations that
         // modify generic_inst_by_name, so we snapshot pending names each iteration.
-        var emitted = std.StringHashMap(void).init(self.allocator);
-        defer emitted.deinit();
+        //
+        // Multi-file: builder.hasFunc() prevents re-emitting generics already lowered
+        // by a previous file (builder is shared across files, same as lowered_generics).
         var pending = std.ArrayListUnmanaged(checker.GenericInstInfo){};
         defer pending.deinit(self.allocator);
         var made_progress = true;
@@ -5134,13 +5136,12 @@ pub const Lowerer = struct {
             var it = self.chk.generics.generic_inst_by_name.valueIterator();
             while (it.next()) |inst_info| {
                 if (!self.lowered_generics.contains(inst_info.concrete_name)) continue;
-                if (emitted.contains(inst_info.concrete_name)) continue;
+                if (self.builder.hasFunc(inst_info.concrete_name)) continue;
                 try pending.append(self.allocator, inst_info.*);
             }
             // Process collected snapshot (safe — no iterator active)
             for (pending.items) |inst_info| {
-                if (emitted.contains(inst_info.concrete_name)) continue;
-                try emitted.put(inst_info.concrete_name, {});
+                if (self.builder.hasFunc(inst_info.concrete_name)) continue;
                 try self.lowerGenericFnInstance(inst_info);
                 made_progress = true;
             }
@@ -6853,7 +6854,8 @@ pub const Lowerer = struct {
             const capture_local = try fb.addLocalWithSize(ce.capture, TypeRegistry.I64, false, 8);
             _ = try fb.emitStoreLocal(capture_local, err_val, ce.span);
             const fallback_val = try self.lowerExprNode(ce.fallback);
-            if (fallback_val == ir.null_node) {
+            const fallback_type = self.inferExprType(ce.fallback);
+            if (fallback_val == ir.null_node or fallback_type == TypeRegistry.VOID) {
                 fallback_is_noreturn = true;
             } else if (is_compound) {
                 try self.storeCatchCompound(result_local, fallback_val, ce.span);
@@ -6863,7 +6865,8 @@ pub const Lowerer = struct {
             fb.restoreScope(scope_depth);
         } else {
             const fallback_val = try self.lowerExprNode(ce.fallback);
-            if (fallback_val == ir.null_node) {
+            const fallback_type = self.inferExprType(ce.fallback);
+            if (fallback_val == ir.null_node or fallback_type == TypeRegistry.VOID) {
                 fallback_is_noreturn = true;
             } else if (is_compound) {
                 try self.storeCatchCompound(result_local, fallback_val, ce.span);

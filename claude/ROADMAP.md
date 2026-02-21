@@ -25,7 +25,7 @@ All language features and stdlib are done. What remains is distribution polish:
 | 7 | Improved `@assert_eq` failure output (expected vs actual diff) | Not started |
 | 8 | Logo & brand assets | Not started |
 | 9 | cot.dev launch (docs site + playground) | Not started |
-| 10 | Self-hosting progress (parser in Cot) | ~5% (scanner done) |
+| 10 | Self-hosting progress (frontend in Cot) | ~41% (scanner+parser+CLI done, 5,599 lines) |
 
 **Release criteria:** `brew install cot-land/tap/cot` works, VS Code extension on marketplace, all tests pass on native + Wasm.
 
