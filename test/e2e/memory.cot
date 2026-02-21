@@ -51,7 +51,7 @@ test "001: stack locals" {
     var c: i64 = 3;
     var d: i64 = 4;
     var e: i64 = 5;
-    @assert_eq(a + b + c + d + e, 15)
+    @assertEq(a + b + c + d + e, 15)
 }
 
 test "002: many locals" {
@@ -63,40 +63,40 @@ test "002: many locals" {
     var v6: i64 = 6;
     var v7: i64 = 7;
     var v8: i64 = 8;
-    @assert_eq(v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8, 36)
+    @assertEq(v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8, 36)
 }
 
 test "009: ptr swap" {
     var x: i64 = 10;
     var y: i64 = 20;
     mem_swap(&x, &y);
-    @assert_eq(x, 20)
+    @assertEq(x, 20)
 }
 
 test "010: indirect add" {
     var x: i64 = 10;
     mem_indirect_add(&x, 5);
     mem_indirect_add(&x, 5);
-    @assert_eq(x, 20)
+    @assertEq(x, 20)
 }
 
 test "014: ptr param inc" {
     var x: i64 = 41;
     mem_inc_ptr(&x);
-    @assert_eq(x, 42)
+    @assertEq(x, 42)
 }
 
 test "015: double deref" {
     var x: i64 = 42;
     var p1: *i64 = &x;
     var p2: **i64 = &p1;
-    @assert_eq(p2.*.*, 42)
+    @assertEq(p2.*.*, 42)
 }
 
 test "016: addr of local" {
     var val: i64 = 100;
     var ptr: *i64 = &val;
-    @assert_eq(ptr.*, 100)
+    @assertEq(ptr.*, 100)
 }
 
 test "020: struct copy" {
@@ -105,7 +105,7 @@ test "020: struct copy" {
     s1.a = 100;
     s1.b = 200;
     mem_copy_struct(&s1, &s2);
-    @assert_eq(s2.a + s2.b, 300)
+    @assertEq(s2.a + s2.b, 300)
 }
 
 test "021: ptr chain" {
@@ -113,7 +113,7 @@ test "021: ptr chain" {
     var p1: *i64 = &a;
     var p2: *i64 = p1;
     var p3: *i64 = p2;
-    @assert_eq(p3.*, 42)
+    @assertEq(p3.*, 42)
 }
 
 test "022: modify via ptr" {
@@ -121,7 +121,7 @@ test "022: modify via ptr" {
     var p: *i64 = &x;
     p.* = p.* + 5;
     p.* = p.* * 2;
-    @assert_eq(x, 30)
+    @assertEq(x, 30)
 }
 
 test "023: multi ptr modify" {
@@ -131,7 +131,7 @@ test "023: multi ptr modify" {
     var pb: *i64 = &b;
     pa.* = pa.* + pb.*;
     pb.* = pa.* + pb.*;
-    @assert_eq(a + b, 8)
+    @assertEq(a + b, 8)
 }
 
 test "024: ptr reassign" {
@@ -141,7 +141,7 @@ test "024: ptr reassign" {
     var sum: i64 = p.*;
     p = &b;
     sum = sum + p.*;
-    @assert_eq(sum, 30)
+    @assertEq(sum, 30)
 }
 
 test "028: nested ptr deref" {
@@ -152,7 +152,7 @@ test "028: nested ptr deref" {
     var ppa: **i64 = &pa;
     var ppb: **i64 = &pb;
     var sum: i64 = ppa.*.* + ppb.*.*;
-    @assert_eq(sum, 300)
+    @assertEq(sum, 300)
 }
 
 test "029: ptr swap" {
@@ -163,8 +163,8 @@ test "029: ptr swap" {
     var tmp: *i64 = pa;
     pa = pb;
     pb = tmp;
-    @assert_eq(pa.*, 20)
-    @assert_eq(pb.*, 10)
+    @assertEq(pa.*, 20)
+    @assertEq(pb.*, 10)
 }
 
 test "031: struct offset" {
@@ -174,16 +174,16 @@ test "031: struct offset" {
     r.flags = 7;
     var ptr: *MemRecord = &r;
     var sum: i64 = ptr.id + ptr.value + ptr.flags;
-    @assert_eq(sum, 108)
+    @assertEq(sum, 108)
 }
 
 test "034: struct init all" {
     var d: MemData4 = undefined;
     mem_init_data(&d, 10);
-    @assert_eq(d.a, 10)
-    @assert_eq(d.b, 20)
-    @assert_eq(d.c, 30)
-    @assert_eq(d.d, 40)
+    @assertEq(d.a, 10)
+    @assertEq(d.b, 20)
+    @assertEq(d.c, 30)
+    @assertEq(d.d, 40)
 }
 
 test "035: struct clear" {
@@ -192,7 +192,7 @@ test "035: struct clear" {
     d.b = 200;
     d.c = 300;
     mem_clear_data(&d);
-    @assert_eq(d.a, 0)
-    @assert_eq(d.b, 0)
-    @assert_eq(d.c, 0)
+    @assertEq(d.a, 0)
+    @assertEq(d.b, 0)
+    @assertEq(d.c, 0)
 }

@@ -2,8 +2,8 @@
 
 // http — TCP networking and basic HTTP.
 //
-// Wraps @net_socket, @net_bind, @net_listen, @net_accept, @net_connect,
-// @net_set_reuse_addr builtins.
+// Wraps net_socket, net_bind, net_listen, net_accept, net_connect,
+// net_set_reuse_addr from std/sys.
 // Reference: Go net/http (patterns), POSIX sockets (API)
 //
 // All socket addresses use struct sockaddr_in (16 bytes) built in linear memory:
@@ -11,6 +11,7 @@
 //   Linux: [0:2] sa_family  [2:4] sin_port  [4:8] sin_addr  [8:16] zero
 
 import "std/string"
+import "std/sys"
 
 // Socket constants
 const AF_INET: i64 = 2
@@ -31,7 +32,7 @@ fn buildSockaddrIn(buf: i64, ip: i64, port: i64) void {
         i = i + 1
     }
 
-    if (@target_os() == "macos") {
+    if (@targetOs() == "macos") {
         // macOS sockaddr_in: sa_len(1) + sa_family(1)
         @intToPtr(*u8, buf).* = @intCast(u8, SOCKADDR_IN_SIZE)
         @intToPtr(*u8, buf + 1).* = @intCast(u8, AF_INET)
@@ -59,68 +60,68 @@ const INADDR_LOOPBACK: i64 = 2130706433
 
 // Create a TCP socket. Returns fd or error.
 fn tcpSocket() NetError!i64 {
-    var fd = @net_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
+    var fd = net_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
     if (fd < 0) { return error.SocketError }
     return fd
 }
 
 // Set SO_REUSEADDR on a socket (prevents "address already in use" errors).
 fn setReuseAddr(fd: i64) void {
-    @net_set_reuse_addr(fd)
+    net_set_reuse_addr(fd)
 }
 
 // Bind a socket to an address and port.
 fn bindSocket(fd: i64, ip: i64, port: i64) NetError!i64 {
-    var addr_buf = @alloc(SOCKADDR_IN_SIZE)
+    var addr_buf = alloc(0, SOCKADDR_IN_SIZE)
     buildSockaddrIn(addr_buf, ip, port)
-    var result = @net_bind(fd, addr_buf, SOCKADDR_IN_SIZE)
-    @dealloc(addr_buf)
+    var result = net_bind(fd, addr_buf, SOCKADDR_IN_SIZE)
+    dealloc(addr_buf)
     if (result < 0) { return error.BindError }
     return result
 }
 
 // Start listening for connections with the given backlog.
 fn listenSocket(fd: i64, backlog: i64) NetError!i64 {
-    var result = @net_listen(fd, backlog)
+    var result = net_listen(fd, backlog)
     if (result < 0) { return error.ListenError }
     return result
 }
 
 // Accept a connection on a listening socket. Returns new fd.
 fn acceptConnection(fd: i64) NetError!i64 {
-    var client_fd = @net_accept(fd)
+    var client_fd = net_accept(fd)
     if (client_fd < 0) { return error.AcceptError }
     return client_fd
 }
 
 // Connect to a remote address. Returns 0 on success.
 fn connectSocket(fd: i64, ip: i64, port: i64) NetError!i64 {
-    var addr_buf = @alloc(SOCKADDR_IN_SIZE)
+    var addr_buf = alloc(0, SOCKADDR_IN_SIZE)
     buildSockaddrIn(addr_buf, ip, port)
-    var result = @net_connect(fd, addr_buf, SOCKADDR_IN_SIZE)
-    @dealloc(addr_buf)
+    var result = net_connect(fd, addr_buf, SOCKADDR_IN_SIZE)
+    dealloc(addr_buf)
     if (result < 0) { return error.ConnectError }
     return result
 }
 
 // Read from a socket fd. Returns bytes read.
 fn socketRead(fd: i64, buf: i64, len: i64) i64 {
-    return @fd_read(fd, buf, len)
+    return fd_read(fd, buf, len)
 }
 
 // Write raw bytes to a socket fd. Returns bytes written.
 fn socketWrite(fd: i64, buf: i64, len: i64) i64 {
-    return @fd_write(fd, buf, len)
+    return fd_write(fd, buf, len)
 }
 
 // Write a string to a socket fd.
 fn socketWriteString(fd: i64, s: string) i64 {
-    return @fd_write(fd, @ptrOf(s), @lenOf(s))
+    return fd_write(fd, @ptrOf(s), @lenOf(s))
 }
 
 // Close a socket fd.
 fn socketClose(fd: i64) void {
-    @fd_close(fd)
+    fd_close(fd)
 }
 
 // ===== High-level TCP Server =====
@@ -268,7 +269,7 @@ fn getHeader(req: i64, name: string) string {
 // Format: "METHOD /path HTTP/1.1\r\nHeaders\r\n\r\nBody"
 // Reference: Go net/http.ReadRequest
 fn parseRequest(data: string) i64 {
-    var req = @alloc(80)
+    var req = alloc(0, 80)
     var i: i64 = 0
     while (i < 80) {
         @intToPtr(*u8, req + i).* = @intCast(u8, 0)

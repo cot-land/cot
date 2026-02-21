@@ -12,10 +12,10 @@ const CeStatus = enum {
 
 test "enum simple" {
     var c = CeColor.Green
-    @assert_eq(c, 1)
+    @assertEq(c, 1)
 }
 
 test "enum explicit value" {
     var s = CeStatus.Error
-    @assert_eq(s, 100)
+    @assertEq(s, 100)
 }

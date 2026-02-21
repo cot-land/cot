@@ -8,6 +8,7 @@
 //   Deno: @std/path (join, resolve, dirname, basename, extname)
 
 import "std/string"
+import "std/sys"
 
 // ============================================================================
 // Basic Operations
@@ -119,17 +120,17 @@ fn join(a: string, b: string) string {
     var a_has_slash = @intToPtr(*u8, @ptrOf(a) + alen - 1).* == 47
 
     if (a_has_slash) {
-        var buf = @alloc(alen + blen)
-        @memcpy(buf, @ptrOf(a), alen)
-        @memcpy(buf + alen, @ptrOf(b), blen)
+        var buf = alloc(0, alen + blen)
+        memcpy(buf, @ptrOf(a), alen)
+        memcpy(buf + alen, @ptrOf(b), blen)
         return clean(@string(buf, alen + blen))
     }
 
     var total = alen + 1 + blen
-    var buf = @alloc(total)
-    @memcpy(buf, @ptrOf(a), alen)
+    var buf = alloc(0, total)
+    memcpy(buf, @ptrOf(a), alen)
     @intToPtr(*u8, buf + alen).* = @intCast(u8, 47)
-    @memcpy(buf + alen + 1, @ptrOf(b), blen)
+    memcpy(buf + alen + 1, @ptrOf(b), blen)
     return clean(@string(buf, total))
 }
 

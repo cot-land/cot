@@ -547,18 +547,18 @@ fn isAlphaNumeric(c: int) bool {
 
 fn expectTok(s: *Scanner, expected: int) void {
     var t = scanNext(s)
-    @assert_eq(t.tok, expected)
+    @assertEq(t.tok, expected)
 }
 
 fn expectTokText(s: *Scanner, expected_tok: int, expected_text: string) void {
     var t = scanNext(s)
-    @assert_eq(t.tok, expected_tok)
-    @assert_eq(t.text, expected_text)
+    @assertEq(t.tok, expected_tok)
+    @assertEq(t.text, expected_text)
 }
 
 fn expectText(s: *Scanner, expected_text: string) void {
     var t = scanNext(s)
-    @assert_eq(t.text, expected_text)
+    @assertEq(t.text, expected_text)
 }
 
 // ============================================================================

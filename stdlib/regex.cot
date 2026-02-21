@@ -10,6 +10,7 @@
 
 import "std/string"
 import "std/list"
+import "std/sys"
 
 // ============================================================================
 // NFA State Representation
@@ -47,7 +48,7 @@ const STATE_SIZE: i64 = 40
 //   [40] anchored_end (i64)
 
 fn newNfa() i64 {
-    var nfa = @alloc(48)
+    var nfa = alloc(0, 48)
     @intToPtr(*i64, nfa).* = 0
     @intToPtr(*i64, nfa + 8).* = 0
     @intToPtr(*i64, nfa + 16).* = 0
@@ -65,10 +66,10 @@ fn addState(nfa: i64, stype: i64, char_val: i64, out1: i64, out2: i64, class_ptr
         var new_cap = cap * 2
         if (new_cap == 0) { new_cap = 32 }
         var buf = @intToPtr(*i64, nfa).*
-        var new_buf = @alloc(new_cap * STATE_SIZE)
+        var new_buf = alloc(0, new_cap * STATE_SIZE)
         if (count > 0) {
-            @memcpy(new_buf, buf, count * STATE_SIZE)
-            @dealloc(buf)
+            memcpy(new_buf, buf, count * STATE_SIZE)
+            dealloc(buf)
         }
         @intToPtr(*i64, nfa).* = new_buf
         @intToPtr(*i64, nfa + 16).* = new_cap
@@ -129,9 +130,9 @@ fn setStateOut2(nfa: i64, idx: i64, out: i64) void {
 // Layout: [0] start, [8] patch_buf, [16] patch_count
 
 fn newFrag(start: i64) i64 {
-    var f = @alloc(24)
+    var f = alloc(0, 24)
     @intToPtr(*i64, f).* = start
-    @intToPtr(*i64, f + 8).* = @alloc(128)
+    @intToPtr(*i64, f + 8).* = alloc(0, 128)
     @intToPtr(*i64, f + 16).* = 0
     return f
 }
@@ -177,7 +178,7 @@ fn fragMergePatches(dst: i64, src: i64) void {
 // Parse [abc], [a-z], [^abc]. Returns pointer to ranges data.
 fn parseCharClass(pat: string, plen: i64, pos_ptr: i64) i64 {
     var pos = @intToPtr(*i64, pos_ptr).*
-    var ranges = @alloc(256)
+    var ranges = alloc(0, 256)
     var rcount: i64 = 0
 
     while (pos < plen) {
@@ -323,11 +324,11 @@ fn compileCharClass(nfa: i64, stack_buf: i64, stack_top: i64, pat: string, plen:
         negated = true
         cur_pos = cur_pos + 1
     }
-    var pos_store = @alloc(8)
+    var pos_store = alloc(0, 8)
     @intToPtr(*i64, pos_store).* = cur_pos
     var class_data = parseCharClass(pat, plen, pos_store)
     cur_pos = @intToPtr(*i64, pos_store).*
-    @dealloc(pos_store)
+    dealloc(pos_store)
 
     var st = STATE_CLASS
     if (negated) { st = STATE_NEG_CLASS }
@@ -344,12 +345,12 @@ fn compileCharClass(nfa: i64, stack_buf: i64, stack_top: i64, pat: string, plen:
 //         [24] paren_natom_buf, [32] paren_nfrags_buf, [40] stack_top
 
 fn newCompilerState() i64 {
-    var cs = @alloc(48)
+    var cs = alloc(0, 48)
     @intToPtr(*i64, cs).* = 0
     @intToPtr(*i64, cs + 8).* = 0
     @intToPtr(*i64, cs + 16).* = 0
-    @intToPtr(*i64, cs + 24).* = @alloc(64)
-    @intToPtr(*i64, cs + 32).* = @alloc(64)
+    @intToPtr(*i64, cs + 24).* = alloc(0, 64)
+    @intToPtr(*i64, cs + 32).* = alloc(0, 64)
     @intToPtr(*i64, cs + 40).* = 0
     return cs
 }
@@ -466,7 +467,7 @@ fn compile(pattern: string) i64 {
         plen = plen - 1
     }
 
-    var stack_buf = @alloc(256)
+    var stack_buf = alloc(0, 256)
     var cs = newCompilerState()
 
     while (pos < plen) {
@@ -526,7 +527,7 @@ fn compile(pattern: string) i64 {
         @intToPtr(*i64, nfa + 24).* = match_state
     }
 
-    @dealloc(stack_buf)
+    dealloc(stack_buf)
     return nfa
 }
 
@@ -581,7 +582,7 @@ fn stateMatches(nfa: i64, idx: i64, c: i64) bool {
 fn addToSet(nfa: i64, set_buf: i64, set_count_ptr: i64, visited: i64, idx: i64) void {
     if (idx < 0) { return }
     // Use an explicit stack to avoid deep recursion
-    var work = @alloc(256)
+    var work = alloc(0, 256)
     var work_top: i64 = 0
     @intToPtr(*i64, work).* = idx
     work_top = 1
@@ -607,7 +608,7 @@ fn addToSet(nfa: i64, set_buf: i64, set_count_ptr: i64, visited: i64, idx: i64) 
             @intToPtr(*i64, set_count_ptr).* = count + 1
         }
     }
-    @dealloc(work)
+    dealloc(work)
 }
 
 // ============================================================================
@@ -648,11 +649,11 @@ fn runNfa(nfa: i64, text: string, start_pos: i64) i64 {
     var start = @intToPtr(*i64, nfa + 24).*
     var anchored_end = @intToPtr(*i64, nfa + 40).*
 
-    var cur_buf = @alloc(state_count * 8 + 8)
-    var next_buf = @alloc(state_count * 8 + 8)
-    var cur_count = @alloc(8)
-    var next_count = @alloc(8)
-    var visited = @alloc(state_count + 1)
+    var cur_buf = alloc(0, state_count * 8 + 8)
+    var next_buf = alloc(0, state_count * 8 + 8)
+    var cur_count = alloc(0, 8)
+    var next_count = alloc(0, 8)
+    var visited = alloc(0, state_count + 1)
 
     // Initialize current set
     @intToPtr(*i64, cur_count).* = 0
@@ -690,11 +691,11 @@ fn runNfa(nfa: i64, text: string, start_pos: i64) i64 {
 
         cc = @intToPtr(*i64, cur_count).*
         if (cc == 0) {
-            @dealloc(cur_buf)
-            @dealloc(next_buf)
-            @dealloc(cur_count)
-            @dealloc(next_count)
-            @dealloc(visited)
+            dealloc(cur_buf)
+            dealloc(next_buf)
+            dealloc(cur_count)
+            dealloc(next_count)
+            dealloc(visited)
             return last_match
         }
 
@@ -708,11 +709,11 @@ fn runNfa(nfa: i64, text: string, start_pos: i64) i64 {
         pos = pos + 1
     }
 
-    @dealloc(cur_buf)
-    @dealloc(next_buf)
-    @dealloc(cur_count)
-    @dealloc(next_count)
-    @dealloc(visited)
+    dealloc(cur_buf)
+    dealloc(next_buf)
+    dealloc(cur_count)
+    dealloc(next_count)
+    dealloc(visited)
     return last_match
 }
 
@@ -855,7 +856,7 @@ fn regexReplaceAll(pattern: string, text: string, replacement: string) string {
 fn regexSplit(pattern: string, text: string) i64 {
     var nfa = compile(pattern)
     var tlen = @lenOf(text)
-    var result = @alloc(256)
+    var result = alloc(0, 256)
     var rcount: i64 = 0
     var last: i64 = 0
     var pos: i64 = 0

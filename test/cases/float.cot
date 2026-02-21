@@ -3,5 +3,5 @@
 // TODO: fix f64 comparison codegen in error-union context
 
 test "float placeholder" {
-    @assert_eq(1, 1)
+    @assertEq(1, 1)
 }

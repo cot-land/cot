@@ -51,46 +51,46 @@ fn sourceSlice(src: *Source, start: int, end: int) string {
 test "pos advance" {
     var p = Pos { offset: 5 }
     var p2 = posAdvance(&p, 3)
-    @assert_eq(p2.offset, 8)
+    @assertEq(p2.offset, 8)
 }
 
 test "span init" {
     var s = spanInit(5, 10)
-    @assert_eq(s.start_offset, 5)
-    @assert_eq(s.end_offset, 10)
+    @assertEq(s.start_offset, 5)
+    @assertEq(s.end_offset, 10)
 }
 
 test "span from pos" {
     var s = spanFromPos(7)
-    @assert_eq(s.start_offset, 7)
-    @assert_eq(s.end_offset, 7)
+    @assertEq(s.start_offset, 7)
+    @assertEq(s.end_offset, 7)
 }
 
 test "span len" {
     var s = spanInit(5, 10)
-    @assert_eq(spanLen(&s), 5)
+    @assertEq(spanLen(&s), 5)
 }
 
 test "source at" {
     var src = Source { filename: "test.cot", content: "abc" }
     var a = sourceAt(&src, 0)
-    @assert_eq(a.?, 97)
+    @assertEq(a.?, 97)
     var b = sourceAt(&src, 1)
-    @assert_eq(b.?, 98)
+    @assertEq(b.?, 98)
     var c = sourceAt(&src, 2)
-    @assert_eq(c.?, 99)
+    @assertEq(c.?, 99)
 }
 
 test "source at past end" {
     var src = Source { filename: "test.cot", content: "abc" }
     var result = sourceAt(&src, 3)
-    @assert_eq(result == null, true)
+    @assertEq(result == null, true)
 }
 
 test "source slice" {
     var src = Source { filename: "test.cot", content: "hello world" }
     var s = sourceSlice(&src, 0, 5)
-    @assert_eq(s, "hello")
+    @assertEq(s, "hello")
     var s2 = sourceSlice(&src, 6, 11)
-    @assert_eq(s2, "world")
+    @assertEq(s2, "world")
 }

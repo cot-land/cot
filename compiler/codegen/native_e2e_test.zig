@@ -202,9 +202,10 @@ test "native: print does not corrupt return value" {
 
 test "native: fd_write to stdout" {
     try expectOutput(std.testing.allocator,
+        \\extern fn fd_write(fd: i64, ptr: i64, len: i64) i64
         \\fn main() i64 {
         \\    var msg = "OK"
-        \\    var n = @fd_write(1, @ptrOf(msg), @lenOf(msg))
+        \\    var n = fd_write(1, @ptrOf(msg), @lenOf(msg))
         \\    return 0
         \\}
     , 0, "OK", "fd_write_stdout");
@@ -343,11 +344,15 @@ fn expectOutputWithStdinInner(backing_allocator: std.mem.Allocator, code: []cons
 // Reference: Wasmtime piped_simple.rs — consumer reads from stdin, verifies data
 test "native: fd_read from stdin" {
     try expectOutputWithStdin(std.testing.allocator,
+        \\extern fn alloc(metadata: i64, size: i64) i64
+        \\extern fn dealloc(ptr: i64) void
+        \\extern fn fd_read(fd: i64, buf: i64, len: i64) i64
+        \\extern fn fd_write(fd: i64, ptr: i64, len: i64) i64
         \\fn main() i64 {
-        \\    var buf = @alloc(16)
-        \\    var n = @fd_read(0, buf, 5)
-        \\    @fd_write(1, buf, n)
-        \\    @dealloc(buf)
+        \\    var buf = alloc(0, 16)
+        \\    var n = fd_read(0, buf, 5)
+        \\    fd_write(1, buf, n)
+        \\    dealloc(buf)
         \\    return 0
         \\}
     , "hello", 0, "hello", "fd_read_stdin");
@@ -509,16 +514,18 @@ fn expectTestModeInner(backing_allocator: std.mem.Allocator, code: []const u8, e
 // These must remain as individual subprocess tests.
 test "native: exit with code 42" {
     try expectOutput(std.testing.allocator,
+        \\extern fn exit(code: i64) void
         \\fn main() void {
-        \\    @exit(42)
+        \\    exit(42)
         \\}
     , 42, "", "exit_42");
 }
 
 test "native: exit with code 0" {
     try expectOutput(std.testing.allocator,
+        \\extern fn exit(code: i64) void
         \\fn main() void {
-        \\    @exit(0)
+        \\    exit(0)
         \\}
     , 0, "", "exit_0");
 }
@@ -555,7 +562,7 @@ test "native: test mode - one failure" {
 test "native: test mode - assert_eq" {
     try expectTestMode(std.testing.allocator,
         \\test "eq" {
-        \\    @assert_eq(42, 42)
+        \\    @assertEq(42, 42)
         \\}
     , 0,
         "test \"eq\" ... ok\n\nok | 1 passed\n",

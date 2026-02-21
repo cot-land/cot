@@ -14,6 +14,7 @@
 
 import "std/string"
 import "std/list"
+import "std/sys"
 
 // ============================================================================
 // Parsing
@@ -43,7 +44,7 @@ fn parseEnv(content: string) i64 {
     line_count = line_count + 1
 
     // Allocate entries (max = line_count)
-    var entries = @alloc(line_count * ENTRY_SIZE)
+    var entries = alloc(0, line_count * ENTRY_SIZE)
     var count: i64 = 0
 
     // Parse line by line
@@ -82,7 +83,7 @@ fn parseEnv(content: string) i64 {
     }
 
     // Create result object
-    var result = @alloc(16)
+    var result = alloc(0, 16)
     @intToPtr(*i64, result).* = count
     @intToPtr(*i64, result + 8).* = entries
     return result

@@ -8,16 +8,16 @@ async fn compute(x: i64) i64 {
 
 test "await basic async fn" {
     const result = await compute(5)
-    @assert_eq(result, 11)
+    @assertEq(result, 11)
 }
 
 test "await with different args" {
     const a = await compute(0)
-    @assert_eq(a, 1)
+    @assertEq(a, 1)
     const b = await compute(10)
-    @assert_eq(b, 21)
+    @assertEq(b, 21)
     const c = await compute(100)
-    @assert_eq(c, 201)
+    @assertEq(c, 201)
 }
 
 async fn add(a: i64, b: i64) i64 {
@@ -26,7 +26,7 @@ async fn add(a: i64, b: i64) i64 {
 
 test "async fn with multiple params" {
     const result = await add(3, 7)
-    @assert_eq(result, 10)
+    @assertEq(result, 10)
 }
 
 async fn get_value() i64 {
@@ -35,7 +35,7 @@ async fn get_value() i64 {
 
 test "async fn with no params" {
     const result = await get_value()
-    @assert_eq(result, 42)
+    @assertEq(result, 42)
 }
 
 async fn nested_helper(x: i64) i64 {
@@ -49,7 +49,7 @@ async fn nested_caller(x: i64) i64 {
 
 test "nested await" {
     const result = await nested_caller(5)
-    @assert_eq(result, 16)
+    @assertEq(result, 16)
 }
 
 async fn conditional(x: i64) i64 {
@@ -61,15 +61,15 @@ async fn conditional(x: i64) i64 {
 
 test "async fn with branching" {
     const a = await conditional(3)
-    @assert_eq(a, 8)
+    @assertEq(a, 8)
     const b = await conditional(20)
-    @assert_eq(b, 40)
+    @assertEq(b, 40)
 }
 
 test "await on variable holding future" {
     const future = compute(7)
     const result = await future
-    @assert_eq(result, 15)
+    @assertEq(result, 15)
 }
 
 // --- Tests that exercise deeper async patterns ---
@@ -90,7 +90,7 @@ async fn double_nested_c(x: i64) i64 {
 
 test "three-level nested await" {
     const result = await double_nested_c(5)
-    @assert_eq(result, 29)
+    @assertEq(result, 29)
 }
 
 async fn async_loop_sum(n: i64) i64 {
@@ -105,14 +105,14 @@ async fn async_loop_sum(n: i64) i64 {
 
 test "async fn with loop" {
     const result = await async_loop_sum(10)
-    @assert_eq(result, 55)
+    @assertEq(result, 55)
 }
 
 test "multiple independent awaits" {
     const a = await compute(1)
     const b = await compute(2)
     const c = await compute(3)
-    @assert_eq(a + b + c, 3 + 5 + 7)
+    @assertEq(a + b + c, 3 + 5 + 7)
 }
 
 async fn factorial(n: i64) i64 {
@@ -130,14 +130,14 @@ async fn factorial(n: i64) i64 {
 
 test "async factorial" {
     const r1 = await factorial(5)
-    @assert_eq(r1, 120)
+    @assertEq(r1, 120)
     const r2 = await factorial(10)
-    @assert_eq(r2, 3628800)
+    @assertEq(r2, 3628800)
 }
 
 test "await in expression context" {
     const result = await compute(3) + await compute(4)
-    @assert_eq(result, 7 + 9)
+    @assertEq(result, 7 + 9)
 }
 
 // --- Error unions across await points (try await) ---
@@ -159,7 +159,7 @@ fn call_try_await_success() AsyncError!i64 {
 
 test "try await success" {
     const val = call_try_await_success() catch 99
-    @assert_eq(val, 10)
+    @assertEq(val, 10)
 }
 
 fn call_try_await_error() AsyncError!i64 {
@@ -169,17 +169,17 @@ fn call_try_await_error() AsyncError!i64 {
 
 test "try await error propagation" {
     const val = call_try_await_error() catch 99
-    @assert_eq(val, 99)
+    @assertEq(val, 99)
 }
 
 test "try await with catch" {
     const val = await async_may_fail(5) catch 0
-    @assert_eq(val, 10)
+    @assertEq(val, 10)
 }
 
 test "try await error with catch" {
     const val = await async_may_fail(-1) catch 42
-    @assert_eq(val, 42)
+    @assertEq(val, 42)
 }
 
 async fn async_chain(x: i64) AsyncError!i64 {
@@ -189,10 +189,10 @@ async fn async_chain(x: i64) AsyncError!i64 {
 
 test "try await chain" {
     const val = await async_chain(5) catch 0
-    @assert_eq(val, 110)
+    @assertEq(val, 110)
 }
 
 test "try await chain error" {
     const val = await async_chain(-1) catch 77
-    @assert_eq(val, 77)
+    @assertEq(val, 77)
 }

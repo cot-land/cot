@@ -12,7 +12,7 @@ test "fs: openFile and close" {
     var f = openFile("/dev/null", O_RDONLY)
     @assert(f.fd > 2)
     defer f.close()
-    @assert_eq(f.isValid(), 1)
+    @assertEq(f.isValid(), 1)
 }
 
 test "fs: write and read back" {
@@ -20,15 +20,15 @@ test "fs: write and read back" {
     @assert(f.fd > 2)
     defer f.close()
     var n = f.writeAll("hello") catch 0 - 1
-    @assert_eq(n, 5)
+    @assertEq(n, 5)
 
     var f2 = openFile("/tmp/cot_std_fs_test", O_RDONLY)
     @assert(f2.fd > 2)
     defer f2.close()
-    var buf = @alloc(16)
-    defer @dealloc(buf)
+    var buf = alloc(0, 16)
+    defer dealloc(buf)
     var nr = f2.read(buf, 5) catch 0 - 1
-    @assert_eq(nr, 5)
+    @assertEq(nr, 5)
 }
 
 test "fs: writeAll" {
@@ -36,7 +36,7 @@ test "fs: writeAll" {
     @assert(f.fd > 2)
     defer f.close()
     var n = f.writeAll("hi") catch 0 - 1
-    @assert_eq(n, 2)
+    @assertEq(n, 2)
 }
 
 test "fs: seekTo" {
@@ -44,9 +44,9 @@ test "fs: seekTo" {
     @assert(f.fd > 2)
     defer f.close()
     var n = f.writeAll("abcde") catch 0 - 1
-    @assert_eq(n, 5)
+    @assertEq(n, 5)
     var pos = f.seekTo(0) catch 0 - 1
-    @assert_eq(pos, 0)
+    @assertEq(pos, 0)
 }
 
 test "fs: getPos" {
@@ -54,9 +54,9 @@ test "fs: getPos" {
     @assert(f.fd > 2)
     defer f.close()
     var n = f.writeAll("abcde") catch 0 - 1
-    @assert_eq(n, 5)
+    @assertEq(n, 5)
     var pos = f.getPos() catch 0 - 1
-    @assert_eq(pos, 5)
+    @assertEq(pos, 5)
 }
 
 test "fs: seekBy" {
@@ -64,31 +64,31 @@ test "fs: seekBy" {
     @assert(f.fd > 2)
     defer f.close()
     var n = f.writeAll("abcdefgh") catch 0 - 1
-    @assert_eq(n, 8)
+    @assertEq(n, 8)
     f.seekTo(2) catch 0 - 1
     var pos = f.seekBy(3) catch 0 - 1
-    @assert_eq(pos, 5)
+    @assertEq(pos, 5)
 }
 
 test "fs: isValid for good fd" {
     var f = openFile("/dev/null", O_RDONLY)
     @assert(f.fd > 2)
     defer f.close()
-    @assert_eq(f.isValid(), 1)
+    @assertEq(f.isValid(), 1)
 }
 
 test "fs: isValid for bad fd" {
     var f = File { .fd = 0 - 2 }
-    @assert_eq(f.isValid(), 0)
+    @assertEq(f.isValid(), 0)
 }
 
 test "fs: constants are correct" {
-    @assert_eq(O_RDONLY, 0)
-    @assert_eq(O_WRONLY, 1)
-    @assert_eq(O_RDWR, 2)
-    @assert_eq(SEEK_SET, 0)
-    @assert_eq(SEEK_CUR, 1)
-    @assert_eq(SEEK_END, 2)
+    @assertEq(O_RDONLY, 0)
+    @assertEq(O_WRONLY, 1)
+    @assertEq(O_RDWR, 2)
+    @assertEq(SEEK_SET, 0)
+    @assertEq(SEEK_CUR, 1)
+    @assertEq(SEEK_END, 2)
 }
 
 test "fs: createFile convenience" {
@@ -96,22 +96,22 @@ test "fs: createFile convenience" {
     @assert(f.fd > 2)
     defer f.close()
     var n = f.writeAll("test") catch 0 - 1
-    @assert_eq(n, 4)
+    @assertEq(n, 4)
 }
 
 test "fs: stdin fd is 0" {
     var f = stdin()
-    @assert_eq(f.fd, 0)
+    @assertEq(f.fd, 0)
 }
 
 test "fs: stdout fd is 1" {
     var f = stdout()
-    @assert_eq(f.fd, 1)
+    @assertEq(f.fd, 1)
 }
 
 test "fs: stderr fd is 2" {
     var f = stderr()
-    @assert_eq(f.fd, 2)
+    @assertEq(f.fd, 2)
 }
 
 // ===== os tests =====
@@ -143,9 +143,9 @@ test "os: environPtr(0) > 0" {
 // ===== time tests =====
 
 test "time: constants" {
-    @assert_eq(ns_per_ms, 1000000)
-    @assert_eq(ns_per_s, 1000000000)
-    @assert_eq(ms_per_s, 1000)
+    @assertEq(ns_per_ms, 1000000)
+    @assertEq(ns_per_s, 1000000000)
+    @assertEq(ms_per_s, 1000)
 }
 
 test "time: nanoTimestamp > epoch" {
@@ -184,10 +184,10 @@ test "time: Timer reset" {
 // ===== random tests =====
 
 test "random: fillBytes success" {
-    var buf = @alloc(16)
-    defer @dealloc(buf)
+    var buf = alloc(0, 16)
+    defer dealloc(buf)
     var result = fillBytes(buf, 16)
-    @assert_eq(result, 0)
+    @assertEq(result, 0)
 }
 
 test "random: randomInt runs" {
@@ -202,7 +202,7 @@ test "random: randomRange bounds" {
 }
 
 test "random: randomRange(1) == 0" {
-    @assert_eq(randomRange(1), 0)
+    @assertEq(randomRange(1), 0)
 }
 
 // ===== high-level os tests =====
@@ -222,7 +222,7 @@ test "os: environ(0) is non-empty string" {
 test "fs: writeFile and readFile" {
     writeFile("/tmp/cot_std_readwrite.txt", "hello world")
     var content = readFile("/tmp/cot_std_readwrite.txt") catch ""
-    @assert_eq(@lenOf(content), 11)
+    @assertEq(@lenOf(content), 11)
 }
 
 test "fs: readFile reads correct content" {

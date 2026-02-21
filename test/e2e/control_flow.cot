@@ -229,145 +229,145 @@ fn cf97_fizzbuzz(n: i64) i64 {
 // === Tests ===
 
 test "001: positive check" {
-    @assert_eq(cf01_check(5), 1)
+    @assertEq(cf01_check(5), 1)
 }
 
 test "002: loop sum" {
-    @assert_eq(cf02_sum(5), 10)
+    @assertEq(cf02_sum(5), 10)
 }
 
 test "003: nested classify" {
-    @assert_eq(cf03_classify(5), 1)
+    @assertEq(cf03_classify(5), 1)
 }
 
 test "004: if else" {
-    @assert_eq(cf04_test_else(5), 1)
+    @assertEq(cf04_test_else(5), 1)
 }
 
 test "005: else if chain" {
-    @assert_eq(cf05_classify(0), 1)
+    @assertEq(cf05_classify(0), 1)
 }
 
 test "006: break in loop" {
-    @assert_eq(cf06_find_first_gt(10), 11)
+    @assertEq(cf06_find_first_gt(10), 11)
 }
 
 test "007: continue skip even" {
-    @assert_eq(cf07_sum_odd(10), 25)
+    @assertEq(cf07_sum_odd(10), 25)
 }
 
 test "008: nested loop product" {
-    @assert_eq(cf08_mul_table_sum(3), 36)
+    @assertEq(cf08_mul_table_sum(3), 36)
 }
 
 test "009: find zero position" {
-    @assert_eq(cf09_find_zero(1, 0, 1), 2)
+    @assertEq(cf09_find_zero(1, 0, 1), 2)
 }
 
 test "010: triple positive check" {
-    @assert_eq(cf10_check(1, 2, 3), 1)
+    @assertEq(cf10_check(1, 2, 3), 1)
 }
 
 test "011: deep nesting" {
-    @assert_eq(cf11_deep_nest(12), 3)
+    @assertEq(cf11_deep_nest(12), 3)
 }
 
 test "012: sum even numbers" {
-    @assert_eq(cf12_sum_even(10), 30)
+    @assertEq(cf12_sum_even(10), 30)
 }
 
 test "013: conditional sum" {
-    @assert_eq(cf13_conditional_sum(1, 5), 15)
+    @assertEq(cf13_conditional_sum(1, 5), 15)
 }
 
 test "014: nested break product" {
-    @assert_eq(cf14_find_product(20), 21)
+    @assertEq(cf14_find_product(20), 21)
 }
 
 test "015: multi return ranges" {
-    @assert_eq(cf15_multi_return(50), 2)
+    @assertEq(cf15_multi_return(50), 2)
 }
 
 test "016: countdown loop" {
-    @assert_eq(cf16_count_down(10), 10)
+    @assertEq(cf16_count_down(10), 10)
 }
 
 test "017: gcd algorithm" {
-    @assert_eq(cf17_gcd(48, 18), 6)
+    @assertEq(cf17_gcd(48, 18), 6)
 }
 
 test "018: count fizzbuzz" {
-    @assert_eq(cf18_count_fizzbuzz(30), 2)
+    @assertEq(cf18_count_fizzbuzz(30), 2)
 }
 
 test "019: first divisible" {
-    @assert_eq(cf19_find_first_divisible(10, 3), 3)
+    @assertEq(cf19_find_first_divisible(10, 3), 3)
 }
 
 test "020: sum digits" {
-    @assert_eq(cf20_sum_digits(12345), 15)
+    @assertEq(cf20_sum_digits(12345), 15)
 }
 
 // 021-025: skipped (extern/malloc)
 
 test "026: count to n" {
-    @assert_eq(cf26_count_to(100), 100)
+    @assertEq(cf26_count_to(100), 100)
 }
 
 test "027: false condition" {
-    @assert_eq(cf27_false_cond(), 0)
+    @assertEq(cf27_false_cond(), 0)
 }
 
 test "028: true condition" {
-    @assert_eq(cf28_true_cond(), 42)
+    @assertEq(cf28_true_cond(), 42)
 }
 
 test "029: break on sum limit" {
-    @assert_eq(cf29_find_sum_gt(50), 55)
+    @assertEq(cf29_find_sum_gt(50), 55)
 }
 
 test "030: first divisible two" {
-    @assert_eq(cf30_first_divisible(20, 7, 11), 7)
+    @assertEq(cf30_first_divisible(20, 7, 11), 7)
 }
 
 test "031: range classify" {
-    @assert_eq(cf31_classify(35), 3)
+    @assertEq(cf31_classify(35), 3)
 }
 
 test "032: while false body" {
-    @assert_eq(cf32_while_zero(), 0)
+    @assertEq(cf32_while_zero(), 0)
 }
 
 test "033: nested else branches" {
-    @assert_eq(cf33_nested_else(0 - 1, 5), 3)
+    @assertEq(cf33_nested_else(0 - 1, 5), 3)
 }
 
 test "034: count modulo matches" {
-    @assert_eq(cf34_count_matches(20, 4), 5)
+    @assertEq(cf34_count_matches(20, 4), 5)
 }
 
 test "035: alternating sum" {
-    @assert_eq(cf35_sum_alternating(10), 0 - 5)
+    @assertEq(cf35_sum_alternating(10), 0 - 5)
 }
 
 test "036: count odd in range" {
-    @assert_eq(cf36_count_odd_in_range(1, 10), 5)
+    @assertEq(cf36_count_odd_in_range(1, 10), 5)
 }
 
 test "037: matrix sum" {
-    @assert_eq(cf37_sum_matrix(4), 100)
+    @assertEq(cf37_sum_matrix(4), 100)
 }
 
 test "038: nested loop count" {
     var sum: i64 = 0; var i: i64 = 0;
     while (i < 5) { var j: i64 = 0; while (j < 5) { sum = sum + 1; j = j + 1; } i = i + 1; }
-    @assert_eq(sum, 25)
+    @assertEq(sum, 25)
 }
 
 test "039: triple nested loop" {
     var sum: i64 = 0; var i: i64 = 0;
     while (i < 3) { var j: i64 = 0; while (j < 3) { var k: i64 = 0; while (k < 3) { sum = sum + 1; k = k + 1; } j = j + 1; } i = i + 1; }
-    @assert_eq(sum, 27)
+    @assertEq(sum, 27)
 }
 
 // 040,041: skipped (malformed)
@@ -389,18 +389,18 @@ test "044: and or combined" {
 }
 
 test "045: multi-path check" {
-    @assert_eq(cf45_check(0 - 5), 0 - 1)
-    @assert_eq(cf45_check(0), 0)
-    @assert_eq(cf45_check(1), 1)
-    @assert_eq(cf45_check(5), 10)
+    @assertEq(cf45_check(0 - 5), 0 - 1)
+    @assertEq(cf45_check(0), 0)
+    @assertEq(cf45_check(1), 1)
+    @assertEq(cf45_check(5), 10)
 }
 
 test "046: grade classification" {
-    @assert_eq(cf46_grade(95), 4)
-    @assert_eq(cf46_grade(85), 3)
-    @assert_eq(cf46_grade(75), 2)
-    @assert_eq(cf46_grade(65), 1)
-    @assert_eq(cf46_grade(55), 0)
+    @assertEq(cf46_grade(95), 4)
+    @assertEq(cf46_grade(85), 3)
+    @assertEq(cf46_grade(75), 2)
+    @assertEq(cf46_grade(65), 1)
+    @assertEq(cf46_grade(55), 0)
 }
 
 // 047: skipped (malformed)
@@ -415,47 +415,47 @@ test "048: deep nesting true" {
 }
 
 test "049: classify ranges" {
-    @assert_eq(cf49_classify(0 - 5), 0 - 1)
-    @assert_eq(cf49_classify(0), 0)
-    @assert_eq(cf49_classify(5), 1)
-    @assert_eq(cf49_classify(50), 2)
-    @assert_eq(cf49_classify(500), 3)
+    @assertEq(cf49_classify(0 - 5), 0 - 1)
+    @assertEq(cf49_classify(0), 0)
+    @assertEq(cf49_classify(5), 1)
+    @assertEq(cf49_classify(50), 2)
+    @assertEq(cf49_classify(500), 3)
 }
 
 test "050: sum until threshold" {
-    @assert_eq(cf50_sum_until_threshold(), 21)
+    @assertEq(cf50_sum_until_threshold(), 21)
 }
 
 test "051: find divisible by 3" {
-    @assert_eq(cf51_find_div3(10, 20), 12)
+    @assertEq(cf51_find_div3(10, 20), 12)
 }
 
 test "052: count in range" {
-    @assert_eq(cf52_count_in_range(1, 100, 7), 14)
+    @assertEq(cf52_count_in_range(1, 100, 7), 14)
 }
 
 test "053: sum range" {
-    @assert_eq(cf53_sum_range(1, 100), 5050)
+    @assertEq(cf53_sum_range(1, 100), 5050)
 }
 
 test "054: product range" {
-    @assert_eq(cf54_product_range(1, 6), 720)
+    @assertEq(cf54_product_range(1, 6), 720)
 }
 
 test "055: sum odd numbers" {
-    @assert_eq(cf55_sum_odds(10), 25)
+    @assertEq(cf55_sum_odds(10), 25)
 }
 
 test "056: two-arg classify" {
-    @assert_eq(cf56_check(1, 1), 1)
-    @assert_eq(cf56_check(1, 0 - 1), 2)
-    @assert_eq(cf56_check(0 - 1, 1), 3)
+    @assertEq(cf56_check(1, 1), 1)
+    @assertEq(cf56_check(1, 0 - 1), 2)
+    @assertEq(cf56_check(0 - 1, 1), 3)
 }
 
 test "057: while with and" {
     var i: i64 = 0; var sum: i64 = 0;
     while (i < 10 and sum < 20) { sum = sum + i; i = i + 1; }
-    @assert_eq(sum, 21)
+    @assertEq(sum, 21)
 }
 
 // 058: skipped (malformed)
@@ -463,24 +463,24 @@ test "057: while with and" {
 test "059: infinite loop break" {
     var i: i64 = 0;
     while (1 == 1) { i = i + 1; if (i >= 10) { break; } }
-    @assert_eq(i, 10)
+    @assertEq(i, 10)
 }
 
 test "060: countdown to zero" {
     var n: i64 = 10; while (n > 0) { n = n - 1; }
-    @assert_eq(n, 0)
+    @assertEq(n, 0)
 }
 
 test "061: step by two sum" {
     var sum: i64 = 0; var i: i64 = 0;
     while (i < 10) { sum = sum + i; i = i + 2; }
-    @assert_eq(sum, 20)
+    @assertEq(sum, 20)
 }
 
 test "062: power of two loop" {
     var x: i64 = 1; var i: i64 = 0;
     while (i < 10) { x = x * 2; i = i + 1; }
-    @assert_eq(x, 1024)
+    @assertEq(x, 1024)
 }
 
 test "063: harmonic sum check" {
@@ -492,7 +492,7 @@ test "063: harmonic sum check" {
 test "064: nested loop counter" {
     var outer: i64 = 0; var i: i64 = 0;
     while (i < 5) { var j: i64 = 0; while (j < 5) { outer = outer + 1; j = j + 1; } i = i + 1; }
-    @assert_eq(outer, 25)
+    @assertEq(outer, 25)
 }
 
 // 065,066: skipped (extern/malformed)
@@ -500,13 +500,13 @@ test "064: nested loop counter" {
 test "067: alternating sign sum" {
     var sum: i64 = 0; var i: i64 = 1; var sign: i64 = 1;
     while (i <= 10) { sum = sum + sign * i; sign = 0 - sign; i = i + 1; }
-    @assert_eq(sum, 0 - 5)
+    @assertEq(sum, 0 - 5)
 }
 
 test "068: fibonacci loop" {
     var a: i64 = 0; var b: i64 = 1; var i: i64 = 0;
     while (i < 10) { var t: i64 = a + b; a = b; b = t; i = i + 1; }
-    @assert_eq(a, 55)
+    @assertEq(a, 55)
 }
 
 // 069: skipped (malformed)
@@ -514,113 +514,113 @@ test "068: fibonacci loop" {
 test "070: count primes to 100" {
     var count: i64 = 0; var n: i64 = 2;
     while (n <= 100) { count = count + cf70_is_prime(n); n = n + 1; }
-    @assert_eq(count, 25)
+    @assertEq(count, 25)
 }
 
 test "071: day of week" {
-    @assert_eq(cf71_day_of_week(3), 3)
-    @assert_eq(cf71_day_of_week(7), 0 - 1)
+    @assertEq(cf71_day_of_week(3), 3)
+    @assertEq(cf71_day_of_week(7), 0 - 1)
 }
 
 test "072: grade function" {
-    @assert_eq(cf72_grade(95), 4)
-    @assert_eq(cf72_grade(75), 2)
-    @assert_eq(cf72_grade(55), 0)
+    @assertEq(cf72_grade(95), 4)
+    @assertEq(cf72_grade(75), 2)
+    @assertEq(cf72_grade(55), 0)
 }
 
 test "073: in range check" {
-    @assert_eq(cf73_in_range(5, 0, 10), 1)
-    @assert_eq(cf73_in_range(15, 0, 10), 0)
+    @assertEq(cf73_in_range(5, 0, 10), 1)
+    @assertEq(cf73_in_range(15, 0, 10), 0)
 }
 
 test "074: clamp function" {
-    @assert_eq(cf74_clamp(5, 0, 10), 5)
-    @assert_eq(cf74_clamp(0 - 5, 0, 10), 0)
-    @assert_eq(cf74_clamp(15, 0, 10), 10)
+    @assertEq(cf74_clamp(5, 0, 10), 5)
+    @assertEq(cf74_clamp(0 - 5, 0, 10), 0)
+    @assertEq(cf74_clamp(15, 0, 10), 10)
 }
 
 test "075: first positive" {
-    @assert_eq(cf75_find_first_positive(0 - 1, 0 - 2, 3, 4), 3)
+    @assertEq(cf75_find_first_positive(0 - 1, 0 - 2, 3, 4), 3)
 }
 
 test "076: sign function" {
-    @assert_eq(cf76_sign(42), 1)
-    @assert_eq(cf76_sign(0 - 5), 0 - 1)
-    @assert_eq(cf76_sign(0), 0)
+    @assertEq(cf76_sign(42), 1)
+    @assertEq(cf76_sign(0 - 5), 0 - 1)
+    @assertEq(cf76_sign(0), 0)
 }
 
 test "077: all true check" {
-    @assert_eq(cf77_all_true(1, 1, 1), 1)
-    @assert_eq(cf77_all_true(1, 0, 1), 0)
+    @assertEq(cf77_all_true(1, 1, 1), 1)
+    @assertEq(cf77_all_true(1, 0, 1), 0)
 }
 
 test "078: any true check" {
-    @assert_eq(cf78_any_true(0, 0, 1), 1)
-    @assert_eq(cf78_any_true(0, 0, 0), 0)
+    @assertEq(cf78_any_true(0, 0, 1), 1)
+    @assertEq(cf78_any_true(0, 0, 0), 0)
 }
 
 test "079: count divisible" {
-    @assert_eq(cf79_count_divisible(20, 3), 6)
+    @assertEq(cf79_count_divisible(20, 3), 6)
 }
 
 test "080: sum divisible" {
-    @assert_eq(cf80_sum_divisible(10, 2), 30)
+    @assertEq(cf80_sum_divisible(10, 2), 30)
 }
 
 test "081: countdown sum" {
-    @assert_eq(cf81_countdown(5), 15)
+    @assertEq(cf81_countdown(5), 15)
 }
 
 test "082: even sum" {
-    @assert_eq(cf82_even_sum(10), 30)
+    @assertEq(cf82_even_sum(10), 30)
 }
 
 test "083: odd sum" {
-    @assert_eq(cf83_odd_sum(10), 25)
+    @assertEq(cf83_odd_sum(10), 25)
 }
 
 test "084: nested loop 3x4" {
     var sum: i64 = 0; var i: i64 = 0;
     while (i < 3) { var j: i64 = 0; while (j < 4) { sum = sum + 1; j = j + 1; } i = i + 1; }
-    @assert_eq(sum, 12)
+    @assertEq(sum, 12)
 }
 
 test "085: triple nested 2x3x4" {
     var sum: i64 = 0; var i: i64 = 0;
     while (i < 2) { var j: i64 = 0; while (j < 3) { var k: i64 = 0; while (k < 4) { sum = sum + 1; k = k + 1; } j = j + 1; } i = i + 1; }
-    @assert_eq(sum, 24)
+    @assertEq(sum, 24)
 }
 
 // 086: skipped (malformed)
 
 test "087: classify value" {
-    @assert_eq(cf87_classify(50), 2)
+    @assertEq(cf87_classify(50), 2)
 }
 
 // 088: skipped (malformed)
 
 test "089: nested else grade" {
-    @assert_eq(cf89_grade(85), 3)
+    @assertEq(cf89_grade(85), 3)
 }
 
 // 090: skipped (malformed)
 
 test "091: first even value" {
-    @assert_eq(cf91_find_first_even(1, 3, 4, 5), 4)
+    @assertEq(cf91_find_first_even(1, 3, 4, 5), 4)
 }
 
 test "092: classify char code" {
-    @assert_eq(cf92_classify_char(65), 2)
+    @assertEq(cf92_classify_char(65), 2)
 }
 
 test "093: find divisor" {
-    @assert_eq(cf93_find_divisor(15), 3)
+    @assertEq(cf93_find_divisor(15), 3)
 }
 
 test "094: triangular loop sum" {
     var sum: i64 = 0; var i: i64 = 1;
     while (i <= 5) { var j: i64 = 1; while (j <= i) { sum = sum + j; j = j + 1; } i = i + 1; }
-    @assert_eq(sum, 35)
+    @assertEq(sum, 35)
 }
 
 // 095: skipped (extern/malloc)
@@ -633,16 +633,16 @@ test "096: multiple divisibility" {
 }
 
 test "097: fizzbuzz classify" {
-    @assert_eq(cf97_fizzbuzz(15), 3)
-    @assert_eq(cf97_fizzbuzz(9), 1)
-    @assert_eq(cf97_fizzbuzz(10), 2)
-    @assert_eq(cf97_fizzbuzz(7), 0)
+    @assertEq(cf97_fizzbuzz(15), 3)
+    @assertEq(cf97_fizzbuzz(9), 1)
+    @assertEq(cf97_fizzbuzz(10), 2)
+    @assertEq(cf97_fizzbuzz(7), 0)
 }
 
 test "098: factorial loop" {
     var product: i64 = 1; var i: i64 = 1;
     while (i <= 5) { product = product * i; i = i + 1; }
-    @assert_eq(product, 120)
+    @assertEq(product, 120)
 }
 
 // 099,100: skipped (malformed)

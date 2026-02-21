@@ -8,6 +8,7 @@
 
 import "std/list"
 import "std/string"
+import "std/sys"
 
 // Type tags
 const JSON_NULL: i64 = 0
@@ -44,7 +45,7 @@ struct JsonParser {
 // ============================================================================
 
 fn jsonNull() i64 {
-    var p = @alloc(40)
+    var p = alloc(0,40)
     @intToPtr(*i64, p).* = JSON_NULL
     @intToPtr(*i64, p + 8).* = 0
     @intToPtr(*i64, p + 16).* = 0
@@ -54,7 +55,7 @@ fn jsonNull() i64 {
 }
 
 fn jsonBool(val: bool) i64 {
-    var p = @alloc(40)
+    var p = alloc(0,40)
     @intToPtr(*i64, p).* = JSON_BOOL
     if (val) {
         @intToPtr(*i64, p + 8).* = 1
@@ -68,7 +69,7 @@ fn jsonBool(val: bool) i64 {
 }
 
 fn jsonInt(val: i64) i64 {
-    var p = @alloc(40)
+    var p = alloc(0,40)
     @intToPtr(*i64, p).* = JSON_INT
     @intToPtr(*i64, p + 8).* = val
     @intToPtr(*i64, p + 16).* = 0
@@ -78,7 +79,7 @@ fn jsonInt(val: i64) i64 {
 }
 
 fn jsonString(val: string) i64 {
-    var p = @alloc(40)
+    var p = alloc(0,40)
     @intToPtr(*i64, p).* = JSON_STRING
     @intToPtr(*i64, p + 8).* = 0
     @intToPtr(*i64, p + 16).* = @ptrOf(val)
@@ -90,7 +91,7 @@ fn jsonString(val: string) i64 {
 // Ref: Go encoding/json uses strconv.ParseFloat
 // Store float as string representation (V1: no f64 type in Cot yet)
 fn jsonFloat(str_repr: string) i64 {
-    var p = @alloc(40)
+    var p = alloc(0,40)
     @intToPtr(*i64, p).* = JSON_FLOAT
     @intToPtr(*i64, p + 8).* = 0
     @intToPtr(*i64, p + 16).* = @ptrOf(str_repr)
@@ -100,10 +101,10 @@ fn jsonFloat(str_repr: string) i64 {
 }
 
 fn jsonArray() i64 {
-    var p = @alloc(40)
+    var p = alloc(0,40)
     @intToPtr(*i64, p).* = JSON_ARRAY
     // Allocate a List(i64) for element pointers
-    var list_p = @alloc(24)
+    var list_p = alloc(0,24)
     @intToPtr(*i64, list_p).* = 0
     @intToPtr(*i64, list_p + 8).* = 0
     @intToPtr(*i64, list_p + 16).* = 0
@@ -115,16 +116,16 @@ fn jsonArray() i64 {
 }
 
 fn jsonObject() i64 {
-    var p = @alloc(40)
+    var p = alloc(0,40)
     @intToPtr(*i64, p).* = JSON_OBJECT
     // keys: List(string) — each entry is 2 i64 (ptr, len)
-    var keys_p = @alloc(24)
+    var keys_p = alloc(0,24)
     @intToPtr(*i64, keys_p).* = 0
     @intToPtr(*i64, keys_p + 8).* = 0
     @intToPtr(*i64, keys_p + 16).* = 0
     @intToPtr(*i64, p + 8).* = keys_p
     // values: List(i64) — each entry is a JsonValue pointer
-    var vals_p = @alloc(24)
+    var vals_p = alloc(0,24)
     @intToPtr(*i64, vals_p).* = 0
     @intToPtr(*i64, vals_p + 8).* = 0
     @intToPtr(*i64, vals_p + 16).* = 0
@@ -196,9 +197,9 @@ fn jsonArrayPush(arr: i64, val: i64) void {
         var new_cap = cap * 2
         if (new_cap < 8) { new_cap = 8 }
         if (cap == 0) {
-            items = @alloc(new_cap * 8)
+            items = alloc(0,new_cap * 8)
         } else {
-            items = @realloc(items, new_cap * 8)
+            items = realloc(items, new_cap * 8)
         }
         @intToPtr(*i64, list_p).* = items
         @intToPtr(*i64, list_p + 16).* = new_cap
@@ -245,9 +246,9 @@ fn jsonObjectPut(obj: i64, key: string, val: i64) void {
         var new_cap = k_cap * 2
         if (new_cap < 8) { new_cap = 8 }
         if (k_cap == 0) {
-            k_items = @alloc(new_cap * 16)
+            k_items = alloc(0,new_cap * 16)
         } else {
-            k_items = @realloc(k_items, new_cap * 16)
+            k_items = realloc(k_items, new_cap * 16)
         }
         @intToPtr(*i64, keys_p).* = k_items
         @intToPtr(*i64, keys_p + 16).* = new_cap
@@ -264,9 +265,9 @@ fn jsonObjectPut(obj: i64, key: string, val: i64) void {
         var new_cap = v_cap * 2
         if (new_cap < 8) { new_cap = 8 }
         if (v_cap == 0) {
-            v_items = @alloc(new_cap * 8)
+            v_items = alloc(0,new_cap * 8)
         } else {
-            v_items = @realloc(v_items, new_cap * 8)
+            v_items = realloc(v_items, new_cap * 8)
         }
         @intToPtr(*i64, vals_p).* = v_items
         @intToPtr(*i64, vals_p + 16).* = new_cap
@@ -318,7 +319,7 @@ fn jsonObjectGetBool(obj: i64, key: string) bool {
 // ============================================================================
 
 fn parserNew(input: string) i64 {
-    var p = @alloc(24)
+    var p = alloc(0,24)
     @intToPtr(*i64, p).* = @ptrOf(input)
     @intToPtr(*i64, p + 8).* = @lenOf(input)
     @intToPtr(*i64, p + 16).* = 0
@@ -848,8 +849,8 @@ fn jsonFree(val: i64) void {
                 jsonFree(@intToPtr(*i64, items + i * 8).*)
                 i += 1
             }
-            if (items != 0) { @dealloc(items) }
-            @dealloc(arr_p)
+            if (items != 0) { dealloc(items) }
+            dealloc(arr_p)
         }
     }
 
@@ -864,15 +865,15 @@ fn jsonFree(val: i64) void {
                 jsonFree(@intToPtr(*i64, v_items + i * 8).*)
                 i += 1
             }
-            if (v_items != 0) { @dealloc(v_items) }
-            @dealloc(vals_p)
+            if (v_items != 0) { dealloc(v_items) }
+            dealloc(vals_p)
         }
         if (keys_p != 0) {
             var k_items = @intToPtr(*i64, keys_p).*
-            if (k_items != 0) { @dealloc(k_items) }
-            @dealloc(keys_p)
+            if (k_items != 0) { dealloc(k_items) }
+            dealloc(keys_p)
         }
     }
 
-    @dealloc(val)
+    dealloc(val)
 }

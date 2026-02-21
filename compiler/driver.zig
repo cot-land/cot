@@ -939,43 +939,43 @@ pub const Driver = struct {
             var override_name: ?[]const u8 = null;
             for (exports) |exp| {
                 if (exp.kind == .func and exp.index == i) {
-                    if (std.mem.eql(u8, exp.name, "cot_write") or
-                        std.mem.eql(u8, exp.name, "cot_fd_write_simple") or
-                        std.mem.eql(u8, exp.name, "cot_fd_read_simple") or
-                        std.mem.eql(u8, exp.name, "cot_fd_close") or
-                        std.mem.eql(u8, exp.name, "cot_fd_seek") or
-                        std.mem.eql(u8, exp.name, "cot_fd_open") or
-                        std.mem.eql(u8, exp.name, "cot_time") or
-                        std.mem.eql(u8, exp.name, "cot_random") or
-                        std.mem.eql(u8, exp.name, "cot_exit") or
+                    if (std.mem.eql(u8, exp.name, "write") or
+                        std.mem.eql(u8, exp.name, "fd_write") or
+                        std.mem.eql(u8, exp.name, "fd_read") or
+                        std.mem.eql(u8, exp.name, "fd_close") or
+                        std.mem.eql(u8, exp.name, "fd_seek") or
+                        std.mem.eql(u8, exp.name, "fd_open") or
+                        std.mem.eql(u8, exp.name, "time") or
+                        std.mem.eql(u8, exp.name, "random") or
+                        std.mem.eql(u8, exp.name, "exit") or
                         std.mem.eql(u8, exp.name, "wasi_fd_write") or
-                        std.mem.eql(u8, exp.name, "cot_args_count") or
-                        std.mem.eql(u8, exp.name, "cot_arg_len") or
-                        std.mem.eql(u8, exp.name, "cot_arg_ptr") or
-                        std.mem.eql(u8, exp.name, "cot_environ_count") or
-                        std.mem.eql(u8, exp.name, "cot_environ_len") or
-                        std.mem.eql(u8, exp.name, "cot_environ_ptr") or
-                        std.mem.eql(u8, exp.name, "cot_net_socket") or
-                        std.mem.eql(u8, exp.name, "cot_net_bind") or
-                        std.mem.eql(u8, exp.name, "cot_net_listen") or
-                        std.mem.eql(u8, exp.name, "cot_net_accept") or
-                        std.mem.eql(u8, exp.name, "cot_net_connect") or
-                        std.mem.eql(u8, exp.name, "cot_net_set_reuse_addr") or
-                        std.mem.eql(u8, exp.name, "cot_kqueue_create") or
-                        std.mem.eql(u8, exp.name, "cot_kevent_add") or
-                        std.mem.eql(u8, exp.name, "cot_kevent_del") or
-                        std.mem.eql(u8, exp.name, "cot_kevent_wait") or
-                        std.mem.eql(u8, exp.name, "cot_epoll_create") or
-                        std.mem.eql(u8, exp.name, "cot_epoll_add") or
-                        std.mem.eql(u8, exp.name, "cot_epoll_del") or
-                        std.mem.eql(u8, exp.name, "cot_epoll_wait") or
-                        std.mem.eql(u8, exp.name, "cot_set_nonblocking") or
-                        std.mem.eql(u8, exp.name, "cot_fork") or
-                        std.mem.eql(u8, exp.name, "cot_execve") or
-                        std.mem.eql(u8, exp.name, "cot_waitpid") or
-                        std.mem.eql(u8, exp.name, "cot_pipe") or
-                        std.mem.eql(u8, exp.name, "cot_dup2") or
-                        std.mem.eql(u8, exp.name, "cot_isatty"))
+                        std.mem.eql(u8, exp.name, "args_count") or
+                        std.mem.eql(u8, exp.name, "arg_len") or
+                        std.mem.eql(u8, exp.name, "arg_ptr") or
+                        std.mem.eql(u8, exp.name, "environ_count") or
+                        std.mem.eql(u8, exp.name, "environ_len") or
+                        std.mem.eql(u8, exp.name, "environ_ptr") or
+                        std.mem.eql(u8, exp.name, "net_socket") or
+                        std.mem.eql(u8, exp.name, "net_bind") or
+                        std.mem.eql(u8, exp.name, "net_listen") or
+                        std.mem.eql(u8, exp.name, "net_accept") or
+                        std.mem.eql(u8, exp.name, "net_connect") or
+                        std.mem.eql(u8, exp.name, "net_set_reuse_addr") or
+                        std.mem.eql(u8, exp.name, "kqueue_create") or
+                        std.mem.eql(u8, exp.name, "kevent_add") or
+                        std.mem.eql(u8, exp.name, "kevent_del") or
+                        std.mem.eql(u8, exp.name, "kevent_wait") or
+                        std.mem.eql(u8, exp.name, "epoll_create") or
+                        std.mem.eql(u8, exp.name, "epoll_add") or
+                        std.mem.eql(u8, exp.name, "epoll_del") or
+                        std.mem.eql(u8, exp.name, "epoll_wait") or
+                        std.mem.eql(u8, exp.name, "set_nonblocking") or
+                        std.mem.eql(u8, exp.name, "fork") or
+                        std.mem.eql(u8, exp.name, "execve") or
+                        std.mem.eql(u8, exp.name, "waitpid") or
+                        std.mem.eql(u8, exp.name, "pipe") or
+                        std.mem.eql(u8, exp.name, "dup2") or
+                        std.mem.eql(u8, exp.name, "isatty"))
                     {
                         override_name = exp.name;
                         break;
@@ -983,7 +983,7 @@ pub const Driver = struct {
                 }
             }
             if (override_name) |name| {
-                if (std.mem.eql(u8, name, "cot_write") or std.mem.eql(u8, name, "cot_fd_write_simple")) {
+                if (std.mem.eql(u8, name, "write") or std.mem.eql(u8, name, "fd_write")) {
                     // ARM64 macOS syscall for write(fd, ptr, len)
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=fd, x3=ptr, x4=len
                     // Reference: Go syscall1 on Darwin ARM64 — BCC/NEG pattern for error handling
@@ -1003,7 +1003,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_write, &.{});
-                } else if (std.mem.eql(u8, name, "cot_fd_read_simple")) {
+                } else if (std.mem.eql(u8, name, "fd_read")) {
                     // ARM64 macOS syscall for read(fd, buf, len)
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=fd, x3=buf, x4=len
                     // Reference: Go syscall1 on Darwin ARM64 — BCC/NEG pattern
@@ -1023,7 +1023,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_read, &.{});
-                } else if (std.mem.eql(u8, name, "cot_fd_close")) {
+                } else if (std.mem.eql(u8, name, "fd_close")) {
                     // ARM64 macOS syscall for close(fd)
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=fd
                     // Reference: Go syscall1 on Darwin ARM64 — BCC/NEG pattern
@@ -1040,7 +1040,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_close, &.{});
-                } else if (std.mem.eql(u8, name, "cot_fd_seek")) {
+                } else if (std.mem.eql(u8, name, "fd_seek")) {
                     // ARM64 macOS syscall for lseek(fd, offset, whence)
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=fd, x3=offset, x4=whence
                     // Reference: Go syscall1 on Darwin ARM64 — BCC/NEG pattern
@@ -1059,7 +1059,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_seek, &.{});
-                } else if (std.mem.eql(u8, name, "cot_fd_open")) {
+                } else if (std.mem.eql(u8, name, "fd_open")) {
                     // ARM64 macOS syscall for openat(AT_FDCWD, path, flags, mode)
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=path_ptr, x3=path_len, x4=flags
                     // Reference: Go zsyscall_darwin_arm64.go openat() + BCC/NEG pattern
@@ -1104,7 +1104,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_open, &.{});
-                } else if (std.mem.eql(u8, name, "cot_time")) {
+                } else if (std.mem.eql(u8, name, "time")) {
                     // ARM64 macOS: monotonic nanoseconds via CNTVCT_EL0
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx (no user args)
                     // Returns: i64 nanoseconds = CNTVCT_EL0 * 125 / 3
@@ -1122,7 +1122,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_time, &.{});
-                } else if (std.mem.eql(u8, name, "cot_random")) {
+                } else if (std.mem.eql(u8, name, "random")) {
                     // ARM64 macOS: getentropy(buf, len) — fill buffer with random bytes
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=buf(wasm ptr), x3=len
                     // Reference: Go rand_getrandom.go chunk loop pattern
@@ -1157,7 +1157,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_random, &.{});
-                } else if (std.mem.eql(u8, name, "cot_exit")) {
+                } else if (std.mem.eql(u8, name, "exit")) {
                     // ARM64 macOS: exit(code) — never returns
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=code
                     // Reference: WASI proc_exit, Go runtime/sys_darwin_arm64.s exit_trampoline
@@ -1198,7 +1198,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_fd_write, &.{});
-                } else if (std.mem.eql(u8, name, "cot_args_count")) {
+                } else if (std.mem.eql(u8, name, "args_count")) {
                     // ARM64: read argc from vmctx+0x30000
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx (no user args)
                     // vmctx+0x30000 = argc (stored by _main wrapper)
@@ -1208,7 +1208,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_args_count, &.{});
-                } else if (std.mem.eql(u8, name, "cot_arg_len")) {
+                } else if (std.mem.eql(u8, name, "arg_len")) {
                     // ARM64: strlen(argv[n]) with bounds check
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=n
                     // Reference: Go goenvs() validates argc before accessing argv
@@ -1233,7 +1233,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret                         (x0 = strlen)
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_arg_len, &.{});
-                } else if (std.mem.eql(u8, name, "cot_arg_ptr")) {
+                } else if (std.mem.eql(u8, name, "arg_ptr")) {
                     // ARM64: copy argv[n] into linear memory at wasm offset 0xAF000 + n*4096
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=n
                     // Reference: Go goenvs() validates argc; Wasmtime uses caller-allocated buffers
@@ -1274,7 +1274,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_arg_ptr, &.{});
-                } else if (std.mem.eql(u8, name, "cot_environ_count")) {
+                } else if (std.mem.eql(u8, name, "environ_count")) {
                     // ARM64: walk envp array counting until NULL pointer
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx (no user args)
                     // envp at vmctx+0x30010
@@ -1291,7 +1291,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret                         (return count in x0)
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_environ_count, &.{});
-                } else if (std.mem.eql(u8, name, "cot_environ_len")) {
+                } else if (std.mem.eql(u8, name, "environ_len")) {
                     // ARM64: strlen(envp[n])
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=n
                     const arm64_environ_len = [_]u8{
@@ -1312,7 +1312,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_environ_len, &.{});
-                } else if (std.mem.eql(u8, name, "cot_environ_ptr")) {
+                } else if (std.mem.eql(u8, name, "environ_ptr")) {
                     // ARM64: copy envp[n] into linmem at 0x7F000 + n*4096, return wasm offset
                     // Reference: arm64_arg_ptr (same pattern, offset 0xAF000→0x7F000, argv→envp)
                     const arm64_environ_ptr = [_]u8{
@@ -1348,7 +1348,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_environ_ptr, &.{});
-                } else if (std.mem.eql(u8, name, "cot_net_socket")) {
+                } else if (std.mem.eql(u8, name, "net_socket")) {
                     // ARM64 macOS syscall for socket(domain, type, protocol)
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=domain, x3=type, x4=protocol
                     // macOS SYS_socket = 97
@@ -1367,7 +1367,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_socket, &.{});
-                } else if (std.mem.eql(u8, name, "cot_net_bind")) {
+                } else if (std.mem.eql(u8, name, "net_bind")) {
                     // ARM64 macOS syscall for bind(fd, addr_ptr, addr_len)
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=fd, x3=addr_ptr(wasm), x4=addr_len
                     // addr_ptr is a wasm pointer into linear memory
@@ -1387,7 +1387,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_bind, &.{});
-                } else if (std.mem.eql(u8, name, "cot_net_listen")) {
+                } else if (std.mem.eql(u8, name, "net_listen")) {
                     // ARM64 macOS syscall for listen(fd, backlog)
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=fd, x3=backlog
                     // macOS SYS_listen = 106
@@ -1404,7 +1404,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_listen, &.{});
-                } else if (std.mem.eql(u8, name, "cot_net_accept")) {
+                } else if (std.mem.eql(u8, name, "net_accept")) {
                     // ARM64 macOS syscall for accept(fd, NULL, NULL)
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=fd
                     // We pass NULL for addr and addrlen (don't need peer info)
@@ -1423,7 +1423,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_accept, &.{});
-                } else if (std.mem.eql(u8, name, "cot_net_connect")) {
+                } else if (std.mem.eql(u8, name, "net_connect")) {
                     // ARM64 macOS syscall for connect(fd, addr_ptr, addr_len)
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=fd, x3=addr_ptr(wasm), x4=addr_len
                     // macOS SYS_connect = 98
@@ -1442,7 +1442,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_connect, &.{});
-                } else if (std.mem.eql(u8, name, "cot_net_set_reuse_addr")) {
+                } else if (std.mem.eql(u8, name, "net_set_reuse_addr")) {
                     // ARM64 macOS syscall for setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, 4)
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=fd
                     // SOL_SOCKET=0xFFFF, SO_REUSEADDR=0x0004 on macOS
@@ -1468,7 +1468,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_reuse, &.{});
-                } else if (std.mem.eql(u8, name, "cot_kqueue_create")) {
+                } else if (std.mem.eql(u8, name, "kqueue_create")) {
                     // ARM64 macOS syscall for kqueue()
                     // No user args. Returns kqueue fd.
                     // macOS SYS_kqueue = 362
@@ -1483,7 +1483,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_kqueue_create, &.{});
-                } else if (std.mem.eql(u8, name, "cot_kevent_add")) {
+                } else if (std.mem.eql(u8, name, "kevent_add")) {
                     // ARM64 macOS: kevent(kq, changelist, 1, NULL, 0, NULL)
                     // Builds kevent struct on stack with EV_ADD|EV_CLEAR (0x0021)
                     // x2=kq, x3=fd, x4=filter. macOS SYS_kevent = 363
@@ -1513,7 +1513,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_kevent_add, &.{});
-                } else if (std.mem.eql(u8, name, "cot_kevent_del")) {
+                } else if (std.mem.eql(u8, name, "kevent_del")) {
                     // ARM64 macOS: kevent(kq, changelist, 1, NULL, 0, NULL)
                     // Builds kevent struct with EV_DELETE (0x0002)
                     // x2=kq, x3=fd, x4=filter. macOS SYS_kevent = 363
@@ -1543,7 +1543,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_kevent_del, &.{});
-                } else if (std.mem.eql(u8, name, "cot_kevent_wait")) {
+                } else if (std.mem.eql(u8, name, "kevent_wait")) {
                     // ARM64 macOS: kevent(kq, NULL, 0, eventlist, max_events, NULL)
                     // x2=kq, x3=buf_ptr(wasm), x4=max_events. SYS_kevent = 363
                     // buf_ptr converted to real ptr via linmem at vmctx+0x40000
@@ -1566,7 +1566,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_kevent_wait, &.{});
-                } else if (std.mem.eql(u8, name, "cot_set_nonblocking")) {
+                } else if (std.mem.eql(u8, name, "set_nonblocking")) {
                     // ARM64 macOS: fcntl(fd, F_GETFL) then fcntl(fd, F_SETFL, flags|O_NONBLOCK)
                     // x2=fd. macOS SYS_fcntl=92, F_GETFL=3, F_SETFL=4, O_NONBLOCK=4
                     const arm64_set_nonblocking = [_]u8{
@@ -1595,7 +1595,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_set_nonblocking, &.{});
-                } else if (std.mem.eql(u8, name, "cot_fork")) {
+                } else if (std.mem.eql(u8, name, "fork")) {
                     // ARM64 macOS: fork() syscall
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx (no value args)
                     // macOS SYS_fork = 2. Returns child pid in parent, 0 in child.
@@ -1615,7 +1615,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // 10: ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_fork, &.{});
-                } else if (std.mem.eql(u8, name, "cot_waitpid")) {
+                } else if (std.mem.eql(u8, name, "waitpid")) {
                     // ARM64 macOS: wait4(pid, &status, options, NULL) syscall
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=pid
                     // macOS SYS_wait4 = 7. Returns pid on success, status in stack buf.
@@ -1641,7 +1641,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_waitpid, &.{});
-                } else if (std.mem.eql(u8, name, "cot_pipe")) {
+                } else if (std.mem.eql(u8, name, "pipe")) {
                     // ARM64 macOS: pipe() syscall
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx (no value args)
                     // macOS SYS_pipe = 42. Writes [read_fd, write_fd] to buffer.
@@ -1661,7 +1661,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // 9: ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_pipe, &.{});
-                } else if (std.mem.eql(u8, name, "cot_dup2")) {
+                } else if (std.mem.eql(u8, name, "dup2")) {
                     // ARM64 macOS: dup2(oldfd, newfd) syscall
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=oldfd, x3=newfd
                     // macOS SYS_dup2 = 90. Returns newfd on success, -errno on error.
@@ -1678,7 +1678,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_dup2, &.{});
-                } else if (std.mem.eql(u8, name, "cot_isatty")) {
+                } else if (std.mem.eql(u8, name, "isatty")) {
                     // ARM64 macOS: isatty(fd) via ioctl(fd, TIOCGETA, &termios_buf)
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=fd
                     // Reference: POSIX isatty(3), macOS SYS_ioctl=54, TIOCGETA=0x40487413
@@ -1714,7 +1714,7 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6,
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_isatty, &.{});
-                } else if (std.mem.eql(u8, name, "cot_execve")) {
+                } else if (std.mem.eql(u8, name, "execve")) {
                     // ARM64 macOS: execve(path, argv, envp) syscall
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=path_ptr, x3=argv_ptr, x4=envp_ptr
                     // All pointers are wasm linear memory offsets — add linmem base.
@@ -1752,10 +1752,10 @@ pub const Driver = struct {
                         0xC0, 0x03, 0x5F, 0xD6, // 24: ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_execve, &.{});
-                } else if (std.mem.eql(u8, name, "cot_epoll_create") or
-                    std.mem.eql(u8, name, "cot_epoll_add") or
-                    std.mem.eql(u8, name, "cot_epoll_del") or
-                    std.mem.eql(u8, name, "cot_epoll_wait"))
+                } else if (std.mem.eql(u8, name, "epoll_create") or
+                    std.mem.eql(u8, name, "epoll_add") or
+                    std.mem.eql(u8, name, "epoll_del") or
+                    std.mem.eql(u8, name, "epoll_wait"))
                 {
                     // epoll is Linux-only — return -1 on macOS
                     const arm64_stub_neg1 = [_]u8{
@@ -2561,43 +2561,43 @@ pub const Driver = struct {
             var override_name: ?[]const u8 = null;
             for (exports) |exp| {
                 if (exp.kind == .func and exp.index == i) {
-                    if (std.mem.eql(u8, exp.name, "cot_write") or
-                        std.mem.eql(u8, exp.name, "cot_fd_write_simple") or
-                        std.mem.eql(u8, exp.name, "cot_fd_read_simple") or
-                        std.mem.eql(u8, exp.name, "cot_fd_close") or
-                        std.mem.eql(u8, exp.name, "cot_fd_seek") or
-                        std.mem.eql(u8, exp.name, "cot_fd_open") or
-                        std.mem.eql(u8, exp.name, "cot_time") or
-                        std.mem.eql(u8, exp.name, "cot_random") or
-                        std.mem.eql(u8, exp.name, "cot_exit") or
+                    if (std.mem.eql(u8, exp.name, "write") or
+                        std.mem.eql(u8, exp.name, "fd_write") or
+                        std.mem.eql(u8, exp.name, "fd_read") or
+                        std.mem.eql(u8, exp.name, "fd_close") or
+                        std.mem.eql(u8, exp.name, "fd_seek") or
+                        std.mem.eql(u8, exp.name, "fd_open") or
+                        std.mem.eql(u8, exp.name, "time") or
+                        std.mem.eql(u8, exp.name, "random") or
+                        std.mem.eql(u8, exp.name, "exit") or
                         std.mem.eql(u8, exp.name, "wasi_fd_write") or
-                        std.mem.eql(u8, exp.name, "cot_args_count") or
-                        std.mem.eql(u8, exp.name, "cot_arg_len") or
-                        std.mem.eql(u8, exp.name, "cot_arg_ptr") or
-                        std.mem.eql(u8, exp.name, "cot_environ_count") or
-                        std.mem.eql(u8, exp.name, "cot_environ_len") or
-                        std.mem.eql(u8, exp.name, "cot_environ_ptr") or
-                        std.mem.eql(u8, exp.name, "cot_net_socket") or
-                        std.mem.eql(u8, exp.name, "cot_net_bind") or
-                        std.mem.eql(u8, exp.name, "cot_net_listen") or
-                        std.mem.eql(u8, exp.name, "cot_net_accept") or
-                        std.mem.eql(u8, exp.name, "cot_net_connect") or
-                        std.mem.eql(u8, exp.name, "cot_net_set_reuse_addr") or
-                        std.mem.eql(u8, exp.name, "cot_kqueue_create") or
-                        std.mem.eql(u8, exp.name, "cot_kevent_add") or
-                        std.mem.eql(u8, exp.name, "cot_kevent_del") or
-                        std.mem.eql(u8, exp.name, "cot_kevent_wait") or
-                        std.mem.eql(u8, exp.name, "cot_epoll_create") or
-                        std.mem.eql(u8, exp.name, "cot_epoll_add") or
-                        std.mem.eql(u8, exp.name, "cot_epoll_del") or
-                        std.mem.eql(u8, exp.name, "cot_epoll_wait") or
-                        std.mem.eql(u8, exp.name, "cot_set_nonblocking") or
-                        std.mem.eql(u8, exp.name, "cot_fork") or
-                        std.mem.eql(u8, exp.name, "cot_execve") or
-                        std.mem.eql(u8, exp.name, "cot_waitpid") or
-                        std.mem.eql(u8, exp.name, "cot_pipe") or
-                        std.mem.eql(u8, exp.name, "cot_dup2") or
-                        std.mem.eql(u8, exp.name, "cot_isatty"))
+                        std.mem.eql(u8, exp.name, "args_count") or
+                        std.mem.eql(u8, exp.name, "arg_len") or
+                        std.mem.eql(u8, exp.name, "arg_ptr") or
+                        std.mem.eql(u8, exp.name, "environ_count") or
+                        std.mem.eql(u8, exp.name, "environ_len") or
+                        std.mem.eql(u8, exp.name, "environ_ptr") or
+                        std.mem.eql(u8, exp.name, "net_socket") or
+                        std.mem.eql(u8, exp.name, "net_bind") or
+                        std.mem.eql(u8, exp.name, "net_listen") or
+                        std.mem.eql(u8, exp.name, "net_accept") or
+                        std.mem.eql(u8, exp.name, "net_connect") or
+                        std.mem.eql(u8, exp.name, "net_set_reuse_addr") or
+                        std.mem.eql(u8, exp.name, "kqueue_create") or
+                        std.mem.eql(u8, exp.name, "kevent_add") or
+                        std.mem.eql(u8, exp.name, "kevent_del") or
+                        std.mem.eql(u8, exp.name, "kevent_wait") or
+                        std.mem.eql(u8, exp.name, "epoll_create") or
+                        std.mem.eql(u8, exp.name, "epoll_add") or
+                        std.mem.eql(u8, exp.name, "epoll_del") or
+                        std.mem.eql(u8, exp.name, "epoll_wait") or
+                        std.mem.eql(u8, exp.name, "set_nonblocking") or
+                        std.mem.eql(u8, exp.name, "fork") or
+                        std.mem.eql(u8, exp.name, "execve") or
+                        std.mem.eql(u8, exp.name, "waitpid") or
+                        std.mem.eql(u8, exp.name, "pipe") or
+                        std.mem.eql(u8, exp.name, "dup2") or
+                        std.mem.eql(u8, exp.name, "isatty"))
                     {
                         override_name = exp.name;
                         break;
@@ -2605,7 +2605,7 @@ pub const Driver = struct {
                 }
             }
             if (override_name) |name| {
-                if (std.mem.eql(u8, name, "cot_write") or std.mem.eql(u8, name, "cot_fd_write_simple")) {
+                if (std.mem.eql(u8, name, "write") or std.mem.eql(u8, name, "fd_write")) {
                     // x86-64 Linux syscall for write(fd, ptr, len)
                     // Cranelift CC: rdi=vmctx, rsi=caller_vmctx, rdx=fd, rcx=ptr(wasm), r8=len
                     // Linux write: rax=1(SYS_write), rdi=fd, rsi=buf, rdx=count
@@ -2622,7 +2622,7 @@ pub const Driver = struct {
                         0xC3, // ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_write, &.{});
-                } else if (std.mem.eql(u8, name, "cot_fd_read_simple")) {
+                } else if (std.mem.eql(u8, name, "fd_read")) {
                     // x86-64 Linux syscall for read(fd, buf, count)
                     // Cranelift CC: rdi=vmctx, rsi=caller_vmctx, rdx=fd, rcx=buf(wasm), r8=len
                     // Linux read: rax=0(SYS_read), rdi=fd, rsi=buf, rdx=count
@@ -2640,7 +2640,7 @@ pub const Driver = struct {
                         0xC3, // ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_read, &.{});
-                } else if (std.mem.eql(u8, name, "cot_fd_close")) {
+                } else if (std.mem.eql(u8, name, "fd_close")) {
                     // x86-64 Linux syscall for close(fd)
                     // Cranelift CC: rdi=vmctx, rsi=caller_vmctx, rdx=fd
                     // Linux close: rax=3(SYS_close), rdi=fd
@@ -2655,7 +2655,7 @@ pub const Driver = struct {
                         0xC3, // ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_close, &.{});
-                } else if (std.mem.eql(u8, name, "cot_fd_seek")) {
+                } else if (std.mem.eql(u8, name, "fd_seek")) {
                     // x86-64 Linux syscall for lseek(fd, offset, whence)
                     // Cranelift CC: rdi=vmctx, rsi=caller_vmctx, rdx=fd, rcx=offset, r8=whence
                     // Linux lseek: rax=8(SYS_lseek), rdi=fd, rsi=offset, rdx=whence
@@ -2672,7 +2672,7 @@ pub const Driver = struct {
                         0xC3, // ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_seek, &.{});
-                } else if (std.mem.eql(u8, name, "cot_fd_open")) {
+                } else if (std.mem.eql(u8, name, "fd_open")) {
                     // x86-64 Linux syscall for openat(AT_FDCWD, path, flags, mode)
                     // Cranelift CC: rdi=vmctx, rsi=caller_vmctx, rdx=path_ptr(wasm), rcx=path_len, r8=flags
                     // Must null-terminate path: copy to stack buffer, append \0
@@ -2735,7 +2735,7 @@ pub const Driver = struct {
                         0xC3, //157: ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_open, &.{});
-                } else if (std.mem.eql(u8, name, "cot_time")) {
+                } else if (std.mem.eql(u8, name, "time")) {
                     // x86-64 Linux: clock_gettime(CLOCK_REALTIME, &timespec) → nanoseconds
                     // Cranelift CC: rdi=vmctx, rsi=caller_vmctx (no user args)
                     // Returns: i64 nanoseconds = tv_sec * 1_000_000_000 + tv_nsec
@@ -2755,7 +2755,7 @@ pub const Driver = struct {
                         0xC3, // 43: ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_time, &.{});
-                } else if (std.mem.eql(u8, name, "cot_random")) {
+                } else if (std.mem.eql(u8, name, "random")) {
                     // x86-64 Linux: getrandom(buf, count, flags) — fill buffer with random bytes
                     // Cranelift CC: rdi=vmctx, rsi=caller_vmctx, rdx=buf(wasm ptr), rcx=len
                     // SYS_getrandom=318, no chunk limit needed but loop handles partial reads
@@ -2788,7 +2788,7 @@ pub const Driver = struct {
                         0xC3, // 57: ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_random, &.{});
-                } else if (std.mem.eql(u8, name, "cot_exit")) {
+                } else if (std.mem.eql(u8, name, "exit")) {
                     // x86-64 Linux: exit_group(code) — never returns
                     // Cranelift CC: rdi=vmctx, rsi=caller_vmctx, rdx=code
                     // SYS_exit_group=231 (kills all threads)
@@ -2832,7 +2832,7 @@ pub const Driver = struct {
                         0xC3, // 57: ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_wasi_write, &.{});
-                } else if (std.mem.eql(u8, name, "cot_args_count")) {
+                } else if (std.mem.eql(u8, name, "args_count")) {
                     // x86-64: read argc from vmctx+0x30000
                     // Cranelift CC: rdi=vmctx, rsi=caller_vmctx (no user args)
                     const x64_args_count = [_]u8{
@@ -2840,7 +2840,7 @@ pub const Driver = struct {
                         0xC3, // ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_args_count, &.{});
-                } else if (std.mem.eql(u8, name, "cot_arg_len")) {
+                } else if (std.mem.eql(u8, name, "arg_len")) {
                     // x86-64: strlen(argv[n]) with bounds check
                     // Cranelift CC: rdi=vmctx, rsi=caller_vmctx, rdx=n
                     // Returns strlen or 0 if n >= argc.
@@ -2865,7 +2865,7 @@ pub const Driver = struct {
                         0xC3, // 43: ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_arg_len, &.{});
-                } else if (std.mem.eql(u8, name, "cot_arg_ptr")) {
+                } else if (std.mem.eql(u8, name, "arg_ptr")) {
                     // x86-64: copy argv[n] into linear memory at wasm offset 0xAF000 + n*4096
                     // Cranelift CC: rdi=vmctx, rsi=caller_vmctx, rdx=n
                     // Each arg gets a 4096-byte slot; copy limited to 4095 bytes + NUL
@@ -2912,7 +2912,7 @@ pub const Driver = struct {
                         0xC3, //111: ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_arg_ptr, &.{});
-                } else if (std.mem.eql(u8, name, "cot_environ_count")) {
+                } else if (std.mem.eql(u8, name, "environ_count")) {
                     // x86-64: count envp entries by walking until NULL pointer
                     // Cranelift CC: rdi=vmctx, rsi=caller_vmctx (no user args)
                     // vmctx+0x30010 = envp (stored by main wrapper)
@@ -2933,7 +2933,7 @@ pub const Driver = struct {
                         0xC3, // 31: ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_environ_count, &.{});
-                } else if (std.mem.eql(u8, name, "cot_environ_len")) {
+                } else if (std.mem.eql(u8, name, "environ_len")) {
                     // x86-64: strlen(envp[n])
                     // Cranelift CC: rdi=vmctx, rsi=caller_vmctx, rdx=n
                     const x64_environ_len = [_]u8{
@@ -2959,7 +2959,7 @@ pub const Driver = struct {
                         0xC3, // 41: ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_environ_len, &.{});
-                } else if (std.mem.eql(u8, name, "cot_environ_ptr")) {
+                } else if (std.mem.eql(u8, name, "environ_ptr")) {
                     // x86-64: copy envp[n] into linear memory at wasm offset 0x7F000 + n*4096
                     // Cranelift CC: rdi=vmctx, rsi=caller_vmctx, rdx=n
                     // Same pattern as x64_arg_ptr but uses envp from vmctx+0x30010
@@ -3004,7 +3004,7 @@ pub const Driver = struct {
                         0xC3, //103: ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_environ_ptr, &.{});
-                } else if (std.mem.eql(u8, name, "cot_net_socket")) {
+                } else if (std.mem.eql(u8, name, "net_socket")) {
                     // x86-64 Linux syscall for socket(domain, type, protocol)
                     // Cranelift CC: rdi=vmctx, rsi=caller_vmctx, rdx=domain, rcx=type, r8=protocol
                     // Linux socket: rax=41(SYS_socket), rdi=domain, rsi=type, rdx=protocol
@@ -3020,7 +3020,7 @@ pub const Driver = struct {
                         0xC3, // ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_socket, &.{});
-                } else if (std.mem.eql(u8, name, "cot_net_bind")) {
+                } else if (std.mem.eql(u8, name, "net_bind")) {
                     // x86-64 Linux syscall for bind(fd, addr, addrlen)
                     // Cranelift CC: rdi=vmctx, rsi=caller_vmctx, rdx=fd, rcx=addr(wasm), r8=addrlen
                     // Linux bind: rax=49(SYS_bind), rdi=fd, rsi=addr, rdx=addrlen
@@ -3038,7 +3038,7 @@ pub const Driver = struct {
                         0xC3, // ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_bind, &.{});
-                } else if (std.mem.eql(u8, name, "cot_net_listen")) {
+                } else if (std.mem.eql(u8, name, "net_listen")) {
                     // x86-64 Linux syscall for listen(fd, backlog)
                     // Cranelift CC: rdi=vmctx, rsi=caller_vmctx, rdx=fd, rcx=backlog
                     // Linux listen: rax=50(SYS_listen), rdi=fd, rsi=backlog
@@ -3053,7 +3053,7 @@ pub const Driver = struct {
                         0xC3, // ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_listen, &.{});
-                } else if (std.mem.eql(u8, name, "cot_net_accept")) {
+                } else if (std.mem.eql(u8, name, "net_accept")) {
                     // x86-64 Linux syscall for accept(fd, NULL, NULL)
                     // Cranelift CC: rdi=vmctx, rsi=caller_vmctx, rdx=fd
                     // Linux accept: rax=43(SYS_accept), rdi=fd, rsi=addr(NULL), rdx=addrlen(NULL)
@@ -3069,7 +3069,7 @@ pub const Driver = struct {
                         0xC3, // ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_accept, &.{});
-                } else if (std.mem.eql(u8, name, "cot_net_connect")) {
+                } else if (std.mem.eql(u8, name, "net_connect")) {
                     // x86-64 Linux syscall for connect(fd, addr, addrlen)
                     // Cranelift CC: rdi=vmctx, rsi=caller_vmctx, rdx=fd, rcx=addr(wasm), r8=addrlen
                     // Linux connect: rax=42(SYS_connect), rdi=fd, rsi=addr, rdx=addrlen
@@ -3087,7 +3087,7 @@ pub const Driver = struct {
                         0xC3, // ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_connect, &.{});
-                } else if (std.mem.eql(u8, name, "cot_net_set_reuse_addr")) {
+                } else if (std.mem.eql(u8, name, "net_set_reuse_addr")) {
                     // x86-64 Linux syscall for setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, 4)
                     // Cranelift CC: rdi=vmctx, rsi=caller_vmctx, rdx=fd
                     // Linux: SOL_SOCKET=1, SO_REUSEADDR=2
@@ -3110,7 +3110,7 @@ pub const Driver = struct {
                         0xC3, // 54: ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_reuse, &.{});
-                } else if (std.mem.eql(u8, name, "cot_epoll_create")) {
+                } else if (std.mem.eql(u8, name, "epoll_create")) {
                     // x86-64 Linux: epoll_create1(0)
                     // SYS_epoll_create1 = 291
                     const x64_epoll_create = [_]u8{
@@ -3123,7 +3123,7 @@ pub const Driver = struct {
                         0xC3, // ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_epoll_create, &.{});
-                } else if (std.mem.eql(u8, name, "cot_epoll_add")) {
+                } else if (std.mem.eql(u8, name, "epoll_add")) {
                     // x86-64 Linux: epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &event)
                     // rdx=epfd, rcx=fd, r8=events_mask
                     // SYS_epoll_ctl = 233, EPOLL_CTL_ADD = 1
@@ -3145,7 +3145,7 @@ pub const Driver = struct {
                         0xC3, // 44: ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_epoll_add, &.{});
-                } else if (std.mem.eql(u8, name, "cot_epoll_del")) {
+                } else if (std.mem.eql(u8, name, "epoll_del")) {
                     // x86-64 Linux: epoll_ctl(epfd, EPOLL_CTL_DEL, fd, NULL)
                     // rdx=epfd, rcx=fd. SYS_epoll_ctl = 233, EPOLL_CTL_DEL = 2
                     const x64_epoll_del = [_]u8{
@@ -3161,7 +3161,7 @@ pub const Driver = struct {
                         0xC3, // ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_epoll_del, &.{});
-                } else if (std.mem.eql(u8, name, "cot_epoll_wait")) {
+                } else if (std.mem.eql(u8, name, "epoll_wait")) {
                     // x86-64 Linux: epoll_wait(epfd, events, maxevents, timeout=-1)
                     // rdx=epfd, rcx=buf_ptr(wasm), r8=max_events
                     // SYS_epoll_wait = 232, timeout=-1 (block indefinitely)
@@ -3180,7 +3180,7 @@ pub const Driver = struct {
                         0xC3, // ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_epoll_wait, &.{});
-                } else if (std.mem.eql(u8, name, "cot_set_nonblocking")) {
+                } else if (std.mem.eql(u8, name, "set_nonblocking")) {
                     // x86-64 Linux: fcntl(fd, F_GETFL) + fcntl(fd, F_SETFL, flags|O_NONBLOCK)
                     // rdx=fd. SYS_fcntl=72, F_GETFL=3, F_SETFL=4, O_NONBLOCK=0x800
                     const x64_set_nonblocking = [_]u8{
@@ -3206,7 +3206,7 @@ pub const Driver = struct {
                         0xC3, // 60: ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_set_nonblocking, &.{});
-                } else if (std.mem.eql(u8, name, "cot_fork")) {
+                } else if (std.mem.eql(u8, name, "fork")) {
                     // x86-64 Linux: fork() syscall (SYS_fork = 57)
                     const x64_fork = [_]u8{
                         0x55, // push rbp
@@ -3217,7 +3217,7 @@ pub const Driver = struct {
                         0xC3, // ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_fork, &.{});
-                } else if (std.mem.eql(u8, name, "cot_waitpid")) {
+                } else if (std.mem.eql(u8, name, "waitpid")) {
                     // x86-64 Linux: wait4(pid, &status, options, NULL) (SYS_wait4 = 61)
                     // Cranelift CC: rdi=vmctx, rsi=caller_vmctx, rdx=pid
                     // Returns exit code = (status >> 8) & 0xFF
@@ -3241,7 +3241,7 @@ pub const Driver = struct {
                         0xC3, // 53: ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_waitpid, &.{});
-                } else if (std.mem.eql(u8, name, "cot_pipe")) {
+                } else if (std.mem.eql(u8, name, "pipe")) {
                     // x86-64 Linux: pipe2(fds_ptr, 0) (SYS_pipe2 = 293)
                     // Returns packed: (write_fd << 32) | read_fd  (as i64 from stack)
                     const x64_pipe = [_]u8{
@@ -3260,7 +3260,7 @@ pub const Driver = struct {
                         0xC3, // ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_pipe, &.{});
-                } else if (std.mem.eql(u8, name, "cot_dup2")) {
+                } else if (std.mem.eql(u8, name, "dup2")) {
                     // x86-64 Linux: dup2(oldfd, newfd) (SYS_dup2 = 33)
                     // Cranelift CC: rdi=vmctx, rsi=caller_vmctx, rdx=oldfd, rcx=newfd
                     const x64_dup2 = [_]u8{
@@ -3274,7 +3274,7 @@ pub const Driver = struct {
                         0xC3, // ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_dup2, &.{});
-                } else if (std.mem.eql(u8, name, "cot_isatty")) {
+                } else if (std.mem.eql(u8, name, "isatty")) {
                     // x86-64 Linux: isatty(fd) via ioctl(fd, TCGETS, &termios_buf)
                     // Cranelift CC: rdi=vmctx, rsi=caller_vmctx, rdx=fd
                     // Reference: POSIX isatty(3), Linux SYS_ioctl=16, TCGETS=0x5401
@@ -3298,7 +3298,7 @@ pub const Driver = struct {
                         0xC3, // 56: ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_isatty, &.{});
-                } else if (std.mem.eql(u8, name, "cot_execve")) {
+                } else if (std.mem.eql(u8, name, "execve")) {
                     // x86-64 Linux: execve(path, argv, envp) (SYS_execve = 59)
                     // Cranelift CC: rdi=vmctx, rsi=caller_vmctx, rdx=path, rcx=argv, r8=envp
                     // All pointers are wasm offsets — add linmem base (vmctx + 0x40000)
@@ -3338,10 +3338,10 @@ pub const Driver = struct {
                         0xC3, // 85: ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_execve, &.{});
-                } else if (std.mem.eql(u8, name, "cot_kqueue_create") or
-                    std.mem.eql(u8, name, "cot_kevent_add") or
-                    std.mem.eql(u8, name, "cot_kevent_del") or
-                    std.mem.eql(u8, name, "cot_kevent_wait"))
+                } else if (std.mem.eql(u8, name, "kqueue_create") or
+                    std.mem.eql(u8, name, "kevent_add") or
+                    std.mem.eql(u8, name, "kevent_del") or
+                    std.mem.eql(u8, name, "kevent_wait"))
                 {
                     // kqueue is macOS-only — return -1 on Linux
                     const x64_stub_neg1 = [_]u8{

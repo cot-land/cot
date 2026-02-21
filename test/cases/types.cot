@@ -8,10 +8,10 @@ type CtCoord = CtPoint
 
 test "type alias" {
     var x: CtInt = 42
-    @assert_eq(x, 42)
+    @assertEq(x, 42)
 }
 
 test "struct alias" {
     var pt = CtCoord { .x = 10, .y = 20 }
-    @assert_eq(pt.x + pt.y, 30)
+    @assertEq(pt.x + pt.y, 30)
 }

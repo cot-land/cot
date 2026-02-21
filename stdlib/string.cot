@@ -7,6 +7,8 @@
 //   Go:  strings/strings.go (API, algorithms)
 //   Zig: std/mem.zig (byte scanning)
 
+import "std/sys"
+
 // ============================================================================
 // Byte Access
 // ============================================================================
@@ -149,8 +151,8 @@ fn substring(s: string, start: i64, end: i64) string {
     if (en > slen) { en = slen }
     if (st >= en) { return "" }
     var new_len = en - st
-    var buf = @alloc(new_len)
-    @memcpy(buf, @ptrOf(s) + st, new_len)
+    var buf = alloc(0, new_len)
+    memcpy(buf, @ptrOf(s) + st, new_len)
     return @string(buf, new_len)
 }
 
@@ -191,7 +193,7 @@ fn trim(s: string) string {
 fn toUpper(s: string) string {
     var slen = @lenOf(s)
     if (slen == 0) { return "" }
-    var buf = @alloc(slen)
+    var buf = alloc(0, slen)
     var i: i64 = 0
     while (i < slen) {
         var c = @intToPtr(*u8, @ptrOf(s) + i)
@@ -210,7 +212,7 @@ fn toUpper(s: string) string {
 fn toLower(s: string) string {
     var slen = @lenOf(s)
     if (slen == 0) { return "" }
-    var buf = @alloc(slen)
+    var buf = alloc(0, slen)
     var i: i64 = 0
     while (i < slen) {
         var c = @intToPtr(*u8, @ptrOf(s) + i)
@@ -237,7 +239,7 @@ fn replace(s: string, old: string, new_s: string) string {
     if (n == 0) { return s }
 
     var result_len = slen + n * (newlen - oldlen)
-    var buf = @alloc(result_len)
+    var buf = alloc(0, result_len)
     var wi: i64 = 0
     var ri: i64 = 0
 
@@ -257,7 +259,7 @@ fn replace(s: string, old: string, new_s: string) string {
         if (found) {
             // Copy new_s into buf
             if (newlen > 0) {
-                @memcpy(buf + wi, @ptrOf(new_s), newlen)
+                memcpy(buf + wi, @ptrOf(new_s), newlen)
             }
             wi = wi + newlen
             ri = ri + oldlen
@@ -285,10 +287,10 @@ fn repeat(s: string, n: i64) string {
     if (n <= 0) { return "" }
     if (slen == 0) { return "" }
     var total = slen * n
-    var buf = @alloc(total)
+    var buf = alloc(0, total)
     var i: i64 = 0
     while (i < n) {
-        @memcpy(buf + i * slen, @ptrOf(s), slen)
+        memcpy(buf + i * slen, @ptrOf(s), slen)
         i = i + 1
     }
     return @string(buf, total)
@@ -554,7 +556,7 @@ fn intToString(n: i64) string {
         val = 0 - val
     }
     // Max i64 is 19 digits + sign
-    var buf = @alloc(21)
+    var buf = alloc(0, 21)
     var pos: i64 = 20
     while (val > 0) {
         var digit = val % 10
@@ -604,9 +606,9 @@ impl StringBuilder {
             new_cap = new_cap * 2
         }
         if (self.cap == 0) {
-            self.buf = @alloc(new_cap)
+            self.buf = alloc(0, new_cap)
         } else {
-            self.buf = @realloc(self.buf, new_cap)
+            self.buf = realloc(self.buf, new_cap)
         }
         self.cap = new_cap
     }
@@ -615,7 +617,7 @@ impl StringBuilder {
         var slen = @lenOf(s)
         if (slen == 0) { return }
         self.grow(self.len + slen)
-        @memcpy(self.buf + self.len, @ptrOf(s), slen)
+        memcpy(self.buf + self.len, @ptrOf(s), slen)
         self.len = self.len + slen
     }
 
@@ -646,7 +648,7 @@ impl StringBuilder {
 
     fn free(self: *StringBuilder) void {
         if (self.cap > 0) {
-            @dealloc(self.buf)
+            dealloc(self.buf)
         }
         self.buf = 0
         self.len = 0

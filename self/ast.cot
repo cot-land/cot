@@ -453,7 +453,7 @@ fn builtinFromString(name: string) int {
         "ptrToInt" => @intFromEnum(BuiltinKind.ptr_to_int),
         "string" => @intFromEnum(BuiltinKind.@"string"),
         "assert" => @intFromEnum(BuiltinKind.assert),
-        "assert_eq" => @intFromEnum(BuiltinKind.assert_eq),
+        "assertEq" => @intFromEnum(BuiltinKind.assert_eq),
         "alloc" => @intFromEnum(BuiltinKind.alloc),
         "dealloc" => @intFromEnum(BuiltinKind.dealloc),
         "realloc" => @intFromEnum(BuiltinKind.realloc),
@@ -475,8 +475,8 @@ fn builtinFromString(name: string) int {
         "environ_count" => @intFromEnum(BuiltinKind.environ_count),
         "environ_len" => @intFromEnum(BuiltinKind.environ_len),
         "environ_ptr" => @intFromEnum(BuiltinKind.environ_ptr),
-        "target_os" => @intFromEnum(BuiltinKind.target_os),
-        "target_arch" => @intFromEnum(BuiltinKind.target_arch),
+        "targetOs" => @intFromEnum(BuiltinKind.target_os),
+        "targetArch" => @intFromEnum(BuiltinKind.target_arch),
         "target" => @intFromEnum(BuiltinKind.target),
         "compileError" => @intFromEnum(BuiltinKind.compile_error),
         "abs" => @intFromEnum(BuiltinKind.abs),
@@ -524,8 +524,8 @@ fn builtinFromString(name: string) int {
         "max" => @intFromEnum(BuiltinKind.max),
         "alignCast" => @intFromEnum(BuiltinKind.align_cast),
         "constCast" => @intFromEnum(BuiltinKind.const_cast),
-        "arc_retain" => @intFromEnum(BuiltinKind.arc_retain),
-        "arc_release" => @intFromEnum(BuiltinKind.arc_release),
+        "arcRetain" => @intFromEnum(BuiltinKind.arc_retain),
+        "arcRelease" => @intFromEnum(BuiltinKind.arc_release),
         "panic" => @intFromEnum(BuiltinKind.panic),
         "isatty" => @intFromEnum(BuiltinKind.isatty),
         "memset" => @intFromEnum(BuiltinKind.memset),
@@ -544,35 +544,35 @@ fn builtinFromString(name: string) int {
 // ============================================================================
 
 test "null_node sentinel" {
-    @assert_eq(null_node, 0xFFFFFFFF)
+    @assertEq(null_node, 0xFFFFFFFF)
 }
 
 test "span init" {
     var s = Span { start: 5, end: 10 }
-    @assert_eq(s.start, 5)
-    @assert_eq(s.end, 10)
+    @assertEq(s.start, 5)
+    @assertEq(s.end, 10)
 }
 
 test "span zero" {
     var s = Span { start: 0, end: 0 }
-    @assert_eq(s.start, 0)
-    @assert_eq(s.end, 0)
+    @assertEq(s.start, 0)
+    @assertEq(s.end, 0)
 }
 
 test "StructLayout enum" {
-    @assert_eq(@intFromEnum(StructLayout.auto), 0)
-    @assert_eq(@intFromEnum(StructLayout.@"packed"), 1)
-    @assert_eq(@intFromEnum(StructLayout.@"extern"), 2)
+    @assertEq(@intFromEnum(StructLayout.auto), 0)
+    @assertEq(@intFromEnum(StructLayout.@"packed"), 1)
+    @assertEq(@intFromEnum(StructLayout.@"extern"), 2)
 }
 
 test "LiteralKind enum" {
-    @assert_eq(@intFromEnum(LiteralKind.@"int"), 0)
-    @assert_eq(@intFromEnum(LiteralKind.@"float"), 1)
-    @assert_eq(@intFromEnum(LiteralKind.@"string"), 2)
-    @assert_eq(@intFromEnum(LiteralKind.char), 3)
-    @assert_eq(@intFromEnum(LiteralKind.true_lit), 4)
-    @assert_eq(@intFromEnum(LiteralKind.null_lit), 6)
-    @assert_eq(@intFromEnum(LiteralKind.unreachable_lit), 8)
+    @assertEq(@intFromEnum(LiteralKind.@"int"), 0)
+    @assertEq(@intFromEnum(LiteralKind.@"float"), 1)
+    @assertEq(@intFromEnum(LiteralKind.@"string"), 2)
+    @assertEq(@intFromEnum(LiteralKind.char), 3)
+    @assertEq(@intFromEnum(LiteralKind.true_lit), 4)
+    @assertEq(@intFromEnum(LiteralKind.null_lit), 6)
+    @assertEq(@intFromEnum(LiteralKind.unreachable_lit), 8)
 }
 
 test "Decl union fn_decl" {
@@ -581,24 +581,24 @@ test "Decl union fn_decl" {
     var d: Decl = Decl.fn_decl(fd)
     switch d {
         Decl.fn_decl |v| => {
-            @assert_eq(v.name, "main")
-            @assert_eq(v.span.start, 0)
-            @assert_eq(v.span.end, 10)
-            @assert_eq(v.is_extern, false)
+            @assertEq(v.name, "main")
+            @assertEq(v.span.start, 0)
+            @assertEq(v.span.end, 10)
+            @assertEq(v.is_extern, false)
         },
-        Decl.var_decl |v| => { @assert_eq(0, 1) },
-        Decl.struct_decl |v| => { @assert_eq(0, 1) },
-        Decl.enum_decl |v| => { @assert_eq(0, 1) },
-        Decl.union_decl |v| => { @assert_eq(0, 1) },
-        Decl.type_alias |v| => { @assert_eq(0, 1) },
-        Decl.import_decl |v| => { @assert_eq(0, 1) },
-        Decl.impl_block |v| => { @assert_eq(0, 1) },
-        Decl.trait_decl |v| => { @assert_eq(0, 1) },
-        Decl.impl_trait |v| => { @assert_eq(0, 1) },
-        Decl.error_set_decl |v| => { @assert_eq(0, 1) },
-        Decl.test_decl |v| => { @assert_eq(0, 1) },
-        Decl.bench_decl |v| => { @assert_eq(0, 1) },
-        Decl.bad_decl |v| => { @assert_eq(0, 1) },
+        Decl.var_decl |v| => { @assertEq(0, 1) },
+        Decl.struct_decl |v| => { @assertEq(0, 1) },
+        Decl.enum_decl |v| => { @assertEq(0, 1) },
+        Decl.union_decl |v| => { @assertEq(0, 1) },
+        Decl.type_alias |v| => { @assertEq(0, 1) },
+        Decl.import_decl |v| => { @assertEq(0, 1) },
+        Decl.impl_block |v| => { @assertEq(0, 1) },
+        Decl.trait_decl |v| => { @assertEq(0, 1) },
+        Decl.impl_trait |v| => { @assertEq(0, 1) },
+        Decl.error_set_decl |v| => { @assertEq(0, 1) },
+        Decl.test_decl |v| => { @assertEq(0, 1) },
+        Decl.bench_decl |v| => { @assertEq(0, 1) },
+        Decl.bad_decl |v| => { @assertEq(0, 1) },
     }
 }
 
@@ -608,24 +608,24 @@ test "Decl union test_decl" {
     var d: Decl = Decl.test_decl(td)
     switch d {
         Decl.test_decl |v| => {
-            @assert_eq(v.name, "my test")
-            @assert_eq(v.body, 42)
-            @assert_eq(v.span.start, 5)
-            @assert_eq(v.span.end, 15)
+            @assertEq(v.name, "my test")
+            @assertEq(v.body, 42)
+            @assertEq(v.span.start, 5)
+            @assertEq(v.span.end, 15)
         },
-        Decl.fn_decl |v| => { @assert_eq(0, 1) },
-        Decl.var_decl |v| => { @assert_eq(0, 1) },
-        Decl.struct_decl |v| => { @assert_eq(0, 1) },
-        Decl.enum_decl |v| => { @assert_eq(0, 1) },
-        Decl.union_decl |v| => { @assert_eq(0, 1) },
-        Decl.type_alias |v| => { @assert_eq(0, 1) },
-        Decl.import_decl |v| => { @assert_eq(0, 1) },
-        Decl.impl_block |v| => { @assert_eq(0, 1) },
-        Decl.trait_decl |v| => { @assert_eq(0, 1) },
-        Decl.impl_trait |v| => { @assert_eq(0, 1) },
-        Decl.error_set_decl |v| => { @assert_eq(0, 1) },
-        Decl.bench_decl |v| => { @assert_eq(0, 1) },
-        Decl.bad_decl |v| => { @assert_eq(0, 1) },
+        Decl.fn_decl |v| => { @assertEq(0, 1) },
+        Decl.var_decl |v| => { @assertEq(0, 1) },
+        Decl.struct_decl |v| => { @assertEq(0, 1) },
+        Decl.enum_decl |v| => { @assertEq(0, 1) },
+        Decl.union_decl |v| => { @assertEq(0, 1) },
+        Decl.type_alias |v| => { @assertEq(0, 1) },
+        Decl.import_decl |v| => { @assertEq(0, 1) },
+        Decl.impl_block |v| => { @assertEq(0, 1) },
+        Decl.trait_decl |v| => { @assertEq(0, 1) },
+        Decl.impl_trait |v| => { @assertEq(0, 1) },
+        Decl.error_set_decl |v| => { @assertEq(0, 1) },
+        Decl.bench_decl |v| => { @assertEq(0, 1) },
+        Decl.bad_decl |v| => { @assertEq(0, 1) },
     }
 }
 
@@ -635,38 +635,38 @@ test "Expr union ident" {
     var e: Expr = Expr.ident(id)
     switch e {
         Expr.ident |v| => {
-            @assert_eq(v.name, "foo")
-            @assert_eq(v.span.start, 0)
-            @assert_eq(v.span.end, 3)
+            @assertEq(v.name, "foo")
+            @assertEq(v.span.start, 0)
+            @assertEq(v.span.end, 3)
         },
-        Expr.literal |v| => { @assert_eq(0, 1) },
-        Expr.binary |v| => { @assert_eq(0, 1) },
-        Expr.unary |v| => { @assert_eq(0, 1) },
-        Expr.call |v| => { @assert_eq(0, 1) },
-        Expr.index |v| => { @assert_eq(0, 1) },
-        Expr.slice_expr |v| => { @assert_eq(0, 1) },
-        Expr.field_access |v| => { @assert_eq(0, 1) },
-        Expr.array_literal |v| => { @assert_eq(0, 1) },
-        Expr.paren |v| => { @assert_eq(0, 1) },
-        Expr.if_expr |v| => { @assert_eq(0, 1) },
-        Expr.switch_expr |v| => { @assert_eq(0, 1) },
-        Expr.block_expr |v| => { @assert_eq(0, 1) },
-        Expr.struct_init |v| => { @assert_eq(0, 1) },
-        Expr.new_expr |v| => { @assert_eq(0, 1) },
-        Expr.builtin_call |v| => { @assert_eq(0, 1) },
-        Expr.string_interp |v| => { @assert_eq(0, 1) },
-        Expr.type_expr |v| => { @assert_eq(0, 1) },
-        Expr.try_expr |v| => { @assert_eq(0, 1) },
-        Expr.await_expr |v| => { @assert_eq(0, 1) },
-        Expr.catch_expr |v| => { @assert_eq(0, 1) },
-        Expr.error_literal |v| => { @assert_eq(0, 1) },
-        Expr.closure_expr |v| => { @assert_eq(0, 1) },
-        Expr.tuple_literal |v| => { @assert_eq(0, 1) },
-        Expr.comptime_block |v| => { @assert_eq(0, 1) },
-        Expr.zero_init |v| => { @assert_eq(0, 1) },
-        Expr.addr_of |v| => { @assert_eq(0, 1) },
-        Expr.deref |v| => { @assert_eq(0, 1) },
-        Expr.bad_expr |v| => { @assert_eq(0, 1) },
+        Expr.literal |v| => { @assertEq(0, 1) },
+        Expr.binary |v| => { @assertEq(0, 1) },
+        Expr.unary |v| => { @assertEq(0, 1) },
+        Expr.call |v| => { @assertEq(0, 1) },
+        Expr.index |v| => { @assertEq(0, 1) },
+        Expr.slice_expr |v| => { @assertEq(0, 1) },
+        Expr.field_access |v| => { @assertEq(0, 1) },
+        Expr.array_literal |v| => { @assertEq(0, 1) },
+        Expr.paren |v| => { @assertEq(0, 1) },
+        Expr.if_expr |v| => { @assertEq(0, 1) },
+        Expr.switch_expr |v| => { @assertEq(0, 1) },
+        Expr.block_expr |v| => { @assertEq(0, 1) },
+        Expr.struct_init |v| => { @assertEq(0, 1) },
+        Expr.new_expr |v| => { @assertEq(0, 1) },
+        Expr.builtin_call |v| => { @assertEq(0, 1) },
+        Expr.string_interp |v| => { @assertEq(0, 1) },
+        Expr.type_expr |v| => { @assertEq(0, 1) },
+        Expr.try_expr |v| => { @assertEq(0, 1) },
+        Expr.await_expr |v| => { @assertEq(0, 1) },
+        Expr.catch_expr |v| => { @assertEq(0, 1) },
+        Expr.error_literal |v| => { @assertEq(0, 1) },
+        Expr.closure_expr |v| => { @assertEq(0, 1) },
+        Expr.tuple_literal |v| => { @assertEq(0, 1) },
+        Expr.comptime_block |v| => { @assertEq(0, 1) },
+        Expr.zero_init |v| => { @assertEq(0, 1) },
+        Expr.addr_of |v| => { @assertEq(0, 1) },
+        Expr.deref |v| => { @assertEq(0, 1) },
+        Expr.bad_expr |v| => { @assertEq(0, 1) },
     }
 }
 
@@ -676,12 +676,12 @@ test "Expr union binary" {
     var e: Expr = Expr.binary(b)
     switch e {
         Expr.binary |v| => {
-            @assert_eq(v.op, 0)
-            @assert_eq(v.left, 1)
-            @assert_eq(v.right, 2)
-            @assert_eq(v.span.end, 5)
+            @assertEq(v.op, 0)
+            @assertEq(v.left, 1)
+            @assertEq(v.right, 2)
+            @assertEq(v.span.end, 5)
         },
-        else => { @assert_eq(0, 1) },
+        else => { @assertEq(0, 1) },
     }
 }
 
@@ -691,22 +691,22 @@ test "Stmt union return" {
     var st: Stmt = Stmt.return_stmt(r)
     switch st {
         Stmt.return_stmt |v| => {
-            @assert_eq(v.value, 42)
-            @assert_eq(v.span.start, 0)
-            @assert_eq(v.span.end, 8)
+            @assertEq(v.value, 42)
+            @assertEq(v.span.start, 0)
+            @assertEq(v.span.end, 8)
         },
-        Stmt.expr_stmt |v| => { @assert_eq(0, 1) },
-        Stmt.var_stmt |v| => { @assert_eq(0, 1) },
-        Stmt.assign_stmt |v| => { @assert_eq(0, 1) },
-        Stmt.if_stmt |v| => { @assert_eq(0, 1) },
-        Stmt.while_stmt |v| => { @assert_eq(0, 1) },
-        Stmt.for_stmt |v| => { @assert_eq(0, 1) },
-        Stmt.block_stmt |v| => { @assert_eq(0, 1) },
-        Stmt.break_stmt |v| => { @assert_eq(0, 1) },
-        Stmt.continue_stmt |v| => { @assert_eq(0, 1) },
-        Stmt.defer_stmt |v| => { @assert_eq(0, 1) },
-        Stmt.destructure_stmt |v| => { @assert_eq(0, 1) },
-        Stmt.bad_stmt |v| => { @assert_eq(0, 1) },
+        Stmt.expr_stmt |v| => { @assertEq(0, 1) },
+        Stmt.var_stmt |v| => { @assertEq(0, 1) },
+        Stmt.assign_stmt |v| => { @assertEq(0, 1) },
+        Stmt.if_stmt |v| => { @assertEq(0, 1) },
+        Stmt.while_stmt |v| => { @assertEq(0, 1) },
+        Stmt.for_stmt |v| => { @assertEq(0, 1) },
+        Stmt.block_stmt |v| => { @assertEq(0, 1) },
+        Stmt.break_stmt |v| => { @assertEq(0, 1) },
+        Stmt.continue_stmt |v| => { @assertEq(0, 1) },
+        Stmt.defer_stmt |v| => { @assertEq(0, 1) },
+        Stmt.destructure_stmt |v| => { @assertEq(0, 1) },
+        Stmt.bad_stmt |v| => { @assertEq(0, 1) },
     }
 }
 
@@ -719,55 +719,55 @@ test "Node union wraps expr" {
     var matched = false
     switch n {
         Node.expr |inner| => { matched = true },
-        Node.decl |d| => { @assert_eq(0, 1) },
-        Node.stmt |s2| => { @assert_eq(0, 1) },
+        Node.decl |d| => { @assertEq(0, 1) },
+        Node.stmt |s2| => { @assertEq(0, 1) },
     }
-    @assert_eq(matched, true)
+    @assertEq(matched, true)
 }
 
 test "BuiltinKind enum count" {
     // Verify enum has all 94 variants
-    @assert_eq(@enumLen(BuiltinKind), 94)
+    @assertEq(@enumLen(BuiltinKind), 94)
 }
 
 test "builtinFromString known" {
-    @assert_eq(builtinFromString("sizeOf"), @intFromEnum(BuiltinKind.size_of))
-    @assert_eq(builtinFromString("intCast"), @intFromEnum(BuiltinKind.int_cast))
-    @assert_eq(builtinFromString("assert_eq"), @intFromEnum(BuiltinKind.assert_eq))
-    @assert_eq(builtinFromString("fd_write"), @intFromEnum(BuiltinKind.fd_write))
-    @assert_eq(builtinFromString("net_socket"), @intFromEnum(BuiltinKind.net_socket))
-    @assert_eq(builtinFromString("typeName"), @intFromEnum(BuiltinKind.type_name))
-    @assert_eq(builtinFromString("typeInfo"), @intFromEnum(BuiltinKind.type_info))
-    @assert_eq(builtinFromString("panic"), @intFromEnum(BuiltinKind.panic))
+    @assertEq(builtinFromString("sizeOf"), @intFromEnum(BuiltinKind.size_of))
+    @assertEq(builtinFromString("intCast"), @intFromEnum(BuiltinKind.int_cast))
+    @assertEq(builtinFromString("assertEq"), @intFromEnum(BuiltinKind.assert_eq))
+    @assertEq(builtinFromString("fd_write"), @intFromEnum(BuiltinKind.fd_write))
+    @assertEq(builtinFromString("net_socket"), @intFromEnum(BuiltinKind.net_socket))
+    @assertEq(builtinFromString("typeName"), @intFromEnum(BuiltinKind.type_name))
+    @assertEq(builtinFromString("typeInfo"), @intFromEnum(BuiltinKind.type_info))
+    @assertEq(builtinFromString("panic"), @intFromEnum(BuiltinKind.panic))
 }
 
 test "builtinFromString unknown" {
-    @assert_eq(builtinFromString("nonexistent"), -1)
-    @assert_eq(builtinFromString(""), -1)
+    @assertEq(builtinFromString("nonexistent"), -1)
+    @assertEq(builtinFromString(""), -1)
 }
 
 test "BuiltinKind quoted identifiers" {
     // Verify @"string", @"trunc", @"as" work as enum variants
-    @assert_eq(@intFromEnum(BuiltinKind.@"string"), 10)
-    @assert_eq(@intFromEnum(BuiltinKind.@"as"), 77)
+    @assertEq(@intFromEnum(BuiltinKind.@"string"), 10)
+    @assertEq(@intFromEnum(BuiltinKind.@"as"), 77)
 }
 
 test "ForStmt isRange pattern" {
     var s = Span { start: 0, end: 10 }
     var fs = ForStmt { binding: "i", iterable: null_node, range_start: 0, range_end: 10, body: 1, is_inline: false, span: s }
     // range check: range_start != null_node means it's a range loop
-    @assert_eq(fs.range_start != null_node, true)
+    @assertEq(fs.range_start != null_node, true)
     var fs2 = ForStmt { binding: "item", iterable: 5, range_start: null_node, range_end: null_node, body: 1, is_inline: false, span: s }
-    @assert_eq(fs2.range_start != null_node, false)
+    @assertEq(fs2.range_start != null_node, false)
 }
 
 test "VarStmt fields" {
     var s = Span { start: 0, end: 20 }
     var vs = VarStmt { name: "x", type_expr: null_node, value: 42, is_const: true, is_weak: false, span: s }
-    @assert_eq(vs.name, "x")
-    @assert_eq(vs.is_const, true)
-    @assert_eq(vs.is_weak, false)
-    @assert_eq(vs.value, 42)
+    @assertEq(vs.name, "x")
+    @assertEq(vs.is_const, true)
+    @assertEq(vs.is_weak, false)
+    @assertEq(vs.value, 42)
 }
 
 test "nested union Decl in Node" {
@@ -779,8 +779,8 @@ test "nested union Decl in Node" {
     var matched = false
     switch n {
         Node.decl |inner| => { matched = true },
-        Node.expr |e| => { @assert_eq(0, 1) },
-        Node.stmt |s2| => { @assert_eq(0, 1) },
+        Node.expr |e| => { @assertEq(0, 1) },
+        Node.stmt |s2| => { @assertEq(0, 1) },
     }
-    @assert_eq(matched, true)
+    @assertEq(matched, true)
 }

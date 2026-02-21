@@ -174,15 +174,15 @@ test "group alternation second" {
 // ============================================================================
 
 test "find returns position" {
-    @assert_eq(regexFind("\\d+", "abc123def"), 3)
+    @assertEq(regexFind("\\d+", "abc123def"), 3)
 }
 
 test "find no match returns -1" {
-    @assert_eq(regexFind("\\d+", "abcdef"), 0 - 1)
+    @assertEq(regexFind("\\d+", "abcdef"), 0 - 1)
 }
 
 test "find at start" {
-    @assert_eq(regexFind("hello", "hello world"), 0)
+    @assertEq(regexFind("hello", "hello world"), 0)
 }
 
 // ============================================================================
@@ -190,15 +190,15 @@ test "find at start" {
 // ============================================================================
 
 test "replace first" {
-    @assert_eq(regexReplace("\\d+", "abc123def456", "NUM"), "abcNUMdef456")
+    @assertEq(regexReplace("\\d+", "abc123def456", "NUM"), "abcNUMdef456")
 }
 
 test "replace no match unchanged" {
-    @assert_eq(regexReplace("\\d+", "abcdef", "NUM"), "abcdef")
+    @assertEq(regexReplace("\\d+", "abcdef", "NUM"), "abcdef")
 }
 
 test "replaceAll" {
-    @assert_eq(regexReplaceAll("\\d+", "a1b2c3", "X"), "aXbXcX")
+    @assertEq(regexReplaceAll("\\d+", "a1b2c3", "X"), "aXbXcX")
 }
 
 // ============================================================================
@@ -207,23 +207,23 @@ test "replaceAll" {
 
 test "split by comma" {
     var parts = regexSplit(",", "a,b,c")
-    @assert_eq(splitCount(parts), 3)
-    @assert_eq(splitGet(parts, 0), "a")
-    @assert_eq(splitGet(parts, 1), "b")
-    @assert_eq(splitGet(parts, 2), "c")
+    @assertEq(splitCount(parts), 3)
+    @assertEq(splitGet(parts, 0), "a")
+    @assertEq(splitGet(parts, 1), "b")
+    @assertEq(splitGet(parts, 2), "c")
 }
 
 test "split by whitespace" {
     var parts = regexSplit("\\s+", "hello world")
-    @assert_eq(splitCount(parts), 2)
-    @assert_eq(splitGet(parts, 0), "hello")
-    @assert_eq(splitGet(parts, 1), "world")
+    @assertEq(splitCount(parts), 2)
+    @assertEq(splitGet(parts, 0), "hello")
+    @assertEq(splitGet(parts, 1), "world")
 }
 
 test "split no match returns whole string" {
     var parts = regexSplit(",", "hello")
-    @assert_eq(splitCount(parts), 1)
-    @assert_eq(splitGet(parts, 0), "hello")
+    @assertEq(splitCount(parts), 1)
+    @assertEq(splitGet(parts, 0), "hello")
 }
 
 // ============================================================================

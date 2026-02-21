@@ -22,10 +22,10 @@ const BLOCK_I64: u8 = @intFromEnum(wasm_op.ValType.i64);
 // Function Names
 // =============================================================================
 
-pub const WRITE_NAME = "cot_write";
-pub const PRINT_INT_NAME = "cot_print_int";
-pub const EPRINT_INT_NAME = "cot_eprint_int";
-pub const INT_TO_STRING_NAME = "cot_int_to_string";
+pub const WRITE_NAME = "write";
+pub const PRINT_INT_NAME = "print_int";
+pub const EPRINT_INT_NAME = "eprint_int";
+pub const INT_TO_STRING_NAME = "int_to_string";
 
 // =============================================================================
 // Return Type

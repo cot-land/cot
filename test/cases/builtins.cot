@@ -4,19 +4,19 @@ struct CbPoint {
 }
 
 test "sizeof basic" {
-    @assert_eq(@sizeOf(i64), 8)
+    @assertEq(@sizeOf(i64), 8)
 }
 
 test "sizeof struct" {
-    @assert_eq(@sizeOf(CbPoint), 16)
+    @assertEq(@sizeOf(CbPoint), 16)
 }
 
 test "alignof basic" {
-    @assert_eq(@alignOf(i64), 8)
+    @assertEq(@alignOf(i64), 8)
 }
 
 test "intcast basic" {
     var big: i64 = 42
     var small = @intCast(i32, big)
-    @assert_eq(small, 42)
+    @assertEq(small, 42)
 }

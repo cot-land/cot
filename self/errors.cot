@@ -90,33 +90,33 @@ fn errorCount(r: *ErrorReporter) int {
 // ============================================================================
 
 test "error code values" {
-    @assert_eq(ErrorCode.e100.code(), 100)
-    @assert_eq(ErrorCode.e200.code(), 200)
-    @assert_eq(ErrorCode.e300.code(), 300)
-    @assert_eq(ErrorCode.e403.code(), 403)
+    @assertEq(ErrorCode.e100.code(), 100)
+    @assertEq(ErrorCode.e200.code(), 200)
+    @assertEq(ErrorCode.e300.code(), 300)
+    @assertEq(ErrorCode.e403.code(), 403)
 }
 
 test "error code descriptions" {
-    @assert_eq(ErrorCode.e100.description(), "unterminated string literal")
-    @assert_eq(ErrorCode.e200.description(), "unexpected token")
-    @assert_eq(ErrorCode.e301.description(), "undefined identifier")
-    @assert_eq(ErrorCode.e403.description(), "missing return")
+    @assertEq(ErrorCode.e100.description(), "unterminated string literal")
+    @assertEq(ErrorCode.e200.description(), "unexpected token")
+    @assertEq(ErrorCode.e301.description(), "undefined identifier")
+    @assertEq(ErrorCode.e403.description(), "missing return")
 }
 
 test "reporter init" {
     var r = reporterInit()
-    @assert_eq(hasErrors(&r), false)
-    @assert_eq(errorCount(&r), 0)
+    @assertEq(hasErrors(&r), false)
+    @assertEq(errorCount(&r), 0)
 }
 
 test "report single error" {
     var r = reporterInit()
     reportError(&r, 10, ErrorCode.e100, "unterminated string")
-    @assert_eq(hasErrors(&r), true)
-    @assert_eq(errorCount(&r), 1)
-    @assert_eq(r.first_offset, 10)
-    @assert_eq(r.first_msg, "unterminated string")
-    @assert_eq(r.first_code.code(), 100)
+    @assertEq(hasErrors(&r), true)
+    @assertEq(errorCount(&r), 1)
+    @assertEq(r.first_offset, 10)
+    @assertEq(r.first_msg, "unterminated string")
+    @assertEq(r.first_code.code(), 100)
 }
 
 test "report multiple errors" {
@@ -124,8 +124,8 @@ test "report multiple errors" {
     reportError(&r, 0, ErrorCode.e200, "error 1")
     reportError(&r, 5, ErrorCode.e201, "error 2")
     reportError(&r, 10, ErrorCode.e300, "error 3")
-    @assert_eq(errorCount(&r), 3)
-    @assert_eq(r.first_msg, "error 1")
-    @assert_eq(r.first_offset, 0)
-    @assert_eq(r.first_code.code(), 200)
+    @assertEq(errorCount(&r), 3)
+    @assertEq(r.first_msg, "error 1")
+    @assertEq(r.first_offset, 0)
+    @assertEq(r.first_code.code(), 200)
 }

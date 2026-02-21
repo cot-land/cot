@@ -22,8 +22,8 @@ pub const SliceFunctions = struct {
 };
 
 /// Function names
-pub const GROWSLICE_NAME = "cot_growslice";
-pub const NEXTSLICECAP_NAME = "cot_nextslicecap";
+pub const GROWSLICE_NAME = "growslice";
+pub const NEXTSLICECAP_NAME = "nextslicecap";
 
 /// Add slice runtime functions to linker.
 /// Go reference: runtime/slice.go

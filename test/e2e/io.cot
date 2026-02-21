@@ -5,6 +5,7 @@
 import "std/io"
 import "std/fs"
 import "std/string"
+import "std/sys"
 
 // ============================================================================
 // BufferedReader tests
@@ -12,97 +13,97 @@ import "std/string"
 
 test "readLine basic" {
     writeFile("/tmp/cot_io_readline.txt", "hello\nworld\nfoo")
-    var fd = @fd_open(@ptrOf("/tmp/cot_io_readline.txt"), @lenOf("/tmp/cot_io_readline.txt"), O_RDONLY)
+    var fd = fd_open(@ptrOf("/tmp/cot_io_readline.txt"), @lenOf("/tmp/cot_io_readline.txt"), O_RDONLY)
     var reader = newBufferedReader(fd)
     var line1 = readLine(reader)
-    @assert_eq(line1, "hello")
+    @assertEq(line1, "hello")
     var line2 = readLine(reader)
-    @assert_eq(line2, "world")
+    @assertEq(line2, "world")
     var line3 = readLine(reader)
-    @assert_eq(line3, "foo")
+    @assertEq(line3, "foo")
     var line4 = readLine(reader)
-    @assert_eq(@lenOf(line4), 0)
-    @fd_close(fd)
+    @assertEq(@lenOf(line4), 0)
+    fd_close(fd)
 }
 
 test "readLine with trailing newline" {
     writeFile("/tmp/cot_io_trailing.txt", "abc\ndef\n")
-    var fd = @fd_open(@ptrOf("/tmp/cot_io_trailing.txt"), @lenOf("/tmp/cot_io_trailing.txt"), O_RDONLY)
+    var fd = fd_open(@ptrOf("/tmp/cot_io_trailing.txt"), @lenOf("/tmp/cot_io_trailing.txt"), O_RDONLY)
     var reader = newBufferedReader(fd)
     var line1 = readLine(reader)
-    @assert_eq(line1, "abc")
+    @assertEq(line1, "abc")
     var line2 = readLine(reader)
-    @assert_eq(line2, "def")
+    @assertEq(line2, "def")
     var line3 = readLine(reader)
-    @assert_eq(@lenOf(line3), 0)
-    @fd_close(fd)
+    @assertEq(@lenOf(line3), 0)
+    fd_close(fd)
 }
 
 test "readLine single line no newline" {
     writeFile("/tmp/cot_io_single.txt", "onlyone")
-    var fd = @fd_open(@ptrOf("/tmp/cot_io_single.txt"), @lenOf("/tmp/cot_io_single.txt"), O_RDONLY)
+    var fd = fd_open(@ptrOf("/tmp/cot_io_single.txt"), @lenOf("/tmp/cot_io_single.txt"), O_RDONLY)
     var reader = newBufferedReader(fd)
     var line = readLine(reader)
-    @assert_eq(line, "onlyone")
+    @assertEq(line, "onlyone")
     var eof = readLine(reader)
-    @assert_eq(@lenOf(eof), 0)
-    @fd_close(fd)
+    @assertEq(@lenOf(eof), 0)
+    fd_close(fd)
 }
 
 test "readLine empty file" {
     writeFile("/tmp/cot_io_empty.txt", "")
-    var fd = @fd_open(@ptrOf("/tmp/cot_io_empty.txt"), @lenOf("/tmp/cot_io_empty.txt"), O_RDONLY)
+    var fd = fd_open(@ptrOf("/tmp/cot_io_empty.txt"), @lenOf("/tmp/cot_io_empty.txt"), O_RDONLY)
     var reader = newBufferedReader(fd)
     var line = readLine(reader)
-    @assert_eq(@lenOf(line), 0)
-    @fd_close(fd)
+    @assertEq(@lenOf(line), 0)
+    fd_close(fd)
 }
 
 test "readByte basic" {
     writeFile("/tmp/cot_io_readbyte.txt", "AB")
-    var fd = @fd_open(@ptrOf("/tmp/cot_io_readbyte.txt"), @lenOf("/tmp/cot_io_readbyte.txt"), O_RDONLY)
+    var fd = fd_open(@ptrOf("/tmp/cot_io_readbyte.txt"), @lenOf("/tmp/cot_io_readbyte.txt"), O_RDONLY)
     var reader = newBufferedReader(fd)
     var a = readByte(reader)
-    @assert_eq(a, 65)
+    @assertEq(a, 65)
     var b = readByte(reader)
-    @assert_eq(b, 66)
+    @assertEq(b, 66)
     var eof = readByte(reader)
-    @assert_eq(eof, 0 - 1)
-    @fd_close(fd)
+    @assertEq(eof, 0 - 1)
+    fd_close(fd)
 }
 
 test "readLine with small buffer" {
     writeFile("/tmp/cot_io_small_buf.txt", "hello\nworld")
-    var fd = @fd_open(@ptrOf("/tmp/cot_io_small_buf.txt"), @lenOf("/tmp/cot_io_small_buf.txt"), O_RDONLY)
+    var fd = fd_open(@ptrOf("/tmp/cot_io_small_buf.txt"), @lenOf("/tmp/cot_io_small_buf.txt"), O_RDONLY)
     var reader = newBufferedReaderSize(fd, 8)
     var line1 = readLine(reader)
-    @assert_eq(line1, "hello")
+    @assertEq(line1, "hello")
     var line2 = readLine(reader)
-    @assert_eq(line2, "world")
+    @assertEq(line2, "world")
     var eof = readLine(reader)
-    @assert_eq(@lenOf(eof), 0)
-    @fd_close(fd)
+    @assertEq(@lenOf(eof), 0)
+    fd_close(fd)
 }
 
 test "readLine spanning buffer boundary" {
     writeFile("/tmp/cot_io_span.txt", "abcdefghij\nxy")
-    var fd = @fd_open(@ptrOf("/tmp/cot_io_span.txt"), @lenOf("/tmp/cot_io_span.txt"), O_RDONLY)
+    var fd = fd_open(@ptrOf("/tmp/cot_io_span.txt"), @lenOf("/tmp/cot_io_span.txt"), O_RDONLY)
     var reader = newBufferedReaderSize(fd, 4)
     var line1 = readLine(reader)
-    @assert_eq(line1, "abcdefghij")
+    @assertEq(line1, "abcdefghij")
     var line2 = readLine(reader)
-    @assert_eq(line2, "xy")
-    @fd_close(fd)
+    @assertEq(line2, "xy")
+    fd_close(fd)
 }
 
 test "readByte EOF returns -1" {
     writeFile("/tmp/cot_io_eof.txt", "x")
-    var fd = @fd_open(@ptrOf("/tmp/cot_io_eof.txt"), @lenOf("/tmp/cot_io_eof.txt"), O_RDONLY)
+    var fd = fd_open(@ptrOf("/tmp/cot_io_eof.txt"), @lenOf("/tmp/cot_io_eof.txt"), O_RDONLY)
     var reader = newBufferedReader(fd)
     readByte(reader)
     var eof = readByte(reader)
-    @assert_eq(eof, 0 - 1)
-    @fd_close(fd)
+    @assertEq(eof, 0 - 1)
+    fd_close(fd)
 }
 
 // ============================================================================
@@ -110,50 +111,50 @@ test "readByte EOF returns -1" {
 // ============================================================================
 
 test "buffered write and flush" {
-    var fd = @fd_open(@ptrOf("/tmp/cot_io_bw.txt"), @lenOf("/tmp/cot_io_bw.txt"), O_CREATE)
+    var fd = fd_open(@ptrOf("/tmp/cot_io_bw.txt"), @lenOf("/tmp/cot_io_bw.txt"), O_CREATE)
     var writer = newBufferedWriter(fd)
     writeString(writer, "hello ")
     writeString(writer, "world")
     writerFlush(writer)
-    @fd_close(fd)
+    fd_close(fd)
 
     var content = readFile("/tmp/cot_io_bw.txt") catch ""
-    @assert_eq(content, "hello world")
+    @assertEq(content, "hello world")
 }
 
 test "buffered writeByte" {
-    var fd = @fd_open(@ptrOf("/tmp/cot_io_wb.txt"), @lenOf("/tmp/cot_io_wb.txt"), O_CREATE)
+    var fd = fd_open(@ptrOf("/tmp/cot_io_wb.txt"), @lenOf("/tmp/cot_io_wb.txt"), O_CREATE)
     var writer = newBufferedWriter(fd)
     writeByte(writer, 72)
     writeByte(writer, 105)
     writerFlush(writer)
-    @fd_close(fd)
+    fd_close(fd)
 
     var content = readFile("/tmp/cot_io_wb.txt") catch ""
-    @assert_eq(content, "Hi")
+    @assertEq(content, "Hi")
 }
 
 test "buffered write large data" {
-    var fd = @fd_open(@ptrOf("/tmp/cot_io_large.txt"), @lenOf("/tmp/cot_io_large.txt"), O_CREATE)
+    var fd = fd_open(@ptrOf("/tmp/cot_io_large.txt"), @lenOf("/tmp/cot_io_large.txt"), O_CREATE)
     var writer = newBufferedWriterSize(fd, 8)
     writeString(writer, "abcdefghijklmnop")
     writerFlush(writer)
-    @fd_close(fd)
+    fd_close(fd)
 
     var content = readFile("/tmp/cot_io_large.txt") catch ""
-    @assert_eq(content, "abcdefghijklmnop")
+    @assertEq(content, "abcdefghijklmnop")
 }
 
 test "buffered writeAll raw" {
-    var fd = @fd_open(@ptrOf("/tmp/cot_io_wa.txt"), @lenOf("/tmp/cot_io_wa.txt"), O_CREATE)
+    var fd = fd_open(@ptrOf("/tmp/cot_io_wa.txt"), @lenOf("/tmp/cot_io_wa.txt"), O_CREATE)
     var writer = newBufferedWriter(fd)
     var data = "raw data"
     writerWriteAll(writer, @ptrOf(data), @lenOf(data))
     writerFlush(writer)
-    @fd_close(fd)
+    fd_close(fd)
 
     var content = readFile("/tmp/cot_io_wa.txt") catch ""
-    @assert_eq(content, "raw data")
+    @assertEq(content, "raw data")
 }
 
 // ============================================================================
@@ -161,35 +162,35 @@ test "buffered writeAll raw" {
 // ============================================================================
 
 test "round-trip buffered write then buffered read" {
-    var wfd = @fd_open(@ptrOf("/tmp/cot_io_rt.txt"), @lenOf("/tmp/cot_io_rt.txt"), O_CREATE)
+    var wfd = fd_open(@ptrOf("/tmp/cot_io_rt.txt"), @lenOf("/tmp/cot_io_rt.txt"), O_CREATE)
     var writer = newBufferedWriter(wfd)
     writeString(writer, "line1\n")
     writeString(writer, "line2\n")
     writeString(writer, "line3")
     writerFlush(writer)
-    @fd_close(wfd)
+    fd_close(wfd)
 
-    var rfd = @fd_open(@ptrOf("/tmp/cot_io_rt.txt"), @lenOf("/tmp/cot_io_rt.txt"), O_RDONLY)
+    var rfd = fd_open(@ptrOf("/tmp/cot_io_rt.txt"), @lenOf("/tmp/cot_io_rt.txt"), O_RDONLY)
     var reader = newBufferedReader(rfd)
-    @assert_eq(readLine(reader), "line1")
-    @assert_eq(readLine(reader), "line2")
-    @assert_eq(readLine(reader), "line3")
+    @assertEq(readLine(reader), "line1")
+    @assertEq(readLine(reader), "line2")
+    @assertEq(readLine(reader), "line3")
     var eof = readLine(reader)
-    @assert_eq(@lenOf(eof), 0)
-    @fd_close(rfd)
+    @assertEq(@lenOf(eof), 0)
+    fd_close(rfd)
 }
 
 test "readLine then readByte" {
     writeFile("/tmp/cot_io_mixed.txt", "abc\nXY")
-    var fd = @fd_open(@ptrOf("/tmp/cot_io_mixed.txt"), @lenOf("/tmp/cot_io_mixed.txt"), O_RDONLY)
+    var fd = fd_open(@ptrOf("/tmp/cot_io_mixed.txt"), @lenOf("/tmp/cot_io_mixed.txt"), O_RDONLY)
     var reader = newBufferedReader(fd)
     var line = readLine(reader)
-    @assert_eq(line, "abc")
+    @assertEq(line, "abc")
     var x = readByte(reader)
-    @assert_eq(x, 88)
+    @assertEq(x, 88)
     var y = readByte(reader)
-    @assert_eq(y, 89)
-    @fd_close(fd)
+    @assertEq(y, 89)
+    fd_close(fd)
 }
 
 // ============================================================================
@@ -199,9 +200,9 @@ test "readLine then readByte" {
 test "BufferWriter write bytes" {
     var bw = BufferWriter { .buf = 0, .len = 0, .cap = 0 }
     bw.writeString("hello")
-    @assert_eq(bw.len, 5)
+    @assertEq(bw.len, 5)
     var result = bw.toSlice()
-    @assert_eq(result, "hello")
+    @assertEq(result, "hello")
     bw.free()
 }
 
@@ -211,27 +212,27 @@ test "BufferWriter writeByte" {
     bw.writeByte(66)
     bw.writeByte(67)
     var result = bw.toSlice()
-    @assert_eq(result, "ABC")
+    @assertEq(result, "ABC")
     bw.free()
 }
 
 test "BufferWriter writeU32LE" {
     var bw = BufferWriter { .buf = 0, .len = 0, .cap = 0 }
     bw.writeU32LE(1)
-    @assert_eq(bw.len, 4)
-    @assert_eq(@intToPtr(*u8, bw.buf).*, 1)
-    @assert_eq(@intToPtr(*u8, bw.buf + 1).*, 0)
+    @assertEq(bw.len, 4)
+    @assertEq(@intToPtr(*u8, bw.buf).*, 1)
+    @assertEq(@intToPtr(*u8, bw.buf + 1).*, 0)
     bw.free()
 }
 
 test "BufferWriter reset" {
     var bw = BufferWriter { .buf = 0, .len = 0, .cap = 0 }
     bw.writeString("test")
-    @assert_eq(bw.len, 4)
+    @assertEq(bw.len, 4)
     bw.reset()
-    @assert_eq(bw.len, 0)
+    @assertEq(bw.len, 0)
     bw.writeString("new")
-    @assert_eq(bw.toSlice(), "new")
+    @assertEq(bw.toSlice(), "new")
     bw.free()
 }
 
@@ -243,7 +244,7 @@ test "BufferWriter grow" {
         bw.writeByte(65)
         i = i + 1
     }
-    @assert_eq(bw.len, 300)
+    @assertEq(bw.len, 300)
     @assert(bw.cap >= 300)
     bw.free()
 }
@@ -255,28 +256,28 @@ test "BufferWriter grow" {
 test "BufferReader read" {
     var data = "hello world"
     var br = BufferReader { .buf = @ptrOf(data), .len = @lenOf(data), .pos = 0 }
-    var buf = @alloc(5)
+    var buf = alloc(0, 5)
     var n = br.read(buf, 5)
-    @assert_eq(n, 5)
-    @assert_eq(@intToPtr(*u8, buf).*, 104)
-    @assert_eq(br.pos, 5)
-    @dealloc(buf)
+    @assertEq(n, 5)
+    @assertEq(@intToPtr(*u8, buf).*, 104)
+    @assertEq(br.pos, 5)
+    dealloc(buf)
 }
 
 test "BufferReader readByte" {
     var data = "AB"
     var br = BufferReader { .buf = @ptrOf(data), .len = @lenOf(data), .pos = 0 }
-    @assert_eq(br.readByte(), 65)
-    @assert_eq(br.readByte(), 66)
-    @assert_eq(br.readByte(), 0 - 1)
+    @assertEq(br.readByte(), 65)
+    @assertEq(br.readByte(), 66)
+    @assertEq(br.readByte(), 0 - 1)
 }
 
 test "BufferReader remaining" {
     var data = "test"
     var br = BufferReader { .buf = @ptrOf(data), .len = @lenOf(data), .pos = 0 }
-    @assert_eq(br.remaining(), 4)
+    @assertEq(br.remaining(), 4)
     br.readByte()
-    @assert_eq(br.remaining(), 3)
+    @assertEq(br.remaining(), 3)
 }
 
 test "BufferReader atEnd" {

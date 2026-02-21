@@ -27,7 +27,7 @@ test "if true" {
     if (1 == 1) {
         result = 1
     }
-    @assert_eq(result, 1)
+    @assertEq(result, 1)
 }
 
 test "if false" {
@@ -35,7 +35,7 @@ test "if false" {
     if (1 == 2) {
         result = 1
     }
-    @assert_eq(result, 0)
+    @assertEq(result, 0)
 }
 
 test "if else" {
@@ -45,7 +45,7 @@ test "if else" {
     } else {
         result = 20
     }
-    @assert_eq(result, 20)
+    @assertEq(result, 20)
 }
 
 test "nested if" {
@@ -62,7 +62,7 @@ test "nested if" {
             }
         }
     }
-    @assert_eq(result, 3)
+    @assertEq(result, 3)
 }
 
 test "while simple" {
@@ -70,7 +70,7 @@ test "while simple" {
     while (i < 10) {
         i += 1
     }
-    @assert_eq(i, 10)
+    @assertEq(i, 10)
 }
 
 test "while break" {
@@ -81,7 +81,7 @@ test "while break" {
         }
         i += 1
     }
-    @assert_eq(i, 5)
+    @assertEq(i, 5)
 }
 
 test "while continue" {
@@ -94,7 +94,7 @@ test "while continue" {
         }
         sum += i
     }
-    @assert_eq(sum, 30)
+    @assertEq(sum, 30)
 }
 
 test "nested while" {
@@ -108,5 +108,5 @@ test "nested while" {
         }
         i += 1
     }
-    @assert_eq(count, 6)
+    @assertEq(count, 6)
 }

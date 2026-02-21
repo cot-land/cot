@@ -25,45 +25,45 @@ const wasm_op = @import("wasm_opcodes.zig");
 // =============================================================================
 
 pub const FD_WRITE_NAME = "wasi_fd_write";
-pub const FD_WRITE_SIMPLE_NAME = "cot_fd_write_simple";
-pub const FD_READ_SIMPLE_NAME = "cot_fd_read_simple";
-pub const FD_CLOSE_NAME = "cot_fd_close";
-pub const FD_SEEK_NAME = "cot_fd_seek";
-pub const FD_OPEN_NAME = "cot_fd_open";
-pub const TIME_NAME = "cot_time";
-pub const RANDOM_NAME = "cot_random";
-pub const EXIT_NAME = "cot_exit";
-pub const ARGS_COUNT_NAME = "cot_args_count";
-pub const ARG_LEN_NAME = "cot_arg_len";
-pub const ARG_PTR_NAME = "cot_arg_ptr";
-pub const ENVIRON_COUNT_NAME = "cot_environ_count";
-pub const ENVIRON_LEN_NAME = "cot_environ_len";
-pub const ENVIRON_PTR_NAME = "cot_environ_ptr";
+pub const FD_WRITE_SIMPLE_NAME = "fd_write";
+pub const FD_READ_SIMPLE_NAME = "fd_read";
+pub const FD_CLOSE_NAME = "fd_close";
+pub const FD_SEEK_NAME = "fd_seek";
+pub const FD_OPEN_NAME = "fd_open";
+pub const TIME_NAME = "time";
+pub const RANDOM_NAME = "random";
+pub const EXIT_NAME = "exit";
+pub const ARGS_COUNT_NAME = "args_count";
+pub const ARG_LEN_NAME = "arg_len";
+pub const ARG_PTR_NAME = "arg_ptr";
+pub const ENVIRON_COUNT_NAME = "environ_count";
+pub const ENVIRON_LEN_NAME = "environ_len";
+pub const ENVIRON_PTR_NAME = "environ_ptr";
 // Networking
-pub const NET_SOCKET_NAME = "cot_net_socket";
-pub const NET_BIND_NAME = "cot_net_bind";
-pub const NET_LISTEN_NAME = "cot_net_listen";
-pub const NET_ACCEPT_NAME = "cot_net_accept";
-pub const NET_CONNECT_NAME = "cot_net_connect";
-pub const NET_SET_REUSE_ADDR_NAME = "cot_net_set_reuse_addr";
+pub const NET_SOCKET_NAME = "net_socket";
+pub const NET_BIND_NAME = "net_bind";
+pub const NET_LISTEN_NAME = "net_listen";
+pub const NET_ACCEPT_NAME = "net_accept";
+pub const NET_CONNECT_NAME = "net_connect";
+pub const NET_SET_REUSE_ADDR_NAME = "net_set_reuse_addr";
 // Event loop (kqueue/epoll)
-pub const KQUEUE_CREATE_NAME = "cot_kqueue_create";
-pub const KEVENT_ADD_NAME = "cot_kevent_add";
-pub const KEVENT_DEL_NAME = "cot_kevent_del";
-pub const KEVENT_WAIT_NAME = "cot_kevent_wait";
-pub const EPOLL_CREATE_NAME = "cot_epoll_create";
-pub const EPOLL_ADD_NAME = "cot_epoll_add";
-pub const EPOLL_DEL_NAME = "cot_epoll_del";
-pub const EPOLL_WAIT_NAME = "cot_epoll_wait";
-pub const SET_NONBLOCK_NAME = "cot_set_nonblocking";
+pub const KQUEUE_CREATE_NAME = "kqueue_create";
+pub const KEVENT_ADD_NAME = "kevent_add";
+pub const KEVENT_DEL_NAME = "kevent_del";
+pub const KEVENT_WAIT_NAME = "kevent_wait";
+pub const EPOLL_CREATE_NAME = "epoll_create";
+pub const EPOLL_ADD_NAME = "epoll_add";
+pub const EPOLL_DEL_NAME = "epoll_del";
+pub const EPOLL_WAIT_NAME = "epoll_wait";
+pub const SET_NONBLOCK_NAME = "set_nonblocking";
 // Process spawning
-pub const FORK_NAME = "cot_fork";
-pub const EXECVE_NAME = "cot_execve";
-pub const WAITPID_NAME = "cot_waitpid";
-pub const PIPE_NAME = "cot_pipe";
-pub const DUP2_NAME = "cot_dup2";
+pub const FORK_NAME = "fork";
+pub const EXECVE_NAME = "execve";
+pub const WAITPID_NAME = "waitpid";
+pub const PIPE_NAME = "pipe";
+pub const DUP2_NAME = "dup2";
 // Terminal
-pub const ISATTY_NAME = "cot_isatty";
+pub const ISATTY_NAME = "isatty";
 
 // WASI scratch memory addresses in linear memory
 // Used by adapter shims to build iov structs and read WASI output params

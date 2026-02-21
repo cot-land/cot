@@ -2,5 +2,5 @@
 // This file verifies the test infrastructure itself works.
 
 test "extern placeholder" {
-    @assert_eq(42, 42)
+    @assertEq(42, 42)
 }

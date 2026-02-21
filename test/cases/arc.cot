@@ -31,7 +31,7 @@ fn ca_createBox() *CaBox {
 
 test "new simple" {
     var p = new CaPoint { x: 40, y: 2 }
-    @assert_eq(p.x + p.y, 42)
+    @assertEq(p.x + p.y, 42)
 }
 
 test "destructor called" {
@@ -39,7 +39,7 @@ test "destructor called" {
     {
         var t = new Tracer { value: 1 }
     }
-    @assert_eq(destructor_called, 99)
+    @assertEq(destructor_called, 99)
 }
 
 test "new auto release" {
@@ -52,10 +52,10 @@ test "new auto release" {
 test "retain on copy" {
     var box = new CaBox { value: 42 }
     var box2 = box
-    @assert_eq(box2.value, 42)
+    @assertEq(box2.value, 42)
 }
 
 test "return ownership" {
     var box = ca_createBox()
-    @assert_eq(box.value, 42)
+    @assertEq(box.value, 42)
 }

@@ -1000,7 +1000,7 @@ pub const GenState = struct {
                 try self.getValue64(v.args[0]);
                 // Look up cot_retain function index
                 const func_idx: i64 = if (self.func_indices) |indices| blk: {
-                    if (indices.get("cot_retain")) |idx| {
+                    if (indices.get("retain")) |idx| {
                         break :blk @intCast(idx);
                     }
                     break :blk 0; // Fallback (should not happen)
@@ -1020,7 +1020,7 @@ pub const GenState = struct {
                 try self.getValue64(v.args[0]);
                 // Look up cot_release function index
                 const func_idx: i64 = if (self.func_indices) |indices| blk: {
-                    if (indices.get("cot_release")) |idx| {
+                    if (indices.get("release")) |idx| {
                         break :blk @intCast(idx);
                     }
                     break :blk 0; // Fallback (should not happen)

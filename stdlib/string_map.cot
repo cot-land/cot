@@ -8,7 +8,9 @@
 //   import "std/string_map"
 //   var m: StringMap = .{}
 //   m.set("hello", 42)
-//   @assert_eq(m.get("hello"), 42)
+//   @assertEq(m.get("hello"), 42)
+
+import "std/sys"
 
 // FNV-1a 64-bit hash for strings.
 // Ref: Zig std.hash.Fnv1a_64, Go hash/fnv
@@ -63,10 +65,10 @@ impl StringMap {
         var old_s = self.states
         var old_cap = self.capacity
 
-        self.key_ptrs = @alloc(new_cap * 8)
-        self.key_lens = @alloc(new_cap * 8)
-        self.values = @alloc(new_cap * 8)
-        self.states = @alloc(new_cap * 8)
+        self.key_ptrs = alloc(0, new_cap * 8)
+        self.key_lens = alloc(0, new_cap * 8)
+        self.values = alloc(0, new_cap * 8)
+        self.states = alloc(0, new_cap * 8)
         self.capacity = new_cap
         self.count = 0
 
@@ -90,10 +92,10 @@ impl StringMap {
         }
 
         if (old_cap > 0) {
-            @dealloc(old_kp)
-            @dealloc(old_kl)
-            @dealloc(old_v)
-            @dealloc(old_s)
+            dealloc(old_kp)
+            dealloc(old_kl)
+            dealloc(old_v)
+            dealloc(old_s)
         }
     }
 
@@ -243,10 +245,10 @@ impl StringMap {
 
     fn free(self: *StringMap) void {
         if (self.capacity > 0) {
-            @dealloc(self.key_ptrs)
-            @dealloc(self.key_lens)
-            @dealloc(self.values)
-            @dealloc(self.states)
+            dealloc(self.key_ptrs)
+            dealloc(self.key_lens)
+            dealloc(self.values)
+            dealloc(self.states)
         }
         self.key_ptrs = 0
         self.key_lens = 0

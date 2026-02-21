@@ -9,6 +9,7 @@
 // Reference: Go net/url/url.go (Parse, getScheme, parseAuthority)
 
 import "std/string"
+import "std/sys"
 
 // URL layout — heap-allocated (6 string fields × 16 bytes = 96 bytes):
 //   offset  0: scheme_ptr  (i64)
@@ -79,7 +80,7 @@ fn urlSetField(url: i64, offset: i64, s: string) void {
 // → scheme="http", host="example.com", port="8080", path="/path",
 //   query="key=val", fragment="frag"
 fn parseUrl(raw: string) i64 {
-    var url = @alloc(96)
+    var url = alloc(0, 96)
     // Zero-init all fields
     var zi: i64 = 0
     while (zi < 96) {

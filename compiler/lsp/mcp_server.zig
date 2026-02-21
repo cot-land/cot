@@ -76,7 +76,7 @@ pub const McpServer = struct {
     fn handleInitialize(self: *McpServer, arena: std.mem.Allocator, id: ?std.json.Value) ![]const u8 {
         _ = self;
         const result =
-            \\{"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":false},"resources":{"listChanged":false},"prompts":{"listChanged":false}},"serverInfo":{"name":"cot-tools","version":"0.4.0"}}
+            \\{"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":false},"resources":{"listChanged":false},"prompts":{"listChanged":false}},"serverInfo":{"name":"cot-tools","version":"0.3.2"}}
         ;
         return try jsonRpcSuccess(arena, id, result);
     }
@@ -482,7 +482,7 @@ pub const McpServer = struct {
             try out.appendSlice(arena, fp);
             try out.appendSlice(arena, "\n\n");
         }
-        try out.appendSlice(arena, "Cot tests use this format:\n```cot\ntest \"description\" {\n    @assert_eq(actual, expected)\n}\n```\n\n");
+        try out.appendSlice(arena, "Cot tests use this format:\n```cot\ntest \"description\" {\n    @assertEq(actual, expected)\n}\n```\n\n");
         try out.appendSlice(arena, "Here is the Cot syntax reference:\n\n");
         try out.appendSlice(arena, syntax_reference_text);
 
@@ -721,14 +721,14 @@ const syntax_reference_text =
     \\@alloc(size)  @dealloc(ptr)  @realloc(ptr, size)
     \\@memcpy(dst, src, len)  @sizeOf(T)  @intCast(T, val)
     \\@intToPtr(*T, addr)  @string(ptr, len)
-    \\@ptrOf(s)  @lenOf(s)  @assert(cond)  @assert_eq(a, b)
+    \\@ptrOf(s)  @lenOf(s)  @assert(cond)  @assertEq(a, b)
     \\print(val)  println(val)  eprint(val)  eprintln(val)
-    \\@trap()  @target_os()  @target_arch()
+    \\@trap()  @targetOs()  @targetArch()
     \\@fd_read(fd, buf, len)  @fd_write(fd, buf, len)
     \\@fd_open(ptr, len, flags)  @fd_close(fd)  @fd_seek(fd, off, whence)
     \\
     \\## Tests
-    \\test "my test" { @assert_eq(1 + 1, 2) }
+    \\test "my test" { @assertEq(1 + 1, 2) }
     \\Run: cot test file.cot
     \\Run filtered: cot test file.cot --filter="my test"
 ;
@@ -769,8 +769,8 @@ const project_info_text =
     \\test/cases/         Category unit tests
     \\
     \\## Writing Tests
-    \\test "name" { @assert_eq(1 + 1, 2) }
-    \\test "strings" { @assert_eq("hello", "hello") }
+    \\test "name" { @assertEq(1 + 1, 2) }
+    \\test "strings" { @assertEq("hello", "hello") }
     \\Run: cot test file.cot
     \\
     \\## Targets

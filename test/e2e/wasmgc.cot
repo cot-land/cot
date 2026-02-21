@@ -56,30 +56,30 @@ fn rect_area(r: Rect) i64 {
 
 test "basic struct create" {
     var pt = Point { .x = 5, .y = 10 }
-    @assert_eq(pt.x, 5)
-    @assert_eq(pt.y, 10)
+    @assertEq(pt.x, 5)
+    @assertEq(pt.y, 10)
 }
 
 test "struct field arithmetic" {
     var pt = Point { .x = 3, .y = 7 }
-    @assert_eq(pt.x + pt.y, 10)
-    @assert_eq(pt.x * pt.y, 21)
+    @assertEq(pt.x + pt.y, 10)
+    @assertEq(pt.x * pt.y, 21)
 }
 
 test "four-field struct" {
     var r = Rect { .x = 1, .y = 2, .w = 10, .h = 20 }
-    @assert_eq(r.x, 1)
-    @assert_eq(r.y, 2)
-    @assert_eq(r.w, 10)
-    @assert_eq(r.h, 20)
-    @assert_eq(r.w * r.h, 200)
+    @assertEq(r.x, 1)
+    @assertEq(r.y, 2)
+    @assertEq(r.w, 10)
+    @assertEq(r.h, 20)
+    @assertEq(r.w * r.h, 200)
 }
 
 test "multiple struct instances" {
     var a = Point { .x = 1, .y = 2 }
     var b = Point { .x = 3, .y = 4 }
-    @assert_eq(a.x + b.x, 4)
-    @assert_eq(a.y + b.y, 6)
+    @assertEq(a.x + b.x, 4)
+    @assertEq(a.y + b.y, 6)
 }
 
 // ============================================================================
@@ -88,17 +88,17 @@ test "multiple struct instances" {
 
 test "struct param" {
     var pt = Point { .x = 20, .y = 22 }
-    @assert_eq(point_sum(pt), 42)
+    @assertEq(point_sum(pt), 42)
 }
 
 test "struct fields as args" {
     var pt = Point { .x = 100, .y = 200 }
-    @assert_eq(add(pt.x, pt.y), 300)
+    @assertEq(add(pt.x, pt.y), 300)
 }
 
 test "four-field struct param" {
     var r = Rect { .x = 0, .y = 0, .w = 15, .h = 20 }
-    @assert_eq(rect_area(r), 300)
+    @assertEq(rect_area(r), 300)
 }
 
 // ============================================================================
@@ -110,22 +110,22 @@ test "method call" {
     c.increment()
     c.increment()
     c.increment()
-    @assert_eq(c.get(), 3)
+    @assertEq(c.get(), 3)
 }
 
 test "method with param" {
     var c = Counter { .value = 10 }
     c.add(5)
-    @assert_eq(c.get(), 15)
+    @assertEq(c.get(), 15)
     c.add(25)
-    @assert_eq(c.get(), 40)
+    @assertEq(c.get(), 40)
 }
 
 test "method reset" {
     var c = Counter { .value = 42 }
-    @assert_eq(c.get(), 42)
+    @assertEq(c.get(), 42)
     c.reset()
-    @assert_eq(c.get(), 0)
+    @assertEq(c.get(), 0)
 }
 
 // ============================================================================
@@ -136,8 +136,8 @@ test "field assignment" {
     var pt = Point { .x = 1, .y = 2 }
     pt.x = 10
     pt.y = 20
-    @assert_eq(pt.x, 10)
-    @assert_eq(pt.y, 20)
+    @assertEq(pt.x, 10)
+    @assertEq(pt.y, 20)
 }
 
 // ============================================================================
@@ -147,6 +147,6 @@ test "field assignment" {
 test "mixed struct types" {
     var pt = Point { .x = 5, .y = 10 }
     var r = Rect { .x = 1, .y = 2, .w = 3, .h = 4 }
-    @assert_eq(pt.x + r.w, 8)
-    @assert_eq(pt.y + r.h, 14)
+    @assertEq(pt.x + r.w, 8)
+    @assertEq(pt.y + r.h, 14)
 }

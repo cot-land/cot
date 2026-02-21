@@ -1,6 +1,6 @@
 // testing — Enhanced test assertion utilities.
 //
-// Extends the built-in @assert/@assert_eq with richer assertions
+// Extends the built-in @assert/@assertEq with richer assertions
 // for string containment, comparison, and boolean checks.
 //
 // References:
@@ -46,7 +46,7 @@ fn assertEndsWith(s: string, suffix: string) void {
     }
 }
 
-// Assert that two strings are equal (same as @assert_eq for strings,
+// Assert that two strings are equal (same as @assertEq for strings,
 // but with a custom label for context).
 fn assertStrEq(actual: string, expected: string, label: string) void {
     if (actual != expected) {

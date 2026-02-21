@@ -1,11 +1,13 @@
 // uuid — UUID v4 generation.
 //
 // Generates RFC 4122 version 4 UUIDs (random-based).
-// Uses @random builtin for cryptographic randomness.
+// Uses random() from std/sys for cryptographic randomness.
 //
 // References:
 //   Deno: @std/uuid (v4)
 //   Go: google/uuid (NewRandom)
+
+import "std/sys"
 
 // ============================================================================
 // UUID v4 Generation
@@ -16,8 +18,8 @@
 // where y is one of [8, 9, a, b].
 fn v4() string {
     // Generate 16 random bytes
-    var bytes = @alloc(16)
-    @random(bytes, 16)
+    var bytes = alloc(0, 16)
+    random(bytes, 16)
 
     // Set version to 4: byte[6] = (byte[6] & 0x0f) | 0x40
     var b6 = @intToPtr(*u8, bytes + 6)
@@ -28,7 +30,7 @@ fn v4() string {
     b8.* = @intCast(u8, (@intCast(i64, b8.*) & 63) | 128)
 
     // Format as "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" (36 chars)
-    var out = @alloc(36)
+    var out = alloc(0, 36)
     var oi: i64 = 0
     var bi: i64 = 0
     while (bi < 16) {
@@ -50,7 +52,7 @@ fn v4() string {
         bi = bi + 1
     }
 
-    @dealloc(bytes)
+    dealloc(bytes)
     return @string(out, 36)
 }
 

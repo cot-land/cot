@@ -5,27 +5,27 @@ import "std/path"
 // ============================================================================
 
 test "basename simple" {
-    @assert_eq(basename("a/b/c"), "c")
+    @assertEq(basename("a/b/c"), "c")
 }
 
 test "basename trailing slash" {
-    @assert_eq(basename("/a/"), "a")
+    @assertEq(basename("/a/"), "a")
 }
 
 test "basename root" {
-    @assert_eq(basename("/"), "/")
+    @assertEq(basename("/"), "/")
 }
 
 test "basename empty" {
-    @assert_eq(basename(""), ".")
+    @assertEq(basename(""), ".")
 }
 
 test "basename no slash" {
-    @assert_eq(basename("file.txt"), "file.txt")
+    @assertEq(basename("file.txt"), "file.txt")
 }
 
 test "basename deep path" {
-    @assert_eq(basename("/usr/local/bin/cot"), "cot")
+    @assertEq(basename("/usr/local/bin/cot"), "cot")
 }
 
 // ============================================================================
@@ -33,27 +33,27 @@ test "basename deep path" {
 // ============================================================================
 
 test "dirname simple" {
-    @assert_eq(dirname("a/b/c"), "a/b")
+    @assertEq(dirname("a/b/c"), "a/b")
 }
 
 test "dirname single component" {
-    @assert_eq(dirname("a"), ".")
+    @assertEq(dirname("a"), ".")
 }
 
 test "dirname root file" {
-    @assert_eq(dirname("/a"), "/")
+    @assertEq(dirname("/a"), "/")
 }
 
 test "dirname root" {
-    @assert_eq(dirname("/"), "/")
+    @assertEq(dirname("/"), "/")
 }
 
 test "dirname empty" {
-    @assert_eq(dirname(""), ".")
+    @assertEq(dirname(""), ".")
 }
 
 test "dirname deep path" {
-    @assert_eq(dirname("/usr/local/bin/cot"), "/usr/local/bin")
+    @assertEq(dirname("/usr/local/bin/cot"), "/usr/local/bin")
 }
 
 // ============================================================================
@@ -61,27 +61,27 @@ test "dirname deep path" {
 // ============================================================================
 
 test "extname txt" {
-    @assert_eq(extname("file.txt"), ".txt")
+    @assertEq(extname("file.txt"), ".txt")
 }
 
 test "extname double ext" {
-    @assert_eq(extname("file.tar.gz"), ".gz")
+    @assertEq(extname("file.tar.gz"), ".gz")
 }
 
 test "extname no ext" {
-    @assert_eq(extname("file"), "")
+    @assertEq(extname("file"), "")
 }
 
 test "extname dotfile" {
-    @assert_eq(extname(".gitignore"), "")
+    @assertEq(extname(".gitignore"), "")
 }
 
 test "extname empty" {
-    @assert_eq(extname(""), "")
+    @assertEq(extname(""), "")
 }
 
 test "extname in path" {
-    @assert_eq(extname("/path/to/file.cot"), ".cot")
+    @assertEq(extname("/path/to/file.cot"), ".cot")
 }
 
 // ============================================================================
@@ -105,31 +105,31 @@ test "isAbsolute empty" {
 // ============================================================================
 
 test "join two segments" {
-    @assert_eq(join("a", "b"), "a/b")
+    @assertEq(join("a", "b"), "a/b")
 }
 
 test "join trailing slash" {
-    @assert_eq(join("a/", "b"), "a/b")
+    @assertEq(join("a/", "b"), "a/b")
 }
 
 test "join absolute second" {
-    @assert_eq(join("a", "/b"), "/b")
+    @assertEq(join("a", "/b"), "/b")
 }
 
 test "join empty first" {
-    @assert_eq(join("", "b"), "b")
+    @assertEq(join("", "b"), "b")
 }
 
 test "join empty second" {
-    @assert_eq(join("a", ""), "a")
+    @assertEq(join("a", ""), "a")
 }
 
 test "join3" {
-    @assert_eq(join3("a", "b", "c"), "a/b/c")
+    @assertEq(join3("a", "b", "c"), "a/b/c")
 }
 
 test "join4" {
-    @assert_eq(join4("a", "b", "c", "d"), "a/b/c/d")
+    @assertEq(join4("a", "b", "c", "d"), "a/b/c/d")
 }
 
 // ============================================================================
@@ -137,31 +137,31 @@ test "join4" {
 // ============================================================================
 
 test "clean double slash" {
-    @assert_eq(clean("a//b"), "a/b")
+    @assertEq(clean("a//b"), "a/b")
 }
 
 test "clean dot" {
-    @assert_eq(clean("a/./b"), "a/b")
+    @assertEq(clean("a/./b"), "a/b")
 }
 
 test "clean dotdot" {
-    @assert_eq(clean("a/b/../c"), "a/c")
+    @assertEq(clean("a/b/../c"), "a/c")
 }
 
 test "clean rooted dotdot" {
-    @assert_eq(clean("/../a"), "/a")
+    @assertEq(clean("/../a"), "/a")
 }
 
 test "clean empty" {
-    @assert_eq(clean(""), ".")
+    @assertEq(clean(""), ".")
 }
 
 test "clean trailing slash" {
-    @assert_eq(clean("a/b/"), "a/b")
+    @assertEq(clean("a/b/"), "a/b")
 }
 
 test "clean relative dotdot" {
-    @assert_eq(clean("a/../../b"), "../b")
+    @assertEq(clean("a/../../b"), "../b")
 }
 
 // ============================================================================
@@ -169,13 +169,13 @@ test "clean relative dotdot" {
 // ============================================================================
 
 test "relative same" {
-    @assert_eq(relative("/a/b", "/a/b"), ".")
+    @assertEq(relative("/a/b", "/a/b"), ".")
 }
 
 test "relative child" {
-    @assert_eq(relative("/a", "/a/b/c"), "b/c")
+    @assertEq(relative("/a", "/a/b/c"), "b/c")
 }
 
 test "relative sibling" {
-    @assert_eq(relative("/a/b", "/a/c"), "../c")
+    @assertEq(relative("/a/b", "/a/c"), "../c")
 }

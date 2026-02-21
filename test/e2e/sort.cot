@@ -4,14 +4,14 @@ import "std/sort"
 test "sort empty" {
     var list: List(i64) = .{}
     sort(i64)(list)
-    @assert_eq(list.len(), 0)
+    @assertEq(list.len(), 0)
 }
 
 test "sort single" {
     var list: List(i64) = .{}
     list.append(42)
     sort(i64)(list)
-    @assert_eq(list.get(0), 42)
+    @assertEq(list.get(0), 42)
 }
 
 test "sort already sorted" {
@@ -20,9 +20,9 @@ test "sort already sorted" {
     list.append(2)
     list.append(3)
     sort(i64)(list)
-    @assert_eq(list.get(0), 1)
-    @assert_eq(list.get(1), 2)
-    @assert_eq(list.get(2), 3)
+    @assertEq(list.get(0), 1)
+    @assertEq(list.get(1), 2)
+    @assertEq(list.get(2), 3)
 }
 
 test "sort reversed" {
@@ -33,11 +33,11 @@ test "sort reversed" {
     list.append(2)
     list.append(1)
     sort(i64)(list)
-    @assert_eq(list.get(0), 1)
-    @assert_eq(list.get(1), 2)
-    @assert_eq(list.get(2), 3)
-    @assert_eq(list.get(3), 4)
-    @assert_eq(list.get(4), 5)
+    @assertEq(list.get(0), 1)
+    @assertEq(list.get(1), 2)
+    @assertEq(list.get(2), 3)
+    @assertEq(list.get(3), 4)
+    @assertEq(list.get(4), 5)
 }
 
 test "sort mixed" {
@@ -51,14 +51,14 @@ test "sort mixed" {
     list.append(2)
     list.append(6)
     sort(i64)(list)
-    @assert_eq(list.get(0), 1)
-    @assert_eq(list.get(1), 1)
-    @assert_eq(list.get(2), 2)
-    @assert_eq(list.get(3), 3)
-    @assert_eq(list.get(4), 4)
-    @assert_eq(list.get(5), 5)
-    @assert_eq(list.get(6), 6)
-    @assert_eq(list.get(7), 9)
+    @assertEq(list.get(0), 1)
+    @assertEq(list.get(1), 1)
+    @assertEq(list.get(2), 2)
+    @assertEq(list.get(3), 3)
+    @assertEq(list.get(4), 4)
+    @assertEq(list.get(5), 5)
+    @assertEq(list.get(6), 6)
+    @assertEq(list.get(7), 9)
 }
 
 test "reverse" {
@@ -69,11 +69,11 @@ test "reverse" {
     list.append(4)
     list.append(5)
     reverse(i64)(list)
-    @assert_eq(list.get(0), 5)
-    @assert_eq(list.get(1), 4)
-    @assert_eq(list.get(2), 3)
-    @assert_eq(list.get(3), 2)
-    @assert_eq(list.get(4), 1)
+    @assertEq(list.get(0), 5)
+    @assertEq(list.get(1), 4)
+    @assertEq(list.get(2), 3)
+    @assertEq(list.get(3), 2)
+    @assertEq(list.get(4), 1)
 }
 
 test "sort duplicates" {
@@ -85,10 +85,10 @@ test "sort duplicates" {
     list.append(2)
     list.append(2)
     sort(i64)(list)
-    @assert_eq(list.get(0), 1)
-    @assert_eq(list.get(1), 1)
-    @assert_eq(list.get(2), 2)
-    @assert_eq(list.get(3), 2)
-    @assert_eq(list.get(4), 3)
-    @assert_eq(list.get(5), 3)
+    @assertEq(list.get(0), 1)
+    @assertEq(list.get(1), 1)
+    @assertEq(list.get(2), 2)
+    @assertEq(list.get(3), 2)
+    @assertEq(list.get(4), 3)
+    @assertEq(list.get(5), 3)
 }

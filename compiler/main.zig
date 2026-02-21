@@ -1164,11 +1164,11 @@ fn initCommand(allocator: std.mem.Allocator, opts: cli.InitOptions) void {
             \\import "lib.cot"
             \\
             \\test "add positive numbers" {
-            \\    @assert_eq(add(2, 3), 5)
+            \\    @assertEq(add(2, 3), 5)
             \\}
             \\
             \\test "add with zero" {
-            \\    @assert_eq(add(0, 42), 42)
+            \\    @assertEq(add(0, 42), 42)
             \\}
             \\
         ;
@@ -1201,7 +1201,7 @@ fn initCommand(allocator: std.mem.Allocator, opts: cli.InitOptions) void {
         };
         const test_content =
             \\test "it works" {
-            \\    @assert_eq(1 + 1, 2)
+            \\    @assertEq(1 + 1, 2)
             \\}
             \\
         ;

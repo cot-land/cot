@@ -201,7 +201,7 @@ pub const Checker = struct {
     generic_instantiations: std.AutoHashMap(NodeIndex, GenericInstInfo) = undefined,
     /// Type substitution map, active during generic instantiation
     type_substitution: ?std.StringHashMap(TypeIndex) = null,
-    /// Compilation target — used for @target_os(), @target_arch(), @target() comptime builtins
+    /// Compilation target — used for @targetOs(), @targetArch(), @target() comptime builtins
     target: target_mod.Target = target_mod.Target.native(),
     /// @safe file annotation: auto-wrap struct types with pointer in function signatures
     safe_mode: bool = false,
@@ -1200,7 +1200,7 @@ pub const Checker = struct {
                         };
                     }
                 }
-                // Fallback: comptime string equality (for @target_os() == "linux" etc.)
+                // Fallback: comptime string equality (for @targetOs() == "linux" etc.)
                 if (bin.op == .eql or bin.op == .neq) {
                     if (self.evalConstString(bin.left)) |ls| {
                         if (self.evalConstString(bin.right)) |rs| {
@@ -1813,46 +1813,6 @@ pub const Checker = struct {
                 _ = try self.checkExpr(bc.args[1]);
                 return TypeRegistry.VOID;
             },
-            .alloc => {
-                _ = try self.checkExpr(bc.args[0]);
-                return TypeRegistry.I64;
-            },
-            .dealloc => {
-                _ = try self.checkExpr(bc.args[0]);
-                return TypeRegistry.VOID;
-            },
-            .realloc => {
-                _ = try self.checkExpr(bc.args[0]);
-                _ = try self.checkExpr(bc.args[1]);
-                return TypeRegistry.I64;
-            },
-            .memcpy => {
-                _ = try self.checkExpr(bc.args[0]);
-                _ = try self.checkExpr(bc.args[1]);
-                _ = try self.checkExpr(bc.args[2]);
-                return TypeRegistry.VOID;
-            },
-            .fd_write, .fd_read, .fd_seek, .fd_open, .net_socket, .net_bind, .net_connect,
-            .kevent_add, .kevent_del, .kevent_wait, .epoll_add, .epoll_wait,
-            .execve,
-            => {
-                _ = try self.checkExpr(bc.args[0]);
-                _ = try self.checkExpr(bc.args[1]);
-                _ = try self.checkExpr(bc.args[2]);
-                return TypeRegistry.I64;
-            },
-            .fd_close, .net_accept, .net_set_reuse_addr, .set_nonblocking, .waitpid => {
-                _ = try self.checkExpr(bc.args[0]);
-                return TypeRegistry.I64;
-            },
-            .net_listen, .epoll_del, .dup2 => {
-                _ = try self.checkExpr(bc.args[0]);
-                _ = try self.checkExpr(bc.args[1]);
-                return TypeRegistry.I64;
-            },
-            .kqueue_create, .epoll_create, .fork, .pipe => {
-                return TypeRegistry.I64;
-            },
             .ptr_of => {
                 const arg_type = try self.checkExpr(bc.args[0]);
                 if (arg_type != TypeRegistry.STRING) { self.err.errorWithCode(bc.span.start, .e300, "@ptrOf requires string argument"); return invalid_type; }
@@ -1864,26 +1824,6 @@ pub const Checker = struct {
                 return TypeRegistry.I64;
             },
             .trap => return TypeRegistry.NORETURN,
-            .exit => {
-                _ = try self.checkExpr(bc.args[0]);
-                return TypeRegistry.NORETURN;
-            },
-            .time => return TypeRegistry.I64,
-            .random => {
-                _ = try self.checkExpr(bc.args[0]);
-                _ = try self.checkExpr(bc.args[1]);
-                return TypeRegistry.I64;
-            },
-            .args_count => return TypeRegistry.I64,
-            .arg_len, .arg_ptr => {
-                _ = try self.checkExpr(bc.args[0]);
-                return TypeRegistry.I64;
-            },
-            .environ_count => return TypeRegistry.I64,
-            .environ_len, .environ_ptr => {
-                _ = try self.checkExpr(bc.args[0]);
-                return TypeRegistry.I64;
-            },
             .target_os, .target_arch, .target => return TypeRegistry.STRING,
             .compile_error => {
                 const msg = self.evalConstString(bc.args[0]) orelse "compile error";
@@ -2124,7 +2064,7 @@ pub const Checker = struct {
             .const_cast => {
                 return try self.checkExpr(bc.args[0]);
             },
-            // @arc_retain(val), @arc_release(val) — conditional ARC management
+            // @arcRetain(val), @arcRelease(val) — conditional ARC management
             // Emits cot_retain/cot_release only when arg type is ARC-managed.
             // No-op for non-ARC types. Used in generic collections.
             .arc_retain, .arc_release => {
@@ -2135,18 +2075,6 @@ pub const Checker = struct {
             .panic => {
                 if (bc.args[0] != null_node) _ = try self.checkExpr(bc.args[0]);
                 return TypeRegistry.NORETURN;
-            },
-            // @isatty(fd) — POSIX isatty(3): returns bool
-            .isatty => {
-                _ = try self.checkExpr(bc.args[0]);
-                return TypeRegistry.BOOL;
-            },
-            // @memset(ptr, val, len) — Wasm memory.fill
-            .memset => {
-                _ = try self.checkExpr(bc.args[0]);
-                _ = try self.checkExpr(bc.args[1]);
-                _ = try self.checkExpr(bc.args[2]);
-                return TypeRegistry.VOID;
             },
             // @ctz(val), @clz(val), @popCount(val) — Wasm i64 bit ops
             .ctz, .clz, .pop_count => {

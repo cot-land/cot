@@ -7,16 +7,16 @@ import "std/string"
 
 test "newArgs creates empty result" {
     var args = newArgs()
-    @assert_eq(flagCount(args), 0)
-    @assert_eq(positionalCount(args), 0)
+    @assertEq(flagCount(args), 0)
+    @assertEq(positionalCount(args), 0)
 }
 
 test "addFlag stores key-value" {
     var args = newArgs()
     addFlag(args, "port", "8080")
-    @assert_eq(flagCount(args), 1)
-    @assert_eq(flagKey(args, 0), "port")
-    @assert_eq(flagValue(args, 0), "8080")
+    @assertEq(flagCount(args), 1)
+    @assertEq(flagKey(args, 0), "port")
+    @assertEq(flagValue(args, 0), "8080")
 }
 
 test "addFlag multiple flags" {
@@ -24,38 +24,38 @@ test "addFlag multiple flags" {
     addFlag(args, "host", "localhost")
     addFlag(args, "port", "3000")
     addFlag(args, "verbose", "true")
-    @assert_eq(flagCount(args), 3)
-    @assert_eq(flagKey(args, 0), "host")
-    @assert_eq(flagValue(args, 0), "localhost")
-    @assert_eq(flagKey(args, 2), "verbose")
-    @assert_eq(flagValue(args, 2), "true")
+    @assertEq(flagCount(args), 3)
+    @assertEq(flagKey(args, 0), "host")
+    @assertEq(flagValue(args, 0), "localhost")
+    @assertEq(flagKey(args, 2), "verbose")
+    @assertEq(flagValue(args, 2), "true")
 }
 
 test "addPositional stores value" {
     var args = newArgs()
     addPositional(args, "file.cot")
-    @assert_eq(positionalCount(args), 1)
-    @assert_eq(positional(args, 0), "file.cot")
+    @assertEq(positionalCount(args), 1)
+    @assertEq(positional(args, 0), "file.cot")
 }
 
 test "addPositional multiple" {
     var args = newArgs()
     addPositional(args, "src/main.cot")
     addPositional(args, "src/lib.cot")
-    @assert_eq(positionalCount(args), 2)
-    @assert_eq(positional(args, 0), "src/main.cot")
-    @assert_eq(positional(args, 1), "src/lib.cot")
+    @assertEq(positionalCount(args), 2)
+    @assertEq(positional(args, 0), "src/main.cot")
+    @assertEq(positional(args, 1), "src/lib.cot")
 }
 
 test "getFlag returns value" {
     var args = newArgs()
     addFlag(args, "port", "8080")
-    @assert_eq(getFlag(args, "port", "3000"), "8080")
+    @assertEq(getFlag(args, "port", "3000"), "8080")
 }
 
 test "getFlag returns default when missing" {
     var args = newArgs()
-    @assert_eq(getFlag(args, "port", "3000"), "3000")
+    @assertEq(getFlag(args, "port", "3000"), "3000")
 }
 
 test "hasFlag true when present" {
@@ -72,12 +72,12 @@ test "hasFlag false when absent" {
 test "getFlagInt returns parsed integer" {
     var args = newArgs()
     addFlag(args, "port", "8080")
-    @assert_eq(getFlagInt(args, "port", 3000), 8080)
+    @assertEq(getFlagInt(args, "port", 3000), 8080)
 }
 
 test "getFlagInt returns default when missing" {
     var args = newArgs()
-    @assert_eq(getFlagInt(args, "port", 3000), 3000)
+    @assertEq(getFlagInt(args, "port", 3000), 3000)
 }
 
 test "mixed flags and positionals" {
@@ -86,10 +86,10 @@ test "mixed flags and positionals" {
     addPositional(args, "main.cot")
     addFlag(args, "verbose", "true")
     addPositional(args, "lib.cot")
-    @assert_eq(flagCount(args), 2)
-    @assert_eq(positionalCount(args), 2)
-    @assert_eq(getFlag(args, "output", ""), "build")
-    @assert_eq(positional(args, 1), "lib.cot")
+    @assertEq(flagCount(args), 2)
+    @assertEq(positionalCount(args), 2)
+    @assertEq(getFlag(args, "output", ""), "build")
+    @assertEq(positional(args, 1), "lib.cot")
 }
 
 test "grow beyond initial capacity" {
@@ -103,7 +103,7 @@ test "grow beyond initial capacity" {
     addFlag(args, "g", "7")
     addFlag(args, "h", "8")
     addFlag(args, "i", "9")
-    @assert_eq(flagCount(args), 9)
-    @assert_eq(flagKey(args, 8), "i")
-    @assert_eq(flagValue(args, 8), "9")
+    @assertEq(flagCount(args), 9)
+    @assertEq(flagKey(args, 8), "i")
+    @assertEq(flagValue(args, 8), "9")
 }

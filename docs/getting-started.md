@@ -350,7 +350,8 @@ Cot uses ARC (Automatic Reference Counting). You rarely need to think about memo
 fn example() void {
     // Heap allocation
     var obj = new Foo { x: 42 }
-    defer @dealloc(@ptrToInt(obj))
+    // ARC automatically manages refcount for heap objects
+    // For manual memory: import "std/sys" and use alloc()/dealloc()
 
     // ARC handles List/Map/Set automatically
     var list: List(i64) = .{}
@@ -369,13 +370,13 @@ fn add(a: i64, b: i64) i64 {
 }
 
 test "addition" {
-    @assert_eq(add(2, 3), 5)
-    @assert_eq(add(-1, 1), 0)
+    @assertEq(add(2, 3), 5)
+    @assertEq(add(-1, 1), 0)
 }
 
 test "string length" {
     const s = "hello"
-    @assert_eq(@lenOf(s), 5)
+    @assertEq(@lenOf(s), 5)
 }
 ```
 

@@ -8,6 +8,7 @@
 //   Go: golang.org/x/mod/semver
 
 import "std/string"
+import "std/sys"
 
 // ============================================================================
 // Version Struct (heap-allocated)
@@ -96,7 +97,7 @@ fn parse(s: string) i64 {
     }
 
     // Allocate and populate
-    var v = @alloc(VERSION_SIZE)
+    var v = alloc(0, VERSION_SIZE)
     @intToPtr(*i64, v).* = maj
     @intToPtr(*i64, v + 8).* = min
     @intToPtr(*i64, v + 16).* = pat
@@ -212,7 +213,7 @@ fn format(v: i64) string {
 
 // Return a new version with major incremented, minor and patch reset to 0.
 fn incMajor(v: i64) i64 {
-    var nv = @alloc(VERSION_SIZE)
+    var nv = alloc(0, VERSION_SIZE)
     @intToPtr(*i64, nv).* = major(v) + 1
     @intToPtr(*i64, nv + 8).* = 0
     @intToPtr(*i64, nv + 16).* = 0
@@ -225,7 +226,7 @@ fn incMajor(v: i64) i64 {
 
 // Return a new version with minor incremented, patch reset to 0.
 fn incMinor(v: i64) i64 {
-    var nv = @alloc(VERSION_SIZE)
+    var nv = alloc(0, VERSION_SIZE)
     @intToPtr(*i64, nv).* = major(v)
     @intToPtr(*i64, nv + 8).* = minor(v) + 1
     @intToPtr(*i64, nv + 16).* = 0
@@ -238,7 +239,7 @@ fn incMinor(v: i64) i64 {
 
 // Return a new version with patch incremented.
 fn incPatch(v: i64) i64 {
-    var nv = @alloc(VERSION_SIZE)
+    var nv = alloc(0, VERSION_SIZE)
     @intToPtr(*i64, nv).* = major(v)
     @intToPtr(*i64, nv + 8).* = minor(v)
     @intToPtr(*i64, nv + 16).* = patch(v) + 1

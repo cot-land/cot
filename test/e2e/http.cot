@@ -1,5 +1,6 @@
 import "std/http"
 import "std/string"
+import "std/sys"
 
 // ===== Socket creation tests =====
 
@@ -19,63 +20,63 @@ test "tcp socket reuse addr" {
 // ===== sockaddr_in construction tests =====
 
 test "build sockaddr for loopback port 8080" {
-    var buf = @alloc(16)
+    var buf = alloc(0, 16)
     buildSockaddrIn(buf, INADDR_LOOPBACK, 8080)
 
     // port 8080 = 0x1F90, big-endian: 0x1F, 0x90
     var port_hi = @intToPtr(*u8, buf + 2).*
     var port_lo = @intToPtr(*u8, buf + 3).*
-    @assert_eq(port_hi, 31)   // 0x1F
-    @assert_eq(port_lo, 144)  // 0x90
+    @assertEq(port_hi, 31)   // 0x1F
+    @assertEq(port_lo, 144)  // 0x90
 
     // 127.0.0.1 big-endian: 127, 0, 0, 1
     var ip0 = @intToPtr(*u8, buf + 4).*
     var ip1 = @intToPtr(*u8, buf + 5).*
     var ip2 = @intToPtr(*u8, buf + 6).*
     var ip3 = @intToPtr(*u8, buf + 7).*
-    @assert_eq(ip0, 127)
-    @assert_eq(ip1, 0)
-    @assert_eq(ip2, 0)
-    @assert_eq(ip3, 1)
+    @assertEq(ip0, 127)
+    @assertEq(ip1, 0)
+    @assertEq(ip2, 0)
+    @assertEq(ip3, 1)
 
-    @dealloc(buf)
+    dealloc(buf)
 }
 
 test "build sockaddr for any addr port 80" {
-    var buf = @alloc(16)
+    var buf = alloc(0, 16)
     buildSockaddrIn(buf, INADDR_ANY, 80)
 
     // port 80 = 0x0050, big-endian: 0x00, 0x50
     var port_hi = @intToPtr(*u8, buf + 2).*
     var port_lo = @intToPtr(*u8, buf + 3).*
-    @assert_eq(port_hi, 0)
-    @assert_eq(port_lo, 80)
+    @assertEq(port_hi, 0)
+    @assertEq(port_lo, 80)
 
     // 0.0.0.0
     var ip0 = @intToPtr(*u8, buf + 4).*
     var ip1 = @intToPtr(*u8, buf + 5).*
     var ip2 = @intToPtr(*u8, buf + 6).*
     var ip3 = @intToPtr(*u8, buf + 7).*
-    @assert_eq(ip0, 0)
-    @assert_eq(ip1, 0)
-    @assert_eq(ip2, 0)
-    @assert_eq(ip3, 0)
+    @assertEq(ip0, 0)
+    @assertEq(ip1, 0)
+    @assertEq(ip2, 0)
+    @assertEq(ip3, 0)
 
-    @dealloc(buf)
+    dealloc(buf)
 }
 
 test "build sockaddr zero padding" {
-    var buf = @alloc(16)
+    var buf = alloc(0, 16)
     buildSockaddrIn(buf, INADDR_LOOPBACK, 8080)
 
     // bytes 8-15 should be zero (sin_zero)
     var i: i64 = 8
     while (i < 16) {
-        @assert_eq(@intToPtr(*u8, buf + i).*, 0)
+        @assertEq(@intToPtr(*u8, buf + i).*, 0)
         i = i + 1
     }
 
-    @dealloc(buf)
+    dealloc(buf)
 }
 
 // ===== Bind and listen tests =====
@@ -119,9 +120,9 @@ test "http response 500" {
 
 test "INADDR_LOOPBACK value" {
     // 127.0.0.1 = (127 << 24) | (0 << 16) | (0 << 8) | 1 = 2130706433
-    @assert_eq(INADDR_LOOPBACK, 2130706433)
+    @assertEq(INADDR_LOOPBACK, 2130706433)
 }
 
 test "INADDR_ANY value" {
-    @assert_eq(INADDR_ANY, 0)
+    @assertEq(INADDR_ANY, 0)
 }

@@ -48,7 +48,7 @@ pub const Lowerer = struct {
     closure_counter: u32 = 0,
     lowered_generics: std.StringHashMap(void),
     type_substitution: ?std.StringHashMap(TypeIndex) = null,
-    /// Compilation target — used for @target_os(), @target_arch(), @target() comptime builtins
+    /// Compilation target — used for @targetOs(), @targetArch(), @target() comptime builtins
     target: target_mod.Target = target_mod.Target.native(),
     /// Async state machine: local index of the state pointer param for the current async poll function.
     /// Stored as a local index (not IR node) so we can reload it in each block (Wasm br_table dispatch
@@ -382,7 +382,7 @@ pub const Lowerer = struct {
             const metadata = try fb.emitConstInt(0, TypeRegistry.I64, fn_decl.span);
             const size_val = try fb.emitConstInt(@intCast(state_size), TypeRegistry.I64, fn_decl.span);
             var alloc_args = [_]ir.NodeIndex{ metadata, size_val };
-            const state_ptr = try fb.emitCall("cot_alloc", &alloc_args, false, TypeRegistry.I64, fn_decl.span);
+            const state_ptr = try fb.emitCall("alloc", &alloc_args, false, TypeRegistry.I64, fn_decl.span);
 
             // Store state_ptr to a local for multi-use (Wasm stack machine semantics)
             const state_local = try fb.addLocalWithSize("__state", TypeRegistry.I64, false, 8);
@@ -549,7 +549,7 @@ pub const Lowerer = struct {
             const metadata = try fb.emitConstInt(0, TypeRegistry.I64, fn_decl.span);
             const size_val = try fb.emitConstInt(future_size, TypeRegistry.I64, fn_decl.span);
             var alloc_args = [_]ir.NodeIndex{ metadata, size_val };
-            const future_ptr = try fb.emitCall("cot_alloc", &alloc_args, false, TypeRegistry.I64, fn_decl.span);
+            const future_ptr = try fb.emitCall("alloc", &alloc_args, false, TypeRegistry.I64, fn_decl.span);
             const future_local = try fb.addLocalWithSize("__future", TypeRegistry.I64, false, 8);
             _ = try fb.emitStoreLocal(future_local, future_ptr, fn_decl.span);
 
@@ -1374,7 +1374,7 @@ pub const Lowerer = struct {
                         else
                             cleanup.value;
                         var args = [_]ir.NodeIndex{value};
-                        _ = try fb.emitCall("cot_release", &args, false, TypeRegistry.VOID, Span.zero);
+                        _ = try fb.emitCall("release", &args, false, TypeRegistry.VOID, Span.zero);
                     },
                     .defer_expr => {
                         try self.lowerDeferredNode(@intCast(cleanup.value));
@@ -1464,7 +1464,7 @@ pub const Lowerer = struct {
                 const local_addr = try fb.emitAddrLocal(local_idx, ptr_type, var_stmt.span);
                 const size_node = try fb.emitConstInt(@intCast(size), TypeRegistry.I64, var_stmt.span);
                 var args = [_]ir.NodeIndex{ local_addr, size_node };
-                _ = try fb.emitCall("cot_memset_zero", &args, false, TypeRegistry.VOID, var_stmt.span);
+                _ = try fb.emitCall("memset_zero", &args, false, TypeRegistry.VOID, var_stmt.span);
 
                 // Register scope_destroy for .{} (zero_init), not for undefined
                 if (is_zero_init) {
@@ -1592,7 +1592,7 @@ pub const Lowerer = struct {
                             };
                             if (needs_retain) {
                                 var retain_args = [_]ir.NodeIndex{value_node};
-                                const retained = try fb.emitCall("cot_retain", &retain_args, false, type_idx, var_stmt.span);
+                                const retained = try fb.emitCall("retain", &retain_args, false, type_idx, var_stmt.span);
                                 _ = try fb.emitStoreLocal(local_idx, retained, var_stmt.span);
                                 const cleanup = arc.Cleanup.initForLocal(.release, retained, type_idx, local_idx);
                                 _ = try self.cleanup_stack.push(cleanup);
@@ -1697,7 +1697,7 @@ pub const Lowerer = struct {
                     const local_addr = try fb.emitAddrLocal(local_idx, ptr_type, span);
                     const size_node = try fb.emitConstInt(@intCast(type_size), TypeRegistry.I64, span);
                     var args = [_]ir.NodeIndex{ local_addr, size_node };
-                    _ = try fb.emitCall("cot_memset_zero", &args, false, TypeRegistry.VOID, span);
+                    _ = try fb.emitCall("memset_zero", &args, false, TypeRegistry.VOID, span);
                     return;
                 }
                 const value_node_ir = try self.lowerExprNode(value_idx);
@@ -1927,7 +1927,7 @@ pub const Lowerer = struct {
                         const buf_local = try fb.addLocalWithSize("__interp_buf", TypeRegistry.I64, true, 24); // 24 bytes (aligned)
                         const buf_addr = try fb.emitAddrLocal(buf_local, TypeRegistry.I64, si.span);
                         var its_args = [_]ir.NodeIndex{ expr_val, buf_addr };
-                        const str_len = try fb.emitCall("cot_int_to_string", &its_args, false, TypeRegistry.I64, si.span);
+                        const str_len = try fb.emitCall("int_to_string", &its_args, false, TypeRegistry.I64, si.span);
                         // String starts at buf_addr + 21 - str_len
                         // str_ptr = buf_addr + 21 - str_len
                         const twenty_one = try fb.emitConstInt(21, TypeRegistry.I64, si.span);
@@ -1956,7 +1956,7 @@ pub const Lowerer = struct {
             const p_ptr = try fb.emitSlicePtr(part, ptr_type, si.span);
             const p_len = try fb.emitSliceLen(part, si.span);
             var concat_args = [_]ir.NodeIndex{ r_ptr, r_len, p_ptr, p_len };
-            const new_ptr = try fb.emitCall("cot_string_concat", &concat_args, false, TypeRegistry.I64, si.span);
+            const new_ptr = try fb.emitCall("string_concat", &concat_args, false, TypeRegistry.I64, si.span);
             const new_len = try fb.emitBinary(.add, r_len, p_len, TypeRegistry.I64, si.span);
             result = try fb.emit(ir.Node.init(.{ .string_header = .{ .ptr = new_ptr, .len = new_len } }, TypeRegistry.STRING, si.span));
         }
@@ -2015,7 +2015,7 @@ pub const Lowerer = struct {
                         const local_type = fb.locals.items[local_idx].type_idx;
                         const old_value = try fb.emitLoadLocal(local_idx, local_type, assign.span);
                         var release_args = [_]ir.NodeIndex{old_value};
-                        _ = try fb.emitCall("cot_release", &release_args, false, TypeRegistry.VOID, assign.span);
+                        _ = try fb.emitCall("release", &release_args, false, TypeRegistry.VOID, assign.span);
 
                         // Check if RHS is +1 (owned) or +0 (borrowed)
                         // Reference: Swift SILGenAssign.cpp — assignment consumes +1, retains +0
@@ -2025,7 +2025,7 @@ pub const Lowerer = struct {
                         if (!is_owned) {
                             // +0 value (borrowed): retain before storing
                             var retain_args = [_]ir.NodeIndex{value_node};
-                            const retained = try fb.emitCall("cot_retain", &retain_args, false, local_type, assign.span);
+                            const retained = try fb.emitCall("retain", &retain_args, false, local_type, assign.span);
                             _ = try fb.emitStoreLocal(local_idx, retained, assign.span);
                             self.cleanup_stack.updateValueForLocal(local_idx, retained);
                         } else {
@@ -2077,7 +2077,7 @@ pub const Lowerer = struct {
                         if (self.type_reg.couldBeARC(pointee_type) and self.baseHasCleanup(d.operand)) {
                             const old_val = try fb.emitPtrLoadValue(ptr_node, pointee_type, assign.span);
                             var release_args = [_]ir.NodeIndex{old_val};
-                            _ = try fb.emitCall("cot_release", &release_args, false, TypeRegistry.VOID, assign.span);
+                            _ = try fb.emitCall("release", &release_args, false, TypeRegistry.VOID, assign.span);
 
                             // Retain new value if borrowed (+0)
                             const rhs_node = self.tree.getNode(assign.value);
@@ -2085,7 +2085,7 @@ pub const Lowerer = struct {
                             const is_owned = if (rhs_expr) |e| (e == .new_expr or e == .call) else false;
                             if (!is_owned) {
                                 var retain_args = [_]ir.NodeIndex{value_node};
-                                const retained = try fb.emitCall("cot_retain", &retain_args, false, pointee_type, assign.span);
+                                const retained = try fb.emitCall("retain", &retain_args, false, pointee_type, assign.span);
                                 _ = try fb.emitPtrStoreValue(ptr_node, retained, assign.span);
                                 return;
                             }
@@ -2139,7 +2139,7 @@ pub const Lowerer = struct {
                     if (self.type_reg.couldBeARC(field.type_idx) and self.baseHasCleanup(fa.base)) {
                         const old_val = try fb.emitFieldValue(ptr_val, field_idx, field_offset, field.type_idx, span);
                         var release_args = [_]ir.NodeIndex{old_val};
-                        _ = try fb.emitCall("cot_release", &release_args, false, TypeRegistry.VOID, span);
+                        _ = try fb.emitCall("release", &release_args, false, TypeRegistry.VOID, span);
 
                         // Retain new value if borrowed (+0)
                         const rhs_node = self.tree.getNode(rhs_ast);
@@ -2147,7 +2147,7 @@ pub const Lowerer = struct {
                         const is_owned = if (rhs_expr) |e| (e == .new_expr or e == .call) else false;
                         if (!is_owned) {
                             var retain_args = [_]ir.NodeIndex{value_node};
-                            const retained = try fb.emitCall("cot_retain", &retain_args, false, field.type_idx, span);
+                            const retained = try fb.emitCall("retain", &retain_args, false, field.type_idx, span);
                             _ = try fb.emitStoreFieldValue(ptr_val, field_idx, field_offset, retained, span);
                         } else {
                             _ = try fb.emitStoreFieldValue(ptr_val, field_idx, field_offset, value_node, span);
@@ -2259,7 +2259,7 @@ pub const Lowerer = struct {
                 if (fb.lookupLocal(base_expr.ident.name)) |local_idx| {
                     const old_val = try fb.emitIndexLocal(local_idx, index_node, elem_size, elem_type, span);
                     var release_args = [_]ir.NodeIndex{old_val};
-                    _ = try fb.emitCall("cot_release", &release_args, false, TypeRegistry.VOID, span);
+                    _ = try fb.emitCall("release", &release_args, false, TypeRegistry.VOID, span);
 
                     // Retain new value if borrowed (+0)
                     const rhs_node = self.tree.getNode(rhs_ast);
@@ -2267,7 +2267,7 @@ pub const Lowerer = struct {
                     const is_owned = if (rhs_expr) |e| (e == .new_expr or e == .call) else false;
                     const store_val = if (!is_owned) blk: {
                         var retain_args = [_]ir.NodeIndex{value_node};
-                        break :blk try fb.emitCall("cot_retain", &retain_args, false, elem_type, span);
+                        break :blk try fb.emitCall("retain", &retain_args, false, elem_type, span);
                     } else value_node;
                     _ = try fb.emitStoreIndexLocal(local_idx, index_node, store_val, elem_size, span);
                     return;
@@ -3060,7 +3060,7 @@ pub const Lowerer = struct {
 
             // Call cot_string_concat(ptr1, len1, ptr2, len2) -> new_ptr
             var args = [_]ir.NodeIndex{ ptr1, len1, ptr2, len2 };
-            const new_ptr = try fb.emitCall("cot_string_concat", &args, false, TypeRegistry.I64, bin.span);
+            const new_ptr = try fb.emitCall("string_concat", &args, false, TypeRegistry.I64, bin.span);
 
             // Compute new_len = len1 + len2
             const new_len = try fb.emitBinary(.add, len1, len2, TypeRegistry.I64, bin.span);
@@ -3069,7 +3069,7 @@ pub const Lowerer = struct {
             return try fb.emit(ir.Node.init(.{ .string_header = .{ .ptr = new_ptr, .len = new_len } }, TypeRegistry.STRING, bin.span));
         }
         // String equality: decompose to ptr/len and call cot_string_eq
-        // Same pattern as @assert_eq string handling (line 3528)
+        // Same pattern as @assertEq string handling (line 3528)
         if ((bin.op == .eql or bin.op == .neq) and self.inferExprType(bin.left) == TypeRegistry.STRING) {
             const ptr_type = try self.type_reg.makePointer(TypeRegistry.U8);
             const l_ptr = try fb.emitSlicePtr(left, ptr_type, bin.span);
@@ -3077,7 +3077,7 @@ pub const Lowerer = struct {
             const r_ptr = try fb.emitSlicePtr(right, ptr_type, bin.span);
             const r_len = try fb.emitSliceLen(right, bin.span);
             var eq_args = [_]ir.NodeIndex{ l_ptr, l_len, r_ptr, r_len };
-            const eq_result = try fb.emitCall("cot_string_eq", &eq_args, false, TypeRegistry.I64, bin.span);
+            const eq_result = try fb.emitCall("string_eq", &eq_args, false, TypeRegistry.I64, bin.span);
             const zero = try fb.emitConstInt(0, TypeRegistry.I64, bin.span);
             if (bin.op == .eql) {
                 return try fb.emitBinary(.ne, eq_result, zero, TypeRegistry.BOOL, bin.span);
@@ -3905,7 +3905,7 @@ pub const Lowerer = struct {
         const size_node = try fb.emitConstInt(@intCast(total_size), TypeRegistry.I64, ne.span);
         var alloc_args = [_]ir.NodeIndex{ metadata_node, size_node };
         const ptr_type = try self.type_reg.makePointer(struct_type_idx);
-        const alloc_result = try fb.emitCall("cot_alloc", &alloc_args, false, ptr_type, ne.span);
+        const alloc_result = try fb.emitCall("alloc", &alloc_args, false, ptr_type, ne.span);
 
         // Store pointer in a temp so we can access it multiple times
         const temp_idx = try fb.addLocalWithSize("__new_ptr", ptr_type, true, 8);
@@ -4022,7 +4022,7 @@ pub const Lowerer = struct {
         const metadata_node = try fb.emitConstInt(0, TypeRegistry.I64, span);
         const size_node = try fb.emitConstInt(@intCast(total_size), TypeRegistry.I64, span);
         var alloc_args = [_]ir.NodeIndex{ metadata_node, size_node };
-        const alloc_result = try fb.emitCall("cot_alloc", &alloc_args, false, TypeRegistry.I64, span);
+        const alloc_result = try fb.emitCall("alloc", &alloc_args, false, TypeRegistry.I64, span);
 
         // Store result in temp
         const temp_name = try std.fmt.allocPrint(self.allocator, "__closure_ptr_{d}", .{self.temp_counter});
@@ -4109,7 +4109,7 @@ pub const Lowerer = struct {
         const metadata_node = try fb.emitConstInt(0, TypeRegistry.I64, ce.span);
         const size_node = try fb.emitConstInt(@intCast(total_size), TypeRegistry.I64, ce.span);
         var alloc_args = [_]ir.NodeIndex{ metadata_node, size_node };
-        const alloc_result = try fb.emitCall("cot_alloc", &alloc_args, false, TypeRegistry.I64, ce.span);
+        const alloc_result = try fb.emitCall("alloc", &alloc_args, false, TypeRegistry.I64, ce.span);
 
         // Store in temp
         const temp_name = try std.fmt.allocPrint(self.allocator, "__closure_ptr_{d}", .{self.temp_counter});
@@ -4240,7 +4240,7 @@ pub const Lowerer = struct {
         // Optional unwrap expression: if expr |val| { val * 2 } else { -1 }
         if (if_expr.capture.len > 0) return try self.lowerIfOptionalExpr(if_expr);
         // Comptime const-fold: if condition is known at compile time, only emit the taken branch.
-        // This eliminates dead branches for @target_os() == "linux" etc.
+        // This eliminates dead branches for @targetOs() == "linux" etc.
         if (self.chk.evalConstExpr(if_expr.condition)) |cond_val| {
             if (cond_val != 0) return self.lowerExprNode(if_expr.then_branch);
             if (if_expr.else_branch != null_node) return self.lowerExprNode(if_expr.else_branch);
@@ -4370,7 +4370,7 @@ pub const Lowerer = struct {
                         const p_ptr = try fb.emitSlicePtr(pattern_val, ptr_type, se.span);
                         const p_len = try fb.emitSliceLen(pattern_val, se.span);
                         var eq_args = [_]ir.NodeIndex{ subject_ptr, subject_len, p_ptr, p_len };
-                        const eq_result = try fb.emitCall("cot_string_eq", &eq_args, false, TypeRegistry.I64, se.span);
+                        const eq_result = try fb.emitCall("string_eq", &eq_args, false, TypeRegistry.I64, se.span);
                         const zero = try fb.emitConstInt(0, TypeRegistry.I64, se.span);
                         break :blk try fb.emitBinary(.ne, eq_result, zero, TypeRegistry.BOOL, se.span);
                     } else try fb.emitBinary(.eq, subject, pattern_val, TypeRegistry.BOOL, se.span);
@@ -4573,7 +4573,7 @@ pub const Lowerer = struct {
                         const p_ptr = try fb.emitSlicePtr(pattern_val, ptr_type, se.span);
                         const p_len = try fb.emitSliceLen(pattern_val, se.span);
                         var eq_args = [_]ir.NodeIndex{ subject_ptr, subject_len, p_ptr, p_len };
-                        const eq_result = try fb.emitCall("cot_string_eq", &eq_args, false, TypeRegistry.I64, se.span);
+                        const eq_result = try fb.emitCall("string_eq", &eq_args, false, TypeRegistry.I64, se.span);
                         const zero = try fb.emitConstInt(0, TypeRegistry.I64, se.span);
                         break :blk try fb.emitBinary(.ne, eq_result, zero, TypeRegistry.BOOL, se.span);
                     } else try fb.emitBinary(.eq, subject, pattern_val, TypeRegistry.BOOL, se.span);
@@ -5262,10 +5262,10 @@ pub const Lowerer = struct {
         fb.setBlock(else_block);
         // Go reference: runtime/slice.go nextslicecap (lines 326-358)
         var cap_args = [_]ir.NodeIndex{ new_len, old_cap };
-        const new_cap_grow = try fb.emitCall("cot_nextslicecap", &cap_args, false, TypeRegistry.I64, call.span);
+        const new_cap_grow = try fb.emitCall("nextslicecap", &cap_args, false, TypeRegistry.I64, call.span);
         // Go reference: runtime/slice.go growslice (lines 178-287)
         var grow_args = [_]ir.NodeIndex{ old_ptr, old_len, new_cap_grow, elem_size_val };
-        const new_ptr_grow = try fb.emitCall("cot_growslice", &grow_args, false, TypeRegistry.I64, call.span);
+        const new_ptr_grow = try fb.emitCall("growslice", &grow_args, false, TypeRegistry.I64, call.span);
         _ = try fb.emitStoreLocal(result_ptr_local, new_ptr_grow, call.span);
         _ = try fb.emitStoreLocal(result_cap_local, new_cap_grow, call.span);
         _ = try fb.emitJump(merge_block, call.span);
@@ -5296,14 +5296,14 @@ pub const Lowerer = struct {
         if (is_integer) {
             const int_val = try self.lowerExprNode(call.args[0]);
             var print_args = [_]ir.NodeIndex{int_val};
-            _ = try fb.emitCall(if (fd == 2) "cot_eprint_int" else "cot_print_int", &print_args, false, TypeRegistry.VOID, call.span);
+            _ = try fb.emitCall(if (fd == 2) "eprint_int" else "print_int", &print_args, false, TypeRegistry.VOID, call.span);
         } else {
             const str_val = try self.lowerExprNode(call.args[0]);
             const ptr_val = try fb.emitSlicePtr(str_val, ptr_type, call.span);
             const len_val = try fb.emitSliceLen(str_val, call.span);
             const fd_val = try fb.emitConstInt(fd, TypeRegistry.I64, call.span);
             var write_args = [_]ir.NodeIndex{ fd_val, ptr_val, len_val };
-            _ = try fb.emitCall("cot_write", &write_args, false, TypeRegistry.I64, call.span);
+            _ = try fb.emitCall("write", &write_args, false, TypeRegistry.I64, call.span);
         }
 
         if (is_println) {
@@ -5313,7 +5313,7 @@ pub const Lowerer = struct {
             const nl_len = try fb.emitConstInt(1, TypeRegistry.I64, call.span);
             const fd_val = try fb.emitConstInt(fd, TypeRegistry.I64, call.span);
             var nl_args = [_]ir.NodeIndex{ fd_val, nl_ptr, nl_len };
-            _ = try fb.emitCall("cot_write", &nl_args, false, TypeRegistry.I64, call.span);
+            _ = try fb.emitCall("write", &nl_args, false, TypeRegistry.I64, call.span);
         }
         return ir.null_node;
     }
@@ -5402,7 +5402,7 @@ pub const Lowerer = struct {
                     const msg_len = try fb.emitSliceLen(msg_str, bc.span);
                     const fd_val = try fb.emitConstInt(2, TypeRegistry.I64, bc.span);
                     var write_args = [_]ir.NodeIndex{ fd_val, msg_ptr, msg_len };
-                    _ = try fb.emitCall("cot_write", &write_args, false, TypeRegistry.I64, bc.span);
+                    _ = try fb.emitCall("write", &write_args, false, TypeRegistry.I64, bc.span);
                     _ = try fb.emitTrap(bc.span);
                 }
                 fb.setBlock(then_block);
@@ -5452,11 +5452,11 @@ pub const Lowerer = struct {
                     const r_ptr = try fb.emitSlicePtr(right, ptr_type, bc.span);
                     const r_len = try fb.emitSliceLen(right, bc.span);
                     var eq_args = [_]ir.NodeIndex{ l_ptr, l_len, r_ptr, r_len };
-                    const eq_result = try fb.emitCall("cot_string_eq", &eq_args, false, TypeRegistry.I64, bc.span);
+                    const eq_result = try fb.emitCall("string_eq", &eq_args, false, TypeRegistry.I64, bc.span);
                     break :blk try fb.emitBinary(.ne, eq_result, try fb.emitConstInt(0, TypeRegistry.I64, bc.span), TypeRegistry.BOOL, bc.span);
                 } else try fb.emitBinary(.eq, left, right, TypeRegistry.BOOL, bc.span);
-                const then_block = try fb.newBlock("assert_eq.ok");
-                const fail_block = try fb.newBlock("assert_eq.fail");
+                const then_block = try fb.newBlock("assertEq.ok");
+                const fail_block = try fb.newBlock("assertEq.fail");
                 _ = try fb.emitBranch(cond, then_block, fail_block, bc.span);
                 fb.setBlock(fail_block);
                 if (self.current_test_name != null) {
@@ -5478,7 +5478,7 @@ pub const Lowerer = struct {
                     }
                     const ret_type = fb.return_type;
                     const eu_size = self.type_reg.sizeOf(ret_type);
-                    const tmp_local = try fb.addLocalWithSize("__assert_eq_err", ret_type, false, eu_size);
+                    const tmp_local = try fb.addLocalWithSize("__assertEq_err", ret_type, false, eu_size);
                     const tag_one = try fb.emitConstInt(1, TypeRegistry.I64, bc.span);
                     _ = try fb.emitStoreLocalField(tmp_local, 0, 0, tag_one, bc.span);
                     const payload = try fb.emitConstInt(0, TypeRegistry.I64, bc.span);
@@ -5486,7 +5486,7 @@ pub const Lowerer = struct {
                     const err_ret = try fb.emitAddrLocal(tmp_local, TypeRegistry.I64, bc.span);
                     _ = try fb.emitRet(err_ret, bc.span);
                 } else {
-                    const msg = try self.allocator.dupe(u8, "assert_eq failed\n");
+                    const msg = try self.allocator.dupe(u8, "assertEq failed\n");
                     const msg_idx = try fb.addStringLiteral(msg);
                     const msg_str = try fb.emitConstSlice(msg_idx, bc.span);
                     const ptr_type = try self.type_reg.makePointer(TypeRegistry.U8);
@@ -5494,187 +5494,11 @@ pub const Lowerer = struct {
                     const msg_len = try fb.emitSliceLen(msg_str, bc.span);
                     const fd_val = try fb.emitConstInt(2, TypeRegistry.I64, bc.span);
                     var write_args = [_]ir.NodeIndex{ fd_val, msg_ptr, msg_len };
-                    _ = try fb.emitCall("cot_write", &write_args, false, TypeRegistry.I64, bc.span);
+                    _ = try fb.emitCall("write", &write_args, false, TypeRegistry.I64, bc.span);
                     _ = try fb.emitTrap(bc.span);
                 }
                 fb.setBlock(then_block);
                 return ir.null_node;
-            },
-            .alloc => {
-                const size = try self.lowerExprNode(bc.args[0]);
-                const metadata_node = try fb.emitConstInt(0, TypeRegistry.I64, bc.span);
-                var alloc_args = [_]ir.NodeIndex{ metadata_node, size };
-                return try fb.emitCall("cot_alloc", &alloc_args, false, TypeRegistry.I64, bc.span);
-            },
-            .dealloc => {
-                const ptr = try self.lowerExprNode(bc.args[0]);
-                var dealloc_args = [_]ir.NodeIndex{ptr};
-                _ = try fb.emitCall("cot_dealloc", &dealloc_args, false, TypeRegistry.VOID, bc.span);
-                return ir.null_node;
-            },
-            .realloc => {
-                const ptr = try self.lowerExprNode(bc.args[0]);
-                const new_size = try self.lowerExprNode(bc.args[1]);
-                var realloc_args = [_]ir.NodeIndex{ ptr, new_size };
-                return try fb.emitCall("cot_realloc", &realloc_args, false, TypeRegistry.I64, bc.span);
-            },
-            .memcpy => {
-                const dst = try self.lowerExprNode(bc.args[0]);
-                const src = try self.lowerExprNode(bc.args[1]);
-                const len = try self.lowerExprNode(bc.args[2]);
-                var memcpy_args = [_]ir.NodeIndex{ dst, src, len };
-                _ = try fb.emitCall("memcpy", &memcpy_args, false, TypeRegistry.VOID, bc.span);
-                return ir.null_node;
-            },
-            .fd_write => {
-                const fd_arg = try self.lowerExprNode(bc.args[0]);
-                const ptr_arg = try self.lowerExprNode(bc.args[1]);
-                const len_arg = try self.lowerExprNode(bc.args[2]);
-                var args = [_]ir.NodeIndex{ fd_arg, ptr_arg, len_arg };
-                return try fb.emitCall("cot_fd_write_simple", &args, false, TypeRegistry.I64, bc.span);
-            },
-            .fd_read => {
-                const fd_arg = try self.lowerExprNode(bc.args[0]);
-                const buf_arg = try self.lowerExprNode(bc.args[1]);
-                const len_arg = try self.lowerExprNode(bc.args[2]);
-                var args = [_]ir.NodeIndex{ fd_arg, buf_arg, len_arg };
-                return try fb.emitCall("cot_fd_read_simple", &args, false, TypeRegistry.I64, bc.span);
-            },
-            .fd_close => {
-                const fd_arg = try self.lowerExprNode(bc.args[0]);
-                var args = [_]ir.NodeIndex{fd_arg};
-                return try fb.emitCall("cot_fd_close", &args, false, TypeRegistry.I64, bc.span);
-            },
-            .fd_seek => {
-                const fd_arg = try self.lowerExprNode(bc.args[0]);
-                const offset_arg = try self.lowerExprNode(bc.args[1]);
-                const whence_arg = try self.lowerExprNode(bc.args[2]);
-                var args = [_]ir.NodeIndex{ fd_arg, offset_arg, whence_arg };
-                return try fb.emitCall("cot_fd_seek", &args, false, TypeRegistry.I64, bc.span);
-            },
-            .fd_open => {
-                const path_ptr_arg = try self.lowerExprNode(bc.args[0]);
-                const path_len_arg = try self.lowerExprNode(bc.args[1]);
-                const flags_arg = try self.lowerExprNode(bc.args[2]);
-                var args = [_]ir.NodeIndex{ path_ptr_arg, path_len_arg, flags_arg };
-                return try fb.emitCall("cot_fd_open", &args, false, TypeRegistry.I64, bc.span);
-            },
-            .net_socket => {
-                const a1 = try self.lowerExprNode(bc.args[0]);
-                const a2 = try self.lowerExprNode(bc.args[1]);
-                const a3 = try self.lowerExprNode(bc.args[2]);
-                var args = [_]ir.NodeIndex{ a1, a2, a3 };
-                return try fb.emitCall("cot_net_socket", &args, false, TypeRegistry.I64, bc.span);
-            },
-            .net_bind => {
-                const a1 = try self.lowerExprNode(bc.args[0]);
-                const a2 = try self.lowerExprNode(bc.args[1]);
-                const a3 = try self.lowerExprNode(bc.args[2]);
-                var args = [_]ir.NodeIndex{ a1, a2, a3 };
-                return try fb.emitCall("cot_net_bind", &args, false, TypeRegistry.I64, bc.span);
-            },
-            .net_listen => {
-                const a1 = try self.lowerExprNode(bc.args[0]);
-                const a2 = try self.lowerExprNode(bc.args[1]);
-                var args = [_]ir.NodeIndex{ a1, a2 };
-                return try fb.emitCall("cot_net_listen", &args, false, TypeRegistry.I64, bc.span);
-            },
-            .net_accept => {
-                const a1 = try self.lowerExprNode(bc.args[0]);
-                var args = [_]ir.NodeIndex{a1};
-                return try fb.emitCall("cot_net_accept", &args, false, TypeRegistry.I64, bc.span);
-            },
-            .net_connect => {
-                const a1 = try self.lowerExprNode(bc.args[0]);
-                const a2 = try self.lowerExprNode(bc.args[1]);
-                const a3 = try self.lowerExprNode(bc.args[2]);
-                var args = [_]ir.NodeIndex{ a1, a2, a3 };
-                return try fb.emitCall("cot_net_connect", &args, false, TypeRegistry.I64, bc.span);
-            },
-            .net_set_reuse_addr => {
-                const a1 = try self.lowerExprNode(bc.args[0]);
-                var args = [_]ir.NodeIndex{a1};
-                return try fb.emitCall("cot_net_set_reuse_addr", &args, false, TypeRegistry.I64, bc.span);
-            },
-            .kqueue_create => {
-                var args = [_]ir.NodeIndex{};
-                return try fb.emitCall("cot_kqueue_create", &args, false, TypeRegistry.I64, bc.span);
-            },
-            .kevent_add => {
-                const a1 = try self.lowerExprNode(bc.args[0]);
-                const a2 = try self.lowerExprNode(bc.args[1]);
-                const a3 = try self.lowerExprNode(bc.args[2]);
-                var args = [_]ir.NodeIndex{ a1, a2, a3 };
-                return try fb.emitCall("cot_kevent_add", &args, false, TypeRegistry.I64, bc.span);
-            },
-            .kevent_del => {
-                const a1 = try self.lowerExprNode(bc.args[0]);
-                const a2 = try self.lowerExprNode(bc.args[1]);
-                const a3 = try self.lowerExprNode(bc.args[2]);
-                var args = [_]ir.NodeIndex{ a1, a2, a3 };
-                return try fb.emitCall("cot_kevent_del", &args, false, TypeRegistry.I64, bc.span);
-            },
-            .kevent_wait => {
-                const a1 = try self.lowerExprNode(bc.args[0]);
-                const a2 = try self.lowerExprNode(bc.args[1]);
-                const a3 = try self.lowerExprNode(bc.args[2]);
-                var args = [_]ir.NodeIndex{ a1, a2, a3 };
-                return try fb.emitCall("cot_kevent_wait", &args, false, TypeRegistry.I64, bc.span);
-            },
-            .epoll_create => {
-                var args = [_]ir.NodeIndex{};
-                return try fb.emitCall("cot_epoll_create", &args, false, TypeRegistry.I64, bc.span);
-            },
-            .epoll_add => {
-                const a1 = try self.lowerExprNode(bc.args[0]);
-                const a2 = try self.lowerExprNode(bc.args[1]);
-                const a3 = try self.lowerExprNode(bc.args[2]);
-                var args = [_]ir.NodeIndex{ a1, a2, a3 };
-                return try fb.emitCall("cot_epoll_add", &args, false, TypeRegistry.I64, bc.span);
-            },
-            .epoll_del => {
-                const a1 = try self.lowerExprNode(bc.args[0]);
-                const a2 = try self.lowerExprNode(bc.args[1]);
-                var args = [_]ir.NodeIndex{ a1, a2 };
-                return try fb.emitCall("cot_epoll_del", &args, false, TypeRegistry.I64, bc.span);
-            },
-            .epoll_wait => {
-                const a1 = try self.lowerExprNode(bc.args[0]);
-                const a2 = try self.lowerExprNode(bc.args[1]);
-                const a3 = try self.lowerExprNode(bc.args[2]);
-                var args = [_]ir.NodeIndex{ a1, a2, a3 };
-                return try fb.emitCall("cot_epoll_wait", &args, false, TypeRegistry.I64, bc.span);
-            },
-            .set_nonblocking => {
-                const a1 = try self.lowerExprNode(bc.args[0]);
-                var args = [_]ir.NodeIndex{a1};
-                return try fb.emitCall("cot_set_nonblocking", &args, false, TypeRegistry.I64, bc.span);
-            },
-            .fork => {
-                var args = [_]ir.NodeIndex{};
-                return try fb.emitCall("cot_fork", &args, false, TypeRegistry.I64, bc.span);
-            },
-            .pipe => {
-                var args = [_]ir.NodeIndex{};
-                return try fb.emitCall("cot_pipe", &args, false, TypeRegistry.I64, bc.span);
-            },
-            .waitpid => {
-                const a1 = try self.lowerExprNode(bc.args[0]);
-                var args = [_]ir.NodeIndex{a1};
-                return try fb.emitCall("cot_waitpid", &args, false, TypeRegistry.I64, bc.span);
-            },
-            .dup2 => {
-                const a1 = try self.lowerExprNode(bc.args[0]);
-                const a2 = try self.lowerExprNode(bc.args[1]);
-                var args = [_]ir.NodeIndex{ a1, a2 };
-                return try fb.emitCall("cot_dup2", &args, false, TypeRegistry.I64, bc.span);
-            },
-            .execve => {
-                const a1 = try self.lowerExprNode(bc.args[0]);
-                const a2 = try self.lowerExprNode(bc.args[1]);
-                const a3 = try self.lowerExprNode(bc.args[2]);
-                var args = [_]ir.NodeIndex{ a1, a2, a3 };
-                return try fb.emitCall("cot_execve", &args, false, TypeRegistry.I64, bc.span);
             },
             .ptr_of => {
                 const str_val = try self.lowerExprNode(bc.args[0]);
@@ -5691,49 +5515,6 @@ pub const Lowerer = struct {
                 const dead_block = try fb.newBlock("trap.dead");
                 fb.setBlock(dead_block);
                 return ir.null_node;
-            },
-            .exit => {
-                const code_arg = try self.lowerExprNode(bc.args[0]);
-                var args = [_]ir.NodeIndex{code_arg};
-                _ = try fb.emitCall("cot_exit", &args, false, TypeRegistry.VOID, bc.span);
-                const dead_block = try fb.newBlock("exit.dead");
-                fb.setBlock(dead_block);
-                return ir.null_node;
-            },
-            .time => {
-                return try fb.emitCall("cot_time", &[_]ir.NodeIndex{}, false, TypeRegistry.I64, bc.span);
-            },
-            .random => {
-                const buf_arg = try self.lowerExprNode(bc.args[0]);
-                const len_arg = try self.lowerExprNode(bc.args[1]);
-                var args = [_]ir.NodeIndex{ buf_arg, len_arg };
-                return try fb.emitCall("cot_random", &args, false, TypeRegistry.I64, bc.span);
-            },
-            .args_count => {
-                return try fb.emitCall("cot_args_count", &[_]ir.NodeIndex{}, false, TypeRegistry.I64, bc.span);
-            },
-            .arg_len => {
-                const n_arg = try self.lowerExprNode(bc.args[0]);
-                var args = [_]ir.NodeIndex{n_arg};
-                return try fb.emitCall("cot_arg_len", &args, false, TypeRegistry.I64, bc.span);
-            },
-            .arg_ptr => {
-                const n_arg = try self.lowerExprNode(bc.args[0]);
-                var args = [_]ir.NodeIndex{n_arg};
-                return try fb.emitCall("cot_arg_ptr", &args, false, TypeRegistry.I64, bc.span);
-            },
-            .environ_count => {
-                return try fb.emitCall("cot_environ_count", &[_]ir.NodeIndex{}, false, TypeRegistry.I64, bc.span);
-            },
-            .environ_len => {
-                const n_arg = try self.lowerExprNode(bc.args[0]);
-                var args = [_]ir.NodeIndex{n_arg};
-                return try fb.emitCall("cot_environ_len", &args, false, TypeRegistry.I64, bc.span);
-            },
-            .environ_ptr => {
-                const n_arg = try self.lowerExprNode(bc.args[0]);
-                var args = [_]ir.NodeIndex{n_arg};
-                return try fb.emitCall("cot_environ_ptr", &args, false, TypeRegistry.I64, bc.span);
             },
             .compile_error => {
                 return try fb.emitTrap(bc.span);
@@ -6118,7 +5899,7 @@ pub const Lowerer = struct {
             .const_cast => {
                 return try self.lowerExprNode(bc.args[0]);
             },
-            // @arc_retain(val), @arc_release(val) — conditional ARC builtins.
+            // @arcRetain(val), @arcRelease(val) — conditional ARC builtins.
             // Resolved at monomorphization: emit cot_retain/cot_release only when
             // the argument type is ARC-managed. No-op for non-ARC types (i64, etc).
             // Reference: Swift value witness tables — destroy/copy resolved per-type.
@@ -6128,7 +5909,7 @@ pub const Lowerer = struct {
                 const arg_type = self.inferExprType(bc.args[0]);
                 if (self.type_reg.couldBeARC(arg_type)) {
                     var args = [_]ir.NodeIndex{arg};
-                    return try fb.emitCall("cot_retain", &args, false, arg_type, bc.span);
+                    return try fb.emitCall("retain", &args, false, arg_type, bc.span);
                 }
                 return arg;
             },
@@ -6137,7 +5918,7 @@ pub const Lowerer = struct {
                 const arg_type = self.inferExprType(bc.args[0]);
                 if (self.type_reg.couldBeARC(arg_type)) {
                     var args = [_]ir.NodeIndex{arg};
-                    _ = try fb.emitCall("cot_release", &args, false, TypeRegistry.VOID, bc.span);
+                    _ = try fb.emitCall("release", &args, false, TypeRegistry.VOID, bc.span);
                 }
                 return ir.null_node;
             },
@@ -6153,45 +5934,28 @@ pub const Lowerer = struct {
                 const loc_idx = try fb.addStringLiteral(loc_str);
                 const loc_val = try fb.emitConstSlice(loc_idx, bc.span);
                 var loc_args = [_]ir.NodeIndex{ fd_arg, loc_val };
-                _ = try fb.emitCall("cot_write", &loc_args, true, TypeRegistry.I64, bc.span);
+                _ = try fb.emitCall("write", &loc_args, true, TypeRegistry.I64, bc.span);
 
                 if (bc.args[0] != null_node) {
                     const msg_arg = try self.lowerExprNode(bc.args[0]);
                     var write_args = [_]ir.NodeIndex{ fd_arg, msg_arg };
-                    _ = try fb.emitCall("cot_write", &write_args, true, TypeRegistry.I64, bc.span);
+                    _ = try fb.emitCall("write", &write_args, true, TypeRegistry.I64, bc.span);
                 }
 
                 // Newline
                 const nl_idx = try fb.addStringLiteral(try self.allocator.dupe(u8, "\n"));
                 const nl_val = try fb.emitConstSlice(nl_idx, bc.span);
                 var nl_args = [_]ir.NodeIndex{ fd_arg, nl_val };
-                _ = try fb.emitCall("cot_write", &nl_args, true, TypeRegistry.I64, bc.span);
+                _ = try fb.emitCall("write", &nl_args, true, TypeRegistry.I64, bc.span);
 
                 // Exit with code 2 (Go crash exit code)
                 const exit_code = try fb.emitConstInt(2, TypeRegistry.I64, bc.span);
                 var exit_args = [_]ir.NodeIndex{exit_code};
-                _ = try fb.emitCall("cot_exit", &exit_args, false, TypeRegistry.VOID, bc.span);
+                _ = try fb.emitCall("exit", &exit_args, false, TypeRegistry.VOID, bc.span);
 
                 _ = try fb.emitTrap(bc.span); // unreachable after exit
                 const dead_block = try fb.newBlock("panic.dead");
                 fb.setBlock(dead_block);
-                return ir.null_node;
-            },
-            // @isatty(fd) — POSIX isatty(3): runtime function
-            // Reference: Go term.IsTerminal, POSIX isatty(3)
-            .isatty => {
-                const fd_arg = try self.lowerExprNode(bc.args[0]);
-                var args = [_]ir.NodeIndex{fd_arg};
-                return try fb.emitCall("cot_isatty", &args, false, TypeRegistry.BOOL, bc.span);
-            },
-            // @memset(ptr, val, len) — Wasm memory.fill (0xFC 0x0B)
-            // Reference: Wasm bulk memory spec, Zig @memset
-            .memset => {
-                const ptr_arg = try self.lowerExprNode(bc.args[0]);
-                const val_arg = try self.lowerExprNode(bc.args[1]);
-                const len_arg = try self.lowerExprNode(bc.args[2]);
-                var memset_args = [_]ir.NodeIndex{ ptr_arg, val_arg, len_arg };
-                _ = try fb.emitCall("cot_memset_zero", &memset_args, false, TypeRegistry.VOID, bc.span);
                 return ir.null_node;
             },
             // @ctz(val) — Wasm i64.ctz (0x7A)
@@ -6315,7 +6079,7 @@ pub const Lowerer = struct {
 
         const size_node = try fb.emitConstInt(total_size, TypeRegistry.I64, span);
         const zero_node = try fb.emitConstInt(0, TypeRegistry.I64, span);
-        const base_ptr = try fb.emitCall("cot_alloc", &.{ zero_node, size_node }, true, TypeRegistry.I64, span);
+        const base_ptr = try fb.emitCall("alloc", &.{ zero_node, size_node }, true, TypeRegistry.I64, span);
 
         for (arr.elements.items, 0..) |elem, i| {
             const byte_offset: i64 = elem_size * @as(i64, @intCast(i));
@@ -6391,38 +6155,38 @@ pub const Lowerer = struct {
         const loc_idx = try fb.addStringLiteral(loc_str);
         const loc_val = try fb.emitConstSlice(loc_idx, span);
         var loc_args = [_]ir.NodeIndex{ fd, loc_val };
-        _ = try fb.emitCall("cot_write", &loc_args, true, TypeRegistry.I64, span);
+        _ = try fb.emitCall("write", &loc_args, true, TypeRegistry.I64, span);
 
         // "panic: index out of range ["
         const prefix = try fb.addStringLiteral(try self.allocator.dupe(u8, "panic: index out of range ["));
         const prefix_val = try fb.emitConstSlice(prefix, span);
         var prefix_args = [_]ir.NodeIndex{ fd, prefix_val };
-        _ = try fb.emitCall("cot_write", &prefix_args, true, TypeRegistry.I64, span);
+        _ = try fb.emitCall("write", &prefix_args, true, TypeRegistry.I64, span);
 
         // Print the index value
         var idx_args = [_]ir.NodeIndex{index_node};
-        _ = try fb.emitCall("cot_eprint_int", &idx_args, false, TypeRegistry.VOID, span);
+        _ = try fb.emitCall("eprint_int", &idx_args, false, TypeRegistry.VOID, span);
 
         // "] with length "
         const mid = try fb.addStringLiteral(try self.allocator.dupe(u8, "] with length "));
         const mid_val = try fb.emitConstSlice(mid, span);
         var mid_args = [_]ir.NodeIndex{ fd, mid_val };
-        _ = try fb.emitCall("cot_write", &mid_args, true, TypeRegistry.I64, span);
+        _ = try fb.emitCall("write", &mid_args, true, TypeRegistry.I64, span);
 
         // Print the length value
         var len_args = [_]ir.NodeIndex{length_node};
-        _ = try fb.emitCall("cot_eprint_int", &len_args, false, TypeRegistry.VOID, span);
+        _ = try fb.emitCall("eprint_int", &len_args, false, TypeRegistry.VOID, span);
 
         // Newline
         const nl = try fb.addStringLiteral(try self.allocator.dupe(u8, "\n"));
         const nl_val = try fb.emitConstSlice(nl, span);
         var nl_args = [_]ir.NodeIndex{ fd, nl_val };
-        _ = try fb.emitCall("cot_write", &nl_args, true, TypeRegistry.I64, span);
+        _ = try fb.emitCall("write", &nl_args, true, TypeRegistry.I64, span);
 
         // Exit with code 2 (Go crash exit code)
         const exit_code = try fb.emitConstInt(2, TypeRegistry.I64, span);
         var exit_args = [_]ir.NodeIndex{exit_code};
-        _ = try fb.emitCall("cot_exit", &exit_args, false, TypeRegistry.VOID, span);
+        _ = try fb.emitCall("exit", &exit_args, false, TypeRegistry.VOID, span);
 
         _ = try fb.emitTrap(span); // unreachable after exit
         fb.setBlock(ok_block);

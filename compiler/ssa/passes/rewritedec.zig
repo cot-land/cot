@@ -375,7 +375,7 @@ fn rewriteStringLen(allocator: std.mem.Allocator, f: *Func, block: *Block, v: *V
 ///     len1 = extract_len(s1)
 ///     ptr2 = extract_ptr(s2)
 ///     len2 = extract_len(s2)
-///     new_ptr = static_call("cot_string_concat", ptr1, len1, ptr2, len2)
+///     new_ptr = static_call("string_concat", ptr1, len1, ptr2, len2)
 ///     new_len = add(len1, len2)
 ///     result = string_make(new_ptr, new_len)
 fn rewriteStringConcat(allocator: std.mem.Allocator, f: *Func, block: *Block, v: *Value) !bool {
@@ -395,7 +395,7 @@ fn rewriteStringConcat(allocator: std.mem.Allocator, f: *Func, block: *Block, v:
 
     // Create static_call to cot_string_concat(ptr1, len1, ptr2, len2) -> new_ptr
     const call = try f.newValue(.static_call, TypeRegistry.I64, block, v.pos);
-    call.aux = .{ .string = "cot_string_concat" };
+    call.aux = .{ .string = "string_concat" };
     call.addArg(s1_ptr);
     call.addArg(s1_len);
     call.addArg(s2_ptr);

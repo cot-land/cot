@@ -1,4 +1,5 @@
 import "std/mem"
+import "std/sys"
 
 // ============================================================================
 // Byte Equality
@@ -38,25 +39,25 @@ test "mem: eql same pointer" {
 test "mem: cmp equal" {
     var a = @ptrOf("abc")
     var b = @ptrOf("abc")
-    @assert_eq(cmp(a, 3, b, 3), 0)
+    @assertEq(cmp(a, 3, b, 3), 0)
 }
 
 test "mem: cmp less" {
     var a = @ptrOf("abc")
     var b = @ptrOf("abd")
-    @assert_eq(cmp(a, 3, b, 3), 0 - 1)
+    @assertEq(cmp(a, 3, b, 3), 0 - 1)
 }
 
 test "mem: cmp greater" {
     var a = @ptrOf("abd")
     var b = @ptrOf("abc")
-    @assert_eq(cmp(a, 3, b, 3), 1)
+    @assertEq(cmp(a, 3, b, 3), 1)
 }
 
 test "mem: cmp shorter prefix" {
     var a = @ptrOf("ab")
     var b = @ptrOf("abc")
-    @assert_eq(cmp(a, 2, b, 3), 0 - 1)
+    @assertEq(cmp(a, 2, b, 3), 0 - 1)
 }
 
 // ============================================================================
@@ -65,22 +66,22 @@ test "mem: cmp shorter prefix" {
 
 test "mem: indexOfScalar found" {
     var p = @ptrOf("hello")
-    @assert_eq(indexOfScalar(p, 5, 108), 2)
+    @assertEq(indexOfScalar(p, 5, 108), 2)
 }
 
 test "mem: indexOfScalar not found" {
     var p = @ptrOf("hello")
-    @assert_eq(indexOfScalar(p, 5, 122), 0 - 1)
+    @assertEq(indexOfScalar(p, 5, 122), 0 - 1)
 }
 
 test "mem: lastIndexOfScalar found" {
     var p = @ptrOf("hello")
-    @assert_eq(lastIndexOfScalar(p, 5, 108), 3)
+    @assertEq(lastIndexOfScalar(p, 5, 108), 3)
 }
 
 test "mem: lastIndexOfScalar not found" {
     var p = @ptrOf("hello")
-    @assert_eq(lastIndexOfScalar(p, 5, 122), 0 - 1)
+    @assertEq(lastIndexOfScalar(p, 5, 122), 0 - 1)
 }
 
 // ============================================================================
@@ -116,26 +117,26 @@ test "mem: endsWith false" {
 // ============================================================================
 
 test "mem: zero clears bs" {
-    var buf = @alloc(4)
+    var buf = alloc(0, 4)
     @intToPtr(*u8, buf).* = 65
     @intToPtr(*u8, buf + 1).* = 66
     zero(buf, 4)
-    @assert_eq(@intToPtr(*u8, buf).*, 0)
-    @assert_eq(@intToPtr(*u8, buf + 1).*, 0)
-    @dealloc(buf)
+    @assertEq(@intToPtr(*u8, buf).*, 0)
+    @assertEq(@intToPtr(*u8, buf + 1).*, 0)
+    dealloc(buf)
 }
 
 test "mem: set fills bs" {
-    var buf = @alloc(4)
+    var buf = alloc(0, 4)
     set(buf, 4, 42)
-    @assert_eq(@intToPtr(*u8, buf).*, 42)
-    @assert_eq(@intToPtr(*u8, buf + 3).*, 42)
-    @dealloc(buf)
+    @assertEq(@intToPtr(*u8, buf).*, 42)
+    @assertEq(@intToPtr(*u8, buf + 3).*, 42)
+    dealloc(buf)
 }
 
 test "mem: countScalar" {
     var p = @ptrOf("hello")
-    @assert_eq(countScalar(p, 5, 108), 2)
+    @assertEq(countScalar(p, 5, 108), 2)
 }
 
 // ============================================================================
@@ -143,15 +144,15 @@ test "mem: countScalar" {
 // ============================================================================
 
 test "mem: writeU32LE and readU32LE" {
-    var buf = @alloc(4)
+    var buf = alloc(0, 4)
     writeU32LE(buf, 305419896)
-    @assert_eq(readU32LE(buf), 305419896)
-    @dealloc(buf)
+    @assertEq(readU32LE(buf), 305419896)
+    dealloc(buf)
 }
 
 test "mem: writeU16LE and readU16LE" {
-    var buf = @alloc(2)
+    var buf = alloc(0, 2)
     writeU16LE(buf, 4660)
-    @assert_eq(readU16LE(buf), 4660)
-    @dealloc(buf)
+    @assertEq(readU16LE(buf), 4660)
+    dealloc(buf)
 }

@@ -54,19 +54,19 @@ fn isOdd(n: i64) i64 {
 }
 
 test "simple call" {
-    @assert_eq(get_value(), 42)
+    @assertEq(get_value(), 42)
 }
 
 test "one param" {
-    @assert_eq(cf_double(5), 10)
+    @assertEq(cf_double(5), 10)
 }
 
 test "two params" {
-    @assert_eq(cf_add(3, 4), 7)
+    @assertEq(cf_add(3, 4), 7)
 }
 
 test "three params" {
-    @assert_eq(sum3(2, 5, 7), 14)
+    @assertEq(sum3(2, 5, 7), 14)
 }
 
 test "call in if" {
@@ -74,50 +74,50 @@ test "call in if" {
     if (cf_double(5) == 10) {
         result = 10
     }
-    @assert_eq(result, 10)
+    @assertEq(result, 10)
 }
 
 test "call then return" {
     var result: i64 = cf_double(5)
-    @assert_eq(result, 10)
+    @assertEq(result, 10)
 }
 
 test "chained calls" {
-    @assert_eq(triple(cf_add(2, 2)), 12)
+    @assertEq(triple(cf_add(2, 2)), 12)
 }
 
 test "two calls" {
-    @assert_eq(cf_double(2) + identity(3), 7)
+    @assertEq(cf_double(2) + identity(3), 7)
 }
 
 test "fibonacci small" {
-    @assert_eq(fibonacci(5), 5)
+    @assertEq(fibonacci(5), 5)
 }
 
 test "fibonacci 2" {
-    @assert_eq(fibonacci(2), 1)
+    @assertEq(fibonacci(2), 1)
 }
 
 test "fibonacci 3" {
-    @assert_eq(fibonacci(3), 2)
+    @assertEq(fibonacci(3), 2)
 }
 
 test "fibonacci 10" {
-    @assert_eq(fibonacci(10), 55)
+    @assertEq(fibonacci(10), 55)
 }
 
 test "factorial" {
-    @assert_eq(factorial(5), 120)
+    @assertEq(factorial(5), 120)
 }
 
 test "countdown base" {
-    @assert_eq(countdown(0), 1)
+    @assertEq(countdown(0), 1)
 }
 
 test "countdown one" {
-    @assert_eq(countdown(1), 1)
+    @assertEq(countdown(1), 1)
 }
 
 test "mutual recursion" {
-    @assert_eq(isEven(4), 1)
+    @assertEq(isEven(4), 1)
 }

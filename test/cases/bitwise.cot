@@ -1,23 +1,23 @@
 test "and" {
-    @assert_eq(255 & 15, 15)
+    @assertEq(255 & 15, 15)
 }
 
 test "or" {
-    @assert_eq(240 | 15 - 200, 55)
+    @assertEq(240 | 15 - 200, 55)
 }
 
 test "xor" {
-    @assert_eq((255 ^ 15) - 200 + 200, 240)
+    @assertEq((255 ^ 15) - 200 + 200, 240)
 }
 
 test "shl" {
-    @assert_eq(1 << 4, 16)
+    @assertEq(1 << 4, 16)
 }
 
 test "shr" {
-    @assert_eq(64 >> 2, 16)
+    @assertEq(64 >> 2, 16)
 }
 
 test "not" {
-    @assert_eq(~0 & 255, 255)
+    @assertEq(~0 & 255, 255)
 }

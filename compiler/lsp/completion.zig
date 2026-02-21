@@ -42,31 +42,22 @@ pub const CompletionItem = struct {
 };
 
 /// Builtin names for @ completions (sorted for display).
+/// Only compiler intrinsics — runtime functions are accessed via `import "std/sys"`.
 const builtin_names = [_][]const u8{
-    "abs",             "alignCast",       "alignOf",         "alloc",
-    "arc_release",     "arc_retain",      "arg_len",         "arg_ptr",
-    "args_count",      "as",              "assert",          "assert_eq",
+    "abs",             "alignCast",       "alignOf",         "arcRelease",
+    "arcRetain",       "as",              "assert",          "assertEq",
     "bitCast",         "ceil",            "clz",             "compileError",
-    "constCast",       "ctz",             "dealloc",         "dup2",
-    "embedFile",       "enumFromInt",     "enumLen",         "enumName",
-    "environ_count",   "environ_len",     "environ_ptr",     "epoll_add",
-    "epoll_create",    "epoll_del",       "epoll_wait",      "errorName",
-    "execve",          "exit",            "fd_close",        "fd_open",
-    "fd_read",         "fd_seek",         "fd_write",        "field",
+    "constCast",       "ctz",             "embedFile",       "enumFromInt",
+    "enumLen",         "enumName",        "errorName",       "field",
     "floatCast",       "floatFromInt",    "fmax",            "fmin",
-    "floor",           "fork",            "hasField",        "intCast",
-    "intFromBool",     "intFromEnum",     "intFromFloat",    "intToPtr",
-    "isatty",          "kevent_add",      "kevent_del",      "kevent_wait",
-    "kqueue_create",   "lenOf",           "max",             "memcpy",
-    "memset",          "min",             "net_accept",      "net_bind",
-    "net_connect",     "net_listen",      "net_set_reuse_addr", "net_socket",
-    "offsetOf",        "panic",           "pipe",            "popCount",
-    "ptrCast",         "ptrOf",           "ptrToInt",        "random",
-    "realloc",         "round",           "set_nonblocking", "sizeOf",
-    "sqrt",            "string",          "tagName",         "target",
-    "target_arch",     "target_os",       "time",            "trap",
-    "truncate",        "trunc",           "typeInfo",        "typeName",
-    "TypeOf",          "waitpid",
+    "floor",           "hasField",        "intCast",         "intFromBool",
+    "intFromEnum",     "intFromFloat",    "intToPtr",        "lenOf",
+    "max",             "min",             "offsetOf",        "panic",
+    "popCount",        "ptrCast",         "ptrOf",           "ptrToInt",
+    "round",           "sizeOf",          "sqrt",            "string",
+    "tagName",         "target",          "targetArch",      "targetOs",
+    "trap",            "truncate",        "trunc",           "typeInfo",
+    "typeName",        "TypeOf",
 };
 
 /// Cot keywords for statement-position completions.
@@ -122,13 +113,8 @@ fn builtinDetail(name: []const u8) []const u8 {
     if (std.mem.eql(u8, name, "dup2")) return "process";
     if (std.mem.eql(u8, name, "exit")) return "process";
     // Memory
-    if (std.mem.eql(u8, name, "alloc")) return "memory";
-    if (std.mem.eql(u8, name, "dealloc")) return "memory";
-    if (std.mem.eql(u8, name, "realloc")) return "memory";
-    if (std.mem.eql(u8, name, "memcpy")) return "memory";
-    if (std.mem.eql(u8, name, "memset")) return "memory";
-    if (std.mem.eql(u8, name, "arc_retain")) return "ARC memory";
-    if (std.mem.eql(u8, name, "arc_release")) return "ARC memory";
+    if (std.mem.eql(u8, name, "arcRetain")) return "ARC memory";
+    if (std.mem.eql(u8, name, "arcRelease")) return "ARC memory";
     // Reflection
     if (std.mem.eql(u8, name, "TypeOf")) return "reflection";
     if (std.mem.eql(u8, name, "hasField")) return "reflection";
@@ -143,7 +129,7 @@ fn builtinDetail(name: []const u8) []const u8 {
     if (name.len >= 6 and name[0] == 't' and name[1] == 'a' and name[2] == 'r' and name[3] == 'g' and name[4] == 'e' and name[5] == 't') return "comptime";
     // Testing
     if (std.mem.eql(u8, name, "assert")) return "testing";
-    if (std.mem.eql(u8, name, "assert_eq")) return "testing";
+    if (std.mem.eql(u8, name, "assertEq")) return "testing";
     // Math
     if (std.mem.eql(u8, name, "abs")) return "math";
     if (std.mem.eql(u8, name, "ceil")) return "math";

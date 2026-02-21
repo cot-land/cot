@@ -191,7 +191,7 @@ impl Color {
 }
 
 var c = Color.Red
-@assert_eq(c.isWarm(), true)
+@assertEq(c.isWarm(), true)
 ```
 
 ## Unions (tagged)
@@ -360,9 +360,9 @@ switch (name) {
 ## Defer / Errdefer
 
 ```cot
-defer @dealloc(ptr)           // runs at end of scope
+defer dealloc(ptr)            // runs at end of scope (dealloc from std/sys)
 defer { cleanup_stuff() }     // block form, LIFO order
-errdefer @dealloc(ptr)        // runs ONLY if function returns error
+errdefer dealloc(ptr)         // runs ONLY if function returns error
 ```
 
 `defer` runs unconditionally at scope exit. `errdefer` runs only on error return (Zig pattern). Both follow LIFO ordering and can be mixed freely.
@@ -462,11 +462,12 @@ arr[start:]          // slice to end
 ## Memory & Pointers
 
 ```cot
-var ptr = @intToPtr(*i64, @alloc(@sizeOf(i64)))
+import "std/sys"
+var ptr = @intToPtr(*i64, alloc(0, @sizeOf(i64)))
 ptr.* = 42                          // dereference assign
 var val = ptr.*                     // dereference read
 var addr = @ptrToInt(ptr)
-@dealloc(addr, @sizeOf(i64))
+dealloc(addr)
 &expr                               // address-of
 ```
 
@@ -502,17 +503,12 @@ var addr = @ptrToInt(ptr)
 | `@clz(value)` | Count leading zeros |
 | `@popCount(value)` | Count set bits |
 
-### Memory
+### ARC
 
 | Builtin | Purpose |
 |---------|---------|
-| `@alloc(size)` | Allocate bytes on heap |
-| `@dealloc(ptr)` | Free memory |
-| `@realloc(ptr, new_size)` | Reallocate |
-| `@memcpy(dst, src, len)` | Copy memory |
-| `@memset(ptr, val, len)` | Fill memory with byte value |
-| `@arc_retain(value)` | Increment ARC refcount (no-op for non-ARC types) |
-| `@arc_release(value)` | Decrement ARC refcount (no-op for non-ARC types) |
+| `@arcRetain(value)` | Increment ARC refcount (no-op for non-ARC types) |
+| `@arcRelease(value)` | Decrement ARC refcount (no-op for non-ARC types) |
 
 ### String
 
@@ -535,62 +531,50 @@ var addr = @ptrToInt(ptr)
 | `@fmin(a, b)` | Minimum of two floats |
 | `@fmax(a, b)` | Maximum of two floats |
 
-### File I/O (WASI)
+### Control
 
 | Builtin | Purpose |
 |---------|---------|
-| `@fd_write(fd, ptr, len)` | Write to file descriptor |
-| `@fd_read(fd, buf, len)` | Read from file descriptor |
-| `@fd_close(fd)` | Close file descriptor |
-| `@fd_seek(fd, offset, whence)` | Seek in file |
-| `@fd_open(path_ptr, path_len, flags)` | Open file |
-
-### Process
-
-| Builtin | Purpose |
-|---------|---------|
-| `@exit(code)` | Exit process |
-| `@args_count()` | Number of CLI arguments |
-| `@arg_len(n)` | Length of argument n |
-| `@arg_ptr(n)` | Pointer to argument n |
-| `@environ_count()` | Number of environment variables |
-| `@environ_len(n)` | Length of env var n |
-| `@environ_ptr(n)` | Pointer to env var n |
-
-### Networking
-
-| Builtin | Purpose |
-|---------|---------|
-| `@net_socket(domain, type, protocol)` | Create a socket |
-| `@net_bind(fd, addr, len)` | Bind socket to address |
-| `@net_listen(fd, backlog)` | Listen for connections |
-| `@net_accept(fd)` | Accept a connection |
-| `@net_connect(fd, addr, len)` | Connect to address |
-| `@net_set_reuse_addr(fd)` | Set SO_REUSEADDR on socket |
-
-### Event Loop
-
-| Builtin | Purpose |
-|---------|---------|
-| `@kqueue_create()` | Create kqueue fd (macOS) |
-| `@kevent_add(kq, fd, filter)` | Register fd for events (macOS) |
-| `@kevent_del(kq, fd, filter)` | Remove fd from kqueue (macOS) |
-| `@kevent_wait(kq, buf, max)` | Wait for kqueue events (macOS) |
-| `@epoll_create()` | Create epoll fd (Linux) |
-| `@epoll_add(epfd, fd, events)` | Register fd for events (Linux) |
-| `@epoll_del(epfd, fd)` | Remove fd from epoll (Linux) |
-| `@epoll_wait(epfd, buf, max)` | Wait for epoll events (Linux) |
-| `@set_nonblocking(fd)` | Set fd to non-blocking mode |
-
-### System
-
-| Builtin | Purpose |
-|---------|---------|
-| `@time()` | Wall clock time in nanoseconds |
-| `@random(buf, len)` | Fill buffer with random bytes |
 | `@trap()` | Unconditional trap / unreachable |
 | `@panic(msg)` | Panic with message (prints file:line) |
-| `@isatty(fd)` | Check if fd is a terminal |
+
+### Comptime
+
+| Builtin | Purpose |
+|---------|---------|
+| `@compileError(msg)` | Compile-time error |
+| `@embedFile(path)` | Embed file contents at compile time |
+| `@target()` | Target triple string |
+| `@targetOs()` | Target OS (`"macos"`, `"linux"`, `"wasm"`) |
+| `@targetArch()` | Target architecture (`"aarch64"`, `"x86_64"`, `"wasm32"`) |
+
+### Assert (test-only)
+
+| Builtin | Purpose |
+|---------|---------|
+| `@assert(cond)` | Assert condition is true |
+| `@assertEq(a, b)` | Assert two values are equal |
+
+### Runtime Functions (via `std/sys`)
+
+Memory, I/O, networking, process control, and other runtime functions are available as regular functions through the standard library. Import `std/sys` to access them directly:
+
+```cot
+import "std/sys"
+
+var buf = alloc(0, 1024)          // allocate 1024 bytes
+memcpy(dst, src, len)             // copy memory
+dealloc(buf)                      // free memory
+
+fd_write(1, @ptrOf("hello"), 5)   // write to stdout
+var fd = fd_open(@ptrOf(path), @lenOf(path), flags)
+fd_close(fd)
+
+exit(0)                           // exit process
+var t = time()                    // wall clock nanoseconds
+```
+
+Higher-level APIs are provided by stdlib modules: `std/fs` (files), `std/os` (process), `std/http` (networking), `std/time` (timestamps), `std/random` (RNG). See [Standard Library](#standard-library) below.
 
 ### Reflection
 
@@ -630,13 +614,13 @@ var y: @TypeOf(x) = 10               // y is i64
 
 // @field — comptime field access by name
 var p = Point { .x = 10, .y = 20 }
-@assert_eq(@field(p, "x"), 10)
+@assertEq(@field(p, "x"), 10)
 
 // @typeInfo — comptime type reflection (Zig pattern)
 const Color = enum { Red, Green, Blue }
 const fields = @typeInfo(Color).fields
-@assert_eq(fields[0].name, "Red")
-@assert_eq(fields[0].value, 0)
+@assertEq(fields[0].name, "Red")
+@assertEq(fields[0].value, 0)
 
 // inline for over @typeInfo fields
 const token_strings = comptime {
@@ -648,22 +632,22 @@ const token_strings = comptime {
 }
 
 // @typeName / @enumName
-@assert_eq(@typeName(i64), "i64")
-@assert_eq(@enumName(Color, 0), "Red")
+@assertEq(@typeName(i64), "i64")
+@assertEq(@enumName(Color, 0), "Red")
 
 // @intFromEnum / @enumFromInt
-@assert_eq(@intFromEnum(Color.Green), 1)
+@assertEq(@intFromEnum(Color.Green), 1)
 var blue = @enumFromInt(Color, 2)                // 2-arg form
 var green = @as(Color, @enumFromInt(1))           // 1-arg form (Zig parity)
-@assert_eq(@intFromBool(true), 1)
+@assertEq(@intFromBool(true), 1)
 ```
 
 ### Comptime
 
 | Builtin | Purpose |
 |---------|---------|
-| `@target_os()` | Target OS as string ("darwin", "linux") |
-| `@target_arch()` | Target arch as string ("arm64", "x86_64") |
+| `@targetOs()` | Target OS as string ("darwin", "linux") |
+| `@targetArch()` | Target arch as string ("arm64", "x86_64") |
 | `@target()` | Full target description |
 | `@compileError("msg")` | Trigger compile-time error with message |
 | `@embedFile("path")` | Embed file contents as string at compile time |
@@ -695,7 +679,7 @@ const color_names = comptime {
 Dead branch elimination: if an `if` condition is comptime-known, only the taken branch is checked. This enables `@compileError` in unreachable branches:
 
 ```cot
-if @target_os() == "darwin" {
+if @targetOs() == "darwin" {
     // macOS code
 } else {
     @compileError("unsupported OS")
@@ -707,7 +691,7 @@ if @target_os() == "darwin" {
 | Builtin | Purpose |
 |---------|---------|
 | `@assert(cond)` | Assert condition is true |
-| `@assert_eq(a, b)` | Assert values are equal |
+| `@assertEq(a, b)` | Assert values are equal |
 
 ## Print Functions
 
@@ -745,13 +729,13 @@ weak var w = strong            // w does NOT retain strong
 // strong is freed when its last non-weak reference dies
 ```
 
-Use `@arc_retain(value)` and `@arc_release(value)` for manual refcount control in collection types. These are no-ops for non-ARC types.
+Use `@arcRetain(value)` and `@arcRelease(value)` for manual refcount control in collection types. These are no-ops for non-ARC types.
 
 ## Tests
 
 ```cot
 test "my test" {
-    @assert_eq(1 + 1, 2)
+    @assertEq(1 + 1, 2)
 }
 ```
 
@@ -908,15 +892,17 @@ All bindings in a destructure statement share the same mutability (`const` or `v
 The `noreturn` type represents functions that never return — they always exit, trap, or loop forever. It is a bottom type that coerces to any other type.
 
 ```cot
+import "std/sys"
+
 fn exit_wrapper(code: i64) noreturn {
-    @exit(code)
+    exit(code)
 }
 
 // noreturn in if branches — the other branch determines the type
-var x = if (cond) { @exit(1) } else { 42 }
+var x = if (cond) { exit(1) } else { 42 }
 ```
 
-Builtins `@exit` and `@trap` return `noreturn`. A function with return type `noreturn` cannot contain a `return` statement.
+`exit()` (from `std/sys`) and `@trap()` return `noreturn`. A function with return type `noreturn` cannot contain a `return` statement.
 
 ## @embedFile
 
@@ -937,12 +923,12 @@ The path is resolved **relative to the source file**, not the working directory.
 // Sum 0..5 unrolled at compile time
 var sum: i64 = 0
 inline for i in 0..5 { sum = sum + i }
-@assert_eq(sum, 10)
+@assertEq(sum, 10)
 
 // Factorial via inline for
 var product: i64 = 1
 inline for i in 1..6 { product = product * i }
-@assert_eq(product, 120)
+@assertEq(product, 120)
 ```
 
 ## Runtime Safety

@@ -7,10 +7,11 @@
 // issues with methods on large structs + compound params.
 
 import "std/string"
+import "std/sys"
 
 // BufferedReader layout (6 * 8 = 48 bytes):
 //   +0:  fd (i64)
-//   +8:  buf (i64 — pointer to @alloc'd buffer)
+//   +8:  buf (i64 — pointer to allocated buffer)
 //   +16: rd (i64 — read position)
 //   +24: wr (i64 — write position / valid data end)
 //   +32: buf_size (i64 — buffer capacity)
@@ -22,9 +23,9 @@ fn newBufferedReader(fd: i64) i64 {
 }
 
 fn newBufferedReaderSize(fd: i64, size: i64) i64 {
-    var p = @alloc(48)
+    var p = alloc(0, 48)
     @intToPtr(*i64, p).* = fd
-    @intToPtr(*i64, p + 8).* = @alloc(size)
+    @intToPtr(*i64, p + 8).* = alloc(0, size)
     @intToPtr(*i64, p + 16).* = 0
     @intToPtr(*i64, p + 24).* = 0
     @intToPtr(*i64, p + 32).* = size
@@ -43,7 +44,7 @@ fn readerFill(r: i64) void {
     if (rd > 0) {
         var unread = wr - rd
         if (unread > 0) {
-            @memcpy(buf, buf + rd, unread)
+            memcpy(buf, buf + rd, unread)
         }
         wr = unread
         rd = 0
@@ -54,7 +55,7 @@ fn readerFill(r: i64) void {
     if (wr >= buf_size) { return }
     // Read from fd
     var fd = @intToPtr(*i64, r).*
-    var n = @fd_read(fd, buf + wr, buf_size - wr)
+    var n = fd_read(fd, buf + wr, buf_size - wr)
     if (n > 0) {
         @intToPtr(*i64, r + 24).* = wr + n
     } else if (n < 0) {
@@ -149,7 +150,7 @@ fn readLine(r: i64) string {
 
 // BufferedWriter layout (5 * 8 = 40 bytes):
 //   +0:  fd (i64)
-//   +8:  buf (i64 — pointer to @alloc'd buffer)
+//   +8:  buf (i64 — pointer to allocated buffer)
 //   +16: wr (i64 — bytes buffered)
 //   +24: buf_size (i64 — buffer capacity)
 //   +32: err (i64 — 0=ok, negative=last error from fd_write)
@@ -160,9 +161,9 @@ fn newBufferedWriter(fd: i64) i64 {
 }
 
 fn newBufferedWriterSize(fd: i64, size: i64) i64 {
-    var p = @alloc(40)
+    var p = alloc(0, 40)
     @intToPtr(*i64, p).* = fd
-    @intToPtr(*i64, p + 8).* = @alloc(size)
+    @intToPtr(*i64, p + 8).* = alloc(0, size)
     @intToPtr(*i64, p + 16).* = 0
     @intToPtr(*i64, p + 24).* = size
     @intToPtr(*i64, p + 32).* = 0
@@ -178,7 +179,7 @@ fn writerFlush(w: i64) void {
         var buf = @intToPtr(*i64, w + 8).*
         var written: i64 = 0
         while (written < wr) {
-            var n = @fd_write(fd, buf + written, wr - written)
+            var n = fd_write(fd, buf + written, wr - written)
             if (n <= 0) {
                 // Store error (Go bufio.go:639: b.err = err)
                 @intToPtr(*i64, w + 32).* = 0 - 1
@@ -218,7 +219,7 @@ fn writeString(w: i64, s: string) void {
     var buf = @intToPtr(*i64, w + 8).*
     var avail = buf_size - wr
     if (slen <= avail) {
-        @memcpy(buf + wr, @ptrOf(s), slen)
+        memcpy(buf + wr, @ptrOf(s), slen)
         @intToPtr(*i64, w + 16).* = wr + slen
         return
     }
@@ -226,11 +227,11 @@ fn writeString(w: i64, s: string) void {
     writerFlush(w)
     if (slen >= buf_size) {
         var fd = @intToPtr(*i64, w).*
-        @fd_write(fd, @ptrOf(s), slen)
+        fd_write(fd, @ptrOf(s), slen)
         return
     }
     // Now it fits (wr was reset to 0 by flush)
-    @memcpy(buf, @ptrOf(s), slen)
+    memcpy(buf, @ptrOf(s), slen)
     @intToPtr(*i64, w + 16).* = slen
 }
 
@@ -248,17 +249,17 @@ fn writerWriteAll(w: i64, ptr: i64, len: i64) void {
     var buf = @intToPtr(*i64, w + 8).*
     var avail = buf_size - wr
     if (len <= avail) {
-        @memcpy(buf + wr, ptr, len)
+        memcpy(buf + wr, ptr, len)
         @intToPtr(*i64, w + 16).* = wr + len
         return
     }
     writerFlush(w)
     if (len >= buf_size) {
         var fd = @intToPtr(*i64, w).*
-        @fd_write(fd, ptr, len)
+        fd_write(fd, ptr, len)
         return
     }
-    @memcpy(buf, ptr, len)
+    memcpy(buf, ptr, len)
     @intToPtr(*i64, w + 16).* = len
 }
 
@@ -287,7 +288,7 @@ struct BufferWriter {
 impl Writer for BufferWriter {
     fn write(self: *BufferWriter, ptr: i64, len: i64) i64 {
         self.ensureCap(self.len + len)
-        @memcpy(self.buf + self.len, ptr, len)
+        memcpy(self.buf + self.len, ptr, len)
         self.len = self.len + len
         return len
     }
@@ -308,9 +309,9 @@ impl BufferWriter {
             new_cap = new_cap * 2
         }
         if (self.cap == 0) {
-            self.buf = @alloc(new_cap)
+            self.buf = alloc(0, new_cap)
         } else {
-            self.buf = @realloc(self.buf, new_cap)
+            self.buf = realloc(self.buf, new_cap)
         }
         self.cap = new_cap
     }
@@ -338,7 +339,7 @@ impl BufferWriter {
     }
 
     fn free(self: *BufferWriter) void {
-        if (self.cap > 0) { @dealloc(self.buf) }
+        if (self.cap > 0) { dealloc(self.buf) }
         self.buf = 0
         self.len = 0
         self.cap = 0
@@ -366,7 +367,7 @@ impl Reader for BufferReader {
         if (avail <= 0) { return 0 }
         var n = len
         if (n > avail) { n = avail }
-        @memcpy(buf, self.buf + self.pos, n)
+        memcpy(buf, self.buf + self.pos, n)
         self.pos = self.pos + n
         return n
     }

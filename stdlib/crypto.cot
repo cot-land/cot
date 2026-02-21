@@ -9,6 +9,7 @@
 //   Deno: @std/crypto
 
 import "std/string"
+import "std/sys"
 
 // ============================================================================
 // SHA-256 Constants
@@ -157,7 +158,7 @@ fn writeBE32(buf: i64, offset: i64, val: i64) void {
 // block is pointer to 64 bytes of data.
 fn sha256Block(state: i64, block: i64) void {
     // Message schedule: W[0..63] stored in allocated buffer (64 * 8 bytes)
-    var W = @alloc(512)
+    var W = alloc(0, 512)
 
     // Load first 16 words from block (big-endian)
     var t: i64 = 0
@@ -212,7 +213,7 @@ fn sha256Block(state: i64, block: i64) void {
     @intToPtr(*i64, state + 48).* = (@intToPtr(*i64, state + 48).* + g) & MASK32
     @intToPtr(*i64, state + 56).* = (@intToPtr(*i64, state + 56).* + h) & MASK32
 
-    @dealloc(W)
+    dealloc(W)
 }
 
 // ============================================================================
@@ -225,7 +226,7 @@ fn sha256(input: string) string {
     var msg_len = @lenOf(input)
 
     // Initialize state (H0..H7)
-    var state = @alloc(64)
+    var state = alloc(0, 64)
     @intToPtr(*i64, state).* = 1779033703
     @intToPtr(*i64, state + 8).* = 3144134277
     @intToPtr(*i64, state + 16).* = 1013904242
@@ -244,11 +245,11 @@ fn sha256(input: string) string {
 
     // Padding: remaining bytes + 0x80 + zeros + 8-byte big-endian length
     var remaining = msg_len - offset
-    var pad_buf = @alloc(128)
+    var pad_buf = alloc(0, 128)
 
     // Copy remaining bytes
     if (remaining > 0) {
-        @memcpy(pad_buf, msg_ptr + offset, remaining)
+        memcpy(pad_buf, msg_ptr + offset, remaining)
     }
 
     // Append 0x80
@@ -289,14 +290,14 @@ fn sha256(input: string) string {
     // Convert state to hex string
     var result = sha256StateToHex(state)
 
-    @dealloc(pad_buf)
-    @dealloc(state)
+    dealloc(pad_buf)
+    dealloc(state)
     return result
 }
 
 // Convert 8 x i64 state values to 64-char hex string.
 fn sha256StateToHex(state: i64) string {
-    var buf = @alloc(64)
+    var buf = alloc(0, 64)
     var pos: i64 = 0
     var si: i64 = 0
     while (si < 8) {
@@ -344,7 +345,7 @@ fn hmacSha256(key: string, message: string) string {
         // Hash the key to get 32 bytes
         var hashed = sha256(key)
         // Convert hex string back to 32 bytes
-        hashed_key_buf = @alloc(32)
+        hashed_key_buf = alloc(0, 32)
         hexToBytes(hashed, hashed_key_buf)
         actual_key_ptr = hashed_key_buf
         actual_key_len = 32
@@ -354,8 +355,8 @@ fn hmacSha256(key: string, message: string) string {
     }
 
     // Create padded key (64 bytes, zero-filled)
-    var ipad = @alloc(64)
-    var opad = @alloc(64)
+    var ipad = alloc(0, 64)
+    var opad = alloc(0, 64)
 
     // Zero fill
     var ki: i64 = 0
@@ -367,8 +368,8 @@ fn hmacSha256(key: string, message: string) string {
 
     // Copy key
     if (actual_key_len > 0) {
-        @memcpy(ipad, actual_key_ptr, actual_key_len)
-        @memcpy(opad, actual_key_ptr, actual_key_len)
+        memcpy(ipad, actual_key_ptr, actual_key_len)
+        memcpy(opad, actual_key_ptr, actual_key_len)
     }
 
     // XOR with ipad (0x36) and opad (0x5c)
@@ -381,34 +382,34 @@ fn hmacSha256(key: string, message: string) string {
 
     // Inner hash: SHA256(ipad || message)
     var inner_len = 64 + @lenOf(message)
-    var inner_buf = @alloc(inner_len)
-    @memcpy(inner_buf, ipad, 64)
+    var inner_buf = alloc(0, inner_len)
+    memcpy(inner_buf, ipad, 64)
     if (@lenOf(message) > 0) {
-        @memcpy(inner_buf + 64, @ptrOf(message), @lenOf(message))
+        memcpy(inner_buf + 64, @ptrOf(message), @lenOf(message))
     }
     var inner_str = @string(inner_buf, inner_len)
     var inner_hash = sha256(inner_str)
 
     // Convert inner hash hex to 32 bytes
-    var inner_bytes = @alloc(32)
+    var inner_bytes = alloc(0, 32)
     hexToBytes(inner_hash, inner_bytes)
 
     // Outer hash: SHA256(opad || inner_hash_bytes)
     var outer_len: i64 = 96
-    var outer_buf = @alloc(outer_len)
-    @memcpy(outer_buf, opad, 64)
-    @memcpy(outer_buf + 64, inner_bytes, 32)
+    var outer_buf = alloc(0, outer_len)
+    memcpy(outer_buf, opad, 64)
+    memcpy(outer_buf + 64, inner_bytes, 32)
     var outer_str = @string(outer_buf, outer_len)
     var result = sha256(outer_str)
 
     // Cleanup
-    @dealloc(ipad)
-    @dealloc(opad)
-    @dealloc(inner_buf)
-    @dealloc(inner_bytes)
-    @dealloc(outer_buf)
+    dealloc(ipad)
+    dealloc(opad)
+    dealloc(inner_buf)
+    dealloc(inner_bytes)
+    dealloc(outer_buf)
     if (hashed_key_buf != 0) {
-        @dealloc(hashed_key_buf)
+        dealloc(hashed_key_buf)
     }
 
     return result

@@ -323,7 +323,8 @@ pub const Parser = struct {
         var body: NodeIndex = null_node;
         if (is_extern) {
             if (self.check(.lbrace)) { self.syntaxError("extern functions cannot have a body"); return null; }
-            if (!self.expect(.semicolon)) return null;
+            // Semicolon is optional (Cot style: no semicolons)
+            _ = self.match(.semicolon);
         } else if (self.check(.lbrace)) {
             body = try self.parseBlock() orelse return null;
         }
@@ -1350,9 +1351,7 @@ pub const Parser = struct {
 
         switch (kind) {
             // 0 args
-            .trap, .time, .args_count, .environ_count, .target_os, .target_arch, .target,
-            .kqueue_create, .epoll_create,
-            .fork, .pipe,
+            .trap, .target_os, .target_arch, .target,
             => {
                 if (!self.expect(.rparen)) return null;
                 return try self.tree.addExpr(.{ .builtin_call = .{ .kind = kind, .type_arg = null_node, .args = .{ null_node, null_node, null_node }, .span = Span.init(start, self.pos()) } });
@@ -1402,27 +1401,21 @@ pub const Parser = struct {
                 return try self.tree.addExpr(.{ .builtin_call = .{ .kind = kind, .type_arg = t, .args = .{ v, null_node, null_node }, .span = Span.init(start, self.pos()) } });
             },
             // 1 value arg
-            .ptr_to_int, .assert, .alloc, .dealloc, .ptr_of, .len_of,
-            .fd_close, .exit, .arg_len, .arg_ptr, .environ_len, .environ_ptr,
+            .ptr_to_int, .assert, .ptr_of, .len_of,
             .compile_error,
             .abs, .ceil, .floor, .trunc, .round, .sqrt,
-            .net_accept, .net_set_reuse_addr,
-            .set_nonblocking,
-            .waitpid,
             .embed_file,
             .type_of,
             .int_from_enum, .tag_name, .error_name, .int_from_bool, .const_cast, .int_from_float,
             .arc_retain, .arc_release,
-            .panic, .isatty, .ctz, .clz, .pop_count,
+            .panic, .ctz, .clz, .pop_count,
             => {
                 const arg = try self.parseExpr() orelse return null;
                 if (!self.expect(.rparen)) return null;
                 return try self.tree.addExpr(.{ .builtin_call = .{ .kind = kind, .type_arg = null_node, .args = .{ arg, null_node, null_node }, .span = Span.init(start, self.pos()) } });
             },
             // 2 value args
-            .string, .assert_eq, .realloc, .random, .fmin, .fmax, .net_listen,
-            .epoll_del,
-            .dup2,
+            .string, .assert_eq, .fmin, .fmax,
             .field,
             .min, .max,
             => {
@@ -1431,21 +1424,6 @@ pub const Parser = struct {
                 const a2 = try self.parseExpr() orelse return null;
                 if (!self.expect(.rparen)) return null;
                 return try self.tree.addExpr(.{ .builtin_call = .{ .kind = kind, .type_arg = null_node, .args = .{ a1, a2, null_node }, .span = Span.init(start, self.pos()) } });
-            },
-            // 3 value args
-            .memcpy, .memset, .fd_write, .fd_read, .fd_seek, .fd_open,
-            .net_socket, .net_bind, .net_connect,
-            .kevent_add, .kevent_del, .kevent_wait,
-            .epoll_add, .epoll_wait,
-            .execve,
-            => {
-                const a1 = try self.parseExpr() orelse return null;
-                if (!self.expect(.comma)) return null;
-                const a2 = try self.parseExpr() orelse return null;
-                if (!self.expect(.comma)) return null;
-                const a3 = try self.parseExpr() orelse return null;
-                if (!self.expect(.rparen)) return null;
-                return try self.tree.addExpr(.{ .builtin_call = .{ .kind = kind, .type_arg = null_node, .args = .{ a1, a2, a3 }, .span = Span.init(start, self.pos()) } });
             },
         }
     }

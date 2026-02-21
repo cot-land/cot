@@ -308,124 +308,124 @@ fn lookup(name: string) Token {
 
 test "token to string" {
     var tok = Token.add
-    @assert_eq(tok.toString(), "+")
-    @assert_eq(Token.kw_fn.toString(), "fn")
-    @assert_eq(Token.eql.toString(), "==")
-    @assert_eq(Token.eof.toString(), "EOF")
+    @assertEq(tok.toString(), "+")
+    @assertEq(Token.kw_fn.toString(), "fn")
+    @assertEq(Token.eql.toString(), "==")
+    @assertEq(Token.eof.toString(), "EOF")
 }
 
 test "keyword lookup" {
-    @assert_eq(lookup("fn"), Token.kw_fn)
-    @assert_eq(lookup("var"), Token.kw_var)
-    @assert_eq(lookup("and"), Token.kw_and)
-    @assert_eq(lookup("i64"), Token.kw_i64)
-    @assert_eq(lookup("notakeyword"), Token.ident)
-    @assert_eq(lookup("main"), Token.ident)
+    @assertEq(lookup("fn"), Token.kw_fn)
+    @assertEq(lookup("var"), Token.kw_var)
+    @assertEq(lookup("and"), Token.kw_and)
+    @assertEq(lookup("i64"), Token.kw_i64)
+    @assertEq(lookup("notakeyword"), Token.ident)
+    @assertEq(lookup("main"), Token.ident)
 }
 
 test "precedence" {
-    @assert_eq(Token.mul.precedence(), 6)
-    @assert_eq(Token.add.precedence(), 5)
-    @assert_eq(Token.eql.precedence(), 4)
-    @assert_eq(Token.kw_and.precedence(), 3)
-    @assert_eq(Token.kw_or.precedence(), 2)
-    @assert_eq(Token.kw_orelse.precedence(), 1)
-    @assert_eq(Token.lparen.precedence(), 0)
+    @assertEq(Token.mul.precedence(), 6)
+    @assertEq(Token.add.precedence(), 5)
+    @assertEq(Token.eql.precedence(), 4)
+    @assertEq(Token.kw_and.precedence(), 3)
+    @assertEq(Token.kw_or.precedence(), 2)
+    @assertEq(Token.kw_orelse.precedence(), 1)
+    @assertEq(Token.lparen.precedence(), 0)
 }
 
 test "isLiteral" {
-    @assert_eq(Token.ident.isLiteral(), true)
-    @assert_eq(Token.int_lit.isLiteral(), true)
-    @assert_eq(Token.string_lit.isLiteral(), true)
-    @assert_eq(Token.add.isLiteral(), false)
-    @assert_eq(Token.kw_fn.isLiteral(), false)
+    @assertEq(Token.ident.isLiteral(), true)
+    @assertEq(Token.int_lit.isLiteral(), true)
+    @assertEq(Token.string_lit.isLiteral(), true)
+    @assertEq(Token.add.isLiteral(), false)
+    @assertEq(Token.kw_fn.isLiteral(), false)
 }
 
 test "isOperator" {
-    @assert_eq(Token.add.isOperator(), true)
-    @assert_eq(Token.eql.isOperator(), true)
-    @assert_eq(Token.lparen.isOperator(), true)
-    @assert_eq(Token.ident.isOperator(), false)
-    @assert_eq(Token.kw_fn.isOperator(), false)
+    @assertEq(Token.add.isOperator(), true)
+    @assertEq(Token.eql.isOperator(), true)
+    @assertEq(Token.lparen.isOperator(), true)
+    @assertEq(Token.ident.isOperator(), false)
+    @assertEq(Token.kw_fn.isOperator(), false)
 }
 
 test "isKeyword" {
-    @assert_eq(Token.kw_fn.isKeyword(), true)
-    @assert_eq(Token.kw_and.isKeyword(), true)
-    @assert_eq(Token.kw_i64.isKeyword(), true)
-    @assert_eq(Token.add.isKeyword(), false)
-    @assert_eq(Token.ident.isKeyword(), false)
+    @assertEq(Token.kw_fn.isKeyword(), true)
+    @assertEq(Token.kw_and.isKeyword(), true)
+    @assertEq(Token.kw_i64.isKeyword(), true)
+    @assertEq(Token.add.isKeyword(), false)
+    @assertEq(Token.ident.isKeyword(), false)
 }
 
 test "isTypeKeyword" {
-    @assert_eq(Token.kw_int.isTypeKeyword(), true)
-    @assert_eq(Token.kw_i64.isTypeKeyword(), true)
-    @assert_eq(Token.kw_string.isTypeKeyword(), true)
-    @assert_eq(Token.kw_f64.isTypeKeyword(), true)
-    @assert_eq(Token.kw_fn.isTypeKeyword(), false)
-    @assert_eq(Token.kw_if.isTypeKeyword(), false)
-    @assert_eq(Token.add.isTypeKeyword(), false)
+    @assertEq(Token.kw_int.isTypeKeyword(), true)
+    @assertEq(Token.kw_i64.isTypeKeyword(), true)
+    @assertEq(Token.kw_string.isTypeKeyword(), true)
+    @assertEq(Token.kw_f64.isTypeKeyword(), true)
+    @assertEq(Token.kw_fn.isTypeKeyword(), false)
+    @assertEq(Token.kw_if.isTypeKeyword(), false)
+    @assertEq(Token.add.isTypeKeyword(), false)
 }
 
 test "isAssignment" {
-    @assert_eq(Token.assign.isAssignment(), true)
-    @assert_eq(Token.add_assign.isAssignment(), true)
-    @assert_eq(Token.sub_assign.isAssignment(), true)
-    @assert_eq(Token.rem_assign.isAssignment(), true)
-    @assert_eq(Token.add.isAssignment(), false)
-    @assert_eq(Token.eql.isAssignment(), false)
+    @assertEq(Token.assign.isAssignment(), true)
+    @assertEq(Token.add_assign.isAssignment(), true)
+    @assertEq(Token.sub_assign.isAssignment(), true)
+    @assertEq(Token.rem_assign.isAssignment(), true)
+    @assertEq(Token.add.isAssignment(), false)
+    @assertEq(Token.eql.isAssignment(), false)
 }
 
 test "string method via switch shorthand" {
     var tok = Token.arrow
-    @assert_eq(tok.toString(), "->")
-    @assert_eq(Token.fat_arrow.toString(), "=>")
-    @assert_eq(Token.question.toString(), "?")
+    @assertEq(tok.toString(), "->")
+    @assertEq(Token.fat_arrow.toString(), "=>")
+    @assertEq(Token.question.toString(), "?")
 }
 
 test "precedence multi-case arms" {
     // Verify all operators at each precedence level
-    @assert_eq(Token.sub.precedence(), 5)
-    @assert_eq(Token.@"or".precedence(), 5)
-    @assert_eq(Token.xor.precedence(), 5)
-    @assert_eq(Token.quo.precedence(), 6)
-    @assert_eq(Token.rem.precedence(), 6)
-    @assert_eq(Token.@"and".precedence(), 6)
-    @assert_eq(Token.shl.precedence(), 6)
-    @assert_eq(Token.shr.precedence(), 6)
-    @assert_eq(Token.neq.precedence(), 4)
-    @assert_eq(Token.lss.precedence(), 4)
-    @assert_eq(Token.leq.precedence(), 4)
-    @assert_eq(Token.gtr.precedence(), 4)
-    @assert_eq(Token.geq.precedence(), 4)
-    @assert_eq(Token.lor.precedence(), 2)
-    @assert_eq(Token.land.precedence(), 3)
+    @assertEq(Token.sub.precedence(), 5)
+    @assertEq(Token.@"or".precedence(), 5)
+    @assertEq(Token.xor.precedence(), 5)
+    @assertEq(Token.quo.precedence(), 6)
+    @assertEq(Token.rem.precedence(), 6)
+    @assertEq(Token.@"and".precedence(), 6)
+    @assertEq(Token.shl.precedence(), 6)
+    @assertEq(Token.shr.precedence(), 6)
+    @assertEq(Token.neq.precedence(), 4)
+    @assertEq(Token.lss.precedence(), 4)
+    @assertEq(Token.leq.precedence(), 4)
+    @assertEq(Token.gtr.precedence(), 4)
+    @assertEq(Token.geq.precedence(), 4)
+    @assertEq(Token.lor.precedence(), 2)
+    @assertEq(Token.land.precedence(), 3)
 }
 
 test "quoted ident operator tokens" {
     // Verify @"and", @"or", @"not" are the bitwise operators (& | ~)
-    @assert_eq(Token.@"and".toString(), "&")
-    @assert_eq(Token.@"or".toString(), "|")
-    @assert_eq(Token.@"not".toString(), "~")
-    @assert_eq(Token.@"and".isOperator(), true)
-    @assert_eq(Token.@"or".isOperator(), true)
-    @assert_eq(Token.@"not".isOperator(), true)
+    @assertEq(Token.@"and".toString(), "&")
+    @assertEq(Token.@"or".toString(), "|")
+    @assertEq(Token.@"not".toString(), "~")
+    @assertEq(Token.@"and".isOperator(), true)
+    @assertEq(Token.@"or".isOperator(), true)
+    @assertEq(Token.@"not".isOperator(), true)
 }
 
 test "string switch keyword lookup" {
     // Verify the string switch-based lookup works for all keyword categories
-    @assert_eq(lookup("struct"), Token.kw_struct)
-    @assert_eq(lookup("enum"), Token.kw_enum)
-    @assert_eq(lookup("if"), Token.kw_if)
-    @assert_eq(lookup("while"), Token.kw_while)
-    @assert_eq(lookup("return"), Token.kw_return)
-    @assert_eq(lookup("true"), Token.kw_true)
-    @assert_eq(lookup("false"), Token.kw_false)
-    @assert_eq(lookup("null"), Token.kw_null)
-    @assert_eq(lookup("comptime"), Token.kw_comptime)
-    @assert_eq(lookup("async"), Token.kw_async)
-    @assert_eq(lookup("await"), Token.kw_await)
-    @assert_eq(lookup("u8"), Token.kw_u8)
-    @assert_eq(lookup("f64"), Token.kw_f64)
-    @assert_eq(lookup("xyz"), Token.ident)
+    @assertEq(lookup("struct"), Token.kw_struct)
+    @assertEq(lookup("enum"), Token.kw_enum)
+    @assertEq(lookup("if"), Token.kw_if)
+    @assertEq(lookup("while"), Token.kw_while)
+    @assertEq(lookup("return"), Token.kw_return)
+    @assertEq(lookup("true"), Token.kw_true)
+    @assertEq(lookup("false"), Token.kw_false)
+    @assertEq(lookup("null"), Token.kw_null)
+    @assertEq(lookup("comptime"), Token.kw_comptime)
+    @assertEq(lookup("async"), Token.kw_async)
+    @assertEq(lookup("await"), Token.kw_await)
+    @assertEq(lookup("u8"), Token.kw_u8)
+    @assertEq(lookup("f64"), Token.kw_f64)
+    @assertEq(lookup("xyz"), Token.ident)
 }

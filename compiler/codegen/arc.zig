@@ -157,15 +157,15 @@ pub const LegacyRuntimeFunctions = struct {
     heap_ptr_global: u32,
 };
 
-/// ARC function names for lookup (Swift ARC only)
-pub const ALLOC_NAME = "cot_alloc";
-pub const RETAIN_NAME = "cot_retain";
-pub const RELEASE_NAME = "cot_release";
-pub const DEALLOC_NAME = "cot_dealloc";
-pub const REALLOC_NAME = "cot_realloc";
-pub const STRING_CONCAT_NAME = "cot_string_concat";
-pub const STRING_EQ_NAME = "cot_string_eq";
-pub const MEMSET_ZERO_NAME = "cot_memset_zero";
+/// Runtime function names for lookup
+pub const ALLOC_NAME = "alloc";
+pub const RETAIN_NAME = "retain";
+pub const RELEASE_NAME = "release";
+pub const DEALLOC_NAME = "dealloc";
+pub const REALLOC_NAME = "realloc";
+pub const STRING_CONCAT_NAME = "string_concat";
+pub const STRING_EQ_NAME = "string_eq";
+pub const MEMSET_ZERO_NAME = "memset_zero";
 pub const MEMCPY_NAME = "memcpy";
 
 // =============================================================================

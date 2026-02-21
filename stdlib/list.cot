@@ -4,11 +4,13 @@
 //
 // Growth: Go's nextslicecap (2x for small, ~1.25x for large).
 // Bounds: All access is bounds-checked via @trap().
-// Memory: Manual via @alloc/@realloc/@dealloc.
+// Memory: Manual via extern fn runtime calls.
 //
 // References:
 //   Go:  runtime/slice.go (growth), slices/ (API)
 //   Zig: std/array_list.zig (API)
+
+import "std/sys"
 
 struct List(T) {
     items: i64,
@@ -36,9 +38,9 @@ impl List(T) {
         if (new_cap < 8) { new_cap = 8 }
         var bytes = new_cap * @sizeOf(T)
         if (self.capacity == 0) {
-            self.items = @alloc(bytes)
+            self.items = alloc(0,bytes)
         } else {
-            self.items = @realloc(self.items, bytes)
+            self.items = realloc(self.items, bytes)
         }
         self.capacity = new_cap
     }
@@ -61,7 +63,7 @@ impl List(T) {
         if (index < 0) { @trap() }
         if (index >= self.count) { @trap() }
         var ptr = @intToPtr(*T, self.items + index * @sizeOf(T))
-        @arc_release(ptr.*)
+        @arcRelease(ptr.*)
         ptr.* = value
     }
 
@@ -90,16 +92,16 @@ impl List(T) {
 
     fn free(self: List(T)) void {
         // Release all ARC-managed elements before deallocating backing buffer.
-        // @arc_release is a no-op when T is not ARC-managed (resolved at monomorphization).
+        // @arcRelease is a no-op when T is not ARC-managed (resolved at monomorphization).
         // Reference: Swift Array.deinit — releases all elements via value witness destroy.
         var fi: i64 = 0
         while (fi < self.count) {
             var fptr = @intToPtr(*T, self.items + fi * @sizeOf(T))
-            @arc_release(fptr.*)
+            @arcRelease(fptr.*)
             fi += 1
         }
         if (self.capacity > 0) {
-            @dealloc(self.items)
+            dealloc(self.items)
         }
         self.items = 0
         self.count = 0
@@ -111,7 +113,7 @@ impl List(T) {
         var ci: i64 = 0
         while (ci < self.count) {
             var cptr = @intToPtr(*T, self.items + ci * @sizeOf(T))
-            @arc_release(cptr.*)
+            @arcRelease(cptr.*)
             ci += 1
         }
         self.count = 0
@@ -131,7 +133,7 @@ impl List(T) {
             var src = self.items + index * @sizeOf(T)
             var dst = src + @sizeOf(T)
             var bytes = (self.count - index) * @sizeOf(T)
-            @memcpy(dst, src, bytes)
+            memcpy(dst, src, bytes)
         }
         var ptr = @intToPtr(*T, self.items + index * @sizeOf(T))
         ptr.* = value
@@ -147,7 +149,7 @@ impl List(T) {
             var dst = self.items + index * @sizeOf(T)
             var src = dst + @sizeOf(T)
             var bytes = (self.count - index - 1) * @sizeOf(T)
-            @memcpy(dst, src, bytes)
+            memcpy(dst, src, bytes)
         }
         self.count -= 1
         return value
@@ -171,7 +173,7 @@ impl List(T) {
     fn appendSlice(self: List(T), source: i64, num: i64) void {
         self.ensureCapacity(self.count + num)
         var dst = self.items + self.count * @sizeOf(T)
-        @memcpy(dst, source, num * @sizeOf(T))
+        memcpy(dst, source, num * @sizeOf(T))
         self.count += num
     }
 
@@ -194,15 +196,15 @@ impl List(T) {
         var new_list: List(T) = .{}
         if (self.count > 0) {
             var bytes = self.count * @sizeOf(T)
-            new_list.items = @alloc(bytes)
-            @memcpy(new_list.items, self.items, bytes)
+            new_list.items = alloc(0,bytes)
+            memcpy(new_list.items, self.items, bytes)
             new_list.count = self.count
             new_list.capacity = self.count
             // Retain all ARC-managed elements (no-op for non-ARC types)
             var ci: i64 = 0
             while (ci < self.count) {
                 var cptr = @intToPtr(*T, new_list.items + ci * @sizeOf(T))
-                @arc_retain(cptr.*)
+                @arcRetain(cptr.*)
                 ci += 1
             }
         }
@@ -266,7 +268,7 @@ impl List(T) {
             self.free()
         } else {
             var bytes = new_len * @sizeOf(T)
-            self.items = @realloc(self.items, bytes)
+            self.items = realloc(self.items, bytes)
             self.capacity = new_len
         }
     }
@@ -300,10 +302,10 @@ impl List(T) {
             var src = self.items + index * @sizeOf(T)
             var dst = src + num * @sizeOf(T)
             var bytes = (self.count - index) * @sizeOf(T)
-            @memcpy(dst, src, bytes)
+            memcpy(dst, src, bytes)
         }
         var dst = self.items + index * @sizeOf(T)
-        @memcpy(dst, source, num * @sizeOf(T))
+        memcpy(dst, source, num * @sizeOf(T))
         self.count += num
     }
 
@@ -321,19 +323,19 @@ impl List(T) {
                 var src = self.items + tail_start * @sizeOf(T)
                 var dst = self.items + (start + num) * @sizeOf(T)
                 var bytes = tail_len * @sizeOf(T)
-                @memcpy(dst, src, bytes)
+                memcpy(dst, src, bytes)
             }
         } else if (num < range_len) {
             if (tail_len > 0) {
                 var src = self.items + tail_start * @sizeOf(T)
                 var dst = self.items + (start + num) * @sizeOf(T)
                 var bytes = tail_len * @sizeOf(T)
-                @memcpy(dst, src, bytes)
+                memcpy(dst, src, bytes)
             }
         }
         if (num > 0) {
             var dst = self.items + start * @sizeOf(T)
-            @memcpy(dst, source, num * @sizeOf(T))
+            memcpy(dst, source, num * @sizeOf(T))
         }
         self.count = new_count
     }
@@ -349,14 +351,14 @@ impl List(T) {
         var di: i64 = start
         while (di < end) {
             var dptr = @intToPtr(*T, self.items + di * @sizeOf(T))
-            @arc_release(dptr.*)
+            @arcRelease(dptr.*)
             di += 1
         }
         if (end < self.count) {
             var src = self.items + end * @sizeOf(T)
             var dst = self.items + start * @sizeOf(T)
             var bytes = (self.count - end) * @sizeOf(T)
-            @memcpy(dst, src, bytes)
+            memcpy(dst, src, bytes)
         }
         self.count -= removed
     }
@@ -376,7 +378,7 @@ impl List(T) {
                 }
                 write += 1
             } else {
-                @arc_release(curr.*)
+                @arcRelease(curr.*)
             }
             read += 1
         }
@@ -420,7 +422,7 @@ impl List(T) {
                 }
                 write += 1
             } else {
-                @arc_release(ptr.*)
+                @arcRelease(ptr.*)
             }
             read += 1
         }
@@ -448,7 +450,7 @@ impl List(T) {
     fn sort(self: List(T), cmp: fn(T, T) -> i64) void {
         if (self.count < 2) { return }
         var n = self.count
-        var tmp = @alloc(n * @sizeOf(T))
+        var tmp = alloc(0,n * @sizeOf(T))
         var width: i64 = 1
         while (width < n) {
             var i: i64 = 0
@@ -493,9 +495,9 @@ impl List(T) {
                 i = i + width * 2
             }
             // Copy tmp back to items
-            @memcpy(self.items, tmp, n * @sizeOf(T))
+            memcpy(self.items, tmp, n * @sizeOf(T))
             width = width * 2
         }
-        @dealloc(tmp)
+        dealloc(tmp)
     }
 }

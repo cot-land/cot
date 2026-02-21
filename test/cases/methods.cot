@@ -11,5 +11,5 @@ impl CmPoint {
 
 test "methods simple" {
     var p = CmPoint { .x = 10, .y = 20 }
-    @assert_eq(p.sum(), 30)
+    @assertEq(p.sum(), 30)
 }

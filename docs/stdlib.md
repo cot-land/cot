@@ -277,7 +277,7 @@ writeFile("output.txt", "Hello!")
 
 // Structured file I/O
 var f = openFile("data.bin", O_RDONLY)
-var buf = @alloc(1024)
+var buf = alloc(0, 1024)
 var n = try f.read(buf, 1024)
 f.close()
 ```

@@ -47,7 +47,7 @@ cot lint <file.cot>             # Check for warnings
 cot fmt <file.cot>              # Format source code in-place (--check for CI, --stdout for pipe)
 cot init [name]                 # Create new project (cot.json, src/main.cot, .gitignore)
 cot lsp                         # Start language server (LSP over stdio)
-cot version                     # Print version: cot 0.3.1 (arm64-macos)
+cot version                     # Print version: cot 0.3.2 (arm64-macos)
 cot help [command]              # Print help (per-subcommand help available)
 ```
 
@@ -61,7 +61,7 @@ cot help [command]              # Print help (per-subcommand help available)
 
 ## Versioning
 
-**Single source of truth:** `VERSION` file at repo root (plain text, e.g. `0.3.1`).
+**Single source of truth:** `VERSION` file at repo root (plain text, e.g. `0.3.2`).
 
 **Flow:** `VERSION` → `build.zig` reads via `@embedFile` → injected as `build_options` → `compiler/cli.zig` imports `@import("build_options").version`.
 
@@ -71,7 +71,7 @@ cot help [command]              # Print help (per-subcommand help available)
 - Rust pattern: plain text VERSION file (simplest, CI-friendly)
 - Zig pattern: `@import("build_options")` comptime injection
 - SemVer `0.X.Y` (standard for pre-1.0)
-- Help banner shows major.minor only (`Cot 0.3`), `cot version` shows full (`cot 0.3.1 (arm64-macos)`)
+- Help banner shows major.minor only (`Cot 0.3`), `cot version` shows full (`cot 0.3.2 (arm64-macos)`)
 
 ---
 
@@ -120,12 +120,14 @@ Cot Source → Scanner → Parser → Checker → IR → SSA
 Two categories:
 | Category | Examples | Implementation |
 |----------|----------|----------------|
-| **Compiler intrinsics** | `@intCast`, `@sizeOf`, `@intToPtr` | Inline Wasm ops in `lower.zig` |
-| **Runtime functions** | `@alloc`, `@dealloc`, `@realloc`, `@memcpy`, `@net_socket`, `@net_bind`, etc. | Wasm module functions in `arc.zig`/`wasi_runtime.zig` → `func_indices` in `driver.zig` |
+| **Compiler intrinsics (~35)** | `@intCast`, `@sizeOf`, `@intToPtr`, `@ptrOf`, `@lenOf`, `@string`, `@assert`, `@panic` | Inline Wasm ops in `lower.zig` |
+| **Runtime functions (~50)** | `alloc`, `dealloc`, `fd_write`, `exit`, `time`, `net_socket`, etc. | Wasm module functions in `arc.zig`/`wasi_runtime.zig` → `func_indices` in `driver.zig` |
 
-**Runtime builtins are Wasm MODULE functions, NOT host imports.** The compiler has ZERO host imports. If a function name is missing from `func_indices`, `wasm_gen.zig` silently calls function index 0 (cot_alloc) — a silent bug.
+**Runtime functions are NOT builtins.** They are regular functions exposed via `extern fn` declarations in `stdlib/sys.cot`. User code imports `std/sys` to access them. The compiler links them by name through `func_indices`.
 
-**To add a new runtime builtin:** parser.zig → checker.zig → lower.zig → arc.zig or wasi_runtime.zig (body + addToLinker) → driver.zig (func_indices + native override)
+**Runtime functions are Wasm MODULE functions, NOT host imports.** The compiler has ZERO host imports. If a function name is missing from `func_indices`, `wasm_gen.zig` silently calls function index 0 (alloc) — a silent bug.
+
+**To add a new runtime function:** arc.zig or wasi_runtime.zig (body + addToLinker) → driver.zig (func_indices + native override) → stdlib/sys.cot (extern fn declaration)
 
 ---
 
@@ -154,7 +156,7 @@ cot test test/cases/<category>.cot                # Targeted: specific category
 **Test directories:**
 - `test/cases/` — Category unit tests (21 files, ~106 tests)
 - `test/e2e/` — Comprehensive feature tests (25 files, ~904 tests)
-- All tests use inline `test "name" { @assert_eq(...) }` format
+- All tests use inline `test "name" { @assertEq(...) }` format
 - See `claude/TESTING.md` for full details
 
 **Every new feature must:**

@@ -16,14 +16,14 @@ fn multiply(a: i64, b: i64) i64 {
 
 test "await compute" {
     const result = await compute(5)
-    @assert_eq(result, 11)
+    @assertEq(result, 11)
 }
 
 test "await add" {
     const result = await add(3, 7)
-    @assert_eq(result, 10)
+    @assertEq(result, 10)
 }
 
 test "sync multiply" {
-    @assert_eq(multiply(4, 5), 20)
+    @assertEq(multiply(4, 5), 20)
 }

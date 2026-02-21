@@ -64,7 +64,7 @@ pub fn addToLinker(allocator: std.mem.Allocator, linker: *@import("wasm/link.zig
     const test_start_global = test_start_dynamic + 1; // Offset by SP
     const total_start_global = total_start_dynamic + 1; // Offset by SP
 
-    // Add globals for storing assert_eq failure values (Deno pattern: show expected vs actual)
+    // Add globals for storing assertEq failure values (Deno pattern: show expected vs actual)
     // fail_left_val: left value (i64 for ints, ptr for strings)
     // fail_right_val: right value (i64 for ints, ptr for strings)
     // fail_left_len: 0 for ints, string length for strings
@@ -498,8 +498,8 @@ fn generateTestSummaryBody(allocator: std.mem.Allocator, write_func_idx: u32, ep
 }
 
 // =============================================================================
-// __test_store_fail_values — stores assert_eq left/right values in globals
-// Called from @assert_eq fail path before returning error union.
+// __test_store_fail_values — stores assertEq left/right values in globals
+// Called from @assertEq fail path before returning error union.
 // Params: left_val, right_val, is_string, left_len, right_len
 // =============================================================================
 

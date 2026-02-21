@@ -8,7 +8,7 @@ test "auto_free_list" {
     var nums: List(i64) = .{}
     nums.append(10)
     nums.append(20)
-    @assert_eq(nums.len(), 2)
+    @assertEq(nums.len(), 2)
     // nums.free() called automatically at scope exit
 }
 
@@ -16,8 +16,8 @@ test "auto_free_map" {
     var m: Map(i64, i64) = .{}
     m.set(1, 100)
     m.set(2, 200)
-    @assert_eq(m.get(1), 100)
-    @assert_eq(m.len(), 2)
+    @assertEq(m.get(1), 100)
+    @assertEq(m.len(), 2)
     // m.free() called automatically
 }
 
@@ -26,8 +26,8 @@ test "auto_free_multiple" {
     var b: List(i64) = .{}
     a.append(1)
     b.append(2)
-    @assert_eq(a.get(0), 1)
-    @assert_eq(b.get(0), 2)
+    @assertEq(a.get(0), 1)
+    @assertEq(b.get(0), 2)
     // b.free() then a.free() (LIFO order)
 }
 
@@ -36,7 +36,7 @@ test "explicit_free_still_works" {
     m.set(1, 100)
     m.free()
     // scope exit calls free() again — Map.free() is idempotent (checks capacity > 0)
-    @assert_eq(m.len(), 0)
+    @assertEq(m.len(), 0)
 }
 
 test "return_transfers_ownership" {
@@ -44,6 +44,6 @@ test "return_transfers_ownership" {
     // (tested by using the value after the call)
     var m: Map(i64, i64) = .{}
     m.set(1, 42)
-    @assert_eq(m.get(1), 42)
+    @assertEq(m.get(1), 42)
     m.free()
 }

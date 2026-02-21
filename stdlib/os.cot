@@ -1,42 +1,42 @@
 // os — Process utilities.
 //
-// Wraps @exit, @args_count, @arg_len, @arg_ptr, @environ_count, @environ_len, @environ_ptr builtins.
+// Wraps low-level process control functions via extern fn declarations.
 // Reference: Zig std.process (exit, argsAlloc, EnvMap)
 
-fn exit(code: i64) void {
-    @exit(code)
-}
+import "std/sys"
+
+// exit(code) is available directly from std/sys
 
 fn argsCount() i64 {
-    return @args_count()
+    return args_count()
 }
 
 fn argLen(n: i64) i64 {
-    return @arg_len(n)
+    return arg_len(n)
 }
 
 fn argPtr(n: i64) i64 {
-    return @arg_ptr(n)
+    return arg_ptr(n)
 }
 
 fn environCount() i64 {
-    return @environ_count()
+    return environ_count()
 }
 
 fn environLen(n: i64) i64 {
-    return @environ_len(n)
+    return environ_len(n)
 }
 
 fn environPtr(n: i64) i64 {
-    return @environ_ptr(n)
+    return environ_ptr(n)
 }
 
 // ===== High-level APIs =====
 
 fn arg(n: i64) string {
-    return @string(@arg_ptr(n), @arg_len(n))
+    return @string(arg_ptr(n), arg_len(n))
 }
 
 fn environ(n: i64) string {
-    return @string(@environ_ptr(n), @environ_len(n))
+    return @string(environ_ptr(n), environ_len(n))
 }

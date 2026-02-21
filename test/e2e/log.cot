@@ -7,37 +7,37 @@ import "std/string"
 
 test "setLevel to debug" {
     setLevel(LOG_DEBUG)
-    @assert_eq(log_level, 0)
+    @assertEq(log_level, 0)
 }
 
 test "setLevel to info" {
     setLevel(LOG_INFO)
-    @assert_eq(log_level, 1)
+    @assertEq(log_level, 1)
 }
 
 test "setLevel to warn" {
     setLevel(LOG_WARN)
-    @assert_eq(log_level, 2)
+    @assertEq(log_level, 2)
 }
 
 test "setLevel to error" {
     setLevel(LOG_ERROR)
-    @assert_eq(log_level, 3)
+    @assertEq(log_level, 3)
 }
 
 test "setLevel to none suppresses all" {
     setLevel(LOG_NONE)
-    @assert_eq(log_level, 4)
+    @assertEq(log_level, 4)
 }
 
 test "setTimestamps disables" {
     setTimestamps(false)
-    @assert_eq(log_timestamps, false)
+    @assertEq(log_timestamps, false)
 }
 
 test "setTimestamps enables" {
     setTimestamps(true)
-    @assert_eq(log_timestamps, true)
+    @assertEq(log_timestamps, true)
 }
 
 test "log level constants are ordered" {

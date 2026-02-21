@@ -1,5 +1,6 @@
 import "std/process"
 import "std/string"
+import "std/sys"
 
 // ============================================================================
 // Fork + Waitpid
@@ -9,20 +10,20 @@ test "fork returns non-negative" {
     var pid = fork()
     if (pid == 0) {
         // Child: exit immediately
-        @exit(0)
+        exit(0)
     }
     @assert(pid > 0)
     var code = waitpid(pid)
-    @assert_eq(code, 0)
+    @assertEq(code, 0)
 }
 
 test "fork child exit code" {
     var pid = fork()
     if (pid == 0) {
-        @exit(42)
+        exit(42)
     }
     var code = waitpid(pid)
-    @assert_eq(code, 42)
+    @assertEq(code, 42)
 }
 
 // ============================================================================
@@ -37,8 +38,8 @@ test "pipe creates valid fds" {
     @assert(read_fd >= 0)
     @assert(write_fd >= 0)
     @assert(read_fd != write_fd)
-    @fd_close(read_fd)
-    @fd_close(write_fd)
+    fd_close(read_fd)
+    fd_close(write_fd)
 }
 
 test "pipe read write" {
@@ -46,14 +47,14 @@ test "pipe read write" {
     var read_fd = pipeReadFd(fds)
     var write_fd = pipeWriteFd(fds)
 
-    @fd_write(write_fd, @ptrOf("hello"), 5)
-    @fd_close(write_fd)
+    fd_write(write_fd, @ptrOf("hello"), 5)
+    fd_close(write_fd)
 
-    var buf = @alloc(32)
-    var n = @fd_read(read_fd, buf, 32)
-    @fd_close(read_fd)
-    @assert_eq(n, 5)
-    @assert_eq(@string(buf, n), "hello")
+    var buf = alloc(0, 32)
+    var n = fd_read(read_fd, buf, 32)
+    fd_close(read_fd)
+    @assertEq(n, 5)
+    @assertEq(@string(buf, n), "hello")
 }
 
 // ============================================================================
@@ -67,16 +68,16 @@ test "dup2 returns new fd" {
     // dup write_fd to fd 100
     var result = dup2(write_fd, 100)
     @assert(result >= 0)
-    @fd_close(write_fd)
+    fd_close(write_fd)
     // Write through dup'd fd
-    @fd_write(100, @ptrOf("test"), 4)
-    @fd_close(100)
+    fd_write(100, @ptrOf("test"), 4)
+    fd_close(100)
     // Read back
-    var buf = @alloc(32)
-    var n = @fd_read(read_fd, buf, 32)
-    @fd_close(read_fd)
-    @assert_eq(n, 4)
-    @assert_eq(@string(buf, n), "test")
+    var buf = alloc(0, 32)
+    var n = fd_read(read_fd, buf, 32)
+    fd_close(read_fd)
+    @assertEq(n, 4)
+    @assertEq(@string(buf, n), "test")
 }
 
 // ============================================================================
@@ -86,8 +87,8 @@ test "dup2 returns new fd" {
 test "pipeReadFd extracts low 32" {
     // Simulate packed value: write_fd=5 (<<32) | read_fd=3
     var packed_val = (5 << 32) | 3
-    @assert_eq(pipeReadFd(packed_val), 3)
-    @assert_eq(pipeWriteFd(packed_val), 5)
+    @assertEq(pipeReadFd(packed_val), 3)
+    @assertEq(pipeWriteFd(packed_val), 5)
 }
 
 // ============================================================================
@@ -96,37 +97,37 @@ test "pipeReadFd extracts low 32" {
 
 test "run0 /usr/bin/true" {
     var code = run0("/usr/bin/true")
-    @assert_eq(code, 0)
+    @assertEq(code, 0)
 }
 
 test "run0 /usr/bin/false" {
     var code = run0("/usr/bin/false")
-    @assert_eq(code, 1)
+    @assertEq(code, 1)
 }
 
 test "run echo" {
     var code = run("/bin/echo", "hello")
-    @assert_eq(code, 0)
+    @assertEq(code, 0)
 }
 
 test "output0 captures stdout" {
     var out = output0("/bin/echo")
     // /bin/echo with no args prints just a newline
-    @assert_eq(out, "\n")
+    @assertEq(out, "\n")
 }
 
 test "output captures stdout" {
     var out = output("/bin/echo", "hello")
-    @assert_eq(out, "hello\n")
+    @assertEq(out, "hello\n")
 }
 
 test "run2 with two args" {
     var code = run2("/bin/echo", "hello", "world")
-    @assert_eq(code, 0)
+    @assertEq(code, 0)
 }
 
 test "output with flag arg" {
     var out = output("/bin/echo", "-n")
     // -n suppresses newline, so output should be empty
-    @assert_eq(out, "")
+    @assertEq(out, "")
 }

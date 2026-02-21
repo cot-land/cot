@@ -8,6 +8,7 @@
 //   Deno: @std/fmt (colors, bytes, duration)
 
 import "std/string"
+import "std/sys"
 
 // ============================================================================
 // ANSI Color Codes
@@ -347,7 +348,7 @@ fn hex(n: i64) string {
     if (val < 0) { val = 0 - val }
     var sb = StringBuilder { .buf = 0, .len = 0, .cap = 0 }
     // Build in reverse using a temp buffer
-    var buf = @alloc(16)
+    var buf = alloc(0, 16)
     var pos: i64 = 0
     while (val > 0) {
         var digit = val & 15
@@ -366,7 +367,7 @@ fn hex(n: i64) string {
         sb.appendByte(@intCast(i64, @intToPtr(*u8, buf + i).*))
         i = i - 1
     }
-    @dealloc(buf)
+    dealloc(buf)
     return sb.toString()
 }
 
@@ -377,7 +378,7 @@ fn binary(n: i64) string {
     var val = n
     if (val < 0) { val = 0 - val }
     var sb = StringBuilder { .buf = 0, .len = 0, .cap = 0 }
-    var buf = @alloc(64)
+    var buf = alloc(0, 64)
     var pos: i64 = 0
     while (val > 0) {
         var digit = val & 1
@@ -391,7 +392,7 @@ fn binary(n: i64) string {
         sb.appendByte(@intCast(i64, @intToPtr(*u8, buf + i).*))
         i = i - 1
     }
-    @dealloc(buf)
+    dealloc(buf)
     return sb.toString()
 }
 
@@ -402,7 +403,7 @@ fn octal(n: i64) string {
     var val = n
     if (val < 0) { val = 0 - val }
     var sb = StringBuilder { .buf = 0, .len = 0, .cap = 0 }
-    var buf = @alloc(22)
+    var buf = alloc(0, 22)
     var pos: i64 = 0
     while (val > 0) {
         var digit = val & 7
@@ -416,7 +417,7 @@ fn octal(n: i64) string {
         sb.appendByte(@intCast(i64, @intToPtr(*u8, buf + i).*))
         i = i - 1
     }
-    @dealloc(buf)
+    dealloc(buf)
     return sb.toString()
 }
 
@@ -428,7 +429,7 @@ fn formatInt(n: i64, base: i64) string {
     var val = n
     if (val < 0) { val = 0 - val }
     var sb = StringBuilder { .buf = 0, .len = 0, .cap = 0 }
-    var buf = @alloc(64)
+    var buf = alloc(0, 64)
     var pos: i64 = 0
     while (val > 0) {
         var digit = val % base
@@ -446,7 +447,7 @@ fn formatInt(n: i64, base: i64) string {
         sb.appendByte(@intCast(i64, @intToPtr(*u8, buf + i).*))
         i = i - 1
     }
-    @dealloc(buf)
+    dealloc(buf)
     return sb.toString()
 }
 

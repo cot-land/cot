@@ -1,62 +1,62 @@
 test "len simple" {
-    @assert_eq(len("hello"), 5)
+    @assertEq(len("hello"), 5)
 }
 
 test "len empty" {
-    @assert_eq(len(""), 0)
+    @assertEq(len(""), 0)
 }
 
 test "len long" {
-    @assert_eq(len("abcdefghijklmnopqrstuvwxyz"), 26)
+    @assertEq(len("abcdefghijklmnopqrstuvwxyz"), 26)
 }
 
 test "index first" {
     var s = "hello"
-    @assert_eq(s[0], 104)
+    @assertEq(s[0], 104)
 }
 
 test "index last" {
     var s = "hello"
-    @assert_eq(s[4], 111)
+    @assertEq(s[4], 111)
 }
 
 test "concat simple" {
     var s1 = "hello"
     var s2 = " world"
     var s3 = s1 + s2
-    @assert_eq(len(s3), 11)
+    @assertEq(len(s3), 11)
 }
 
 test "concat two vars" {
     var s1 = "hello"
     var s2 = " world"
-    @assert_eq(len(s1) + len(s2), 11)
+    @assertEq(len(s1) + len(s2), 11)
 }
 
 test "concat var direct" {
     var s = "hello!"
-    @assert_eq(len(s), 6)
+    @assertEq(len(s), 6)
 }
 
 test "concat direct len" {
-    @assert_eq(len("hello" + " world"), 11)
+    @assertEq(len("hello" + " world"), 11)
 }
 
 test "string eq literals" {
-    @assert_eq("hello", "hello")
+    @assertEq("hello", "hello")
 }
 
 test "string eq vars" {
     var a = "world"
     var b = "world"
-    @assert_eq(a, b)
+    @assertEq(a, b)
 }
 
 test "string eq concat" {
     var s = "hello" + " world"
-    @assert_eq(s, "hello world")
+    @assertEq(s, "hello world")
 }
 
 test "string eq empty" {
-    @assert_eq("", "")
+    @assertEq("", "")
 }

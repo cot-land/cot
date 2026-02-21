@@ -4,6 +4,7 @@
 import "std/list"
 import "std/map"
 import "std/string"
+import "std/sys"
 
 // ============================================================================
 // Shared type declarations
@@ -118,7 +119,7 @@ fn getSize(T)() i64 {
 }
 
 fn allocOne(T)(value: T) *T {
-    var ptr = @intToPtr(*T, @alloc(@sizeOf(T)))
+    var ptr = @intToPtr(*T, alloc(0, @sizeOf(T)))
     ptr.* = value
     return ptr
 }
@@ -134,9 +135,9 @@ fn List_ensureCapacity(T)(self: *List(T), needed: i64) void {
     if (self.capacity > 0) { new_cap = self.capacity * 2 }
     var bytes = new_cap * @sizeOf(T)
     if (self.capacity == 0) {
-        self.items = @alloc(bytes)
+        self.items = alloc(0, bytes)
     } else {
-        self.items = @realloc(self.items, bytes)
+        self.items = realloc(self.items, bytes)
     }
     self.capacity = new_cap
 }
@@ -203,21 +204,21 @@ impl Pair(T, U) {
 
 test "baseline" {
     // Constants
-    @assert_eq(42, 42)
-    @assert_eq(10 + 5, 15)
-    @assert_eq(20 - 8, 12)
-    @assert_eq(6 * 7, 42)
-    @assert_eq(2 + 3 * 4, 14)
+    @assertEq(42, 42)
+    @assertEq(10 + 5, 15)
+    @assertEq(20 - 8, 12)
+    @assertEq(6 * 7, 42)
+    @assertEq(2 + 3 * 4, 14)
 
     // Variables
     var x = 10
     var y = 5
-    @assert_eq(x + y, 15)
+    @assertEq(x + y, 15)
 
     // If/else
     if (10 > 5) {
         var ok = 1
-        @assert_eq(ok, 1)
+        @assertEq(ok, 1)
     } else {
         @assert(1 == 0)
     }
@@ -229,7 +230,7 @@ test "baseline" {
         sum = sum + i
         i = i + 1
     }
-    @assert_eq(sum, 55)
+    @assertEq(sum, 55)
 }
 
 // ============================================================================
@@ -239,61 +240,61 @@ test "baseline" {
 test "phase3" {
     // Char literals
     var c1 = 'A'
-    @assert_eq(c1, 65)
+    @assertEq(c1, 65)
     var c2 = '\n'
-    @assert_eq(c2, 10)
+    @assertEq(c2, 10)
 
     // Type alias + struct
     var coord: Coord = Coord { .x = 10, .y = 20 }
-    @assert_eq(coord.x + coord.y, 30)
+    @assertEq(coord.x + coord.y, 30)
 
     // Builtins
-    @assert_eq(@sizeOf(i64), 8)
-    @assert_eq(@sizeOf(Point), 16)
-    @assert_eq(@alignOf(i64), 8)
+    @assertEq(@sizeOf(i64), 8)
+    @assertEq(@sizeOf(Point), 16)
+    @assertEq(@alignOf(i64), 8)
     var big: i64 = 42
     var small = @intCast(i32, big)
-    @assert_eq(small, 42)
+    @assertEq(small, 42)
 
     // Enums
     var color: i64 = Color.Green
-    @assert_eq(color, 1)
+    @assertEq(color, 1)
     var status: i64 = Status.Error
-    @assert_eq(status, 100)
+    @assertEq(status, 100)
 
     // Union
     var state: i64 = State.Running
-    @assert_eq(state, 1)
+    @assertEq(state, 1)
 
     // Bitwise ops
     var a = 255
     var b = 15
-    @assert_eq(a & b, 15)
-    @assert_eq((240 | 15) - 200, 55)
-    @assert_eq((a ^ b) & 255, 240)
-    @assert_eq((~0) & 255, 255)
-    @assert_eq(1 << 4, 16)
-    @assert_eq(64 >> 2, 16)
+    @assertEq(a & b, 15)
+    @assertEq((240 | 15) - 200, 55)
+    @assertEq((a ^ b) & 255, 240)
+    @assertEq((~0) & 255, 255)
+    @assertEq(1 << 4, 16)
+    @assertEq(64 >> 2, 16)
 
     // Compound assignment
     var x = 10
     x += 5
-    @assert_eq(x, 15)
+    @assertEq(x, 15)
     x -= 3
-    @assert_eq(x, 12)
+    @assertEq(x, 12)
     x *= 2
-    @assert_eq(x, 24)
+    @assertEq(x, 24)
     var y = 255
     y &= 15
-    @assert_eq(y, 15)
+    @assertEq(y, 15)
 
     // Optional types
     var opt1: ?i64 = 42
-    @assert_eq(opt1.?, 42)
+    @assertEq(opt1.?, 42)
     var opt2: ?i64 = null
-    @assert_eq(opt2 orelse 99, 99)
+    @assertEq(opt2 orelse 99, 99)
     var opt3: ?i64 = 42
-    @assert_eq(opt3 orelse 99, 42)
+    @assertEq(opt3 orelse 99, 42)
 
     // Switch
     var sw1 = switch 2 {
@@ -302,7 +303,7 @@ test "phase3" {
         3 => 30,
         else => 0,
     }
-    @assert_eq(sw1, 20)
+    @assertEq(sw1, 20)
 
     var level = Level.Medium
     var sw2 = switch level {
@@ -311,7 +312,7 @@ test "phase3" {
         Level.High => 99,
         else => 0,
     }
-    @assert_eq(sw2, 50)
+    @assertEq(sw2, 50)
 }
 
 // ============================================================================
@@ -319,7 +320,7 @@ test "phase3" {
 // ============================================================================
 
 test "func_call" {
-    @assert_eq(double(10), 20)
+    @assertEq(double(10), 20)
 }
 
 test "float_locals" {
@@ -333,20 +334,20 @@ test "float_locals" {
 
 test "union_payload" {
     var r: Result = Result.Ok(42)
-    @assert_eq(r.tag, 0)
+    @assertEq(r.tag, 0)
     var val = r.Ok
-    @assert_eq(val, 42)
+    @assertEq(val, 42)
     var e: Result = Result.Err(99)
-    @assert_eq(e.tag, 1)
+    @assertEq(e.tag, 1)
 }
 
 test "union_mixed" {
     var e1: Event = Event.Hover
-    @assert_eq(e1.tag, 1)
+    @assertEq(e1.tag, 1)
     var e2: Event = Event.Click(100)
-    @assert_eq(e2.tag, 0)
+    @assertEq(e2.tag, 0)
     var clicks = e2.Click
-    @assert_eq(clicks, 100)
+    @assertEq(clicks, 100)
 }
 
 test "union_switch_no_capture" {
@@ -356,7 +357,7 @@ test "union_switch_no_capture" {
         Result.Ok => { matched = 1 },
         Result.Err => { matched = 2 },
     }
-    @assert_eq(matched, 1)
+    @assertEq(matched, 1)
 }
 
 test "union_switch_capture" {
@@ -370,8 +371,8 @@ test "union_switch_capture" {
         },
         Result.Err |e| => { matched = 2 },
     }
-    @assert_eq(matched, 1)
-    @assert_eq(captured, 42)
+    @assertEq(matched, 1)
+    @assertEq(captured, 42)
 }
 
 test "union_struct_payload_capture" {
@@ -387,8 +388,8 @@ test "union_struct_payload_capture" {
         Container.val |v| => {},
         Container.none => {},
     }
-    @assert_eq(cx, 10)
-    @assert_eq(cy, 20)
+    @assertEq(cx, 10)
+    @assertEq(cy, 20)
 }
 
 // ============================================================================
@@ -397,14 +398,14 @@ test "union_struct_payload_capture" {
 
 test "error_union_catch" {
     var result = mayFail(-1) catch 99
-    @assert_eq(result, 99)
+    @assertEq(result, 99)
     var success = mayFail(5) catch 99
-    @assert_eq(success, 10)
+    @assertEq(success, 10)
 }
 
 test "error_union_try" {
     var result = outer() catch 42
-    @assert_eq(result, 42)
+    @assertEq(result, 42)
 }
 
 // ============================================================================
@@ -414,7 +415,7 @@ test "error_union_try" {
 test "defer_basic" {
     var x: i64 = 10
     defer x = 99
-    @assert_eq(x, 10)
+    @assertEq(x, 10)
 }
 
 test "defer_loop_break" {
@@ -425,14 +426,14 @@ test "defer_loop_break" {
         i = i + 1
         if (i == 3) { break }
     }
-    @assert_eq(sum, 3)
+    @assertEq(sum, 3)
 }
 
 test "defer_lifo" {
     var x: i64 = 2
     defer x = x + 1
     defer x = x * 10
-    @assert_eq(x, 2)
+    @assertEq(x, 2)
 }
 
 // ============================================================================
@@ -441,61 +442,61 @@ test "defer_lifo" {
 
 test "arc_func_return_new" {
     var p = createFoo(42)
-    @assert_eq(p.x, 42)
+    @assertEq(p.x, 42)
 }
 
 test "arc_copy_local" {
     var p = new Foo { x: 10 }
     var q = p
-    @assert_eq(q.x, 10)
+    @assertEq(q.x, 10)
 }
 
 test "arc_reassignment" {
     var p = new Foo { x: 1 }
     var q = new Foo { x: 2 }
     p = q
-    @assert_eq(p.x, 2)
+    @assertEq(p.x, 2)
 }
 
 test "arc_return_forward" {
     var f = makeFoo(77)
-    @assert_eq(f.x, 77)
+    @assertEq(f.x, 77)
 }
 
 test "arc_dealloc_basic" {
     var p = new Foo { x: 42 }
-    @assert_eq(p.x, 42)
+    @assertEq(p.x, 42)
 }
 
 test "arc_dealloc_multi" {
     var a = makeFoo(10)
     var b = makeFoo(20)
     var c = makeFoo(12)
-    @assert_eq(a.x + b.x + c.x, 42)
+    @assertEq(a.x + b.x + c.x, 42)
 }
 
 // ============================================================================
-// Tests: Builtins (@alloc, @dealloc, @realloc)
+// Tests: Memory (alloc, dealloc, realloc)
 // ============================================================================
 
 test "builtin_alloc_dealloc" {
-    var ptr = @alloc(8)
-    @dealloc(ptr)
+    var ptr = alloc(0, 8)
+    dealloc(ptr)
 }
 
 test "builtin_realloc" {
-    var ptr = @alloc(8)
-    var ptr2 = @realloc(ptr, 16)
-    @dealloc(ptr2)
+    var ptr = alloc(0, 8)
+    var ptr2 = realloc(ptr, 16)
+    dealloc(ptr2)
 }
 
 test "freelist_reuse" {
-    var p1 = @alloc(8)
-    @dealloc(p1)
-    var p2 = @alloc(8)
-    @dealloc(p2)
-    var p3 = @alloc(8)
-    @dealloc(p3)
+    var p1 = alloc(0, 8)
+    dealloc(p1)
+    var p2 = alloc(0, 8)
+    dealloc(p2)
+    var p3 = alloc(0, 8)
+    dealloc(p3)
 }
 
 // ============================================================================
@@ -504,7 +505,7 @@ test "freelist_reuse" {
 
 test "deinit_basic" {
     var p = new DFoo { x: 42 }
-    @assert_eq(p.x, 42)
+    @assertEq(p.x, 42)
 }
 
 test "deinit_no_use" {
@@ -514,14 +515,14 @@ test "deinit_no_use" {
 test "deinit_mixed" {
     var f = new DFoo { x: 10 }
     var b = new Bar { y: 20 }
-    @assert_eq(f.x + b.y, 30)
+    @assertEq(f.x + b.y, 30)
 }
 
 test "deinit_alloc_reuse" {
     var p1 = createDFoo(10)
     var v1 = p1.x
     var p2 = createDFoo(20)
-    @assert_eq(v1 + p2.x, 30)
+    @assertEq(v1 + p2.x, 30)
 }
 
 // ============================================================================
@@ -530,11 +531,11 @@ test "deinit_alloc_reuse" {
 
 test "fnptr_basic" {
     var f = add
-    @assert_eq(f(3, 4), 7)
+    @assertEq(f(3, 4), 7)
 }
 
 test "fnptr_param" {
-    @assert_eq(apply_fn(dbl, 5), 10)
+    @assertEq(apply_fn(dbl, 5), 10)
 }
 
 test "fnptr_reassign" {
@@ -542,7 +543,7 @@ test "fnptr_reassign" {
     var a = f(10)
     f = dec
     var b = f(10)
-    @assert_eq(a + b, 20)
+    @assertEq(a + b, 20)
 }
 
 // ============================================================================
@@ -551,26 +552,26 @@ test "fnptr_reassign" {
 
 test "closure_no_capture" {
     var f = fn(x: i64) i64 { return x * 2 }
-    @assert_eq(f(21), 42)
+    @assertEq(f(21), 42)
 }
 
 test "closure_capture" {
     var x: i64 = 10
     var f = fn(y: i64) i64 { return x + y }
-    @assert_eq(f(5), 15)
+    @assertEq(f(5), 15)
 }
 
 test "closure_multi_capture" {
     var a: i64 = 3
     var b: i64 = 7
     var f = fn(x: i64) i64 { return a + b + x }
-    @assert_eq(f(10), 20)
+    @assertEq(f(10), 20)
 }
 
 test "closure_passed" {
     var offset: i64 = 100
     var g = fn(x: i64) i64 { return x + offset }
-    @assert_eq(apply_fn(g, 5), 105)
+    @assertEq(apply_fn(g, 5), 105)
 }
 
 // ============================================================================
@@ -578,37 +579,37 @@ test "closure_passed" {
 // ============================================================================
 
 test "generic_fn_basic" {
-    @assert_eq(max(i64)(3, 7), 7)
+    @assertEq(max(i64)(3, 7), 7)
 }
 
 test "generic_struct_basic" {
     var p: Pair(i64, i64) = undefined
     p.first = 10
     p.second = 20
-    @assert_eq(p.first + p.second, 30)
+    @assertEq(p.first + p.second, 30)
 }
 
 test "generic_fn_multi_inst" {
     var x: i64 = generic_add(i64)(10, 20)
     var y: i32 = generic_add(i32)(3, 4)
-    @assert_eq(x + y, 37)
+    @assertEq(x + y, 37)
 }
 
 test "generic_struct_param" {
     var b: Box(i64) = undefined
     b.value = 42
-    @assert_eq(Box_getValue(i64)(&b), 42)
+    @assertEq(Box_getValue(i64)(&b), 42)
 }
 
 test "sizeof_generic" {
-    @assert_eq(getSize(i64)(), 8)
+    @assertEq(getSize(i64)(), 8)
 }
 
 test "alloc_inttoptr_generic" {
     var p = allocOne(i64)(42)
     var result = p.*
-    @dealloc(@ptrToInt(p))
-    @assert_eq(result, 42)
+    dealloc(@ptrToInt(p))
+    @assertEq(result, 42)
 }
 
 test "generic_field_mutation" {
@@ -617,7 +618,7 @@ test "generic_field_mutation" {
     c.count = 0
     CounterM_increment(i64)(&c)
     CounterM_increment(i64)(&c)
-    @assert_eq(c.count, 2)
+    @assertEq(c.count, 2)
 }
 
 // ============================================================================
@@ -635,7 +636,7 @@ test "list_basic" {
     var a = List_get(i64)(&list, 0)
     var b = List_get(i64)(&list, 1)
     var c = List_get(i64)(&list, 2)
-    @assert_eq(a + b + c, 60)
+    @assertEq(a + b + c, 60)
 }
 
 test "list_growth" {
@@ -650,7 +651,7 @@ test "list_growth" {
     }
     var first = List_get(i64)(&list, 0)
     var last = List_get(i64)(&list, 19)
-    @assert_eq(first + last + list.count, 39)
+    @assertEq(first + last + list.count, 39)
 }
 
 test "list_pop" {
@@ -662,7 +663,7 @@ test "list_pop" {
     List_append(i64)(&list, 20)
     List_append(i64)(&list, 30)
     var popped = List_pop(i64)(&list)
-    @assert_eq(popped + list.count, 32)
+    @assertEq(popped + list.count, 32)
 }
 
 test "list_set" {
@@ -674,7 +675,7 @@ test "list_set" {
     List_append(i64)(&list, 20)
     List_append(i64)(&list, 30)
     List_set(i64)(&list, 1, 50)
-    @assert_eq(List_get(i64)(&list, 0) + List_get(i64)(&list, 1) + List_get(i64)(&list, 2), 90)
+    @assertEq(List_get(i64)(&list, 0) + List_get(i64)(&list, 1) + List_get(i64)(&list, 2), 90)
 }
 
 test "list_multi_type" {
@@ -690,7 +691,7 @@ test "list_multi_type" {
     List_append(i32)(&b, 5)
     var x = List_get(i64)(&a, 0)
     var y: i64 = List_get(i32)(&b, 0)
-    @assert_eq(x + y, 105)
+    @assertEq(x + y, 105)
 }
 
 // ============================================================================
@@ -708,7 +709,7 @@ test "list_impl_basic" {
     var a = list.get(0)
     var b = list.get(1)
     var c = list.get(2)
-    @assert_eq(a + b + c, 60)
+    @assertEq(a + b + c, 60)
 }
 
 test "list_impl_growth" {
@@ -723,7 +724,7 @@ test "list_impl_growth" {
     }
     var first = list.get(0)
     var last = list.get(19)
-    @assert_eq(first + last + list.count, 39)
+    @assertEq(first + last + list.count, 39)
 }
 
 test "list_impl_pop" {
@@ -735,7 +736,7 @@ test "list_impl_pop" {
     list.append(20)
     list.append(30)
     var popped = list.pop()
-    @assert_eq(popped + list.count, 32)
+    @assertEq(popped + list.count, 32)
 }
 
 test "list_impl_set" {
@@ -747,7 +748,7 @@ test "list_impl_set" {
     list.append(20)
     list.append(30)
     list.set(1, 50)
-    @assert_eq(list.get(0) + list.get(1) + list.get(2), 90)
+    @assertEq(list.get(0) + list.get(1) + list.get(2), 90)
 }
 
 test "list_impl_multi_type" {
@@ -763,7 +764,7 @@ test "list_impl_multi_type" {
     b.append(5)
     var x = a.get(0)
     var y: i64 = b.get(0)
-    @assert_eq(x + y, 105)
+    @assertEq(x + y, 105)
 }
 
 // ============================================================================
@@ -773,7 +774,7 @@ test "list_impl_multi_type" {
 test "generic_impl_basic" {
     var c: Counter(i64) = undefined
     c.value = 42
-    @assert_eq(c.get(), 42)
+    @assertEq(c.get(), 42)
 }
 
 test "generic_impl_self_call" {
@@ -783,7 +784,7 @@ test "generic_impl_self_call" {
     b.increment()
     b.increment()
     b.increment()
-    @assert_eq(b.count + b.value, 13)
+    @assertEq(b.count + b.value, 13)
 }
 
 test "generic_impl_multi_inst" {
@@ -793,7 +794,7 @@ test "generic_impl_multi_inst" {
     b.value = 12
     var x: i64 = a.get()
     var y: i64 = b.get()
-    @assert_eq(x + y, 42)
+    @assertEq(x + y, 42)
 }
 
 test "generic_impl_forward_ref" {
@@ -802,14 +803,14 @@ test "generic_impl_forward_ref" {
     b.count = 0
     b.increment()
     b.increment()
-    @assert_eq(b.count + b.value, 12)
+    @assertEq(b.count + b.value, 12)
 }
 
 test "generic_impl_two_params" {
     var p: Pair(i64, i64) = undefined
     p.first = 30
     p.second = 12
-    @assert_eq(p.sum(), 42)
+    @assertEq(p.sum(), 42)
 }
 
 // ============================================================================
@@ -818,59 +819,59 @@ test "generic_impl_two_params" {
 
 test "generic_struct_literal" {
     var p = Pair(i64, i64) { .first = 10, .second = 32 }
-    @assert_eq(p.first + p.second, 42)
+    @assertEq(p.first + p.second, 42)
 }
 
 test "generic_struct_literal_methods" {
     var p = Pair(i64, i64) { .first = 30, .second = 12 }
-    @assert_eq(p.sum(), 42)
+    @assertEq(p.sum(), 42)
 }
 
 test "zero_init_basic" {
     var p: Point = .{}
-    @assert_eq(p.x + p.y, 0)
+    @assertEq(p.x + p.y, 0)
 }
 
 test "zero_init_generic" {
     var p: Pair(i64, i64) = .{}
-    @assert_eq(p.first + p.second, 0)
+    @assertEq(p.first + p.second, 0)
 }
 
 test "new_generic" {
     var p = new Pair(i64, i64) { first: 30, second: 12 }
-    @assert_eq(p.first + p.second, 42)
+    @assertEq(p.first + p.second, 42)
 }
 
 // ============================================================================
-// @memcpy builtin
+// memcpy function
 // ============================================================================
 
 test "memcpy_basic" {
-    var src = @alloc(24)
-    var dst = @alloc(24)
+    var src = alloc(0, 24)
+    var dst = alloc(0, 24)
     var p0 = @intToPtr(*i64, src)
     p0.* = 10
     var p1 = @intToPtr(*i64, src + 8)
     p1.* = 20
     var p2 = @intToPtr(*i64, src + 16)
     p2.* = 30
-    @memcpy(dst, src, 24)
+    memcpy(dst, src, 24)
     var d0 = @intToPtr(*i64, dst)
     var d1 = @intToPtr(*i64, dst + 8)
     var d2 = @intToPtr(*i64, dst + 16)
-    @assert_eq(d0.*, 10)
-    @assert_eq(d1.*, 20)
-    @assert_eq(d2.*, 30)
-    @dealloc(src)
-    @dealloc(dst)
+    @assertEq(d0.*, 10)
+    @assertEq(d1.*, 20)
+    @assertEq(d2.*, 30)
+    dealloc(src)
+    dealloc(dst)
 }
 
 test "memcpy_zero_length" {
-    var buf = @alloc(8)
+    var buf = alloc(0, 8)
     @intToPtr(*i64, buf).* = 42
-    @memcpy(buf, buf, 0)
-    @assert_eq(@intToPtr(*i64, buf).*, 42)
-    @dealloc(buf)
+    memcpy(buf, buf, 0)
+    @assertEq(@intToPtr(*i64, buf).*, 42)
+    dealloc(buf)
 }
 
 // ============================================================================
@@ -903,13 +904,13 @@ fn slice_sum(items: []i64) i64 {
 test "slice_param_basic" {
     var arr = [10, 20, 30]
     var s = arr[0:3]
-    @assert_eq(get_slice_len(s), 3)
+    @assertEq(get_slice_len(s), 3)
 }
 
 test "slice_param_iteration" {
     var arr = [10, 20, 30, 40, 50]
     var s = arr[1:4]
-    @assert_eq(slice_sum(s), 90)
+    @assertEq(slice_sum(s), 90)
 }
 
 // ============================================================================
@@ -930,7 +931,7 @@ impl Greetable for TraitDog {
 
 test "trait_basic" {
     var d = TraitDog { .age = 42 }
-    @assert_eq(d.greet(), 42)
+    @assertEq(d.greet(), 42)
 }
 
 trait Doubled {
@@ -945,7 +946,7 @@ impl Doubled for i64 {
 
 test "trait_primitive" {
     var x: i64 = 21
-    @assert_eq(x.doubled(), 42)
+    @assertEq(x.doubled(), 42)
 }
 
 trait HasValue {
@@ -969,7 +970,7 @@ impl HasValue for TraitDog {
 test "trait_multi_impl" {
     var c = TraitCat { .lives = 9 }
     var d = TraitDog { .age = 3 }
-    @assert_eq(c.value() + d.value(), 12)
+    @assertEq(c.value() + d.value(), 12)
 }
 
 fn extractValue(T)(item: *T) i64 {
@@ -978,7 +979,7 @@ fn extractValue(T)(item: *T) i64 {
 
 test "trait_generic_usage" {
     var b = TraitCat { .lives = 99 }
-    @assert_eq(extractValue(TraitCat)(&b), 99)
+    @assertEq(extractValue(TraitCat)(&b), 99)
 }
 
 trait TraitEq {
@@ -1002,8 +1003,8 @@ test "trait_self_type" {
     var a = TraitPoint { .x = 3, .y = 4 }
     var b = TraitPoint { .x = 3, .y = 4 }
     var c = TraitPoint { .x = 1, .y = 2 }
-    @assert_eq(a.eq(&b), 1)
-    @assert_eq(a.eq(&c), 0)
+    @assertEq(a.eq(&b), 1)
+    @assertEq(a.eq(&c), 0)
 }
 
 // ============================================================================
@@ -1016,9 +1017,9 @@ const CE_TRIPLE: i64 = CE_SIZE + CE_SIZE + CE_SIZE
 
 test "const_eval_arithmetic" {
     // Go: cmd/compile/internal/ir/const.go — const folding chains
-    @assert_eq(CE_DOUBLE, 16)
-    @assert_eq(CE_TRIPLE, 24)
-    @assert_eq(CE_DOUBLE + CE_TRIPLE, 40)
+    @assertEq(CE_DOUBLE, 16)
+    @assertEq(CE_TRIPLE, 24)
+    @assertEq(CE_DOUBLE + CE_TRIPLE, 40)
 }
 
 struct CEPoint { x: i64, y: i64 }
@@ -1027,9 +1028,9 @@ const CE_I64_SIZE: i64 = @sizeOf(i64)
 
 test "const_eval_sizeof" {
     // Zig: @sizeOf resolved at comptime. Go: unsafe.Sizeof is const-foldable.
-    @assert_eq(CE_I64_SIZE, 8)
-    @assert_eq(CE_POINT_SIZE, 16)
-    @assert_eq(CE_POINT_SIZE + CE_I64_SIZE, 24)
+    @assertEq(CE_I64_SIZE, 8)
+    @assertEq(CE_POINT_SIZE, 16)
+    @assertEq(CE_POINT_SIZE + CE_I64_SIZE, 24)
 }
 
 // ============================================================================
@@ -1058,8 +1059,8 @@ fn bounded_max(T)(a: T, b: T) T where T: BComparable {
 test "trait_bound_basic" {
     // Rust: fn max<T: Ord>(a: T, b: T) -> T
     // Go 1.18: func Max[T constraints.Ordered](a, b T) T
-    @assert_eq(bounded_max(i64)(10, 20), 20)
-    @assert_eq(bounded_max(i64)(30, 5), 30)
+    @assertEq(bounded_max(i64)(10, 20), 20)
+    @assertEq(bounded_max(i64)(30, 5), 30)
 }
 
 trait BAddable {
@@ -1077,7 +1078,7 @@ fn bounded_sum(T)(a: T, b: T) i64 where T: BAddable {
 }
 
 test "trait_bound_multi" {
-    @assert_eq(bounded_sum(i64)(10, 32), 42)
+    @assertEq(bounded_sum(i64)(10, 32), 42)
 }
 
 // ============================================================================
@@ -1094,10 +1095,10 @@ fn match_classify_wildcard(x: i64) i64 {
 
 test "match_wildcard" {
     // Zig: _ in switch covers all remaining values. Rust: _ in match is catch-all.
-    @assert_eq(match_classify_wildcard(1), 10)
-    @assert_eq(match_classify_wildcard(2), 20)
-    @assert_eq(match_classify_wildcard(42), 99)
-    @assert_eq(match_classify_wildcard(0), 99)
+    @assertEq(match_classify_wildcard(1), 10)
+    @assertEq(match_classify_wildcard(2), 20)
+    @assertEq(match_classify_wildcard(42), 99)
+    @assertEq(match_classify_wildcard(0), 99)
 }
 
 fn match_classify_guard(x: i64) i64 {
@@ -1110,9 +1111,9 @@ fn match_classify_guard(x: i64) i64 {
 
 test "match_guard" {
     // Rust: match x { n if n > 10 => "big", _ => "small" }
-    @assert_eq(match_classify_guard(1), 10)
-    @assert_eq(match_classify_guard(2), 20)
-    @assert_eq(match_classify_guard(99), 0)
+    @assertEq(match_classify_guard(1), 10)
+    @assertEq(match_classify_guard(2), 20)
+    @assertEq(match_classify_guard(99), 0)
 }
 
 fn match_classify_range(x: i64) i64 {
@@ -1125,13 +1126,13 @@ fn match_classify_range(x: i64) i64 {
 
 test "match_range" {
     // Zig: 1...10 (inclusive). Rust: 1..=10. Cot: 1..10 (inclusive).
-    @assert_eq(match_classify_range(1), 1)
-    @assert_eq(match_classify_range(3), 1)
-    @assert_eq(match_classify_range(5), 1)
-    @assert_eq(match_classify_range(6), 2)
-    @assert_eq(match_classify_range(10), 2)
-    @assert_eq(match_classify_range(0), 3)
-    @assert_eq(match_classify_range(11), 3)
+    @assertEq(match_classify_range(1), 1)
+    @assertEq(match_classify_range(3), 1)
+    @assertEq(match_classify_range(5), 1)
+    @assertEq(match_classify_range(6), 2)
+    @assertEq(match_classify_range(10), 2)
+    @assertEq(match_classify_range(0), 3)
+    @assertEq(match_classify_range(11), 3)
 }
 
 // ============================================================================
@@ -1140,20 +1141,20 @@ test "match_range" {
 
 test "tuple_basic" {
     var t = (10, 20)
-    @assert_eq(t.0, 10)
-    @assert_eq(t.1, 20)
-    @assert_eq(t.0 + t.1, 30)
+    @assertEq(t.0, 10)
+    @assertEq(t.1, 20)
+    @assertEq(t.0 + t.1, 30)
 }
 
 test "tuple_nested" {
     var a = (1, 2)
     var b = (3, 4)
-    @assert_eq(a.0 + a.1 + b.0 + b.1, 10)
+    @assertEq(a.0 + a.1 + b.0 + b.1, 10)
 }
 
 test "tuple_three" {
     var t = (100, 200, 300)
-    @assert_eq(t.0 + t.1 + t.2, 600)
+    @assertEq(t.0 + t.1 + t.2, 600)
 }
 
 // ============================================================================
@@ -1166,9 +1167,9 @@ fn make_pair() (i64, i64) {
 
 test "sret_tuple_return" {
     var p = make_pair()
-    @assert_eq(p.0, 10)
-    @assert_eq(p.1, 20)
-    @assert_eq(p.0 + p.1, 30)
+    @assertEq(p.0, 10)
+    @assertEq(p.1, 20)
+    @assertEq(p.0 + p.1, 30)
 }
 
 fn make_point() Point {
@@ -1177,9 +1178,9 @@ fn make_point() Point {
 
 test "sret_struct_return" {
     var p = make_point()
-    @assert_eq(p.x, 10)
-    @assert_eq(p.y, 20)
-    @assert_eq(p.x + p.y, 30)
+    @assertEq(p.x, 10)
+    @assertEq(p.y, 20)
+    @assertEq(p.x + p.y, 30)
 }
 
 fn double_pair() (i64, i64) {
@@ -1189,9 +1190,9 @@ fn double_pair() (i64, i64) {
 
 test "sret_chain" {
     var d = double_pair()
-    @assert_eq(d.0, 20)
-    @assert_eq(d.1, 40)
-    @assert_eq(d.0 + d.1, 60)
+    @assertEq(d.0, 20)
+    @assertEq(d.1, 40)
+    @assertEq(d.0 + d.1, 60)
 }
 
 // ============================================================================
@@ -1205,13 +1206,13 @@ test "list_bounds_get" {
     list.append(20)
     list.append(30)
     // get(0) and get(count-1) must succeed
-    @assert_eq(list.get(0), 10)
-    @assert_eq(list.get(2), 30)
+    @assertEq(list.get(0), 10)
+    @assertEq(list.get(2), 30)
     // set boundary
     list.set(0, 99)
-    @assert_eq(list.get(0), 99)
+    @assertEq(list.get(0), 99)
     list.set(2, 88)
-    @assert_eq(list.get(2), 88)
+    @assertEq(list.get(2), 88)
     list.free()
 }
 
@@ -1223,10 +1224,10 @@ test "list_growth_go" {
         list.append(i)
         i = i + 1
     }
-    @assert_eq(list.len(), 300)
+    @assertEq(list.len(), 300)
     // Verify first and last elements survive growth
-    @assert_eq(list.get(0), 0)
-    @assert_eq(list.get(299), 299)
+    @assertEq(list.get(0), 0)
+    @assertEq(list.get(299), 299)
     // After 256 elements, growth should be ~1.25x, so capacity < 512 (which 2x would give)
     // With Go's formula: after 256, next cap = 256 + (256+768)/4 = 256 + 256 = 512
     // Then 512 is enough for 300, so cap should be 512
@@ -1241,9 +1242,9 @@ test "list_free" {
     list.append(2)
     list.append(3)
     list.free()
-    @assert_eq(list.count, 0)
-    @assert_eq(list.capacity, 0)
-    @assert_eq(list.items, 0)
+    @assertEq(list.count, 0)
+    @assertEq(list.capacity, 0)
+    @assertEq(list.items, 0)
 }
 
 test "list_clear" {
@@ -1253,12 +1254,12 @@ test "list_clear" {
     list.append(30)
     var cap_before = list.cap()
     list.clear()
-    @assert_eq(list.len(), 0)
+    @assertEq(list.len(), 0)
     // Capacity retained after clear
-    @assert_eq(list.cap(), cap_before)
+    @assertEq(list.cap(), cap_before)
     // Can reuse after clear
     list.append(99)
-    @assert_eq(list.get(0), 99)
+    @assertEq(list.get(0), 99)
     list.free()
 }
 
@@ -1274,13 +1275,13 @@ test "list_insert" {
     // Insert at end
     list.insert(5, 50)
     // Expected: [5, 10, 20, 30, 40, 50]
-    @assert_eq(list.len(), 6)
-    @assert_eq(list.get(0), 5)
-    @assert_eq(list.get(1), 10)
-    @assert_eq(list.get(2), 20)
-    @assert_eq(list.get(3), 30)
-    @assert_eq(list.get(4), 40)
-    @assert_eq(list.get(5), 50)
+    @assertEq(list.len(), 6)
+    @assertEq(list.get(0), 5)
+    @assertEq(list.get(1), 10)
+    @assertEq(list.get(2), 20)
+    @assertEq(list.get(3), 30)
+    @assertEq(list.get(4), 40)
+    @assertEq(list.get(5), 50)
     list.free()
 }
 
@@ -1293,18 +1294,18 @@ test "list_ordered_remove" {
     list.append(50)
     // Remove from beginning
     var first = list.orderedRemove(0)
-    @assert_eq(first, 10)
+    @assertEq(first, 10)
     // Now: [20, 30, 40, 50]
-    @assert_eq(list.len(), 4)
-    @assert_eq(list.get(0), 20)
+    @assertEq(list.len(), 4)
+    @assertEq(list.get(0), 20)
     // Remove from middle
     var mid = list.orderedRemove(1)
-    @assert_eq(mid, 30)
+    @assertEq(mid, 30)
     // Now: [20, 40, 50]
-    @assert_eq(list.len(), 3)
-    @assert_eq(list.get(0), 20)
-    @assert_eq(list.get(1), 40)
-    @assert_eq(list.get(2), 50)
+    @assertEq(list.len(), 3)
+    @assertEq(list.get(0), 20)
+    @assertEq(list.get(1), 40)
+    @assertEq(list.get(2), 50)
     list.free()
 }
 
@@ -1316,16 +1317,16 @@ test "list_swap_remove" {
     list.append(40)
     // SwapRemove index 1 (value 20): last element (40) moves to index 1
     var removed = list.swapRemove(1)
-    @assert_eq(removed, 20)
+    @assertEq(removed, 20)
     // Now: [10, 40, 30]
-    @assert_eq(list.len(), 3)
-    @assert_eq(list.get(0), 10)
-    @assert_eq(list.get(1), 40)
-    @assert_eq(list.get(2), 30)
+    @assertEq(list.len(), 3)
+    @assertEq(list.get(0), 10)
+    @assertEq(list.get(1), 40)
+    @assertEq(list.get(2), 30)
     // SwapRemove last element (no swap needed)
     var last = list.swapRemove(2)
-    @assert_eq(last, 30)
-    @assert_eq(list.len(), 2)
+    @assertEq(last, 30)
+    @assertEq(list.len(), 2)
     list.free()
 }
 
@@ -1337,11 +1338,11 @@ test "list_reverse" {
     list.append(4)
     list.append(5)
     list.reverse()
-    @assert_eq(list.get(0), 5)
-    @assert_eq(list.get(1), 4)
-    @assert_eq(list.get(2), 3)
-    @assert_eq(list.get(3), 2)
-    @assert_eq(list.get(4), 1)
+    @assertEq(list.get(0), 5)
+    @assertEq(list.get(1), 4)
+    @assertEq(list.get(2), 3)
+    @assertEq(list.get(3), 2)
+    @assertEq(list.get(4), 1)
     list.free()
 }
 
@@ -1352,13 +1353,13 @@ test "list_clone" {
     list.append(30)
     var copy = list.clone()
     // Verify clone has same data
-    @assert_eq(copy.len(), 3)
-    @assert_eq(copy.get(0), 10)
-    @assert_eq(copy.get(1), 20)
-    @assert_eq(copy.get(2), 30)
+    @assertEq(copy.len(), 3)
+    @assertEq(copy.get(0), 10)
+    @assertEq(copy.get(1), 20)
+    @assertEq(copy.get(2), 30)
     // Mutate original, verify clone unaffected
     list.set(0, 99)
-    @assert_eq(copy.get(0), 10)
+    @assertEq(copy.get(0), 10)
     list.free()
     copy.free()
 }
@@ -1366,19 +1367,19 @@ test "list_clone" {
 test "list_last" {
     var list: List(i64) = .{}
     list.append(10)
-    @assert_eq(list.last(), 10)
+    @assertEq(list.last(), 10)
     list.append(20)
-    @assert_eq(list.last(), 20)
+    @assertEq(list.last(), 20)
     list.append(30)
-    @assert_eq(list.last(), 30)
+    @assertEq(list.last(), 30)
     var popped = list.pop()
-    @assert_eq(list.last(), 20)
+    @assertEq(list.last(), 20)
     list.free()
 }
 
 test "memcpy_overlap" {
-    // Test overlapping @memcpy (memmove semantics) — used by insert/orderedRemove
-    var buf = @alloc(40)
+    // Test overlapping memcpy (memmove semantics) — used by insert/orderedRemove
+    var buf = alloc(0, 40)
     // Write [10, 20, 30, 40, 50] at positions 0-4
     @intToPtr(*i64, buf).* = 10
     @intToPtr(*i64, buf + 8).* = 20
@@ -1386,14 +1387,14 @@ test "memcpy_overlap" {
     @intToPtr(*i64, buf + 24).* = 40
     @intToPtr(*i64, buf + 32).* = 0
     // Shift right: copy [0..3] to [1..4] (dst > src, backward copy path)
-    @memcpy(buf + 8, buf, 32)
+    memcpy(buf + 8, buf, 32)
     // Expected: [10, 10, 20, 30, 40]
-    @assert_eq(@intToPtr(*i64, buf).*, 10)
-    @assert_eq(@intToPtr(*i64, buf + 8).*, 10)
-    @assert_eq(@intToPtr(*i64, buf + 16).*, 20)
-    @assert_eq(@intToPtr(*i64, buf + 24).*, 30)
-    @assert_eq(@intToPtr(*i64, buf + 32).*, 40)
-    @dealloc(buf)
+    @assertEq(@intToPtr(*i64, buf).*, 10)
+    @assertEq(@intToPtr(*i64, buf + 8).*, 10)
+    @assertEq(@intToPtr(*i64, buf + 16).*, 20)
+    @assertEq(@intToPtr(*i64, buf + 24).*, 30)
+    @assertEq(@intToPtr(*i64, buf + 32).*, 40)
+    dealloc(buf)
 }
 
 // ============================================================================
@@ -1406,10 +1407,10 @@ test "list_contains" {
     list.append(10)
     list.append(20)
     list.append(30)
-    @assert_eq(list.contains(20), 1)
-    @assert_eq(list.contains(99), 0)
-    @assert_eq(list.contains(10), 1)
-    @assert_eq(list.contains(30), 1)
+    @assertEq(list.contains(20), 1)
+    @assertEq(list.contains(99), 0)
+    @assertEq(list.contains(10), 1)
+    @assertEq(list.contains(30), 1)
     list.free()
 }
 
@@ -1420,10 +1421,10 @@ test "list_index_of" {
     list.append(20)
     list.append(30)
     list.append(20)
-    @assert_eq(list.indexOf(10), 0)
-    @assert_eq(list.indexOf(20), 1)
-    @assert_eq(list.indexOf(30), 2)
-    @assert_eq(list.indexOf(99), 0 - 1)
+    @assertEq(list.indexOf(10), 0)
+    @assertEq(list.indexOf(20), 1)
+    @assertEq(list.indexOf(30), 2)
+    @assertEq(list.indexOf(99), 0 - 1)
     list.free()
 }
 
@@ -1437,16 +1438,16 @@ test "list_equal" {
     b.append(1)
     b.append(2)
     b.append(3)
-    @assert_eq(a.equal(&b), 1)
+    @assertEq(a.equal(&b), 1)
     // Different length
     b.append(4)
-    @assert_eq(a.equal(&b), 0)
+    @assertEq(a.equal(&b), 0)
     // Same length, different content
     var c: List(i64) = .{}
     c.append(1)
     c.append(99)
     c.append(3)
-    @assert_eq(a.equal(&c), 0)
+    @assertEq(a.equal(&c), 0)
     a.free()
     b.free()
     c.free()
@@ -1456,9 +1457,9 @@ test "list_first" {
     var list: List(i64) = .{}
     list.append(42)
     list.append(99)
-    @assert_eq(list.first(), 42)
+    @assertEq(list.first(), 42)
     list.insert(0, 7)
-    @assert_eq(list.first(), 7)
+    @assertEq(list.first(), 7)
     list.free()
 }
 
@@ -1470,20 +1471,20 @@ test "list_resize" {
     list.append(30)
     // Shrink
     list.resize(2)
-    @assert_eq(list.len(), 2)
-    @assert_eq(list.get(0), 10)
-    @assert_eq(list.get(1), 20)
+    @assertEq(list.len(), 2)
+    @assertEq(list.get(0), 10)
+    @assertEq(list.get(1), 20)
     // Grow (new elements undefined, but count changes)
     list.resize(5)
-    @assert_eq(list.len(), 5)
+    @assertEq(list.len(), 5)
     // Original elements preserved
-    @assert_eq(list.get(0), 10)
-    @assert_eq(list.get(1), 20)
+    @assertEq(list.get(0), 10)
+    @assertEq(list.get(1), 20)
     // Can write to new slots
     list.set(2, 30)
     list.set(3, 40)
     list.set(4, 50)
-    @assert_eq(list.get(4), 50)
+    @assertEq(list.get(4), 50)
     list.free()
 }
 
@@ -1491,14 +1492,14 @@ test "list_append_n_times" {
     // Zig: appendNTimes — fill with value
     var list: List(i64) = .{}
     list.appendNTimes(42, 5)
-    @assert_eq(list.len(), 5)
-    @assert_eq(list.get(0), 42)
-    @assert_eq(list.get(4), 42)
+    @assertEq(list.len(), 5)
+    @assertEq(list.get(0), 42)
+    @assertEq(list.get(4), 42)
     // Append more
     list.appendNTimes(0, 3)
-    @assert_eq(list.len(), 8)
-    @assert_eq(list.get(5), 0)
-    @assert_eq(list.get(7), 0)
+    @assertEq(list.len(), 8)
+    @assertEq(list.get(5), 0)
+    @assertEq(list.get(7), 0)
     list.free()
 }
 
@@ -1508,19 +1509,19 @@ test "list_insert_slice" {
     list.append(1)
     list.append(5)
     // Prepare source buffer [2, 3, 4]
-    var src = @alloc(24)
+    var src = alloc(0, 24)
     @intToPtr(*i64, src).* = 2
     @intToPtr(*i64, src + 8).* = 3
     @intToPtr(*i64, src + 16).* = 4
     // Insert at index 1: [1, 2, 3, 4, 5]
     list.insertSlice(1, src, 3)
-    @dealloc(src)
-    @assert_eq(list.len(), 5)
-    @assert_eq(list.get(0), 1)
-    @assert_eq(list.get(1), 2)
-    @assert_eq(list.get(2), 3)
-    @assert_eq(list.get(3), 4)
-    @assert_eq(list.get(4), 5)
+    dealloc(src)
+    @assertEq(list.len(), 5)
+    @assertEq(list.get(0), 1)
+    @assertEq(list.get(1), 2)
+    @assertEq(list.get(2), 3)
+    @assertEq(list.get(3), 4)
+    @assertEq(list.get(4), 5)
     list.free()
 }
 
@@ -1533,31 +1534,31 @@ test "list_replace_range" {
     list.append(4)
     list.append(5)
     // Replace [1..3) (elements 2,3) with [20, 30, 40] — growing
-    var src1 = @alloc(24)
+    var src1 = alloc(0, 24)
     @intToPtr(*i64, src1).* = 20
     @intToPtr(*i64, src1 + 8).* = 30
     @intToPtr(*i64, src1 + 16).* = 40
     list.replaceRange(1, 2, src1, 3)
-    @dealloc(src1)
+    dealloc(src1)
     // Expected: [1, 20, 30, 40, 4, 5]
-    @assert_eq(list.len(), 6)
-    @assert_eq(list.get(0), 1)
-    @assert_eq(list.get(1), 20)
-    @assert_eq(list.get(2), 30)
-    @assert_eq(list.get(3), 40)
-    @assert_eq(list.get(4), 4)
-    @assert_eq(list.get(5), 5)
+    @assertEq(list.len(), 6)
+    @assertEq(list.get(0), 1)
+    @assertEq(list.get(1), 20)
+    @assertEq(list.get(2), 30)
+    @assertEq(list.get(3), 40)
+    @assertEq(list.get(4), 4)
+    @assertEq(list.get(5), 5)
     // Replace [1..4) (elements 20,30,40) with [99] — shrinking
-    var src2 = @alloc(8)
+    var src2 = alloc(0, 8)
     @intToPtr(*i64, src2).* = 99
     list.replaceRange(1, 3, src2, 1)
-    @dealloc(src2)
+    dealloc(src2)
     // Expected: [1, 99, 4, 5]
-    @assert_eq(list.len(), 4)
-    @assert_eq(list.get(0), 1)
-    @assert_eq(list.get(1), 99)
-    @assert_eq(list.get(2), 4)
-    @assert_eq(list.get(3), 5)
+    @assertEq(list.len(), 4)
+    @assertEq(list.get(0), 1)
+    @assertEq(list.get(1), 99)
+    @assertEq(list.get(2), 4)
+    @assertEq(list.get(3), 5)
     list.free()
 }
 
@@ -1571,15 +1572,15 @@ test "list_shrink_and_free" {
     list.append(50)
     var old_cap = list.cap()
     list.shrinkAndFree(3)
-    @assert_eq(list.len(), 3)
-    @assert_eq(list.cap(), 3)
-    @assert_eq(list.get(0), 10)
-    @assert_eq(list.get(1), 20)
-    @assert_eq(list.get(2), 30)
+    @assertEq(list.len(), 3)
+    @assertEq(list.cap(), 3)
+    @assertEq(list.get(0), 10)
+    @assertEq(list.get(1), 20)
+    @assertEq(list.get(2), 30)
     // Shrink to 0 frees everything
     list.shrinkAndFree(0)
-    @assert_eq(list.count, 0)
-    @assert_eq(list.capacity, 0)
+    @assertEq(list.count, 0)
+    @assertEq(list.capacity, 0)
 }
 
 test "list_delete_range" {
@@ -1593,15 +1594,15 @@ test "list_delete_range" {
     // Delete [1, 3) — remove elements 2, 3
     list.deleteRange(1, 3)
     // Expected: [1, 4, 5]
-    @assert_eq(list.len(), 3)
-    @assert_eq(list.get(0), 1)
-    @assert_eq(list.get(1), 4)
-    @assert_eq(list.get(2), 5)
+    @assertEq(list.len(), 3)
+    @assertEq(list.get(0), 1)
+    @assertEq(list.get(1), 4)
+    @assertEq(list.get(2), 5)
     // Delete [0, 1) — remove first element
     list.deleteRange(0, 1)
     // Expected: [4, 5]
-    @assert_eq(list.len(), 2)
-    @assert_eq(list.get(0), 4)
+    @assertEq(list.len(), 2)
+    @assertEq(list.get(0), 4)
     list.free()
 }
 
@@ -1611,18 +1612,18 @@ test "list_ensure_unused" {
     list.append(1)
     list.ensureUnusedCapacity(100)
     @assert(list.cap() >= 101)
-    @assert_eq(list.len(), 1)
-    @assert_eq(list.get(0), 1)
+    @assertEq(list.len(), 1)
+    @assertEq(list.get(0), 1)
     list.free()
 }
 
 test "list_is_empty" {
     var list: List(i64) = .{}
-    @assert_eq(list.isEmpty(), 1)
+    @assertEq(list.isEmpty(), 1)
     list.append(42)
-    @assert_eq(list.isEmpty(), 0)
+    @assertEq(list.isEmpty(), 0)
     list.pop()
-    @assert_eq(list.isEmpty(), 1)
+    @assertEq(list.isEmpty(), 1)
 }
 
 test "list_compact" {
@@ -1638,11 +1639,11 @@ test "list_compact" {
     list.append(1)
     list.compact()
     // Expected: [1, 2, 3, 1]
-    @assert_eq(list.len(), 4)
-    @assert_eq(list.get(0), 1)
-    @assert_eq(list.get(1), 2)
-    @assert_eq(list.get(2), 3)
-    @assert_eq(list.get(3), 1)
+    @assertEq(list.len(), 4)
+    @assertEq(list.get(0), 1)
+    @assertEq(list.get(1), 2)
+    @assertEq(list.get(2), 3)
+    @assertEq(list.get(3), 1)
     list.free()
 }
 
@@ -1651,13 +1652,13 @@ test "list_compact" {
 // ============================================================================
 
 test "target_os returns string" {
-    var os = @target_os()
+    var os = @targetOs()
     var len = @lenOf(os)
     @assert(len > 0)
 }
 
 test "target_arch returns string" {
-    var arch = @target_arch()
+    var arch = @targetArch()
     var len = @lenOf(arch)
     @assert(len > 0)
 }
@@ -1670,23 +1671,23 @@ test "target returns string" {
 
 test "comptime if folds integer" {
     const val: i64 = if (1 == 1) { 42 } else { 99 }
-    @assert_eq(val, 42)
+    @assertEq(val, 42)
 }
 
 test "comptime if folds else branch" {
     const val: i64 = if (1 == 2) { 42 } else { 99 }
-    @assert_eq(val, 99)
+    @assertEq(val, 99)
 }
 
 test "comptime if target_os string compare" {
-    const flag: i64 = if (@target_os() == "linux") { 64 } else { 512 }
+    const flag: i64 = if (@targetOs() == "linux") { 64 } else { 512 }
     // On macOS this should be 512, on linux 64
     @assert(flag > 0)
 }
 
 test "comptime if target_os neq" {
-    const flag: i64 = if (@target_os() != "nonexistent_os") { 1 } else { 0 }
-    @assert_eq(flag, 1)
+    const flag: i64 = if (@targetOs() != "nonexistent_os") { 1 } else { 0 }
+    @assertEq(flag, 1)
 }
 
 // ============================================================================
@@ -1698,7 +1699,7 @@ test "string builtin constructs from ptr and len" {
     var ptr = @ptrOf(s)
     var len = @lenOf(s)
     var s2 = @string(ptr, len)
-    @assert_eq(@lenOf(s2), 5)
+    @assertEq(@lenOf(s2), 5)
 }
 
 test "string builtin roundtrip" {
@@ -1713,17 +1714,17 @@ test "string builtin roundtrip" {
 
 test "comptime block evaluates simple expression" {
     const x = comptime { 40 + 2 }
-    @assert_eq(x, 42)
+    @assertEq(x, 42)
 }
 
 test "comptime block with nested arithmetic" {
     const y = comptime { 10 * 3 + 7 }
-    @assert_eq(y, 37)
+    @assertEq(y, 37)
 }
 
 test "comptime block used in expression" {
     var a = 10 + comptime { 5 * 6 }
-    @assert_eq(a, 40)
+    @assertEq(a, 40)
 }
 
 test "compileError in dead branch is not triggered" {
@@ -1736,13 +1737,13 @@ test "compileError in dead branch is not triggered" {
 }
 
 test "compileError in dead else with target check" {
-    if (@target_os() == "macos") {
+    if (@targetOs() == "macos") {
         @assert(true)
-    } else if (@target_os() == "linux") {
+    } else if (@targetOs() == "linux") {
         @assert(true)
-    } else if (@target_os() == "freestanding") {
+    } else if (@targetOs() == "freestanding") {
         @assert(true)
-    } else if (@target_os() == "wasi") {
+    } else if (@targetOs() == "wasi") {
         @assert(true)
     } else {
         @compileError("unsupported OS")
@@ -1755,38 +1756,38 @@ test "compileError in dead else with target check" {
 
 test "auto-deref struct field read" {
     var p = new Point { x: 10, y: 20 }
-    @assert_eq(p.x, 10)
-    @assert_eq(p.y, 20)
+    @assertEq(p.x, 10)
+    @assertEq(p.y, 20)
 }
 
 test "auto-deref struct field write" {
     var p = new Point { x: 0, y: 0 }
     p.x = 42
     p.y = 99
-    @assert_eq(p.x, 42)
-    @assert_eq(p.y, 99)
+    @assertEq(p.x, 42)
+    @assertEq(p.y, 99)
 }
 
 test "auto-deref method call" {
     var b = new Box(i64) { value: 77 }
-    @assert_eq(b.get(), 77)
+    @assertEq(b.get(), 77)
 }
 
 test "auto-deref explicit deref still works" {
     var p = new Foo { x: 5 }
-    @assert_eq(p.*.x, 5)
-    @assert_eq(p.x, 5)
+    @assertEq(p.*.x, 5)
+    @assertEq(p.x, 5)
 }
 
 test "auto-deref compound assignment" {
     var p = new Point { x: 10, y: 20 }
     p.x = p.x + 5
-    @assert_eq(p.x, 15)
+    @assertEq(p.x, 15)
 }
 
 test "auto-deref returned pointer" {
     var f = createFoo(33)
-    @assert_eq(f.x, 33)
+    @assertEq(f.x, 33)
 }
 
 // --- String compound reassignment ---
@@ -1798,16 +1799,16 @@ fn getGreeting() string {
 test "string reassignment from function call" {
     var s = ""
     s = getGreeting()
-    @assert_eq(@lenOf(s), 11)
-    @assert_eq(s, "hello world")
+    @assertEq(@lenOf(s), 11)
+    @assertEq(s, "hello world")
 }
 
 test "string reassignment preserves length" {
     var s = "short"
-    @assert_eq(@lenOf(s), 5)
+    @assertEq(@lenOf(s), 5)
     s = "a longer string"
-    @assert_eq(@lenOf(s), 15)
-    @assert_eq(s, "a longer string")
+    @assertEq(@lenOf(s), 15)
+    @assertEq(s, "a longer string")
 }
 
 test "string conditional reassignment" {
@@ -1816,8 +1817,8 @@ test "string conditional reassignment" {
     if (flag == 1) {
         s = "yes"
     }
-    @assert_eq(s, "yes")
-    @assert_eq(@lenOf(s), 3)
+    @assertEq(s, "yes")
+    @assertEq(@lenOf(s), 3)
 }
 
 test "while not done" {
@@ -1829,15 +1830,15 @@ test "while not done" {
             done = true
         }
     }
-    @assert_eq(count, 5)
+    @assertEq(count, 5)
 }
 
 test "not operator on bool" {
     var x = true
     var y = not x
-    @assert_eq(y, 0)
+    @assertEq(y, 0)
     var z = not false
-    @assert_eq(z, 1)
+    @assertEq(z, 1)
 }
 
 // =============================================================================
@@ -1859,15 +1860,15 @@ fn errdefer_succeed() !i64 {
 test "errdefer runs on error" {
     errdefer_tracker = 0
     var result = errdefer_fail() catch 0
-    @assert_eq(result, 0)
-    @assert_eq(errdefer_tracker, 1)
+    @assertEq(result, 0)
+    @assertEq(errdefer_tracker, 1)
 }
 
 test "errdefer does not run on success" {
     errdefer_tracker = 0
     var result = errdefer_succeed() catch 0
-    @assert_eq(result, 42)
-    @assert_eq(errdefer_tracker, 0)
+    @assertEq(result, 42)
+    @assertEq(errdefer_tracker, 0)
 }
 
 var errdefer_order: i64 = 0
@@ -1883,7 +1884,7 @@ test "errdefer LIFO ordering with defer" {
     errdefer_order = 0
     var result = errdefer_ordering() catch 0
     // LIFO on error: defer(3), errdefer(2), defer(1) → 321
-    @assert_eq(errdefer_order, 321)
+    @assertEq(errdefer_order, 321)
 }
 
 var errdefer_order2: i64 = 0
@@ -1898,9 +1899,9 @@ fn errdefer_ordering_success() !i64 {
 test "errdefer skipped on success, defers still run" {
     errdefer_order2 = 0
     var result = errdefer_ordering_success() catch 0
-    @assert_eq(result, 99)
+    @assertEq(result, 99)
     // LIFO on success: defer(3), skip errdefer, defer(1) → 31
-    @assert_eq(errdefer_order2, 31)
+    @assertEq(errdefer_order2, 31)
 }
 
 var errdefer_try_tracker: i64 = 0
@@ -1918,8 +1919,8 @@ fn errdefer_try_propagate() !i64 {
 test "errdefer runs on try propagation" {
     errdefer_try_tracker = 0
     var result = errdefer_try_propagate() catch 0
-    @assert_eq(result, 0)
-    @assert_eq(errdefer_try_tracker, 1)
+    @assertEq(result, 0)
+    @assertEq(errdefer_try_tracker, 1)
 }
 
 // =============================================================================
@@ -1932,7 +1933,7 @@ test "if optional unwrap non-null" {
     if (x) |val| {
         result = val
     }
-    @assert_eq(result, 42)
+    @assertEq(result, 42)
 }
 
 test "if optional unwrap null" {
@@ -1941,7 +1942,7 @@ test "if optional unwrap null" {
     if (x) |val| {
         result = val
     }
-    @assert_eq(result, 99)
+    @assertEq(result, 99)
 }
 
 test "if optional unwrap with else" {
@@ -1952,7 +1953,7 @@ test "if optional unwrap with else" {
     } else {
         result = -1
     }
-    @assert_eq(result, -1)
+    @assertEq(result, -1)
 }
 
 test "if optional unwrap non-null with else" {
@@ -1963,19 +1964,19 @@ test "if optional unwrap non-null with else" {
     } else {
         result = -1
     }
-    @assert_eq(result, 20)
+    @assertEq(result, 20)
 }
 
 test "if optional unwrap expr" {
     var x: ?i64 = 5
     var result = if (x) |val| { val + 10 } else { -1 }
-    @assert_eq(result, 15)
+    @assertEq(result, 15)
 }
 
 test "if optional unwrap expr null" {
     var x: ?i64 = null
     var result = if (x) |val| { val + 10 } else { -1 }
-    @assert_eq(result, -1)
+    @assertEq(result, -1)
 }
 
 // =============================================================================
@@ -1998,7 +1999,7 @@ test "catch switch on error variant" {
         error.PermissionDenied => -2,
         _ => -99,
     }
-    @assert_eq(result, -1)
+    @assertEq(result, -1)
 }
 
 test "catch switch io error" {
@@ -2007,7 +2008,7 @@ test "catch switch io error" {
         error.IoError => -3,
         _ => -99,
     }
-    @assert_eq(result, -3)
+    @assertEq(result, -3)
 }
 
 test "catch switch default case" {
@@ -2015,7 +2016,7 @@ test "catch switch default case" {
         error.PermissionDenied => -2,
         _ => -99,
     }
-    @assert_eq(result, -99)
+    @assertEq(result, -99)
 }
 
 // ============================================================================
@@ -2033,7 +2034,7 @@ test "for key value in map" {
     for k, v in m {
         sum = sum + k + v
     }
-    @assert_eq(sum, 606)
+    @assertEq(sum, 606)
     m.free()
 }
 
@@ -2046,8 +2047,8 @@ test "for key value in map single entry" {
         key_sum = key_sum + k
         val_sum = val_sum + v
     }
-    @assert_eq(key_sum, 42)
-    @assert_eq(val_sum, 99)
+    @assertEq(key_sum, 42)
+    @assertEq(val_sum, 99)
     m.free()
 }
 
@@ -2057,7 +2058,7 @@ test "for key value in empty map" {
     for k, v in m {
         count = count + 1
     }
-    @assert_eq(count, 0)
+    @assertEq(count, 0)
     m.free()
 }
 
@@ -2079,7 +2080,7 @@ test "labeled break from nested for loops" {
         }
     }
     // i=0: 5, i=1: 5, i=2: 3 (j=0,1,2 then break) = 13
-    @assert_eq(result, 13)
+    @assertEq(result, 13)
 }
 
 test "labeled continue from nested for loops" {
@@ -2093,7 +2094,7 @@ test "labeled continue from nested for loops" {
         }
     }
     // each outer iteration only counts j=0
-    @assert_eq(result, 3)
+    @assertEq(result, 3)
 }
 
 test "labeled break from nested while loops" {
@@ -2111,7 +2112,7 @@ test "labeled break from nested while loops" {
         i = i + 1
     }
     // i=0: 5, i=1: 5, i=2: 5, i=3: break immediately = 15
-    @assert_eq(result, 15)
+    @assertEq(result, 15)
 }
 
 test "labeled continue from nested while loops" {
@@ -2130,7 +2131,7 @@ test "labeled continue from nested while loops" {
         i = i + 1
     }
     // each outer iteration only counts j=0, then continue :outer
-    @assert_eq(result, 3)
+    @assertEq(result, 3)
 }
 
 test "labeled break with mixed for and while" {
@@ -2148,7 +2149,7 @@ test "labeled break with mixed for and while" {
         }
     }
     // i=0: 4, i=1: 4, i=2: 1 (j=0 then break) = 9
-    @assert_eq(result, 9)
+    @assertEq(result, 9)
 }
 
 // ============================================================================
@@ -2158,19 +2159,19 @@ test "labeled break with mixed for and while" {
 // -- noreturn type --
 
 fn exit_wrapper(code: i64) noreturn {
-    @exit(code)
+    exit(code)
 }
 
 test "noreturn in if branch" {
     var x = 10
-    if (x > 100) { @exit(1) }
-    @assert_eq(x, 10)
+    if (x > 100) { exit(1) }
+    @assertEq(x, 10)
 }
 
 test "noreturn with exit wrapper" {
     var x = 42
     if (x != 42) { exit_wrapper(1) }
-    @assert_eq(x, 42)
+    @assertEq(x, 42)
 }
 
 // -- inferred error sets (!T) --
@@ -2182,12 +2183,12 @@ fn mayFail2(x: i64) !i64 {
 
 test "inferred error set catch" {
     var result = mayFail2(-1) catch 99
-    @assert_eq(result, 99)
+    @assertEq(result, 99)
 }
 
 test "inferred error set success" {
     var result = mayFail2(5) catch 0
-    @assert_eq(result, 10)
+    @assertEq(result, 10)
 }
 
 fn wrapperInferred() !i64 {
@@ -2197,7 +2198,7 @@ fn wrapperInferred() !i64 {
 
 test "inferred try propagation" {
     var result = wrapperInferred() catch 0
-    @assert_eq(result, 11)
+    @assertEq(result, 11)
 }
 
 // -- destructuring --
@@ -2212,25 +2213,25 @@ fn getTriple() (i64, i64, i64) {
 
 test "destructure tuple literal" {
     const a, b = (10, 20)
-    @assert_eq(a, 10)
-    @assert_eq(b, 20)
+    @assertEq(a, 10)
+    @assertEq(b, 20)
 }
 
 test "destructure from function" {
     const x, y = getPair()
-    @assert_eq(x + y, 30)
+    @assertEq(x + y, 30)
 }
 
 test "destructure var" {
     var x, y = (1, 2)
     x = x + 10
-    @assert_eq(x, 11)
-    @assert_eq(y, 2)
+    @assertEq(x, 11)
+    @assertEq(y, 2)
 }
 
 test "destructure three elements" {
     const a, b, c = getTriple()
-    @assert_eq(a + b + c, 6)
+    @assertEq(a + b + c, 6)
 }
 
 // -- @embedFile --
@@ -2242,7 +2243,7 @@ test "embed file basic" {
 
 test "embed file content" {
     const data = @embedFile("embed_data.txt")
-    @assert_eq(@lenOf(data), 22)
+    @assertEq(@lenOf(data), 22)
 }
 
 // -- @hasField --
@@ -2272,13 +2273,13 @@ test "hasField comptime branch" {
 test "typeof var decl" {
     const x: i64 = 42
     var y: @TypeOf(x) = 10
-    @assert_eq(y, 10)
+    @assertEq(y, 10)
 }
 
 test "typeof in expression" {
     var a: i64 = 5
     var b: i64 = @TypeOf(a)  // should be i64 type, 0 at runtime (returns the type, not value)
-    @assert_eq(a, 5)
+    @assertEq(a, 5)
 }
 
 // -- @field --
@@ -2287,14 +2288,14 @@ struct FPoint { x: i64, y: i64 }
 
 test "field access" {
     var p = FPoint { .x = 10, .y = 20 }
-    @assert_eq(@field(p, "x"), 10)
-    @assert_eq(@field(p, "y"), 20)
+    @assertEq(@field(p, "x"), 10)
+    @assertEq(@field(p, "y"), 20)
 }
 
 test "field with hasField" {
     if (@hasField(FPoint, "x")) {
         var p = FPoint { .x = 42, .y = 0 }
-        @assert_eq(@field(p, "x"), 42)
+        @assertEq(@field(p, "x"), 42)
     }
 }
 
@@ -2313,7 +2314,7 @@ fn doAllErr() AllErrors!i64 {
 
 test "error set merge" {
     var r = doAllErr() catch 99
-    @assert_eq(r, 99)
+    @assertEq(r, 99)
 }
 
 // -- inline for --
@@ -2321,26 +2322,26 @@ test "error set merge" {
 test "inline for range" {
     var sum: i64 = 0
     inline for i in 0..5 { sum = sum + i }
-    @assert_eq(sum, 10)
+    @assertEq(sum, 10)
 }
 
 test "inline for comptime" {
     var product: i64 = 1
     inline for i in 1..6 { product = product * i }
-    @assert_eq(product, 120)
+    @assertEq(product, 120)
 }
 
 // -- Runtime safety (bounds check) --
 
 test "bounds check valid" {
     var arr = [10, 20, 30]
-    @assert_eq(arr[0], 10)
-    @assert_eq(arr[2], 30)
+    @assertEq(arr[0], 10)
+    @assertEq(arr[2], 30)
 }
 
 test "null unwrap valid" {
     var x: ?i64 = 42
-    @assert_eq(x.?, 42)
+    @assertEq(x.?, 42)
 }
 
 // -- unreachable keyword --
@@ -2353,7 +2354,7 @@ test "unreachable in switch else" {
         3 => 30,
         else => unreachable,
     }
-    @assert_eq(result, 20)
+    @assertEq(result, 20)
 }
 
 test "unreachable in if branch" {
@@ -2364,7 +2365,7 @@ test "unreachable in if branch" {
     } else {
         unreachable
     }
-    @assert_eq(result, 42)
+    @assertEq(result, 42)
 }
 
 // ============================================================================
@@ -2373,33 +2374,33 @@ test "unreachable in if branch" {
 
 test "struct default all fields" {
     var c = Config {}
-    @assert_eq(c.width, 800)
-    @assert_eq(c.height, 600)
-    @assert_eq(c.debug, 0)
+    @assertEq(c.width, 800)
+    @assertEq(c.height, 600)
+    @assertEq(c.debug, 0)
 }
 
 test "struct default override some" {
     var c = Config { .width = 1920 }
-    @assert_eq(c.width, 1920)
-    @assert_eq(c.height, 600)
-    @assert_eq(c.debug, 0)
+    @assertEq(c.width, 1920)
+    @assertEq(c.height, 600)
+    @assertEq(c.debug, 0)
 }
 
 test "struct default override all" {
     var c = Config { .width = 320, .height = 240, .debug = 1 }
-    @assert_eq(c.width, 320)
-    @assert_eq(c.height, 240)
-    @assert_eq(c.debug, 1)
+    @assertEq(c.width, 320)
+    @assertEq(c.height, 240)
+    @assertEq(c.debug, 1)
 }
 
 test "struct default mixed required and default" {
     var p = Partial { .name = "alice" }
-    @assert_eq(p.score, 100)
+    @assertEq(p.score, 100)
 }
 
 test "struct default mixed override default" {
     var p = Partial { .name = "bob", .score = 42 }
-    @assert_eq(p.score, 42)
+    @assertEq(p.score, 42)
 }
 
 // ============================================================================
@@ -2425,7 +2426,7 @@ test "while optional capture" {
     while (it.next()) |val| {
         sum = sum + val
     }
-    @assert_eq(sum, 6)
+    @assertEq(sum, 6)
 }
 
 test "while optional capture no iterations" {
@@ -2434,7 +2435,7 @@ test "while optional capture no iterations" {
     while (it.next()) |val| {
         sum = sum + val
     }
-    @assert_eq(sum, 0)
+    @assertEq(sum, 0)
 }
 
 // ============================================================================
@@ -2447,8 +2448,8 @@ test "while continue expression" {
     while (i < 5) : (i = i + 1) {
         sum = sum + i
     }
-    @assert_eq(sum, 10)
-    @assert_eq(i, 5)
+    @assertEq(sum, 10)
+    @assertEq(i, 5)
 }
 
 // ============================================================================
@@ -2457,14 +2458,14 @@ test "while continue expression" {
 
 test "enum method pointer receiver" {
     var lvl = Level.High
-    @assert_eq(lvl.isHigh(), true)
-    @assert_eq(lvl.toInt(), 100)
+    @assertEq(lvl.isHigh(), true)
+    @assertEq(lvl.toInt(), 100)
 }
 
 test "enum method dispatch" {
     var lvl = Level.Low
-    @assert_eq(lvl.isHigh(), false)
-    @assert_eq(lvl.toInt(), 10)
+    @assertEq(lvl.isHigh(), false)
+    @assertEq(lvl.toInt(), 10)
 }
 
 // ============================================================================
@@ -2488,16 +2489,16 @@ fn colorWithElse(c: Color) i64 {
 
 test "exhaustive switch all variants" {
     var c = Color.Blue
-    @assert_eq(colorToInt(c), 3)
+    @assertEq(colorToInt(c), 3)
     var r = Color.Red
-    @assert_eq(colorToInt(r), 1)
+    @assertEq(colorToInt(r), 1)
 }
 
 test "switch with else branch" {
     var c = Color.Green
-    @assert_eq(colorWithElse(c), 0)
+    @assertEq(colorWithElse(c), 0)
     var r = Color.Red
-    @assert_eq(colorWithElse(r), 10)
+    @assertEq(colorWithElse(r), 10)
 }
 
 // ============================================================================
@@ -2513,17 +2514,17 @@ extern struct MixedExtern { a: u8, b: u32, c: u8 }
 extern struct ExternI64 { x: i64, y: i64 }
 
 test "extern struct layout" {
-    @assert_eq(@sizeOf(CHeader), 8)
+    @assertEq(@sizeOf(CHeader), 8)
 }
 
 test "extern struct mixed alignment" {
-    @assert_eq(@sizeOf(MixedExtern), 12)
+    @assertEq(@sizeOf(MixedExtern), 12)
 }
 
 test "extern struct i64 field access" {
     var h = ExternI64 { .x = 42, .y = 100 }
-    @assert_eq(h.x, 42)
-    @assert_eq(h.y, 100)
+    @assertEq(h.x, 42)
+    @assertEq(h.y, 100)
 }
 
 // ============================================================================
@@ -2534,13 +2535,13 @@ packed struct PackedSmall { a: u8, b: u32, c: u8 }
 packed struct PackedTwo { x: i64, y: i64 }
 
 test "packed struct size" {
-    @assert_eq(@sizeOf(PackedSmall), 6)
+    @assertEq(@sizeOf(PackedSmall), 6)
 }
 
 test "packed struct i64 field access" {
     var p = PackedTwo { .x = 10, .y = 20 }
-    @assert_eq(p.x, 10)
-    @assert_eq(p.y, 20)
+    @assertEq(p.x, 10)
+    @assertEq(p.y, 20)
 }
 
 // ============================================================================
@@ -2561,17 +2562,17 @@ fn lexerMayFail(x: i64) Lexer.Error!i64 {
 
 test "nested error set error value" {
     var e = lexerMayFail(-1) catch 99
-    @assert_eq(e, 99)
+    @assertEq(e, 99)
 }
 
 test "nested error set success" {
     var e = lexerMayFail(5) catch 0
-    @assert_eq(e, 10)
+    @assertEq(e, 10)
 }
 
 test "nested type with struct field" {
     var l = Lexer { .pos = 42 }
-    @assert_eq(l.pos, 42)
+    @assertEq(l.pos, 42)
 }
 
 // ============================================================================
@@ -2586,14 +2587,14 @@ fn makeOrigin() AnonPoint {
 
 test "anonymous struct var init" {
     var p: AnonPoint = .{ .x = 10, .y = 20 }
-    @assert_eq(p.x, 10)
-    @assert_eq(p.y, 20)
+    @assertEq(p.x, 10)
+    @assertEq(p.y, 20)
 }
 
 test "anonymous struct return" {
     var p = makeOrigin()
-    @assert_eq(p.x, 0)
-    @assert_eq(p.y, 0)
+    @assertEq(p.x, 0)
+    @assertEq(p.y, 0)
 }
 
 // ============================================================================
@@ -2606,26 +2607,26 @@ const BuiltinColor = enum { red, green, blue }
 
 test "@intFromEnum" {
     var c = BuiltinColor.green
-    @assert_eq(@intFromEnum(c), 1)
-    @assert_eq(@intFromEnum(BuiltinColor.red), 0)
-    @assert_eq(@intFromEnum(BuiltinColor.blue), 2)
+    @assertEq(@intFromEnum(c), 1)
+    @assertEq(@intFromEnum(BuiltinColor.red), 0)
+    @assertEq(@intFromEnum(BuiltinColor.blue), 2)
 }
 
 test "@enumFromInt" {
     var val = @enumFromInt(BuiltinColor, 2)
-    @assert_eq(@intFromEnum(val), 2)
+    @assertEq(@intFromEnum(val), 2)
 }
 
 test "@enumFromInt single-arg with @as" {
     var val = @as(BuiltinColor, @enumFromInt(1))
-    @assert_eq(@intFromEnum(val), 1)
-    @assert_eq(@tagName(val), "green")
+    @assertEq(@intFromEnum(val), 1)
+    @assertEq(@tagName(val), "green")
 }
 
 test "@enumFromInt single-arg in expression" {
     var idx: i64 = 0
     var c = @as(BuiltinColor, @enumFromInt(idx))
-    @assert_eq(@tagName(c), "red")
+    @assertEq(@tagName(c), "red")
 }
 
 fn acceptColor(c: BuiltinColor) i64 {
@@ -2637,34 +2638,34 @@ fn getBlue() BuiltinColor {
 }
 
 test "@enumFromInt single-arg in function arg" {
-    @assert_eq(acceptColor(@enumFromInt(2)), 2)
+    @assertEq(acceptColor(@enumFromInt(2)), 2)
 }
 
 test "@enumFromInt single-arg from var type" {
     var c: BuiltinColor = @enumFromInt(0)
-    @assert_eq(@tagName(c), "red")
+    @assertEq(@tagName(c), "red")
 }
 
 test "@enumFromInt single-arg from return type" {
-    @assert_eq(@tagName(getBlue()), "blue")
+    @assertEq(@tagName(getBlue()), "blue")
 }
 
 // --- @tagName (Zig Sema.zig:20487) ---
 
 test "@tagName enum" {
     var c = BuiltinColor.green
-    @assert_eq(@tagName(c), "green")
-    @assert_eq(@tagName(BuiltinColor.red), "red")
-    @assert_eq(@tagName(BuiltinColor.blue), "blue")
+    @assertEq(@tagName(c), "green")
+    @assertEq(@tagName(BuiltinColor.red), "red")
+    @assertEq(@tagName(BuiltinColor.blue), "blue")
 }
 
 // --- @intFromBool (Zig Sema.zig:20341) ---
 
 test "@intFromBool" {
-    @assert_eq(@intFromBool(true), 1)
-    @assert_eq(@intFromBool(false), 0)
+    @assertEq(@intFromBool(true), 1)
+    @assertEq(@intFromBool(false), 0)
     var b = true
-    @assert_eq(@intFromBool(b), 1)
+    @assertEq(@intFromBool(b), 1)
 }
 
 // --- @truncate (Zig Sema.zig:22882) ---
@@ -2672,20 +2673,20 @@ test "@intFromBool" {
 test "@truncate u8" {
     var big: i64 = 258
     var small = @truncate(u8, big)
-    @assert_eq(small, 2)
+    @assertEq(small, 2)
 }
 
 test "@truncate u16" {
     var big: i64 = 65538
     var small = @truncate(u16, big)
-    @assert_eq(small, 2)
+    @assertEq(small, 2)
 }
 
 // --- @as (Zig Sema.zig:9659) ---
 
 test "@as explicit coercion" {
     var x = @as(i64, 42)
-    @assert_eq(x, 42)
+    @assertEq(x, 42)
 }
 
 // --- @offsetOf (Zig Sema.zig:23060) ---
@@ -2693,30 +2694,30 @@ test "@as explicit coercion" {
 struct OffsetTest { a: i64, b: i64, c: i64 }
 
 test "@offsetOf" {
-    @assert_eq(@offsetOf(OffsetTest, "a"), 0)
-    @assert_eq(@offsetOf(OffsetTest, "b"), 8)
-    @assert_eq(@offsetOf(OffsetTest, "c"), 16)
+    @assertEq(@offsetOf(OffsetTest, "a"), 0)
+    @assertEq(@offsetOf(OffsetTest, "b"), 8)
+    @assertEq(@offsetOf(OffsetTest, "c"), 16)
 }
 
 // --- @min / @max (Zig Sema.zig:24678) ---
 
 test "@min" {
-    @assert_eq(@min(3, 7), 3)
-    @assert_eq(@min(10, 2), 2)
-    @assert_eq(@min(5, 5), 5)
+    @assertEq(@min(3, 7), 3)
+    @assertEq(@min(10, 2), 2)
+    @assertEq(@min(5, 5), 5)
 }
 
 test "@max" {
-    @assert_eq(@max(3, 7), 7)
-    @assert_eq(@max(10, 2), 10)
-    @assert_eq(@max(5, 5), 5)
+    @assertEq(@max(3, 7), 7)
+    @assertEq(@max(10, 2), 10)
+    @assertEq(@max(5, 5), 5)
 }
 
 test "@min @max comptime" {
     const a = @min(10, 20)
     const b = @max(10, 20)
-    @assert_eq(a, 10)
-    @assert_eq(b, 20)
+    @assertEq(a, 10)
+    @assertEq(b, 20)
 }
 
 // --- @constCast / @alignCast (identity ops) ---
@@ -2724,7 +2725,7 @@ test "@min @max comptime" {
 test "@constCast identity" {
     var ptr: i64 = 12345
     var result = @constCast(ptr)
-    @assert_eq(result, 12345)
+    @assertEq(result, 12345)
 }
 
 // --- @bitCast (Zig Sema.zig:30554) — integer identity ---
@@ -2732,7 +2733,7 @@ test "@constCast identity" {
 test "@bitCast same-size identity" {
     var x: i64 = 42
     var y = @bitCast(i64, x)
-    @assert_eq(y, 42)
+    @assertEq(y, 42)
 }
 
 // ============================================================================
@@ -2744,34 +2745,34 @@ test "type promotion: u8 + i64 = i64" {
     var a: u8 = 100
     var b: i64 = 200
     var c = a + b
-    @assert_eq(c, 300)
+    @assertEq(c, 300)
 }
 
 test "type promotion: u16 + u32 = u32" {
     var a: u16 = 1000
     var b: u32 = 2000
     var c = a + b
-    @assert_eq(c, 3000)
+    @assertEq(c, 3000)
 }
 
 test "type promotion: untyped + u8 = u8" {
     var a: u8 = 10
     var c = a + 5
-    @assert_eq(c, 15)
+    @assertEq(c, 15)
 }
 
 test "type promotion: i32 * i64 = i64" {
     var a: i32 = 100
     var b: i64 = 200
     var c = a * b
-    @assert_eq(c, 20000)
+    @assertEq(c, 20000)
 }
 
 test "type promotion: u8 - u8 = u8" {
     var a: u8 = 50
     var b: u8 = 30
     var c = a - b
-    @assert_eq(c, 20)
+    @assertEq(c, 20)
 }
 
 // --- Overflow detection (debug mode, narrow types) ---
@@ -2781,37 +2782,37 @@ test "type promotion: u8 - u8 = u8" {
 test "overflow: u8 add no overflow" {
     var a: u8 = 100
     var b: u8 = 155
-    @assert_eq(a + b, 255)
+    @assertEq(a + b, 255)
 }
 
 test "overflow: u8 sub no overflow" {
     var a: u8 = 200
     var b: u8 = 100
-    @assert_eq(a - b, 100)
+    @assertEq(a - b, 100)
 }
 
 test "overflow: u8 mul no overflow" {
     var a: u8 = 15
     var b: u8 = 17
-    @assert_eq(a * b, 255)
+    @assertEq(a * b, 255)
 }
 
 test "overflow: u16 add no overflow" {
     var a: u16 = 60000
     var b: u16 = 5535
-    @assert_eq(a + b, 65535)
+    @assertEq(a + b, 65535)
 }
 
 test "overflow: u32 add no overflow" {
     var a: u32 = 2000000000
     var b: u32 = 1000000000
-    @assert_eq(a + b, 3000000000)
+    @assertEq(a + b, 3000000000)
 }
 
 test "overflow: u32 mul no overflow" {
     var a: u32 = 65536
     var b: u32 = 65535
-    @assert_eq(a * b, 4294901760)
+    @assertEq(a * b, 4294901760)
 }
 
 // ============================================================================
@@ -2821,37 +2822,37 @@ test "overflow: u32 mul no overflow" {
 test "string slice basic" {
     var s = "hello world"
     var sub = s[0:5]
-    @assert_eq(sub, "hello")
+    @assertEq(sub, "hello")
 }
 
 test "string slice middle" {
     var s = "hello world"
     var sub = s[6:11]
-    @assert_eq(sub, "world")
+    @assertEq(sub, "world")
 }
 
 test "string slice to end" {
     var s = "hello world"
     var sub = s[6:]
-    @assert_eq(sub, "world")
+    @assertEq(sub, "world")
 }
 
 test "string slice from start" {
     var s = "hello world"
     var sub = s[:5]
-    @assert_eq(sub, "hello")
+    @assertEq(sub, "hello")
 }
 
 test "string slice full" {
     var s = "hello"
     var sub = s[:]
-    @assert_eq(sub, "hello")
+    @assertEq(sub, "hello")
 }
 
 test "string slice length" {
     var s = "hello world"
     var sub = s[0:5]
-    @assert_eq(@lenOf(sub), 5)
+    @assertEq(@lenOf(sub), 5)
 }
 
 // ============================================================================
@@ -2859,65 +2860,65 @@ test "string slice length" {
 // ============================================================================
 
 test "ctz basic" {
-    @assert_eq(@ctz(8), 3)
+    @assertEq(@ctz(8), 3)
 }
 
 test "ctz power of 2" {
-    @assert_eq(@ctz(16), 4)
+    @assertEq(@ctz(16), 4)
 }
 
 test "ctz zero" {
-    @assert_eq(@ctz(0), 64)
+    @assertEq(@ctz(0), 64)
 }
 
 test "clz basic" {
-    @assert_eq(@clz(1), 63)
+    @assertEq(@clz(1), 63)
 }
 
 test "clz larger" {
     // 0x8000000000000000 = 1 << 63, clz = 0
     var x: i64 = 1 << 63
-    @assert_eq(@clz(x), 0)
+    @assertEq(@clz(x), 0)
 }
 
 test "clz zero" {
-    @assert_eq(@clz(0), 64)
+    @assertEq(@clz(0), 64)
 }
 
 test "popCount basic" {
-    @assert_eq(@popCount(7), 3)
+    @assertEq(@popCount(7), 3)
 }
 
 test "popCount single bit" {
-    @assert_eq(@popCount(1), 1)
+    @assertEq(@popCount(1), 1)
 }
 
 test "popCount zero" {
-    @assert_eq(@popCount(0), 0)
+    @assertEq(@popCount(0), 0)
 }
 
 test "popCount all bits" {
     // 0xFF = 255, 8 bits set
-    @assert_eq(@popCount(255), 8)
+    @assertEq(@popCount(255), 8)
 }
 
 // ============================================================================
-// @memset builtin
+// memset_zero function
 // ============================================================================
 
 test "memset zeros memory" {
-    var buf = @alloc(16)
-    @memset(buf, 0, 16)
-    @assert_eq(1, 1)
+    var buf = alloc(0, 16)
+    memset_zero(buf, 16)
+    @assertEq(1, 1)
 }
 
 // ============================================================================
-// @isatty builtin
+// isatty function
 // ============================================================================
 
 test "isatty on non-tty fd" {
     // fd 99 is not open, so not a tty
-    @assert_eq(@isatty(99), 0)
+    @assertEq(isatty(99), 0)
 }
 
 // ============================================================================
@@ -2927,27 +2928,27 @@ test "isatty on non-tty fd" {
 test "optional eq value" {
     var x: ?i64 = 42
     if (x == 42) {
-        @assert_eq(1, 1)
+        @assertEq(1, 1)
     } else {
-        @assert_eq(1, 0)
+        @assertEq(1, 0)
     }
 }
 
 test "optional eq null" {
     var x: ?i64 = null
     if (x == null) {
-        @assert_eq(1, 1)
+        @assertEq(1, 1)
     } else {
-        @assert_eq(1, 0)
+        @assertEq(1, 0)
     }
 }
 
 test "optional neq value" {
     var x: ?i64 = 42
     if (x != 99) {
-        @assert_eq(1, 1)
+        @assertEq(1, 1)
     } else {
-        @assert_eq(1, 0)
+        @assertEq(1, 0)
     }
 }
 
@@ -2958,19 +2959,19 @@ test "optional neq value" {
 test "floatCast f64 to f32" {
     var x: f64 = 3.14
     var y: f32 = @floatCast(f32, x)
-    @assert_eq(1, 1)
+    @assertEq(1, 1)
 }
 
 test "floatCast f32 to f64" {
     var x: f32 = 2.5
     var y: f64 = @floatCast(f64, x)
-    @assert_eq(1, 1)
+    @assertEq(1, 1)
 }
 
 test "floatCast identity f64" {
     var x: f64 = 1.0
     var y: f64 = @floatCast(f64, x)
-    @assert_eq(1, 1)
+    @assertEq(1, 1)
 }
 
 // ============================================================================
@@ -2980,25 +2981,25 @@ test "floatCast identity f64" {
 test "intFromFloat positive" {
     var x: f64 = 3.7
     var y = @intFromFloat(x)
-    @assert_eq(y, 3)
+    @assertEq(y, 3)
 }
 
 test "intFromFloat negative" {
     var x: f64 = -2.9
     var y = @intFromFloat(x)
-    @assert_eq(y, -2)
+    @assertEq(y, -2)
 }
 
 test "intFromFloat zero" {
     var x: f64 = 0.0
     var y = @intFromFloat(x)
-    @assert_eq(y, 0)
+    @assertEq(y, 0)
 }
 
 test "intFromFloat whole number" {
     var x: f64 = 42.0
     var y = @intFromFloat(x)
-    @assert_eq(y, 42)
+    @assertEq(y, 42)
 }
 
 // ============================================================================
@@ -3006,27 +3007,27 @@ test "intFromFloat whole number" {
 // ============================================================================
 
 test "parseInt hex" {
-    @assert_eq(parseInt("0xFF"), 255)
+    @assertEq(parseInt("0xFF"), 255)
 }
 
 test "parseInt hex uppercase" {
-    @assert_eq(parseInt("0XAB"), 171)
+    @assertEq(parseInt("0XAB"), 171)
 }
 
 test "parseInt binary" {
-    @assert_eq(parseInt("0b1010"), 10)
+    @assertEq(parseInt("0b1010"), 10)
 }
 
 test "parseInt octal" {
-    @assert_eq(parseInt("0o17"), 15)
+    @assertEq(parseInt("0o17"), 15)
 }
 
 test "parseInt negative hex" {
-    @assert_eq(parseInt("-0xFF"), -255)
+    @assertEq(parseInt("-0xFF"), -255)
 }
 
 test "parseInt decimal unchanged" {
-    @assert_eq(parseInt("12345"), 12345)
+    @assertEq(parseInt("12345"), 12345)
 }
 
 // ============================================================================
@@ -3035,23 +3036,23 @@ test "parseInt decimal unchanged" {
 
 test "parseFloat integer" {
     var x = parseFloat("42")
-    @assert_eq(@intFromFloat(x), 42)
+    @assertEq(@intFromFloat(x), 42)
 }
 
 test "parseFloat decimal" {
     var x = parseFloat("3.14")
     // 3.14 truncates to 3
-    @assert_eq(@intFromFloat(x), 3)
+    @assertEq(@intFromFloat(x), 3)
 }
 
 test "parseFloat negative" {
     var x = parseFloat("-2.5")
-    @assert_eq(@intFromFloat(x), -2)
+    @assertEq(@intFromFloat(x), -2)
 }
 
 test "parseFloat exponent" {
     var x = parseFloat("1e3")
-    @assert_eq(@intFromFloat(x), 1000)
+    @assertEq(@intFromFloat(x), 1000)
 }
 
 // ============================================================================
@@ -3059,7 +3060,7 @@ test "parseFloat exponent" {
 // ============================================================================
 
 test "enumLen basic" {
-    @assert_eq(@enumLen(Color), 3)
+    @assertEq(@enumLen(Color), 3)
 }
 
 test "enumLen iterate with enumFromInt" {
@@ -3069,7 +3070,7 @@ test "enumLen iterate with enumFromInt" {
         count += 1
         i += 1
     }
-    @assert_eq(count, 3)
+    @assertEq(count, 3)
 }
 
 // ============================================================================
@@ -3083,7 +3084,7 @@ test "enum shorthand in switch" {
         .Green => 2,
         .Blue => 3,
     }
-    @assert_eq(result, 2)
+    @assertEq(result, 2)
 }
 
 test "enum shorthand multi-pattern" {
@@ -3092,7 +3093,7 @@ test "enum shorthand multi-pattern" {
         .Red, .Blue => 1,
         .Green => 2,
     }
-    @assert_eq(result, 1)
+    @assertEq(result, 1)
 }
 
 test "enum shorthand with else" {
@@ -3101,7 +3102,7 @@ test "enum shorthand with else" {
         .Red => 1,
         else => 0,
     }
-    @assert_eq(result, 0)
+    @assertEq(result, 0)
 }
 
 test "enum shorthand with custom values" {
@@ -3111,7 +3112,7 @@ test "enum shorthand with custom values" {
         .Warning => 1,
         .Error => 2,
     }
-    @assert_eq(result, 1)
+    @assertEq(result, 1)
 }
 
 test "enum shorthand statement form" {
@@ -3122,7 +3123,7 @@ test "enum shorthand statement form" {
         .Green => { x = 20 },
         .Blue => { x = 30 },
     }
-    @assert_eq(x, 30)
+    @assertEq(x, 30)
 }
 
 // ============================================================================
@@ -3135,7 +3136,7 @@ test "comptime block with var" {
         a = a + 5
         a
     }
-    @assert_eq(x, 15)
+    @assertEq(x, 15)
 }
 
 test "comptime block multiple vars" {
@@ -3144,7 +3145,7 @@ test "comptime block multiple vars" {
         var b: i64 = 7
         a * b
     }
-    @assert_eq(result, 21)
+    @assertEq(result, 21)
 }
 
 test "comptime block compound assign" {
@@ -3154,7 +3155,7 @@ test "comptime block compound assign" {
         a *= 2
         a
     }
-    @assert_eq(x, 30)
+    @assertEq(x, 30)
 }
 
 // ============================================================================
@@ -3162,13 +3163,13 @@ test "comptime block compound assign" {
 // ============================================================================
 
 test "typeName basic types" {
-    @assert_eq(@typeName(i64), "i64")
-    @assert_eq(@typeName(bool), "bool")
-    @assert_eq(@typeName(string), "string")
+    @assertEq(@typeName(i64), "i64")
+    @assertEq(@typeName(bool), "bool")
+    @assertEq(@typeName(string), "string")
 }
 
 test "typeName enum" {
-    @assert_eq(@typeName(Color), "Color")
+    @assertEq(@typeName(Color), "Color")
 }
 
 // ============================================================================
@@ -3176,9 +3177,9 @@ test "typeName enum" {
 // ============================================================================
 
 test "enumName" {
-    @assert_eq(@enumName(Color, 0), "Red")
-    @assert_eq(@enumName(Color, 1), "Green")
-    @assert_eq(@enumName(Color, 2), "Blue")
+    @assertEq(@enumName(Color, 0), "Red")
+    @assertEq(@enumName(Color, 1), "Green")
+    @assertEq(@enumName(Color, 2), "Blue")
 }
 
 // ============================================================================
@@ -3187,19 +3188,19 @@ test "enumName" {
 
 test "typeInfo enum fields length" {
     const len = @typeInfo(Color).fields.len
-    @assert_eq(len, 3)
+    @assertEq(len, 3)
 }
 
 test "typeInfo enum name" {
     const name = @typeInfo(Color).name
-    @assert_eq(name, "Color")
+    @assertEq(name, "Color")
 }
 
 test "typeInfo enum field access" {
-    @assert_eq(@typeInfo(Color).fields[0].name, "Red")
-    @assert_eq(@typeInfo(Color).fields[0].value, 0)
-    @assert_eq(@typeInfo(Color).fields[1].name, "Green")
-    @assert_eq(@typeInfo(Color).fields[2].name, "Blue")
+    @assertEq(@typeInfo(Color).fields[0].name, "Red")
+    @assertEq(@typeInfo(Color).fields[0].value, 0)
+    @assertEq(@typeInfo(Color).fields[1].name, "Green")
+    @assertEq(@typeInfo(Color).fields[2].name, "Blue")
 }
 
 // ============================================================================
@@ -3211,7 +3212,7 @@ test "inline for over typeInfo fields count" {
     inline for field in @typeInfo(Color).fields {
         count += 1
     }
-    @assert_eq(count, 3)
+    @assertEq(count, 3)
 }
 
 test "inline for field value sum" {
@@ -3219,7 +3220,7 @@ test "inline for field value sum" {
     inline for field in @typeInfo(Status).fields {
         sum += field.value
     }
-    @assert_eq(sum, 150)
+    @assertEq(sum, 150)
 }
 
 // ============================================================================
@@ -3234,10 +3235,10 @@ test "comptime array inline for construction" {
         }
         s
     }
-    @assert_eq(arr[0], 0)
-    @assert_eq(arr[1], 1)
-    @assert_eq(arr[3], 9)
-    @assert_eq(arr[4], 16)
+    @assertEq(arr[0], 0)
+    @assertEq(arr[1], 1)
+    @assertEq(arr[3], 9)
+    @assertEq(arr[4], 16)
 }
 
 test "comptime int array dynamic index" {
@@ -3249,9 +3250,9 @@ test "comptime int array dynamic index" {
         s
     }
     var i: i64 = 3
-    @assert_eq(arr[i], 9)
+    @assertEq(arr[i], 9)
     i = 4
-    @assert_eq(arr[i], 16)
+    @assertEq(arr[i], 16)
 }
 
 test "comptime string array from typeInfo" {
@@ -3262,9 +3263,9 @@ test "comptime string array from typeInfo" {
         }
         s
     }
-    @assert_eq(names[0], "Red")
-    @assert_eq(names[1], "Green")
-    @assert_eq(names[2], "Blue")
+    @assertEq(names[0], "Red")
+    @assertEq(names[1], "Green")
+    @assertEq(names[2], "Blue")
 }
 
 // ============================================================================
@@ -3274,10 +3275,10 @@ test "comptime string array from typeInfo" {
 const QuotedOp = enum { @"and", @"or", @"not", add }
 
 test "quoted identifier enum variant" {
-    @assert_eq(@intFromEnum(QuotedOp.@"and"), 0)
-    @assert_eq(@intFromEnum(QuotedOp.@"or"), 1)
-    @assert_eq(@intFromEnum(QuotedOp.@"not"), 2)
-    @assert_eq(@intFromEnum(QuotedOp.add), 3)
+    @assertEq(@intFromEnum(QuotedOp.@"and"), 0)
+    @assertEq(@intFromEnum(QuotedOp.@"or"), 1)
+    @assertEq(@intFromEnum(QuotedOp.@"not"), 2)
+    @assertEq(@intFromEnum(QuotedOp.add), 3)
 }
 
 test "quoted ident in switch" {
@@ -3289,13 +3290,13 @@ test "quoted ident in switch" {
         .add => 40,
         else => 0,
     }
-    @assert_eq(result, 10)
+    @assertEq(result, 10)
 }
 
 test "quoted ident typeInfo name" {
-    @assert_eq(@typeInfo(QuotedOp).fields[0].name, "and")
-    @assert_eq(@typeInfo(QuotedOp).fields[1].name, "or")
-    @assert_eq(@typeInfo(QuotedOp).fields[2].name, "not")
+    @assertEq(@typeInfo(QuotedOp).fields[0].name, "and")
+    @assertEq(@typeInfo(QuotedOp).fields[1].name, "or")
+    @assertEq(@typeInfo(QuotedOp).fields[2].name, "not")
 }
 
 // ============================================================================
@@ -3306,13 +3307,13 @@ const BackedColor = enum(u8) { Red, Green, Blue }
 const BackedStatus = enum(u16) { Ok = 200, NotFound = 404 }
 
 test "enum backing type u8" {
-    @assert_eq(@intFromEnum(BackedColor.Red), 0)
-    @assert_eq(@intFromEnum(BackedColor.Blue), 2)
+    @assertEq(@intFromEnum(BackedColor.Red), 0)
+    @assertEq(@intFromEnum(BackedColor.Blue), 2)
 }
 
 test "enum backing type with values" {
-    @assert_eq(@intFromEnum(BackedStatus.Ok), 200)
-    @assert_eq(@intFromEnum(BackedStatus.NotFound), 404)
+    @assertEq(@intFromEnum(BackedStatus.Ok), 200)
+    @assertEq(@intFromEnum(BackedStatus.NotFound), 404)
 }
 
 // ============================================================================
@@ -3325,7 +3326,7 @@ test "string switch expression" {
         "world" => 2,
         else => 0,
     }
-    @assert_eq(result, 1)
+    @assertEq(result, 1)
 }
 
 test "string switch no match" {
@@ -3333,7 +3334,7 @@ test "string switch no match" {
         "hello" => 1,
         else => 0,
     }
-    @assert_eq(result, 0)
+    @assertEq(result, 0)
 }
 
 test "string switch statement" {
@@ -3344,7 +3345,7 @@ test "string switch statement" {
         "var" => { x = 2 },
         else => { x = 99 },
     }
-    @assert_eq(x, 1)
+    @assertEq(x, 1)
 }
 
 test "string switch with variable" {
@@ -3354,5 +3355,5 @@ test "string switch with variable" {
         "world" => 20,
         else => 0,
     }
-    @assert_eq(r, 20)
+    @assertEq(r, 20)
 }

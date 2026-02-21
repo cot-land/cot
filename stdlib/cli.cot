@@ -10,6 +10,7 @@
 import "std/string"
 import "std/os"
 import "std/list"
+import "std/sys"
 
 // ============================================================================
 // Parsed Result
@@ -17,7 +18,7 @@ import "std/list"
 
 // A parsed CLI result stored as parallel arrays.
 // Flags: name/value pairs. Positional: ordered args.
-// Heap-allocated via @alloc.
+// Heap-allocated via alloc().
 //
 // Layout (8 bytes each):
 //   [0]  flag_keys_buf     (i64 ptr to keys buffer)
@@ -29,7 +30,7 @@ import "std/list"
 //   [48] positional_cap    (i64)
 
 fn newArgs() i64 {
-    var p = @alloc(56)
+    var p = alloc(0, 56)
     @intToPtr(*i64, p).* = 0
     @intToPtr(*i64, p + 8).* = 0
     @intToPtr(*i64, p + 16).* = 0
@@ -56,14 +57,14 @@ fn addFlag(args: i64, key: string, val: string) void {
         var vals_buf = @intToPtr(*i64, args + 8).*
 
         // Each entry is 16 bytes (ptr + len for string)
-        var new_keys = @alloc(new_cap * 16)
-        var new_vals = @alloc(new_cap * 16)
+        var new_keys = alloc(0, new_cap * 16)
+        var new_vals = alloc(0, new_cap * 16)
 
         if (count > 0) {
-            @memcpy(new_keys, keys_buf, count * 16)
-            @memcpy(new_vals, vals_buf, count * 16)
-            @dealloc(keys_buf)
-            @dealloc(vals_buf)
+            memcpy(new_keys, keys_buf, count * 16)
+            memcpy(new_vals, vals_buf, count * 16)
+            dealloc(keys_buf)
+            dealloc(vals_buf)
         }
 
         @intToPtr(*i64, args).* = new_keys
@@ -94,11 +95,11 @@ fn addPositional(args: i64, val: string) void {
         if (new_cap == 0) { new_cap = 8 }
 
         var buf = @intToPtr(*i64, args + 32).*
-        var new_buf = @alloc(new_cap * 16)
+        var new_buf = alloc(0, new_cap * 16)
 
         if (count > 0) {
-            @memcpy(new_buf, buf, count * 16)
-            @dealloc(buf)
+            memcpy(new_buf, buf, count * 16)
+            dealloc(buf)
         }
 
         @intToPtr(*i64, args + 32).* = new_buf

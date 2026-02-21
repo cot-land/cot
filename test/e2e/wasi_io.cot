@@ -1,23 +1,25 @@
-// WASI I/O tests — @fd_write, @fd_read, @fd_close builtins
+// WASI I/O tests — fd_write, fd_read, fd_close via std/sys
 // Note: flags 1537 = O_WRONLY|O_CREAT|O_TRUNC on macOS.
 // On Linux these flags are 577. Platform-conditional when x64 port lands.
 
+import "std/sys"
+
 test "fd_write returns bytes written" {
     var msg = "hello"
-    var n = @fd_write(1, @ptrOf(msg), @lenOf(msg))
-    @assert_eq(n, 5)
+    var n = fd_write(1, @ptrOf(msg), @lenOf(msg))
+    @assertEq(n, 5)
 }
 
 test "fd_write writes to stdout" {
     var msg = "OK"
-    var n = @fd_write(1, @ptrOf(msg), @lenOf(msg))
-    @assert_eq(n, 2)
+    var n = fd_write(1, @ptrOf(msg), @lenOf(msg))
+    @assertEq(n, 2)
 }
 
 test "fd_write single byte" {
     var msg = "X"
-    var n = @fd_write(1, @ptrOf(msg), @lenOf(msg))
-    @assert_eq(n, 1)
+    var n = fd_write(1, @ptrOf(msg), @lenOf(msg))
+    @assertEq(n, 1)
 }
 
 // fd_read tests
@@ -25,17 +27,17 @@ test "fd_write single byte" {
 // Batch test runs with stdin = /dev/null (.Ignore), so read returns 0 (EOF)
 
 test "fd_read returns 0 on EOF" {
-    var buf = @alloc(16)
-    var n = @fd_read(0, buf, 1)
-    @assert_eq(n, 0)
-    @dealloc(buf)
+    var buf = alloc(0, 16)
+    var n = fd_read(0, buf, 1)
+    @assertEq(n, 0)
+    dealloc(buf)
 }
 
 test "fd_read with zero length returns zero" {
-    var buf = @alloc(1)
-    var n = @fd_read(0, buf, 0)
-    @assert_eq(n, 0)
-    @dealloc(buf)
+    var buf = alloc(0, 1)
+    var n = fd_read(0, buf, 0)
+    @assertEq(n, 0)
+    dealloc(buf)
 }
 
 // fd_close tests
@@ -43,8 +45,8 @@ test "fd_read with zero length returns zero" {
 // macOS ARM64 SVC convention: on error, carry set, NEG x0 → negative errno (EBADF = -9)
 
 test "fd_close on invalid fd returns EBADF" {
-    var result = @fd_close(999)
-    @assert_eq(result, -9)
+    var result = fd_close(999)
+    @assertEq(result, -9)
 }
 
 // fd_seek tests
@@ -53,22 +55,22 @@ test "fd_close on invalid fd returns EBADF" {
 
 test "fd_seek to beginning of file" {
     var path = "/tmp/cot_test_seek_file"
-    var fd = @fd_open(@ptrOf(path), @lenOf(path), 1537)
+    var fd = fd_open(@ptrOf(path), @lenOf(path), 1537)
     var msg = "hello"
-    @fd_write(fd, @ptrOf(msg), @lenOf(msg))
-    var pos = @fd_seek(fd, 0, 0)
-    @assert_eq(pos, 0)
-    @fd_close(fd)
+    fd_write(fd, @ptrOf(msg), @lenOf(msg))
+    var pos = fd_seek(fd, 0, 0)
+    @assertEq(pos, 0)
+    fd_close(fd)
 }
 
 test "fd_seek returns current position" {
     var path = "/tmp/cot_test_seek_file2"
-    var fd = @fd_open(@ptrOf(path), @lenOf(path), 1537)
+    var fd = fd_open(@ptrOf(path), @lenOf(path), 1537)
     var msg = "abcde"
-    @fd_write(fd, @ptrOf(msg), @lenOf(msg))
-    var pos = @fd_seek(fd, 0, 1)
-    @assert_eq(pos, 5)
-    @fd_close(fd)
+    fd_write(fd, @ptrOf(msg), @lenOf(msg))
+    var pos = fd_seek(fd, 0, 1)
+    @assertEq(pos, 5)
+    fd_close(fd)
 }
 
 // fd_open tests
@@ -77,95 +79,95 @@ test "fd_seek returns current position" {
 
 test "fd_open /dev/null returns valid fd" {
     var path = "/dev/null"
-    var fd = @fd_open(@ptrOf(path), @lenOf(path), 0)
+    var fd = fd_open(@ptrOf(path), @lenOf(path), 0)
     @assert(fd > 2)
-    @fd_close(fd)
+    fd_close(fd)
 }
 
 test "fd_open nonexistent file returns ENOENT" {
     var path = "/tmp/cot_nonexistent_test_file_xyz"
-    var result = @fd_open(@ptrOf(path), @lenOf(path), 0)
-    @assert_eq(result, -2)
+    var result = fd_open(@ptrOf(path), @lenOf(path), 0)
+    @assertEq(result, -2)
 }
 
 test "fd_open write and read back" {
     var path = "/tmp/cot_test_io_file"
-    var fd = @fd_open(@ptrOf(path), @lenOf(path), 1537)
+    var fd = fd_open(@ptrOf(path), @lenOf(path), 1537)
     @assert(fd > 2)
     var msg = "hello"
-    var n = @fd_write(fd, @ptrOf(msg), @lenOf(msg))
-    @assert_eq(n, 5)
-    @fd_close(fd)
-    var fd2 = @fd_open(@ptrOf(path), @lenOf(path), 0)
+    var n = fd_write(fd, @ptrOf(msg), @lenOf(msg))
+    @assertEq(n, 5)
+    fd_close(fd)
+    var fd2 = fd_open(@ptrOf(path), @lenOf(path), 0)
     @assert(fd2 > 2)
-    var buf = @alloc(16)
-    var nr = @fd_read(fd2, buf, 5)
-    @assert_eq(nr, 5)
-    @fd_close(fd2)
-    @dealloc(buf)
+    var buf = alloc(0, 16)
+    var nr = fd_read(fd2, buf, 5)
+    @assertEq(nr, 5)
+    fd_close(fd2)
+    dealloc(buf)
 }
 
-// @time() tests
+// time() tests
 // Reference: Go runtime/sys_darwin_arm64.s walltime_trampoline
 // SYS_gettimeofday(116) → nanoseconds since epoch
 
 test "time returns positive nanoseconds" {
-    var t = @time()
+    var t = time()
     @assert(t > 1000000000)
 }
 
 test "time is monotonically increasing" {
-    var t1 = @time()
-    var t2 = @time()
+    var t1 = time()
+    var t2 = time()
     @assert(t2 >= t1)
 }
 
-// @random(buf, len) tests
+// random(buf, len) tests
 // Reference: Go runtime/sys_darwin_arm64.s arc4random_buf_trampoline
 // SYS_getentropy(500) — fill buffer with cryptographic random bytes
 
 test "random returns success" {
-    var buf = @alloc(16)
-    var result = @random(buf, 16)
-    @assert_eq(result, 0)
-    @dealloc(buf)
+    var buf = alloc(0, 16)
+    var result = random(buf, 16)
+    @assertEq(result, 0)
+    dealloc(buf)
 }
 
 test "random with zero length succeeds" {
-    var buf = @alloc(1)
-    var result = @random(buf, 0)
-    @assert_eq(result, 0)
-    @dealloc(buf)
+    var buf = alloc(0, 1)
+    var result = random(buf, 0)
+    @assertEq(result, 0)
+    dealloc(buf)
 }
 
 test "random with 512 bytes exercises chunk loop" {
-    var buf = @alloc(512)
-    var result = @random(buf, 512)
-    @assert_eq(result, 0)
-    @dealloc(buf)
+    var buf = alloc(0, 512)
+    var result = random(buf, 512)
+    @assertEq(result, 0)
+    dealloc(buf)
 }
 
-// @args_count() tests
+// args_count() tests
 // In batch test mode, the binary is called with no extra args, so argc >= 1
 // (argv[0] is always the program name)
 
 test "args_count returns at least 1" {
-    var n = @args_count()
+    var n = args_count()
     @assert(n >= 1)
 }
 
-// @arg_len(n) tests
+// arg_len(n) tests
 // argv[0] is the program path, which always has length > 0
 
 test "arg_len of program name is positive" {
-    var len = @arg_len(0)
+    var len = arg_len(0)
     @assert(len > 0)
 }
 
-// @arg_ptr(n) tests
+// arg_ptr(n) tests
 // argv[0] points to the program path
 
 test "arg_ptr of program name returns valid pointer" {
-    var ptr = @arg_ptr(0)
+    var ptr = arg_ptr(0)
     @assert(ptr > 0)
 }

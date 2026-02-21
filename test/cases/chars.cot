@@ -1,9 +1,9 @@
 test "char simple" {
     var c: i64 = 'A'
-    @assert_eq(c, 65)
+    @assertEq(c, 65)
 }
 
 test "char escape" {
     var c: i64 = '\n'
-    @assert_eq(c, 10)
+    @assertEq(c, 10)
 }

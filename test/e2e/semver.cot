@@ -7,59 +7,59 @@ import "std/semver"
 test "parse simple version" {
     var v = parse("1.2.3")
     @assert(v != 0)
-    @assert_eq(major(v), 1)
-    @assert_eq(minor(v), 2)
-    @assert_eq(patch(v), 3)
+    @assertEq(major(v), 1)
+    @assertEq(minor(v), 2)
+    @assertEq(patch(v), 3)
 }
 
 test "parse with v prefix" {
     var v = parse("v2.0.1")
     @assert(v != 0)
-    @assert_eq(major(v), 2)
-    @assert_eq(minor(v), 0)
-    @assert_eq(patch(v), 1)
+    @assertEq(major(v), 2)
+    @assertEq(minor(v), 0)
+    @assertEq(patch(v), 1)
 }
 
 test "parse with prerelease" {
     var v = parse("1.0.0-alpha")
     @assert(v != 0)
-    @assert_eq(major(v), 1)
-    @assert_eq(minor(v), 0)
-    @assert_eq(patch(v), 0)
-    @assert_eq(prerelease(v), "alpha")
+    @assertEq(major(v), 1)
+    @assertEq(minor(v), 0)
+    @assertEq(patch(v), 0)
+    @assertEq(prerelease(v), "alpha")
 }
 
 test "parse with build" {
     var v = parse("1.0.0+build.123")
     @assert(v != 0)
-    @assert_eq(build(v), "build.123")
+    @assertEq(build(v), "build.123")
 }
 
 test "parse with prerelease and build" {
     var v = parse("1.0.0-beta.1+sha.abc")
     @assert(v != 0)
-    @assert_eq(prerelease(v), "beta.1")
-    @assert_eq(build(v), "sha.abc")
+    @assertEq(prerelease(v), "beta.1")
+    @assertEq(build(v), "sha.abc")
 }
 
 test "parse zero version" {
     var v = parse("0.0.0")
     @assert(v != 0)
-    @assert_eq(major(v), 0)
-    @assert_eq(minor(v), 0)
-    @assert_eq(patch(v), 0)
+    @assertEq(major(v), 0)
+    @assertEq(minor(v), 0)
+    @assertEq(patch(v), 0)
 }
 
 test "parse empty returns 0" {
-    @assert_eq(parse(""), 0)
+    @assertEq(parse(""), 0)
 }
 
 test "parse invalid returns 0" {
-    @assert_eq(parse("not-a-version"), 0)
+    @assertEq(parse("not-a-version"), 0)
 }
 
 test "parse partial returns 0" {
-    @assert_eq(parse("1.2"), 0)
+    @assertEq(parse("1.2"), 0)
 }
 
 // ============================================================================
@@ -69,25 +69,25 @@ test "parse partial returns 0" {
 test "compare equal" {
     var a = parse("1.2.3")
     var b = parse("1.2.3")
-    @assert_eq(cmp(a, b), 0)
+    @assertEq(cmp(a, b), 0)
 }
 
 test "compare major" {
     var a = parse("2.0.0")
     var b = parse("1.0.0")
-    @assert_eq(cmp(a, b), 1)
+    @assertEq(cmp(a, b), 1)
 }
 
 test "compare minor" {
     var a = parse("1.1.0")
     var b = parse("1.2.0")
-    @assert_eq(cmp(a, b), 0 - 1)
+    @assertEq(cmp(a, b), 0 - 1)
 }
 
 test "compare patch" {
     var a = parse("1.0.1")
     var b = parse("1.0.0")
-    @assert_eq(cmp(a, b), 1)
+    @assertEq(cmp(a, b), 1)
 }
 
 test "compare prerelease less than release" {
@@ -129,20 +129,20 @@ test "eq" {
 // ============================================================================
 
 test "format simple" {
-    @assert_eq(format(parse("1.2.3")), "1.2.3")
+    @assertEq(format(parse("1.2.3")), "1.2.3")
 }
 
 test "format with prerelease" {
-    @assert_eq(format(parse("1.0.0-alpha")), "1.0.0-alpha")
+    @assertEq(format(parse("1.0.0-alpha")), "1.0.0-alpha")
 }
 
 test "format with build" {
-    @assert_eq(format(parse("1.0.0+build")), "1.0.0+build")
+    @assertEq(format(parse("1.0.0+build")), "1.0.0+build")
 }
 
 test "format roundtrip" {
     var original = "2.1.0-rc.1+sha.456"
-    @assert_eq(format(parse(original)), original)
+    @assertEq(format(parse(original)), original)
 }
 
 // ============================================================================
@@ -151,26 +151,26 @@ test "format roundtrip" {
 
 test "incMajor" {
     var v = incMajor(parse("1.2.3"))
-    @assert_eq(major(v), 2)
-    @assert_eq(minor(v), 0)
-    @assert_eq(patch(v), 0)
+    @assertEq(major(v), 2)
+    @assertEq(minor(v), 0)
+    @assertEq(patch(v), 0)
 }
 
 test "incMinor" {
     var v = incMinor(parse("1.2.3"))
-    @assert_eq(major(v), 1)
-    @assert_eq(minor(v), 3)
-    @assert_eq(patch(v), 0)
+    @assertEq(major(v), 1)
+    @assertEq(minor(v), 3)
+    @assertEq(patch(v), 0)
 }
 
 test "incPatch" {
     var v = incPatch(parse("1.2.3"))
-    @assert_eq(major(v), 1)
-    @assert_eq(minor(v), 2)
-    @assert_eq(patch(v), 4)
+    @assertEq(major(v), 1)
+    @assertEq(minor(v), 2)
+    @assertEq(patch(v), 4)
 }
 
 test "incMajor strips prerelease" {
     var v = incMajor(parse("1.0.0-alpha"))
-    @assert_eq(prerelease(v), "")
+    @assertEq(prerelease(v), "")
 }

@@ -3,7 +3,7 @@ test "for range sum" {
     for i in 0..10 {
         sum += i
     }
-    @assert_eq(sum, 45)
+    @assertEq(sum, 45)
 }
 
 test "for range index" {
@@ -12,7 +12,7 @@ test "for range index" {
     for i, x in arr {
         sum += i
     }
-    @assert_eq(sum, 10)
+    @assertEq(sum, 10)
 }
 
 test "for range index value" {
@@ -21,5 +21,5 @@ test "for range index value" {
     for i, x in arr {
         sum += i + x
     }
-    @assert_eq(sum, 63)
+    @assertEq(sum, 63)
 }
