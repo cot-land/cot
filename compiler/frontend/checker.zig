@@ -1530,8 +1530,45 @@ pub const Checker = struct {
         const right = self.types.get(right_type);
 
         switch (bin.op) {
-            .add => {
+            .concat => {
+                // String ++ String → String
                 if (left_type == TypeRegistry.STRING and right_type == TypeRegistry.STRING) return TypeRegistry.STRING;
+                // [N]T ++ [M]T → [N+M]T (array concat, Zig Sema.zig:zirArrayCat)
+                if (left == .array and right == .array) {
+                    if (left.array.elem == right.array.elem) {
+                        return self.types.makeArray(left.array.elem, left.array.length + right.array.length) catch return invalid_type;
+                    }
+                    self.err.errorWithCode(bin.span.start, .e300, "'++' requires matching element types");
+                    return invalid_type;
+                }
+                // []T ++ []T → []T (slice concat)
+                if (left == .slice and right == .slice) {
+                    if (left.slice.elem == right.slice.elem) return left_type;
+                    self.err.errorWithCode(bin.span.start, .e300, "'++' requires matching element types");
+                    return invalid_type;
+                }
+                self.err.errorWithCode(bin.span.start, .e300, "'++' requires two strings, arrays, or slices of the same type");
+                return invalid_type;
+            },
+            .add => {
+                // String + String: @safe desugars to ++, normal mode errors
+                if (left_type == TypeRegistry.STRING and right_type == TypeRegistry.STRING) {
+                    if (self.safe_mode) return TypeRegistry.STRING;
+                    self.err.errorWithCode(bin.span.start, .e300, "'+' cannot concatenate strings; use '++' operator");
+                    return invalid_type;
+                }
+                // Array + Array: @safe desugars to ++, normal mode errors
+                if (left == .array and right == .array and left.array.elem == right.array.elem) {
+                    if (self.safe_mode) return self.types.makeArray(left.array.elem, left.array.length + right.array.length) catch return invalid_type;
+                    self.err.errorWithCode(bin.span.start, .e300, "'+' cannot concatenate arrays; use '++' operator");
+                    return invalid_type;
+                }
+                // Slice + Slice: @safe desugars to ++, normal mode errors
+                if (left == .slice and right == .slice and left.slice.elem == right.slice.elem) {
+                    if (self.safe_mode) return left_type;
+                    self.err.errorWithCode(bin.span.start, .e300, "'+' cannot concatenate slices; use '++' operator");
+                    return invalid_type;
+                }
                 if (left == .pointer and types.isInteger(right)) return left_type;
                 if (types.isInteger(left) and right == .pointer) return right_type;
                 if (!types.isNumeric(left) or !types.isNumeric(right)) { self.err.errorWithCode(bin.span.start, .e300, "invalid operation"); return invalid_type; }

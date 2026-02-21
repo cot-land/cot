@@ -294,3 +294,17 @@ test "auto-ref: explicit & still works" {
     incrementCounter(&c)
     @assertEq(c.value, 1)
 }
+
+// --- Feature 6: + desugars to ++ for strings in @safe mode ---
+
+test "safe mode + string concat" {
+    var s = "hello" + " world"
+    @assertEq(s, "hello world")
+}
+
+test "safe mode + string concat vars" {
+    var a = "foo"
+    var b = "bar"
+    var c = a + b
+    @assertEq(c, "foobar")
+}

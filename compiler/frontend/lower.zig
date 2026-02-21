@@ -3047,7 +3047,7 @@ pub const Lowerer = struct {
 
         // String concatenation: emit call to cot_string_concat + string_make
         // Go reference: walk/expr.go:walkAddString transforms OADDSTR to concatstring call
-        if (result_type == TypeRegistry.STRING and bin.op == .add) {
+        if (result_type == TypeRegistry.STRING and (bin.op == .add or bin.op == .concat)) {
             const ptr_type = try self.type_reg.makePointer(TypeRegistry.U8);
 
             // Extract ptr1, len1 from left string
@@ -3067,6 +3067,22 @@ pub const Lowerer = struct {
 
             // Create string_header(new_ptr, new_len) - this creates a string_make in SSA
             return try fb.emit(ir.Node.init(.{ .string_header = .{ .ptr = new_ptr, .len = new_len } }, TypeRegistry.STRING, bin.span));
+        }
+        // Array concat: [N]T ++ [M]T → [N+M]T (or + in @safe mode)
+        // Pattern: stack-alloc result, copy elements from both arrays (like lowerArrayLiteral)
+        if (bin.op == .concat or bin.op == .add) {
+            const left_type_idx = self.inferExprType(bin.left);
+            const right_type_idx = self.inferExprType(bin.right);
+            const left_type = self.type_reg.get(left_type_idx);
+            const right_type = self.type_reg.get(right_type_idx);
+            if (left_type == .array and right_type == .array) {
+                return try self.lowerArrayConcat(fb, left, right, left_type.array, right_type.array, bin.span);
+            }
+            // Slice concat: []T ++ []T → []T
+            // Reuse string_concat: alloc + memcpy by byte length, type-agnostic
+            if (left_type == .slice and right_type == .slice) {
+                return try self.lowerSliceConcat(fb, left, right, left_type.slice, left_type_idx, bin.span);
+            }
         }
         // String equality: decompose to ptr/len and call cot_string_eq
         // Same pattern as @assertEq string handling (line 3528)
@@ -3631,6 +3647,56 @@ pub const Lowerer = struct {
             _ = try fb.emitStoreIndexLocal(local_idx, idx_node, elem_node, elem_size, al.span);
         }
         return try fb.emitAddrLocal(local_idx, array_type, al.span);
+    }
+
+    /// Array concat: [N]T ++ [M]T → [N+M]T
+    /// Stack-alloc result, copy elements from both arrays (same pattern as lowerArrayLiteral)
+    fn lowerArrayConcat(self: *Lowerer, fb: *ir.FuncBuilder, left: ir.NodeIndex, right: ir.NodeIndex, la: types.ArrayType, ra: types.ArrayType, span: Span) Error!ir.NodeIndex {
+        const elem_type = la.elem;
+        const elem_size = self.type_reg.sizeOf(elem_type);
+        const result_len = la.length + ra.length;
+        const result_type = self.type_reg.makeArray(elem_type, result_len) catch return ir.null_node;
+        const result_size = self.type_reg.sizeOf(result_type);
+        const temp_name = try std.fmt.allocPrint(self.allocator, "__cat_{d}", .{fb.locals.items.len});
+        const local_idx = try fb.addLocalWithSize(temp_name, result_type, false, result_size);
+        // Copy elements from left array (indices 0..N)
+        for (0..la.length) |i| {
+            const idx_node = try fb.emitConstInt(@intCast(i), TypeRegistry.I64, span);
+            const src_elem = try fb.emitIndexValue(left, idx_node, elem_size, elem_type, span);
+            _ = try fb.emitStoreIndexLocal(local_idx, idx_node, src_elem, elem_size, span);
+        }
+        // Copy elements from right array (indices N..N+M)
+        for (0..ra.length) |j| {
+            const src_idx = try fb.emitConstInt(@intCast(j), TypeRegistry.I64, span);
+            const dst_idx = try fb.emitConstInt(@intCast(la.length + j), TypeRegistry.I64, span);
+            const src_elem = try fb.emitIndexValue(right, src_idx, elem_size, elem_type, span);
+            _ = try fb.emitStoreIndexLocal(local_idx, dst_idx, src_elem, elem_size, span);
+        }
+        return try fb.emitAddrLocal(local_idx, result_type, span);
+    }
+
+    /// Slice concat: []T ++ []T → []T
+    /// Reuse string_concat runtime (alloc + memcpy by byte length), type-agnostic
+    fn lowerSliceConcat(self: *Lowerer, fb: *ir.FuncBuilder, left: ir.NodeIndex, right: ir.NodeIndex, sl: types.SliceType, slice_type: TypeIndex, span: Span) Error!ir.NodeIndex {
+        const elem_type = sl.elem;
+        const elem_size = self.type_reg.sizeOf(elem_type);
+        const ptr_type = self.type_reg.makePointer(elem_type) catch return ir.null_node;
+        // Extract ptr and len from both slices
+        const ptr1 = try fb.emitSlicePtr(left, ptr_type, span);
+        const len1 = try fb.emitSliceLen(left, span); // element count
+        const ptr2 = try fb.emitSlicePtr(right, ptr_type, span);
+        const len2 = try fb.emitSliceLen(right, span); // element count
+        // Convert to byte lengths for string_concat
+        const elem_size_node = try fb.emitConstInt(@intCast(elem_size), TypeRegistry.I64, span);
+        const byte_len1 = try fb.emitBinary(.mul, len1, elem_size_node, TypeRegistry.I64, span);
+        const byte_len2 = try fb.emitBinary(.mul, len2, elem_size_node, TypeRegistry.I64, span);
+        // Alloc + copy via string_concat(ptr1, byte_len1, ptr2, byte_len2)
+        var args = [_]ir.NodeIndex{ ptr1, byte_len1, ptr2, byte_len2 };
+        const new_ptr = try fb.emitCall("string_concat", &args, false, TypeRegistry.I64, span);
+        // Element count for result
+        const new_len = try fb.emitBinary(.add, len1, len2, TypeRegistry.I64, span);
+        // Return slice_header(ptr, len, cap=len)
+        return try fb.emit(ir.Node.init(.{ .slice_header = .{ .ptr = new_ptr, .len = new_len, .cap = new_len } }, slice_type, span));
     }
 
     fn lowerSliceExpr(self: *Lowerer, se: ast.SliceExpr) Error!ir.NodeIndex {
@@ -6844,7 +6910,7 @@ pub const Lowerer = struct {
 
 fn tokenToBinaryOp(tok: Token) ir.BinaryOp {
     return switch (tok) {
-        .add, .add_assign => .add,
+        .add, .add_assign, .concat => .add,
         .sub, .sub_assign => .sub,
         .mul, .mul_assign => .mul,
         .quo, .quo_assign => .div,

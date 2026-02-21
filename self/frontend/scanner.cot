@@ -452,7 +452,10 @@ impl Scanner {
 
         // Two-char arithmetic operators
         if (c == '+') {
-            if (self.ch) |nc| { if (nc == '=') { self.advance(); return makeOp(start, self.pos, @intFromEnum(Token.add_assign)) } }
+            if (self.ch) |nc| {
+                if (nc == '+') { self.advance(); return makeOp(start, self.pos, @intFromEnum(Token.concat)) }
+                if (nc == '=') { self.advance(); return makeOp(start, self.pos, @intFromEnum(Token.add_assign)) }
+            }
             return makeOp(start, self.pos, @intFromEnum(Token.add))
         }
         if (c == '-') {
@@ -717,5 +720,13 @@ test "scanner quoted identifier" {
     var s = scannerInit("@\"or\" @\"and\"")
     expectTokText(s, @intFromEnum(Token.ident), "or")
     expectTokText(s, @intFromEnum(Token.ident), "and")
+    expectTok(s, @intFromEnum(Token.eof))
+}
+
+test "scanner concat operator" {
+    var s = scannerInit("a ++ b")
+    expectTokText(s, @intFromEnum(Token.ident), "a")
+    expectTok(s, @intFromEnum(Token.concat))
+    expectTokText(s, @intFromEnum(Token.ident), "b")
     expectTok(s, @intFromEnum(Token.eof))
 }

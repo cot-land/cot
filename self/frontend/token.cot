@@ -15,7 +15,7 @@ const Token = enum(u8) {
 
     // Operators (operator_beg..operator_end)
     operator_beg,
-    add, sub, mul, quo, rem,
+    add, sub, mul, quo, rem, concat,
     @"and", @"or", xor, shl, shr, @"not",
     add_assign, sub_assign, mul_assign, quo_assign, rem_assign,
     and_assign, or_assign, xor_assign,
@@ -69,6 +69,7 @@ const token_strings = comptime {
     s[@intFromEnum(Token.mul)] = "*"
     s[@intFromEnum(Token.quo)] = "/"
     s[@intFromEnum(Token.rem)] = "%"
+    s[@intFromEnum(Token.concat)] = "++"
     s[@intFromEnum(Token.@"and")] = "&"
     s[@intFromEnum(Token.@"or")] = "|"
     s[@intFromEnum(Token.xor)] = "^"
@@ -190,7 +191,7 @@ impl Token {
             .lor, .kw_or => 2,
             .land, .kw_and => 3,
             .eql, .neq, .lss, .leq, .gtr, .geq => 4,
-            .add, .sub, .@"or", .xor => 5,
+            .add, .sub, .@"or", .xor, .concat => 5,
             .mul, .quo, .rem, .@"and", .shl, .shr => 6,
             else => 0,
         }
@@ -396,6 +397,12 @@ test "precedence multi-case arms" {
     @assertEq(Token.geq.precedence(), 4)
     @assertEq(Token.lor.precedence(), 2)
     @assertEq(Token.land.precedence(), 3)
+}
+
+test "concat token" {
+    @assertEq(Token.concat.toString(), "++")
+    @assertEq(Token.concat.precedence(), 5)
+    @assertEq(Token.concat.isOperator(), true)
 }
 
 test "quoted ident operator tokens" {

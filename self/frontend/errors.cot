@@ -1,6 +1,8 @@
 /// Error reporting for the self-hosted compiler.
 /// Ported from compiler/frontend/errors.zig
 
+import "std/string"
+
 /// Error codes: 1xx=scanner, 2xx=parser, 3xx=type, 4xx=semantic
 const ErrorCode = enum(u16) {
     // Scanner
@@ -54,7 +56,14 @@ impl ErrorCode {
     }
 }
 
-/// Collects compilation errors with first-error detail.
+/// A single diagnostic error.
+struct Diagnostic {
+    offset: int,
+    code: ErrorCode,
+    msg: string,
+}
+
+/// Collects compilation errors with source location info.
 struct ErrorReporter {
     count: int,
     first_msg: string,
@@ -73,7 +82,7 @@ fn reporterInit() ErrorReporter {
 }
 
 impl ErrorReporter {
-    /// Record an error. First error's details are preserved.
+    /// Record an error.
     fn report(offset: int, code: ErrorCode, msg: string) void {
         if (self.count == 0) {
             self.first_msg = msg
@@ -92,6 +101,32 @@ impl ErrorReporter {
     fn errorCount() int {
         return self.count
     }
+}
+
+/// Compute line and column (1-based) from a byte offset in source text.
+fn offsetToLineCol(content: string, offset: int) (int, int) {
+    var line = 1
+    var col = 1
+    var i = 0
+    const len = @lenOf(content)
+    while (i < len and i < offset) {
+        if (charAt(content, i) == '\n') {
+            line = line + 1
+            col = 1
+        } else {
+            col = col + 1
+        }
+        i = i + 1
+    }
+    return (line, col)
+}
+
+/// Format a diagnostic as "filename:line:col: error[E###]: message"
+fn formatDiagnostic(filename: string, content: string, diag: Diagnostic) string {
+    const line, col = offsetToLineCol(content, diag.offset)
+    const loc = filename ++ ":" ++ intToString(line) ++ ":" ++ intToString(col)
+    const code_str = "error[E" ++ intToString(diag.code.code()) ++ "]: "
+    return loc ++ ": " ++ code_str ++ diag.msg
 }
 
 // ============================================================================
@@ -137,4 +172,28 @@ test "report multiple errors" {
     @assertEq(r.first_msg, "error 1")
     @assertEq(r.first_offset, 0)
     @assertEq(r.first_code.code(), 200)
+}
+
+test "offsetToLineCol first char" {
+    const line, col = offsetToLineCol("hello\nworld", 0)
+    @assertEq(line, 1)
+    @assertEq(col, 1)
+}
+
+test "offsetToLineCol second line" {
+    const line, col = offsetToLineCol("hello\nworld", 6)
+    @assertEq(line, 2)
+    @assertEq(col, 1)
+}
+
+test "offsetToLineCol third line" {
+    const line, col = offsetToLineCol("a\nb\ncde", 5)
+    @assertEq(line, 3)
+    @assertEq(col, 2)
+}
+
+test "formatDiagnostic output" {
+    const diag = Diagnostic { offset: 6, code: ErrorCode.e203, msg: "expected identifier" }
+    const result = formatDiagnostic("test.cot", "hello\nworld", diag)
+    @assertEq(result, "test.cot:2:1: error[E203]: expected identifier")
 }

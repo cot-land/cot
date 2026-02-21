@@ -8,6 +8,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **`++` concat operator (Zig parity)**: Works on strings, arrays (`[N]T ++ [M]T → [N+M]T`), and slices (`[]T ++ []T → []T`). `+` on strings/arrays/slices is now an error in normal mode (use `++`); in `@safe` mode, `+` auto-desugars to `++`
 - **`@safe` auto-ref**: Structs passed by reference automatically — no `&` needed. `foo(myStruct)` passes the original, mutations visible to caller. TypeScript/C#-style object semantics.
 - **Self-hosted parser**: Recursive descent parser (`self/frontend/parser.cot`, ~2,650 lines, 85 tests) — generic structs, generic impl, where clauses, switch range/guard, 53 builtins, quoted identifiers
 - CI/CD pipeline with GitHub Actions (test on every commit, release on tag)

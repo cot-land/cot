@@ -1,38 +1,180 @@
-/// Entry point for the self-hosted Cot compiler.
-/// Currently: tokenizes a source file and prints each token.
+/// Self-hosted Cot compiler CLI.
+/// Usage: cot <command> <file.cot>
+///
+/// Commands:
+///   parse <file>  — Parse and report syntax errors
+///   lex <file>    — Tokenize and print tokens
+///   help          — Print usage
 
 import "std/os"
 import "std/fs"
 import "std/sys"
+import "std/string"
 import "frontend/token"
 import "frontend/scanner"
+import "frontend/ast"
+import "frontend/errors"
+import "frontend/parser"
 
 fn main() void {
     if (argsCount() < 2) {
-        fd_write(2, @ptrOf("usage: cot <file.cot>\n"), 21)
+        printUsage()
         exit(1)
     }
 
-    const path = arg(1)
+    const cmd = arg(1)
+
+    if (strEqual(cmd, "help") or strEqual(cmd, "--help") or strEqual(cmd, "-h")) {
+        printUsage()
+        return
+    }
+
+    if (strEqual(cmd, "version") or strEqual(cmd, "--version")) {
+        writeOut("cot 0.3.2 (self-hosted)\n")
+        return
+    }
+
+    if (argsCount() < 3) {
+        writeErr("error: missing file argument\n")
+        printUsage()
+        exit(1)
+    }
+
+    const path = arg(2)
     const content = readFile(path) catch {
-        fd_write(2, @ptrOf("error: cannot read file\n"), 24)
+        writeErr("error: cannot read file: ")
+        writeErr(path)
+        writeErr("\n")
         exit(1)
     }
 
+    if (strEqual(cmd, "parse")) {
+        cmdParse(path, content)
+    } else if (strEqual(cmd, "lex")) {
+        cmdLex(path, content)
+    } else {
+        writeErr("error: unknown command: ")
+        writeErr(cmd)
+        writeErr("\n")
+        printUsage()
+        exit(1)
+    }
+}
+
+/// Parse a file and report syntax errors.
+fn cmdParse(path: string, content: string) void {
+    var s = scannerInit(content)
+    var ast = astInit(path)
+    var errs = reporterInit()
+    var p = parserInit(s, ast, errs)
+    p.parseFile()
+
+    if (errs.hasErrors()) {
+        const diag = Diagnostic { offset: errs.first_offset, code: errs.first_code, msg: errs.first_msg }
+        const msg = formatDiagnostic(path, content, diag)
+        writeErr(msg)
+        writeErr("\n")
+        if (errs.errorCount() > 1) {
+            writeErr("... and " ++ intToString(errs.errorCount() - 1) ++ " more error(s)\n")
+        }
+        exit(1)
+    }
+
+    const decl_count = ast.file_decls.len()
+    writeOut(path ++ ": ok (" ++ intToString(decl_count) ++ " declarations)\n")
+}
+
+/// Tokenize a file and print each token.
+fn cmdLex(path: string, content: string) void {
     var s = scannerInit(content)
     while (true) {
         const t = s.scanNext()
         const tok = @as(Token, @enumFromInt(t.tok))
         const name = tok.toString()
-        fd_write(1, @ptrOf(name), @lenOf(name))
+        writeOut(name)
         if (@lenOf(t.text) > 0) {
-            fd_write(1, @ptrOf(" \""), 2)
-            fd_write(1, @ptrOf(t.text), @lenOf(t.text))
-            fd_write(1, @ptrOf("\""), 1)
+            writeOut(" \"")
+            writeOut(t.text)
+            writeOut("\"")
         }
-        fd_write(1, @ptrOf("\n"), 1)
+        writeOut("\n")
         if (tok == Token.eof) {
             break
         }
     }
+}
+
+fn printUsage() void {
+    writeErr("Cot 0.3 (self-hosted)\n")
+    writeErr("\n")
+    writeErr("Usage: cot <command> <file.cot>\n")
+    writeErr("\n")
+    writeErr("Commands:\n")
+    writeErr("  parse <file>    Parse and report syntax errors\n")
+    writeErr("  lex <file>      Tokenize and print tokens\n")
+    writeErr("  version         Print version\n")
+    writeErr("  help            Print this help\n")
+}
+
+/// Write to stdout.
+fn writeOut(msg: string) void {
+    fd_write(1, @ptrOf(msg), @lenOf(msg))
+}
+
+/// Write to stderr.
+fn writeErr(msg: string) void {
+    fd_write(2, @ptrOf(msg), @lenOf(msg))
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "offsetToLineCol first char" {
+    const line, col = offsetToLineCol("hello\nworld", 0)
+    @assertEq(line, 1)
+    @assertEq(col, 1)
+}
+
+test "offsetToLineCol middle of first line" {
+    const line, col = offsetToLineCol("hello\nworld", 3)
+    @assertEq(line, 1)
+    @assertEq(col, 4)
+}
+
+test "offsetToLineCol start of second line" {
+    const line, col = offsetToLineCol("hello\nworld", 6)
+    @assertEq(line, 2)
+    @assertEq(col, 1)
+}
+
+test "offsetToLineCol third line" {
+    const line, col = offsetToLineCol("a\nb\ncde", 5)
+    @assertEq(line, 3)
+    @assertEq(col, 2)
+}
+
+test "parse valid source" {
+    var s = scannerInit("const x = 42")
+    var ast = astInit("test.cot")
+    var errs = reporterInit()
+    var p = parserInit(s, ast, errs)
+    p.parseFile()
+    @assertEq(errs.hasErrors(), false)
+    @assertEq(ast.file_decls.len(), 1)
+}
+
+test "parse reports errors" {
+    var s = scannerInit("fn { }")
+    var ast = astInit("test.cot")
+    var errs = reporterInit()
+    var p = parserInit(s, ast, errs)
+    p.parseFile()
+    @assertEq(errs.hasErrors(), true)
+}
+
+test "formatDiagnostic output" {
+    const diag = Diagnostic { offset: 6, code: ErrorCode.e203, msg: "expected identifier" }
+    const result = formatDiagnostic("test.cot", "hello\nworld", diag)
+    @assertEq(result, "test.cot:2:1: error[E203]: expected identifier")
 }

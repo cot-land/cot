@@ -409,6 +409,15 @@ var msg = "Value is ${x}, next is ${y + 1}"
 ### Arithmetic
 `+` `-` `*` `/` `%`
 
+### Concatenation
+`++` concatenates strings, arrays, and slices (like Zig's `++`):
+- `"hello" ++ " world"` → `"hello world"` (string)
+- `[1, 2] ++ [3, 4]` → `[1, 2, 3, 4]` (array `[N]T ++ [M]T → [N+M]T`)
+- `slice1 ++ slice2` → new slice (slice `[]T ++ []T → []T`)
+
+`+` on strings/arrays/slices is an **error** in normal mode — use `++` instead.
+In `@safe` mode, `+` auto-desugars to `++` for TypeScript-like DX.
+
 ### Comparison
 `<` `<=` `>` `>=` `==` `!=`
 
@@ -440,7 +449,7 @@ var msg = "Value is ${x}, next is ${y + 1}"
 | 2 | `\|\|`, `or` |
 | 3 | `&&`, `and` |
 | 4 | `==`, `!=`, `<`, `<=`, `>`, `>=` |
-| 5 | `+`, `-`, `\|`, `^` |
+| 5 | `+`, `-`, `++`, `\|`, `^` |
 | 6 (highest) | `*`, `/`, `%`, `&`, `<<`, `>>` |
 
 ### Operator Semantics

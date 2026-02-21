@@ -301,7 +301,7 @@ pub const Scanner = struct {
                 }
                 return .{ .tok = .ident, .span = Span.init(start, self.pos), .text = ident_text };
             } else .at,
-            '+' => if (self.ch == '=') blk: { self.advance(); break :blk .add_assign; } else .add,
+            '+' => if (self.ch == '+') blk: { self.advance(); break :blk .concat; } else if (self.ch == '=') blk: { self.advance(); break :blk .add_assign; } else .add,
             '-' => if (self.ch == '=') blk: { self.advance(); break :blk .sub_assign; } else if (self.ch == '>') blk: { self.advance(); break :blk .arrow; } else .sub,
             '*' => if (self.ch == '=') blk: { self.advance(); break :blk .mul_assign; } else .mul,
             '/' => if (self.ch == '=') blk: { self.advance(); break :blk .quo_assign; } else .quo,
@@ -483,6 +483,21 @@ test "scanner character literals" {
     try std.testing.expectEqual(Token.char_lit, tok.tok);
     tok = scanner.next();
     try std.testing.expectEqual(Token.char_lit, tok.tok);
+}
+
+test "scanner concat operator" {
+    const content = "a ++ b";
+    var src = Source.init(std.testing.allocator, "test.cot", content);
+    defer src.deinit();
+    var scanner = Scanner.init(&src);
+
+    var tok = scanner.next();
+    try std.testing.expectEqual(Token.ident, tok.tok);
+    try std.testing.expectEqualStrings("a", tok.text);
+    try std.testing.expectEqual(Token.concat, scanner.next().tok);
+    tok = scanner.next();
+    try std.testing.expectEqual(Token.ident, tok.tok);
+    try std.testing.expectEqualStrings("b", tok.text);
 }
 
 test "scanner compound assignment" {

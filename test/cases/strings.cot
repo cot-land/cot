@@ -23,7 +23,7 @@ test "index last" {
 test "concat simple" {
     var s1 = "hello"
     var s2 = " world"
-    var s3 = s1 + s2
+    var s3 = s1 ++ s2
     @assertEq(len(s3), 11)
 }
 
@@ -39,7 +39,7 @@ test "concat var direct" {
 }
 
 test "concat direct len" {
-    @assertEq(len("hello" + " world"), 11)
+    @assertEq(len("hello" ++ " world"), 11)
 }
 
 test "string eq literals" {
@@ -53,10 +53,51 @@ test "string eq vars" {
 }
 
 test "string eq concat" {
-    var s = "hello" + " world"
+    var s = "hello" ++ " world"
     @assertEq(s, "hello world")
 }
 
 test "string eq empty" {
     @assertEq("", "")
+}
+
+test "concat ++ simple" {
+    var s = "hello" ++ " world"
+    @assertEq(s, "hello world")
+}
+
+test "concat ++ chain" {
+    var result = "a" ++ "b" ++ "c"
+    @assertEq(result, "abc")
+}
+
+test "concat ++ with vars" {
+    var name = "world"
+    var s = "hello " ++ name ++ "!"
+    @assertEq(s, "hello world!")
+}
+
+test "concat ++ length" {
+    var s = "foo" ++ "bar"
+    @assertEq(len(s), 6)
+}
+
+test "array concat ++" {
+    var a = [1, 2, 3]
+    var b = [4, 5]
+    var c = a ++ b
+    @assertEq(c[0], 1)
+    @assertEq(c[2], 3)
+    @assertEq(c[3], 4)
+    @assertEq(c[4], 5)
+}
+
+test "array concat ++ same type" {
+    var x = [10, 20]
+    var y = [30, 40]
+    var z = x ++ y
+    @assertEq(z[0], 10)
+    @assertEq(z[1], 20)
+    @assertEq(z[2], 30)
+    @assertEq(z[3], 40)
 }
