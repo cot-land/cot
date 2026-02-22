@@ -2,12 +2,6 @@
 
 const std = @import("std");
 
-// Core modules
-pub const core_types = @import("core/types.zig");
-pub const core_errors = @import("core/errors.zig");
-pub const core_target = @import("core/target.zig");
-pub const core_testing = @import("core/testing.zig");
-
 // Frontend modules
 pub const token = @import("frontend/token.zig");
 pub const source = @import("frontend/source.zig");
@@ -60,7 +54,7 @@ pub const bench_runtime = @import("codegen/bench_runtime.zig");
 pub const file_watcher = @import("file_watcher.zig");
 pub const js_glue = @import("codegen/js_glue.zig");
 
-const Target = core_target.Target;
+const Target = @import("frontend/target.zig").Target;
 const Driver = driver.Driver;
 
 /// Resolve input file: if explicit file given, use it. Otherwise try cot.json.

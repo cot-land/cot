@@ -10,7 +10,7 @@
 
 const std = @import("std");
 const Driver = @import("../driver.zig").Driver;
-const Target = @import("../core/target.zig").Target;
+const Target = @import("../frontend/target.zig").Target;
 
 const NativeResult = struct {
     exit_code: ?u32,

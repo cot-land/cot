@@ -16,7 +16,7 @@ const wasm = @import("wasm.zig");
 const wasm_link = @import("wasm/wasm.zig");
 const ValType = wasm_link.ValType;
 const WasmImport = wasm_link.WasmImport;
-const Target = @import("../core/target.zig").Target;
+const Target = @import("../frontend/target.zig").Target;
 
 const wasm_op = @import("wasm_opcodes.zig");
 

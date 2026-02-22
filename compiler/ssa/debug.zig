@@ -6,8 +6,7 @@ const Block = @import("block.zig").Block;
 const Value = @import("value.zig").Value;
 const Op = @import("op.zig").Op;
 const TypeRegistry = @import("../frontend/types.zig").TypeRegistry;
-const core_types = @import("../core/types.zig");
-const ID = core_types.ID;
+const ID = u32;
 
 pub const Format = enum { text, dot };
 

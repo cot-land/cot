@@ -20,7 +20,7 @@ const rewritegeneric = @import("ssa/passes/rewritegeneric.zig");
 const decompose_builtin = @import("ssa/passes/decompose.zig");
 const rewritedec = @import("ssa/passes/rewritedec.zig");
 const lower_wasm = @import("ssa/passes/lower_wasm.zig");
-const target_mod = @import("core/target.zig");
+const target_mod = @import("frontend/target.zig");
 const pipeline_debug = @import("pipeline_debug.zig");
 
 // Wasm codegen

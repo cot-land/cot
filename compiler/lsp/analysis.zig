@@ -150,7 +150,7 @@ pub fn analyze(parent_allocator: std.mem.Allocator, text: []const u8, filename: 
 
     var checker: ?Checker = null;
     if (parse_ok) {
-        const target = @import("../core/target.zig").Target.native();
+        const target = @import("../frontend/target.zig").Target.native();
         var c = Checker.init(allocator, &tree, &type_reg, &err_reporter, &global_scope, &generics, target);
         c.checkFile() catch {};
         checker = c;
@@ -212,7 +212,7 @@ pub fn analyzeWithImports(parent_allocator: std.mem.Allocator, text: []const u8,
     var global_scope = Scope.init(allocator, null);
     var generics = SharedGenericContext.init(allocator);
     var symbol_origins = std.StringHashMap(SymbolOrigin).init(allocator);
-    const target = @import("../core/target.zig").Target.native();
+    const target = @import("../frontend/target.zig").Target.native();
 
     // Phase 1: Parse imports recursively (dependencies before main file)
     var dep_list = std.ArrayListUnmanaged(DepFile){};

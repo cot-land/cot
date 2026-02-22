@@ -46,7 +46,7 @@ fn testPipeline(allocator: std.mem.Allocator, code: []const u8) !struct {
     var generic_ctx = checker.SharedGenericContext.init(allocator);
     defer generic_ctx.deinit(allocator);
 
-    const target = @import("../core/target.zig").Target.native();
+    const target = @import("target.zig").Target.native();
     var check = checker.Checker.init(allocator, &tree, &type_reg, &err, &global_scope, &generic_ctx, target);
     defer check.deinit();
 

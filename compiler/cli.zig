@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const build_options = @import("build_options");
-const Target = @import("core/target.zig").Target;
+const Target = @import("frontend/target.zig").Target;
 
 pub const version: []const u8 = build_options.version;
 

@@ -10,7 +10,7 @@ const checker = @import("checker.zig");
 const comptime_mod = @import("comptime.zig");
 const token = @import("token.zig");
 const arc = @import("arc_insertion.zig");
-const target_mod = @import("../core/target.zig");
+const target_mod = @import("target.zig");
 
 const Allocator = std.mem.Allocator;
 const Ast = ast.Ast;

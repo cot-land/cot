@@ -60,7 +60,7 @@ fn compileToWasm(backing: std.mem.Allocator, code: []const u8) !WasmResult {
     var type_reg = try TypeRegistry.init(allocator);
     var global_scope = checker.Scope.init(allocator, null);
     var generic_ctx = checker.SharedGenericContext.init(allocator);
-    const target = @import("../core/target.zig").Target.native();
+    const target = @import("../frontend/target.zig").Target.native();
     var check = checker.Checker.init(allocator, &tree, &type_reg, &err, &global_scope, &generic_ctx, target);
     check.checkFile() catch {
         return .{ .arena = arena, .has_errors = true, .wasm_bytes = &.{} };
@@ -882,7 +882,7 @@ test "wasm e2e: ARC return forwarding" {
 // ============================================================================
 
 const Driver = @import("../driver.zig").Driver;
-const Target = @import("../core/target.zig").Target;
+const Target = @import("../frontend/target.zig").Target;
 
 fn compileToWasmViaDriver(backing_allocator: std.mem.Allocator, code: []const u8) !WasmResult {
     var arena = std.heap.ArenaAllocator.init(backing_allocator);

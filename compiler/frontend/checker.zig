@@ -8,7 +8,7 @@ const source = @import("source.zig");
 const token = @import("token.zig");
 const comptime_mod = @import("comptime.zig");
 
-const target_mod = @import("../core/target.zig");
+const target_mod = @import("target.zig");
 
 pub const ComptimeValue = comptime_mod.ComptimeValue;
 

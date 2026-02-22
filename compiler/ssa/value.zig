@@ -1,14 +1,14 @@
 //! SSA Value representation - the result of an SSA operation.
 
 const std = @import("std");
-const types = @import("../core/types.zig");
+const frontend_types = @import("../frontend/types.zig");
 const Op = @import("op.zig").Op;
 const abi = @import("../codegen/native/abi.zig");
 
-pub const ID = types.ID;
-pub const INVALID_ID = types.INVALID_ID;
-pub const TypeIndex = types.TypeIndex;
-pub const Pos = types.Pos;
+pub const ID = u32;
+pub const INVALID_ID: ID = 0;
+pub const TypeIndex = frontend_types.TypeIndex;
+pub const Pos = struct { line: u32 = 0, col: u32 = 0, file: u16 = 0 };
 
 // SSA size limits
 pub const MAX_STRUCT_FIELDS: usize = 4;
