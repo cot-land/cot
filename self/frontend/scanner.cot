@@ -172,7 +172,7 @@ impl Scanner {
         const text = substring(self.content, start, self.pos)
         const kw = lookup(text)
         if (kw != Token.ident) {
-            return TokenInfo { tok: @intFromEnum(kw), start_offset: start, end_offset: self.pos, text: "" }
+            return TokenInfo { tok: @intFromEnum(kw), start_offset: start, end_offset: self.pos, text: text }
         }
         return TokenInfo {
             tok: @intFromEnum(Token.ident),

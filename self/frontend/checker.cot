@@ -1,0 +1,2462 @@
+/// Type checker for the self-hosted Cot compiler.
+/// Ported from compiler/frontend/checker.zig
+///
+/// Checks the AST for type errors, builds the type registry, and
+/// resolves type expressions. Operates on the flat-encoded AST
+/// produced by parser.cot.
+
+import "std/list"
+import "std/map"
+import "std/string"
+import "ast"
+import "errors"
+import "types"
+import "token"
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+// null_node: defined in ast.cot
+// invalid_type: defined in types.cot
+
+// Type expression kind constants (match parser.cot addTypeExpr kind values)
+const TYPE_NAMED: int = 0
+const TYPE_POINTER: int = 1
+const TYPE_OPTIONAL: int = 2
+const TYPE_ERROR_UNION: int = 3
+const TYPE_SLICE: int = 4
+const TYPE_ARRAY: int = 5
+const TYPE_FUNCTION: int = 6
+
+// ============================================================================
+// Symbol — named binding in scope
+// ============================================================================
+
+struct Symbol {
+    name: string,
+    type_idx: int,
+    node: int,
+    mutable: bool,
+    is_func: bool,
+    is_type: bool,
+    is_const_val: bool,
+    const_value: int,
+}
+
+fn makeSymbol(name: string, type_idx: int, node: int, mutable: bool) Symbol {
+    return Symbol {
+        name: name,
+        type_idx: type_idx,
+        node: node,
+        mutable: mutable,
+        is_func: false,
+        is_type: false,
+        is_const_val: false,
+        const_value: 0,
+    }
+}
+
+fn makeFuncSymbol(name: string, type_idx: int, node: int) Symbol {
+    return Symbol {
+        name: name,
+        type_idx: type_idx,
+        node: node,
+        mutable: false,
+        is_func: true,
+        is_type: false,
+        is_const_val: false,
+        const_value: 0,
+    }
+}
+
+fn makeTypeSymbol(name: string, type_idx: int, node: int) Symbol {
+    return Symbol {
+        name: name,
+        type_idx: type_idx,
+        node: node,
+        mutable: false,
+        is_func: false,
+        is_type: true,
+        is_const_val: false,
+        const_value: 0,
+    }
+}
+
+fn makeConstSymbol(name: string, type_idx: int, node: int, value: int) Symbol {
+    return Symbol {
+        name: name,
+        type_idx: type_idx,
+        node: node,
+        mutable: false,
+        is_func: false,
+        is_type: false,
+        is_const_val: true,
+        const_value: value,
+    }
+}
+
+// ============================================================================
+// Checker — type checking state
+// ============================================================================
+
+// Symbol and Scope are stored via raw alloc'd arrays (not List(Struct))
+// due to native codegen bug with List(T) where T has 2+ fields.
+// Scope names stored as heap-allocated Map pointers in List(int).
+
+struct Checker {
+    types: *TypeRegistry,
+    ast: *Ast,
+    err: *ErrorReporter,
+    // Symbol table (raw alloc'd array)
+    sym_data: int,
+    sym_count: int,
+    sym_cap: int,
+    // Scope chain (parallel List(int) arrays)
+    scope_parents: List(int),
+    scope_maps: List(int),       // raw pointers to heap-allocated Map(string, int)
+    current_scope: int,
+    global_scope: int,
+    expr_types: Map(int, int),
+    current_return_type: int,
+    in_loop: bool,
+    safe_mode: bool,
+}
+
+impl Checker {
+    static fn init(ast: *Ast, types: *TypeRegistry, err: *ErrorReporter) Checker {
+        var expr_types: Map(int, int) = undefined
+        expr_types.keys = 0
+        expr_types.values = 0
+        expr_types.states = 0
+        expr_types.count = 0
+        expr_types.capacity = 0
+
+        var scope_parents: List(int) = undefined
+        scope_parents.items = 0
+        scope_parents.count = 0
+        scope_parents.capacity = 0
+
+        var scope_maps: List(int) = undefined
+        scope_maps.items = 0
+        scope_maps.count = 0
+        scope_maps.capacity = 0
+
+        // Create global scope (index 0)
+        var global_map = allocMap()
+        scope_parents.append(-1)
+        scope_maps.append(global_map)
+
+        return Checker {
+            types: types,
+            ast: ast,
+            err: err,
+            sym_data: 0,
+            sym_count: 0,
+            sym_cap: 0,
+            scope_parents: scope_parents,
+            scope_maps: scope_maps,
+            current_scope: 0,
+            global_scope: 0,
+            expr_types: expr_types,
+            current_return_type: VOID,
+            in_loop: false,
+            safe_mode: false,
+        }
+    }
+
+    // ---- Scope management ----
+
+    fn pushScope() int {
+        const idx = self.scope_parents.count
+        var new_map = allocMap()
+        self.scope_parents.append(self.current_scope)
+        self.scope_maps.append(new_map)
+        self.current_scope = idx
+        return idx
+    }
+
+    fn popScope() void {
+        self.current_scope = self.scope_parents.get(self.current_scope)
+    }
+
+    fn defineSymbol(sym: Symbol) void {
+        const idx = self.sym_count
+        // Grow symbol array if needed
+        if (self.sym_count >= self.sym_cap) {
+            var new_cap: int = self.sym_cap * 2
+            if (self.sym_cap == 0) { new_cap = 64 }
+            const new_size = new_cap * @sizeOf(Symbol)
+            if (self.sym_data == 0) {
+                self.sym_data = alloc(0, new_size)
+            } else {
+                self.sym_data = realloc(self.sym_data, new_size)
+            }
+            self.sym_cap = new_cap
+        }
+        var ptr = @intToPtr(*Symbol, self.sym_data + idx * @sizeOf(Symbol))
+        ptr.name = sym.name
+        ptr.type_idx = sym.type_idx
+        ptr.node = sym.node
+        ptr.mutable = sym.mutable
+        ptr.is_func = sym.is_func
+        ptr.is_type = sym.is_type
+        ptr.is_const_val = sym.is_const_val
+        ptr.const_value = sym.const_value
+        self.sym_count = self.sym_count + 1
+        // Register in current scope's map
+        var map = @intToPtr(*Map(string, int), self.scope_maps.get(self.current_scope))
+        map.set(sym.name, idx)
+    }
+
+    fn isDefined(name: string) bool {
+        var map = @intToPtr(*Map(string, int), self.scope_maps.get(self.current_scope))
+        return map.has(name) != 0
+    }
+
+    fn lookupSymbol(name: string) int {
+        var scope_idx = self.current_scope
+        while (scope_idx >= 0) {
+            var map = @intToPtr(*Map(string, int), self.scope_maps.get(scope_idx))
+            if (map.has(name) != 0) {
+                return map.get(name)
+            }
+            scope_idx = self.scope_parents.get(scope_idx)
+        }
+        return -1
+    }
+
+    fn getSymbol(idx: int) *Symbol {
+        return @intToPtr(*Symbol, self.sym_data + idx * @sizeOf(Symbol))
+    }
+
+    // ---- Main entry point ----
+
+    fn checkFile() void {
+        self.safe_mode = self.ast.safe_mode
+
+        // Pass 1: collect type declarations (struct, enum, union, type alias)
+        var i: int = 0
+        while (i < self.ast.file_decls.count) {
+            self.collectTypeDecl(self.ast.file_decls.get(i))
+            i = i + 1
+        }
+
+        // Pass 2: collect non-type declarations (fn, var/const, impl)
+        i = 0
+        while (i < self.ast.file_decls.count) {
+            self.collectNonTypeDecl(self.ast.file_decls.get(i))
+            i = i + 1
+        }
+
+        // Pass 3: check declaration bodies
+        i = 0
+        while (i < self.ast.file_decls.count) {
+            self.checkDecl(self.ast.file_decls.get(i))
+            i = i + 1
+        }
+    }
+
+    // ---- Declaration collection (pass 1 & 2) ----
+
+    fn collectTypeDecl(idx: int) void {
+        const tag = self.ast.getTag(idx)
+        if (tag == @intFromEnum(NodeTag.struct_decl)) {
+            self.collectStructDecl(idx)
+        } else if (tag == @intFromEnum(NodeTag.enum_decl)) {
+            self.collectEnumDecl(idx)
+        } else if (tag == @intFromEnum(NodeTag.union_decl)) {
+            self.collectUnionDecl(idx)
+        } else if (tag == @intFromEnum(NodeTag.type_alias)) {
+            self.collectTypeAlias(idx)
+        } else if (tag == @intFromEnum(NodeTag.error_set_decl)) {
+            self.collectErrorSetDecl(idx)
+        }
+    }
+
+    fn collectNonTypeDecl(idx: int) void {
+        const tag = self.ast.getTag(idx)
+        if (tag == @intFromEnum(NodeTag.fn_decl)) {
+            self.collectFnDecl(idx)
+        } else if (tag == @intFromEnum(NodeTag.var_decl)) {
+            self.collectVarDecl(idx)
+        } else if (tag == @intFromEnum(NodeTag.impl_block)) {
+            self.collectImplBlock(idx)
+        }
+    }
+
+    fn collectStructDecl(idx: int) void {
+        // struct_decl: [name_s, layout, doc_s, fields_count, ...fields, tp_count, ...tps, nested_count, ...nested, span_s, span_e]
+        const name = self.ast.getStr(self.ast.getData(idx, 0))
+        if (self.isDefined(name)) {
+            self.reportError(idx, ErrorCode.e302, "redefined identifier")
+            return
+        }
+        const fields_count = self.ast.getData(idx, 3)
+
+        // Skip generic structs (tp_count > 0)
+        const tp_count = self.ast.getData(idx, 4 + fields_count)
+        if (tp_count > 0) {
+            self.defineSymbol(makeTypeSymbol(name, invalid_type, idx))
+            return
+        }
+
+        const struct_type = self.buildStructType(idx, name)
+        self.defineSymbol(makeTypeSymbol(name, struct_type, idx))
+        self.types.registerNamed(name, struct_type)
+    }
+
+    fn collectEnumDecl(idx: int) void {
+        // enum_decl: [name_s, backing_type_n, doc_s, variants_count, ...variants, span_s, span_e]
+        const name = self.ast.getStr(self.ast.getData(idx, 0))
+        if (self.isDefined(name)) {
+            self.reportError(idx, ErrorCode.e302, "redefined identifier")
+            return
+        }
+        const enum_type = self.buildEnumType(idx)
+        self.defineSymbol(makeTypeSymbol(name, enum_type, idx))
+        self.types.registerNamed(name, enum_type)
+    }
+
+    fn collectUnionDecl(idx: int) void {
+        // union_decl: [name_s, doc_s, variants_count, ...variants, span_s, span_e]
+        const name = self.ast.getStr(self.ast.getData(idx, 0))
+        if (self.isDefined(name)) {
+            self.reportError(idx, ErrorCode.e302, "redefined identifier")
+            return
+        }
+        const union_type = self.buildUnionType(idx)
+        self.defineSymbol(makeTypeSymbol(name, union_type, idx))
+        self.types.registerNamed(name, union_type)
+    }
+
+    fn collectTypeAlias(idx: int) void {
+        // type_alias: [name_s, target_n, doc_s, span_s, span_e]
+        const name = self.ast.getStr(self.ast.getData(idx, 0))
+        if (self.isDefined(name)) {
+            self.reportError(idx, ErrorCode.e302, "redefined identifier")
+            return
+        }
+        const target_n = self.ast.getData(idx, 1)
+        const target_type = self.resolveTypeExpr(target_n)
+        self.defineSymbol(makeTypeSymbol(name, target_type, idx))
+        self.types.registerNamed(name, target_type)
+    }
+
+    fn collectErrorSetDecl(idx: int) void {
+        // error_set_decl: [name_s, doc_s, variants_count, ...variant_strings, span_s, span_e]
+        const name = self.ast.getStr(self.ast.getData(idx, 0))
+        if (self.isDefined(name)) {
+            self.reportError(idx, ErrorCode.e302, "redefined identifier")
+            return
+        }
+        // Build error set type
+        const variants_count = self.ast.getData(idx, 2)
+        const es_type = self.types.add(Type.error_set(ErrorSetType {
+            name: name,
+            variant_count: variants_count,
+            variant_names: 0,
+        }))
+        self.defineSymbol(makeTypeSymbol(name, es_type, idx))
+        self.types.registerNamed(name, es_type)
+    }
+
+    fn collectFnDecl(idx: int) void {
+        // fn_decl: [name_s, ret_type_n, body_n, is_extern, is_async, doc_s,
+        //           params_count, ...param_nodes, tp_count, ...tp_strings, bounds_count, ...bounds, span_s, span_e]
+        const name = self.ast.getStr(self.ast.getData(idx, 0))
+        if (self.isDefined(name)) {
+            self.reportError(idx, ErrorCode.e302, "redefined identifier")
+            return
+        }
+        const params_count = self.ast.getData(idx, 6)
+
+        // Skip generic functions (tp_count > 0)
+        const tp_count = self.ast.getData(idx, 7 + params_count)
+        if (tp_count > 0) {
+            self.defineSymbol(makeTypeSymbol(name, invalid_type, idx))
+            return
+        }
+
+        const func_type = self.buildFuncType(idx)
+        self.defineSymbol(makeFuncSymbol(name, func_type, idx))
+    }
+
+    fn collectVarDecl(idx: int) void {
+        // var_decl: [name_s, type_expr_n, value_n, is_const, doc_s, span_s, span_e]
+        const name = self.ast.getStr(self.ast.getData(idx, 0))
+        if (self.isDefined(name)) {
+            self.reportError(idx, ErrorCode.e302, "redefined identifier")
+            return
+        }
+        const is_const = self.ast.getData(idx, 3)
+        self.defineSymbol(makeSymbol(name, invalid_type, idx, is_const == 0))
+    }
+
+    fn collectImplBlock(idx: int) void {
+        // impl_block: [type_name_s, doc_s, methods_count, ...method_nodes, tp_count, ...tp_strings, span_s, span_e]
+        const type_name = self.ast.getStr(self.ast.getData(idx, 0))
+        const methods_count = self.ast.getData(idx, 2)
+
+        // Skip generic impl blocks
+        const tp_count = self.ast.getData(idx, 3 + methods_count)
+        if (tp_count > 0) {
+            return
+        }
+
+        var mi: int = 0
+        while (mi < methods_count) {
+            const method_idx = self.ast.getData(idx, 3 + mi)
+            const method_tag = self.ast.getTag(method_idx)
+            if (method_tag == @intFromEnum(NodeTag.fn_decl)) {
+                const method_name = self.ast.getStr(self.ast.getData(method_idx, 0))
+                const synth_name = type_name ++ "_" ++ method_name
+                const func_type = self.buildFuncType(method_idx)
+
+                // Detect static (no params or first param not named "self")
+                const m_params_count = self.ast.getData(method_idx, 6)
+                var is_static = true
+                if (m_params_count > 0) {
+                    const first_param = self.ast.getData(method_idx, 7)
+                    const first_tag = self.ast.getTag(first_param)
+                    if (first_tag == @intFromEnum(NodeTag.field_def)) {
+                        const pname = self.ast.getStr(self.ast.getData(first_param, 0))
+                        if (strEqual(pname, "self")) {
+                            is_static = false
+                        }
+                    }
+                }
+
+                self.defineSymbol(makeFuncSymbol(synth_name, func_type, method_idx))
+                self.types.registerMethod(type_name, MethodInfo {
+                    name: method_name,
+                    func_name: synth_name,
+                    func_type: func_type,
+                    receiver_is_ptr: !is_static,
+                })
+
+                // Also define associated constants (var_decl inside impl)
+            } else if (method_tag == @intFromEnum(NodeTag.var_decl)) {
+                const const_name = self.ast.getStr(self.ast.getData(method_idx, 0))
+                const synth_name = type_name ++ "_" ++ const_name
+                const is_const = self.ast.getData(method_idx, 3)
+                self.defineSymbol(makeSymbol(synth_name, invalid_type, method_idx, is_const == 0))
+            }
+            mi = mi + 1
+        }
+    }
+
+    // ---- Declaration checking (pass 3) ----
+
+    fn checkDecl(idx: int) void {
+        const tag = self.ast.getTag(idx)
+        if (tag == @intFromEnum(NodeTag.fn_decl)) {
+            // Skip generic functions
+            const params_count = self.ast.getData(idx, 6)
+            const tp_count = self.ast.getData(idx, 7 + params_count)
+            if (tp_count > 0) { return }
+            const name = self.ast.getStr(self.ast.getData(idx, 0))
+            self.checkFnDeclBody(idx, name)
+        } else if (tag == @intFromEnum(NodeTag.var_decl)) {
+            self.checkTopVarDecl(idx)
+        } else if (tag == @intFromEnum(NodeTag.impl_block)) {
+            self.checkImplBlock(idx)
+        } else if (tag == @intFromEnum(NodeTag.test_decl)) {
+            self.checkTestDecl(idx)
+        } else if (tag == @intFromEnum(NodeTag.bench_decl)) {
+            self.checkTestDecl(idx)
+        }
+    }
+
+    fn checkImplBlock(idx: int) void {
+        const type_name = self.ast.getStr(self.ast.getData(idx, 0))
+        const methods_count = self.ast.getData(idx, 2)
+        // Skip generic impl blocks
+        const tp_count = self.ast.getData(idx, 3 + methods_count)
+        if (tp_count > 0) { return }
+
+        var mi: int = 0
+        while (mi < methods_count) {
+            const method_idx = self.ast.getData(idx, 3 + mi)
+            if (self.ast.getTag(method_idx) == @intFromEnum(NodeTag.fn_decl)) {
+                const method_name = self.ast.getStr(self.ast.getData(method_idx, 0))
+                const synth_name = type_name ++ "_" ++ method_name
+                self.checkFnDeclBody(method_idx, synth_name)
+            }
+            mi = mi + 1
+        }
+    }
+
+    fn checkTestDecl(idx: int) void {
+        // test_decl/bench_decl: [name_s, body_n, span_s, span_e]
+        const body = self.ast.getData(idx, 1)
+        if (body == null_node) { return }
+        self.pushScope()
+        const old_ret = self.current_return_type
+        self.current_return_type = VOID
+        self.checkStmt(body)
+        self.current_return_type = old_ret
+        self.popScope()
+    }
+
+    fn checkFnDeclBody(idx: int, lookup_name: string) void {
+        const sym_idx = self.lookupSymbol(lookup_name)
+        if (sym_idx < 0) { return }
+        const sym = self.getSymbol(sym_idx)
+
+        // Get return type from func type
+        var return_type: int = VOID
+        const func_t = self.types.get(sym.type_idx)
+        if (func_t.tag == TAG_FUNC) {
+            const ft = switch (func_t) {
+                Type.func |f| => f,
+                else => FuncType { param_count: 0, params: 0, return_type: VOID },
+            }
+            return_type = ft.return_type
+        }
+
+        // fn_decl: [name_s, ret_type_n, body_n, is_extern, is_async, doc_s, params_count, ...params, ...]
+        const body = self.ast.getData(idx, 2)
+        if (body == null_node) { return }
+        const params_count = self.ast.getData(idx, 6)
+
+        self.pushScope()
+        const old_ret = self.current_return_type
+        self.current_return_type = return_type
+
+        // Define parameters in scope
+        var pi: int = 0
+        while (pi < params_count) {
+            const param_idx = self.ast.getData(idx, 7 + pi)
+            // field_def: [name_s, type_expr_n, default_val_n, doc_s, span_s, span_e]
+            if (self.ast.getTag(param_idx) == @intFromEnum(NodeTag.field_def)) {
+                const pname = self.ast.getStr(self.ast.getData(param_idx, 0))
+                const ptype_n = self.ast.getData(param_idx, 1)
+                var ptype = self.resolveTypeExpr(ptype_n)
+                self.defineSymbol(makeSymbol(pname, ptype, idx, false))
+            }
+            pi = pi + 1
+        }
+
+        self.checkBlockBody(body)
+
+        self.current_return_type = old_ret
+        self.popScope()
+    }
+
+    fn checkTopVarDecl(idx: int) void {
+        // var_decl: [name_s, type_expr_n, value_n, is_const, doc_s, span_s, span_e]
+        const name = self.ast.getStr(self.ast.getData(idx, 0))
+        const type_expr_n = self.ast.getData(idx, 1)
+        const value_n = self.ast.getData(idx, 2)
+        const is_const = self.ast.getData(idx, 3)
+
+        var var_type: int = invalid_type
+        if (type_expr_n != null_node) {
+            var_type = self.resolveTypeExpr(type_expr_n)
+        }
+        if (value_n != null_node) {
+            const val_type = self.checkExpr(value_n)
+            if (var_type == invalid_type) {
+                var_type = self.materializeType(val_type)
+            } else if (!self.types.isAssignable(val_type, var_type)) {
+                self.reportError(idx, ErrorCode.e300, "type mismatch")
+            }
+        }
+
+        // Update symbol with resolved type
+        const sym_idx = self.lookupSymbol(name)
+        if (sym_idx >= 0) {
+            // Try to evaluate const value
+            if (is_const != 0 and value_n != null_node) {
+                const cv = self.evalConstExpr(value_n)
+                if (cv.0 != 0) {
+                    self.updateSymbolType(sym_idx, var_type)
+                    self.updateSymbolConst(sym_idx, cv.1)
+                    return
+                }
+            }
+            self.updateSymbolType(sym_idx, var_type)
+        }
+    }
+
+    fn updateSymbolType(sym_idx: int, type_idx: int) void {
+        var sym_ptr = self.getSymbol(sym_idx)
+        sym_ptr.type_idx = type_idx
+    }
+
+    fn updateSymbolConst(sym_idx: int, value: int) void {
+        var sym_ptr = self.getSymbol(sym_idx)
+        sym_ptr.is_const_val = true
+        sym_ptr.const_value = value
+    }
+
+    // ---- Statement checking ----
+
+    fn checkStmt(idx: int) void {
+        if (idx == null_node) { return }
+        const tag = self.ast.getTag(idx)
+
+        if (tag == @intFromEnum(NodeTag.expr_stmt)) {
+            // expr_stmt: [expr_n, span_s, span_e]
+            self.checkExpr(self.ast.getData(idx, 0))
+        } else if (tag == @intFromEnum(NodeTag.return_stmt)) {
+            self.checkReturn(idx)
+        } else if (tag == @intFromEnum(NodeTag.var_stmt)) {
+            self.checkVarStmt(idx)
+        } else if (tag == @intFromEnum(NodeTag.assign_stmt)) {
+            self.checkAssign(idx)
+        } else if (tag == @intFromEnum(NodeTag.if_stmt)) {
+            self.checkIfStmt(idx)
+        } else if (tag == @intFromEnum(NodeTag.while_stmt)) {
+            self.checkWhileStmt(idx)
+        } else if (tag == @intFromEnum(NodeTag.for_stmt)) {
+            self.checkForStmt(idx)
+        } else if (tag == @intFromEnum(NodeTag.block_stmt)) {
+            self.checkBlockStmt(idx)
+        } else if (tag == @intFromEnum(NodeTag.break_stmt)) {
+            if (!self.in_loop) {
+                self.reportError(idx, ErrorCode.e400, "break outside loop")
+            }
+        } else if (tag == @intFromEnum(NodeTag.continue_stmt)) {
+            if (!self.in_loop) {
+                self.reportError(idx, ErrorCode.e401, "continue outside loop")
+            }
+        } else if (tag == @intFromEnum(NodeTag.defer_stmt)) {
+            // defer_stmt: [expr_n, is_errdefer, span_s, span_e]
+            self.checkExpr(self.ast.getData(idx, 0))
+        } else if (tag == @intFromEnum(NodeTag.destructure_stmt)) {
+            self.checkDestructureStmt(idx)
+        }
+    }
+
+    fn checkReturn(idx: int) void {
+        // return_stmt: [value_n, span_s, span_e]
+        const value = self.ast.getData(idx, 0)
+        if (value != null_node) {
+            const val_type = self.checkExpr(value)
+            if (self.current_return_type == VOID) {
+                self.reportError(idx, ErrorCode.e402, "void function should not return a value")
+            } else if (!self.types.isAssignable(val_type, self.current_return_type)) {
+                self.reportError(idx, ErrorCode.e300, "type mismatch")
+            }
+        } else if (self.current_return_type != VOID) {
+            self.reportError(idx, ErrorCode.e402, "non-void function must return a value")
+        }
+    }
+
+    fn checkVarStmt(idx: int) void {
+        // var_stmt: [name_s, type_expr_n, value_n, is_const, is_weak, span_s, span_e]
+        const name = self.ast.getStr(self.ast.getData(idx, 0))
+        const type_expr_n = self.ast.getData(idx, 1)
+        const value_n = self.ast.getData(idx, 2)
+        const is_const = self.ast.getData(idx, 3)
+
+        if (self.isDefined(name)) {
+            self.reportError(idx, ErrorCode.e302, "redefined identifier")
+            return
+        }
+
+        var var_type: int = invalid_type
+        if (type_expr_n != null_node) {
+            var_type = self.resolveTypeExpr(type_expr_n)
+        }
+
+        if (value_n != null_node) {
+            // Check for undefined literal
+            if (self.ast.getTag(value_n) != @intFromEnum(NodeTag.literal) or self.getLiteralKind(value_n) != @intFromEnum(LiteralKind.undefined_lit)) {
+                const val_type = self.checkExpr(value_n)
+                if (var_type == invalid_type) {
+                    var_type = self.materializeType(val_type)
+                } else if (!self.types.isAssignable(val_type, var_type)) {
+                    self.reportError(idx, ErrorCode.e300, "type mismatch")
+                }
+            }
+        }
+
+        // Store const_value for comptime const-folding
+        if (is_const != 0 and value_n != null_node) {
+            const cv = self.evalConstExpr(value_n)
+            if (cv.0 != 0) {
+                self.defineSymbol(makeConstSymbol(name, var_type, idx, cv.1))
+                return
+            }
+        }
+        self.defineSymbol(makeSymbol(name, var_type, idx, is_const == 0))
+    }
+
+    fn checkAssign(idx: int) void {
+        // assign_stmt: [target_n, op, value_n, span_s, span_e]
+        const target_n = self.ast.getData(idx, 0)
+        const value_n = self.ast.getData(idx, 2)
+        const target_type = self.checkExpr(target_n)
+        const value_type = self.checkExpr(value_n)
+
+        // Check mutability for identifier targets
+        const target_tag = self.ast.getTag(target_n)
+        if (target_tag == @intFromEnum(NodeTag.ident)) {
+            const name = self.ast.getStr(self.ast.getData(target_n, 0))
+            const sym_idx = self.lookupSymbol(name)
+            if (sym_idx >= 0) {
+                const sym = self.getSymbol(sym_idx)
+                if (!sym.mutable) {
+                    self.reportError(idx, ErrorCode.e303, "cannot assign to constant")
+                    return
+                }
+            }
+        }
+
+        if (!self.types.isAssignable(value_type, target_type)) {
+            self.reportError(idx, ErrorCode.e300, "type mismatch")
+        }
+    }
+
+    fn checkIfStmt(idx: int) void {
+        // if_stmt: [cond_n, then_n, else_n, capture_s, span_s, span_e]
+        const cond_n = self.ast.getData(idx, 0)
+        const then_n = self.ast.getData(idx, 1)
+        const else_n = self.ast.getData(idx, 2)
+        const capture_s = self.ast.getData(idx, 3)
+        const capture = self.ast.getStr(capture_s)
+
+        const cond_type = self.checkExpr(cond_n)
+
+        // Optional capture: if (expr) |val| { }
+        if (@lenOf(capture) > 0) {
+            const cond_t = self.types.get(cond_type)
+            if (cond_t.tag != TAG_OPTIONAL) {
+                self.reportError(idx, ErrorCode.e300, "capture requires optional type")
+                return
+            }
+            const elem_type = switch (cond_t) {
+                Type.optional |o| => o.elem,
+                else => invalid_type,
+            }
+            self.pushScope()
+            self.defineSymbol(makeSymbol(capture, elem_type, null_node, false))
+            self.checkStmt(then_n)
+            self.popScope()
+            if (else_n != null_node) { self.checkStmt(else_n) }
+            return
+        }
+
+        // Normal if: condition must be bool
+        if (!self.isBoolType(cond_type)) {
+            self.reportError(idx, ErrorCode.e300, "condition must be bool")
+        }
+
+        // Comptime dead branch elimination
+        const cv = self.evalConstExpr(cond_n)
+        if (cv.0 != 0) {
+            if (cv.1 != 0) { self.checkStmt(then_n); return }
+            if (else_n != null_node) { self.checkStmt(else_n); return }
+            return
+        }
+
+        self.checkStmt(then_n)
+        if (else_n != null_node) { self.checkStmt(else_n) }
+    }
+
+    fn checkWhileStmt(idx: int) void {
+        // while_stmt: [cond_n, body_n, capture_s, cont_expr_n, label_s, span_s, span_e]
+        const cond_n = self.ast.getData(idx, 0)
+        const body_n = self.ast.getData(idx, 1)
+        const capture_s = self.ast.getData(idx, 2)
+        const capture = self.ast.getStr(capture_s)
+
+        const cond_type = self.checkExpr(cond_n)
+
+        if (@lenOf(capture) > 0) {
+            const cond_t = self.types.get(cond_type)
+            if (cond_t.tag != TAG_OPTIONAL) {
+                self.reportError(idx, ErrorCode.e300, "capture requires optional type")
+                return
+            }
+            const elem_type = switch (cond_t) {
+                Type.optional |o| => o.elem,
+                else => invalid_type,
+            }
+            self.pushScope()
+            self.defineSymbol(makeSymbol(capture, elem_type, null_node, false))
+            const old_in_loop = self.in_loop
+            self.in_loop = true
+            self.checkStmt(body_n)
+            self.in_loop = old_in_loop
+            self.popScope()
+            return
+        }
+
+        if (!self.isBoolType(cond_type)) {
+            self.reportError(idx, ErrorCode.e300, "condition must be bool")
+        }
+        const old_in_loop = self.in_loop
+        self.in_loop = true
+        self.checkStmt(body_n)
+        self.in_loop = old_in_loop
+    }
+
+    fn checkForStmt(idx: int) void {
+        // for_stmt: [binding_s, index_s, iterable_n, range_start_n, range_end_n, body_n, is_inline, label_s, span_s, span_e]
+        const binding = self.ast.getStr(self.ast.getData(idx, 0))
+        const index_s = self.ast.getData(idx, 1)
+        const index_binding = self.ast.getStr(index_s)
+        const iterable_n = self.ast.getData(idx, 2)
+        const range_start_n = self.ast.getData(idx, 3)
+        const range_end_n = self.ast.getData(idx, 4)
+        const body_n = self.ast.getData(idx, 5)
+
+        var elem_type: int = invalid_type
+        const is_range = range_start_n != null_node and range_end_n != null_node
+
+        if (is_range) {
+            const start_type = self.checkExpr(range_start_n)
+            const end_type = self.checkExpr(range_end_n)
+            if (!self.isIntegerType(start_type) or !self.isIntegerType(end_type)) {
+                self.reportError(idx, ErrorCode.e300, "range bounds must be integers")
+            }
+            elem_type = self.materializeType(start_type)
+        } else if (iterable_n != null_node) {
+            const iter_type = self.checkExpr(iterable_n)
+            const iter_t = self.types.get(iter_type)
+            if (iter_type == STRING) {
+                elem_type = U8
+            } else if (iter_t.tag == TAG_ARRAY) {
+                elem_type = switch (iter_t) { Type.array |a| => a.elem, else => invalid_type }
+            } else if (iter_t.tag == TAG_SLICE) {
+                elem_type = switch (iter_t) { Type.slice |s| => s.elem, else => invalid_type }
+            } else {
+                self.reportError(idx, ErrorCode.e300, "cannot iterate over this type")
+            }
+        }
+
+        self.pushScope()
+        self.defineSymbol(makeSymbol(binding, elem_type, null_node, false))
+        if (@lenOf(index_binding) > 0) {
+            self.defineSymbol(makeSymbol(index_binding, I64, null_node, false))
+        }
+        const old_in_loop = self.in_loop
+        self.in_loop = true
+        self.checkStmt(body_n)
+        self.in_loop = old_in_loop
+        self.popScope()
+    }
+
+    fn checkBlockStmt(idx: int) void {
+        // block_stmt: [stmts_count, ...stmt_nodes, span_s, span_e]
+        const stmts_count = self.ast.getData(idx, 0)
+        self.pushScope()
+        var i: int = 0
+        while (i < stmts_count) {
+            self.checkStmt(self.ast.getData(idx, 1 + i))
+            i = i + 1
+        }
+        self.popScope()
+    }
+
+    fn checkDestructureStmt(idx: int) void {
+        // destructure_stmt: [value_n, is_const, bindings_count, ...binding_nodes, span_s, span_e]
+        const value_n = self.ast.getData(idx, 0)
+        const is_const = self.ast.getData(idx, 1)
+        const bindings_count = self.ast.getData(idx, 2)
+
+        const val_type = self.checkExpr(value_n)
+        const val_t = self.types.get(val_type)
+
+        if (val_t.tag != TAG_TUPLE) {
+            self.reportError(idx, ErrorCode.e300, "destructuring requires a tuple value")
+            return
+        }
+
+        const tup = switch (val_t) { Type.tuple |t| => t, else => TupleType { elem_count: 0, elem_types: 0 } }
+        if (bindings_count != tup.elem_count) {
+            self.reportError(idx, ErrorCode.e300, "destructuring count mismatch")
+            return
+        }
+
+        var i: int = 0
+        while (i < bindings_count) {
+            const bind_idx = self.ast.getData(idx, 3 + i)
+            // destructure_bind: [name_s, type_expr_n, span_s, span_e]
+            const bname = self.ast.getStr(self.ast.getData(bind_idx, 0))
+            var elem_type = @intToPtr(*int, tup.elem_types + i * 8).*
+            elem_type = self.materializeType(elem_type)
+            self.defineSymbol(makeSymbol(bname, elem_type, idx, is_const != 0))
+            i = i + 1
+        }
+    }
+
+    fn checkBlockBody(idx: int) void {
+        if (idx == null_node) { return }
+        const tag = self.ast.getTag(idx)
+        if (tag == @intFromEnum(NodeTag.block_stmt)) {
+            self.checkBlockStmt(idx)
+        } else if (tag == @intFromEnum(NodeTag.block_expr)) {
+            self.checkBlockExprVoid(idx)
+        } else {
+            self.checkStmt(idx)
+        }
+    }
+
+    fn checkBlockExprVoid(idx: int) void {
+        // block_expr: [result_expr_n, stmts_count, ...stmt_nodes, span_s, span_e]
+        const result_expr = self.ast.getData(idx, 0)
+        const stmts_count = self.ast.getData(idx, 1)
+        self.pushScope()
+        var i: int = 0
+        while (i < stmts_count) {
+            self.checkStmt(self.ast.getData(idx, 2 + i))
+            i = i + 1
+        }
+        if (result_expr != null_node) {
+            self.checkExpr(result_expr)
+        }
+        self.popScope()
+    }
+
+    // ---- Expression checking ----
+
+    fn checkExpr(idx: int) int {
+        if (idx == null_node) { return invalid_type }
+
+        // Check cache
+        if (self.expr_types.has(idx) != 0) {
+            return self.expr_types.get(idx)
+        }
+
+        const result = self.checkExprInner(idx)
+        self.expr_types.set(idx, result)
+        return result
+    }
+
+    fn checkExprInner(idx: int) int {
+        const tag = self.ast.getTag(idx)
+
+        if (tag == @intFromEnum(NodeTag.ident)) {
+            return self.checkIdentifier(idx)
+        } else if (tag == @intFromEnum(NodeTag.literal)) {
+            return self.checkLiteral(idx)
+        } else if (tag == @intFromEnum(NodeTag.binary)) {
+            return self.checkBinary(idx)
+        } else if (tag == @intFromEnum(NodeTag.unary)) {
+            return self.checkUnary(idx)
+        } else if (tag == @intFromEnum(NodeTag.call)) {
+            return self.checkCall(idx)
+        } else if (tag == @intFromEnum(NodeTag.index_expr)) {
+            return self.checkIndex(idx)
+        } else if (tag == @intFromEnum(NodeTag.field_access)) {
+            return self.checkFieldAccess(idx)
+        } else if (tag == @intFromEnum(NodeTag.struct_init)) {
+            return self.checkStructInit(idx)
+        } else if (tag == @intFromEnum(NodeTag.new_expr)) {
+            return self.checkNewExpr(idx)
+        } else if (tag == @intFromEnum(NodeTag.array_literal)) {
+            return self.checkArrayLiteral(idx)
+        } else if (tag == @intFromEnum(NodeTag.paren)) {
+            // paren: [inner_n, span_s, span_e]
+            return self.checkExpr(self.ast.getData(idx, 0))
+        } else if (tag == @intFromEnum(NodeTag.if_expr)) {
+            return self.checkIfExpr(idx)
+        } else if (tag == @intFromEnum(NodeTag.switch_expr)) {
+            return self.checkSwitchExpr(idx)
+        } else if (tag == @intFromEnum(NodeTag.block_expr)) {
+            return self.checkBlockExpr(idx)
+        } else if (tag == @intFromEnum(NodeTag.builtin_call)) {
+            return self.checkBuiltinCall(idx)
+        } else if (tag == @intFromEnum(NodeTag.string_interp)) {
+            return self.checkStringInterp(idx)
+        } else if (tag == @intFromEnum(NodeTag.try_expr)) {
+            return self.checkTryExpr(idx)
+        } else if (tag == @intFromEnum(NodeTag.catch_expr)) {
+            return self.checkCatchExpr(idx)
+        } else if (tag == @intFromEnum(NodeTag.error_literal)) {
+            return self.current_return_type
+        } else if (tag == @intFromEnum(NodeTag.addr_of)) {
+            return self.checkAddrOf(idx)
+        } else if (tag == @intFromEnum(NodeTag.deref)) {
+            return self.checkDeref(idx)
+        } else if (tag == @intFromEnum(NodeTag.tuple_literal)) {
+            return self.checkTupleLiteral(idx)
+        } else if (tag == @intFromEnum(NodeTag.slice_expr)) {
+            return self.checkSliceExpr(idx)
+        } else if (tag == @intFromEnum(NodeTag.zero_init)) {
+            return VOID
+        }
+        return invalid_type
+    }
+
+    fn checkIdentifier(idx: int) int {
+        // ident: [name_s, span_s, span_e]
+        const name = self.ast.getStr(self.ast.getData(idx, 0))
+
+        // Check type registry (enum/union used as expression for variant access)
+        const type_idx = self.types.lookupByName(name)
+        if (type_idx >= 0) {
+            const t = self.types.get(type_idx)
+            if (t.tag == TAG_ENUM or t.tag == TAG_UNION or t.tag == TAG_ERROR_SET) {
+                return type_idx
+            }
+        }
+
+        const sym_idx = self.lookupSymbol(name)
+        if (sym_idx >= 0) {
+            return self.getSymbol(sym_idx).type_idx
+        }
+        self.reportError(idx, ErrorCode.e301, "undefined identifier")
+        return invalid_type
+    }
+
+    fn checkLiteral(idx: int) int {
+        // literal: [kind, value_s, span_s, span_e]
+        const kind = self.ast.getData(idx, 0)
+        if (kind == @intFromEnum(LiteralKind.@"int")) { return UNTYPED_INT }
+        if (kind == @intFromEnum(LiteralKind.@"float")) { return UNTYPED_FLOAT }
+        if (kind == @intFromEnum(LiteralKind.@"string")) { return STRING }
+        if (kind == @intFromEnum(LiteralKind.char)) { return U8 }
+        if (kind == @intFromEnum(LiteralKind.true_lit) or kind == @intFromEnum(LiteralKind.false_lit)) { return UNTYPED_BOOL }
+        if (kind == @intFromEnum(LiteralKind.null_lit) or kind == @intFromEnum(LiteralKind.undefined_lit)) { return UNTYPED_NULL }
+        if (kind == @intFromEnum(LiteralKind.unreachable_lit)) { return NORETURN }
+        return invalid_type
+    }
+
+    fn getLiteralKind(idx: int) int {
+        if (self.ast.getTag(idx) != @intFromEnum(NodeTag.literal)) { return -1 }
+        return self.ast.getData(idx, 0)
+    }
+
+    fn checkBinary(idx: int) int {
+        // binary: [op, left_n, right_n, span_s, span_e]
+        const op = self.ast.getData(idx, 0)
+        const left_n = self.ast.getData(idx, 1)
+        const right_n = self.ast.getData(idx, 2)
+        const left_type = self.checkExpr(left_n)
+        const right_type = self.checkExpr(right_n)
+
+        // Concat: ++
+        if (op == @intFromEnum(Token.concat)) {
+            if (left_type == STRING and right_type == STRING) { return STRING }
+            self.reportError(idx, ErrorCode.e300, "'++' requires matching types")
+            return invalid_type
+        }
+
+        // Orelse
+        if (op == @intFromEnum(Token.kw_orelse)) {
+            const lt = self.types.get(left_type)
+            if (lt.tag == TAG_OPTIONAL) {
+                return switch (lt) { Type.optional |o| => o.elem, else => left_type }
+            }
+            return left_type
+        }
+
+        // Comparison operators → bool
+        if (op == @intFromEnum(Token.eql) or op == @intFromEnum(Token.neq) or
+            op == @intFromEnum(Token.lss) or op == @intFromEnum(Token.leq) or
+            op == @intFromEnum(Token.gtr) or op == @intFromEnum(Token.geq)) {
+            return BOOL
+        }
+
+        // Logical operators → bool
+        if (op == @intFromEnum(Token.kw_and) or op == @intFromEnum(Token.kw_or) or
+            op == @intFromEnum(Token.land) or op == @intFromEnum(Token.lor)) {
+            return BOOL
+        }
+
+        // Arithmetic and bitwise → common type
+        if (op == @intFromEnum(Token.add) or op == @intFromEnum(Token.sub) or
+            op == @intFromEnum(Token.mul) or op == @intFromEnum(Token.quo) or
+            op == @intFromEnum(Token.rem)) {
+            // String + String in safe mode
+            if (op == @intFromEnum(Token.add) and left_type == STRING and right_type == STRING) {
+                if (self.safe_mode) { return STRING }
+                self.reportError(idx, ErrorCode.e300, "'+' cannot concatenate strings; use '++'")
+                return invalid_type
+            }
+            if (!self.isNumericType(left_type) or !self.isNumericType(right_type)) {
+                self.reportError(idx, ErrorCode.e303, "invalid operation")
+                return invalid_type
+            }
+            return TypeRegistry.commonType(left_type, right_type)
+        }
+
+        // Bitwise
+        if (op == @intFromEnum(Token.@"and") or op == @intFromEnum(Token.@"or") or
+            op == @intFromEnum(Token.xor) or op == @intFromEnum(Token.shl) or
+            op == @intFromEnum(Token.shr)) {
+            return TypeRegistry.commonType(left_type, right_type)
+        }
+
+        return invalid_type
+    }
+
+    fn checkUnary(idx: int) int {
+        // unary: [op, operand_n, span_s, span_e]
+        const op = self.ast.getData(idx, 0)
+        const operand_n = self.ast.getData(idx, 1)
+        const operand_type = self.checkExpr(operand_n)
+
+        if (op == @intFromEnum(Token.sub)) {
+            if (!self.isNumericType(operand_type)) {
+                self.reportError(idx, ErrorCode.e303, "unary '-' requires numeric operand")
+                return invalid_type
+            }
+            return operand_type
+        }
+        if (op == @intFromEnum(Token.lnot) or op == @intFromEnum(Token.kw_not)) {
+            return BOOL
+        }
+        if (op == @intFromEnum(Token.@"not")) {
+            return operand_type
+        }
+        // .? optional unwrap (period_question token)
+        if (op == @intFromEnum(Token.period_question)) {
+            const ot = self.types.get(operand_type)
+            if (ot.tag == TAG_OPTIONAL) {
+                return switch (ot) { Type.optional |o| => o.elem, else => invalid_type }
+            }
+            self.reportError(idx, ErrorCode.e303, "'.?' requires optional operand")
+            return invalid_type
+        }
+        return operand_type
+    }
+
+    fn checkCall(idx: int) int {
+        // call: [callee_n, args_count, ...arg_nodes, span_s, span_e]
+        const callee_n = self.ast.getData(idx, 0)
+        const args_count = self.ast.getData(idx, 1)
+
+        // Check for built-in function calls: print, println, etc.
+        if (self.ast.getTag(callee_n) == @intFromEnum(NodeTag.ident)) {
+            const name = self.ast.getStr(self.ast.getData(callee_n, 0))
+            if (strEqual(name, "print") or strEqual(name, "println") or
+                strEqual(name, "eprint") or strEqual(name, "eprintln")) {
+                // Check args but always returns void
+                var ai: int = 0
+                while (ai < args_count) {
+                    self.checkExpr(self.ast.getData(idx, 2 + ai))
+                    ai = ai + 1
+                }
+                return VOID
+            }
+            if (strEqual(name, "len")) {
+                if (args_count >= 1) {
+                    self.checkExpr(self.ast.getData(idx, 2))
+                }
+                return INT
+            }
+        }
+
+        const callee_type = self.checkExpr(callee_n)
+
+        // Resolve method call
+        var func_type_idx = callee_type
+        var is_method = false
+        if (self.ast.getTag(callee_n) == @intFromEnum(NodeTag.field_access)) {
+            const mi = self.resolveMethodFromFieldAccess(callee_n)
+            if (mi >= 0) {
+                const method_info = self.types.getMethodInfo(mi)
+                func_type_idx = method_info.func_type
+                is_method = true
+            }
+        }
+
+        const ft = self.types.get(func_type_idx)
+        if (ft.tag != TAG_FUNC) {
+            // Not callable — might still work if it's a constructor etc.
+            self.reportError(idx, ErrorCode.e305, "not callable")
+            return invalid_type
+        }
+
+        const func_info = switch (ft) {
+            Type.func |f| => f,
+            else => FuncType { param_count: 0, params: 0, return_type: VOID },
+        }
+
+        // Check argument count (subtract self for instance methods)
+        var expected = func_info.param_count
+        if (is_method and expected > 0) {
+            expected = expected - 1
+        }
+        if (args_count != expected) {
+            self.reportError(idx, ErrorCode.e304, "wrong number of arguments")
+            return func_info.return_type
+        }
+
+        // Check argument types
+        const param_offset = if (is_method) { 1 } else { 0 }
+        var ai: int = 0
+        while (ai < args_count) {
+            const arg_type = self.checkExpr(self.ast.getData(idx, 2 + ai))
+            const param = @intToPtr(*FuncParam, func_info.params + (ai + param_offset) * @sizeOf(FuncParam))
+            if (!self.types.isAssignable(arg_type, param.type_idx)) {
+                self.reportError(idx, ErrorCode.e300, "type mismatch")
+            }
+            ai = ai + 1
+        }
+
+        return func_info.return_type
+    }
+
+    fn resolveMethodFromFieldAccess(callee_idx: int) int {
+        // field_access: [base_n, field_s, span_s, span_e]
+        const base_n = self.ast.getData(callee_idx, 0)
+        const field_name = self.ast.getStr(self.ast.getData(callee_idx, 1))
+
+        if (self.expr_types.has(base_n) == 0) { return -1 }
+        var base_type = self.expr_types.get(base_n)
+
+        // Auto-deref pointers
+        while (self.types.get(base_type).tag == TAG_POINTER) {
+            base_type = switch (self.types.get(base_type)) { Type.pointer |p| => p.elem, else => base_type }
+        }
+
+        const type_name = self.types.typeName(base_type)
+        if (strEqual(type_name, "unknown")) { return -1 }
+        return self.types.lookupMethod(type_name, field_name)
+    }
+
+    fn checkIndex(idx: int) int {
+        // index_expr: [base_n, idx_n, span_s, span_e]
+        const base_n = self.ast.getData(idx, 0)
+        const idx_n = self.ast.getData(idx, 1)
+        var base_type = self.checkExpr(base_n)
+        self.checkExpr(idx_n)
+
+        // Auto-deref
+        while (self.types.get(base_type).tag == TAG_POINTER) {
+            base_type = switch (self.types.get(base_type)) { Type.pointer |p| => p.elem, else => base_type }
+        }
+
+        if (base_type == STRING) { return U8 }
+        const bt = self.types.get(base_type)
+        if (bt.tag == TAG_ARRAY) { return switch (bt) { Type.array |a| => a.elem, else => invalid_type } }
+        if (bt.tag == TAG_SLICE) { return switch (bt) { Type.slice |s| => s.elem, else => invalid_type } }
+        if (bt.tag == TAG_LIST) { return switch (bt) { Type.list_type |l| => l.elem, else => invalid_type } }
+
+        self.reportError(idx, ErrorCode.e303, "cannot index this type")
+        return invalid_type
+    }
+
+    fn checkSliceExpr(idx: int) int {
+        // slice_expr: [base_n, start_n, end_n, span_s, span_e]
+        const base_n = self.ast.getData(idx, 0)
+        const start_n = self.ast.getData(idx, 1)
+        const end_n = self.ast.getData(idx, 2)
+        var base_type = self.checkExpr(base_n)
+        if (start_n != null_node) { self.checkExpr(start_n) }
+        if (end_n != null_node) { self.checkExpr(end_n) }
+
+        if (base_type == STRING) { return STRING }
+        const bt = self.types.get(base_type)
+        if (bt.tag == TAG_ARRAY) {
+            return self.types.makeSlice(switch (bt) { Type.array |a| => a.elem, else => invalid_type })
+        }
+        if (bt.tag == TAG_SLICE) { return base_type }
+        self.reportError(idx, ErrorCode.e303, "cannot slice this type")
+        return invalid_type
+    }
+
+    fn checkFieldAccess(idx: int) int {
+        // field_access: [base_n, field_s, span_s, span_e]
+        const base_n = self.ast.getData(idx, 0)
+        const field_name = self.ast.getStr(self.ast.getData(idx, 1))
+
+        // Nested type namespace: TypeName.Nested
+        if (self.ast.getTag(base_n) == @intFromEnum(NodeTag.ident)) {
+            const base_name = self.ast.getStr(self.ast.getData(base_n, 0))
+            const qualified = base_name ++ "_" ++ field_name
+
+            // Check named types
+            const nested_type = self.types.lookupByName(qualified)
+            if (nested_type >= 0) { return nested_type }
+
+            // Check scope for associated constants and static methods
+            const sym_idx = self.lookupSymbol(qualified)
+            if (sym_idx >= 0) {
+                const sym = self.getSymbol(sym_idx)
+                if (sym.is_func) {
+                    // Store base type in expr_types for method call resolution
+                    const base_type_idx = self.types.lookupByName(base_name)
+                    if (base_type_idx >= 0) {
+                        self.expr_types.set(base_n, base_type_idx)
+                    }
+                    return sym.type_idx
+                }
+                if (sym.type_idx != invalid_type) { return sym.type_idx }
+            }
+        }
+
+        var base_type = self.checkExpr(base_n)
+
+        // Auto-deref pointers
+        while (self.types.get(base_type).tag == TAG_POINTER) {
+            base_type = switch (self.types.get(base_type)) { Type.pointer |p| => p.elem, else => base_type }
+        }
+
+        const base = self.types.get(base_type)
+
+        // Struct field access
+        if (base.tag == TAG_STRUCT) {
+            const st = switch (base) { Type.struct_type |s| => s, else => StructType { name: "", field_count: 0, fields: 0, size: 0, alignment: 0, layout: 0 } }
+            // Search fields
+            var fi: int = 0
+            while (fi < st.field_count) {
+                const sf = @intToPtr(*StructField, st.fields + fi * @sizeOf(StructField))
+                if (strEqual(sf.name, field_name)) {
+                    return sf.type_idx
+                }
+                fi = fi + 1
+            }
+            // Check methods
+            const mi = self.types.lookupMethod(st.name, field_name)
+            if (mi >= 0) {
+                return self.types.getMethodInfo(mi).func_type
+            }
+            self.reportError(idx, ErrorCode.e306, "field not found")
+            return invalid_type
+        }
+
+        // Enum variant access
+        if (base.tag == TAG_ENUM) {
+            const et = switch (base) { Type.enum_type |e| => e, else => EnumType { name: "", variant_count: 0, variants: 0, backing_type: 0 } }
+            var vi: int = 0
+            while (vi < et.variant_count) {
+                const ev = @intToPtr(*EnumVariant, et.variants + vi * @sizeOf(EnumVariant))
+                if (strEqual(ev.name, field_name)) {
+                    return base_type
+                }
+                vi = vi + 1
+            }
+            // Check methods
+            const mi = self.types.lookupMethod(et.name, field_name)
+            if (mi >= 0) {
+                return self.types.getMethodInfo(mi).func_type
+            }
+            self.reportError(idx, ErrorCode.e306, "field not found")
+            return invalid_type
+        }
+
+        // Union variant access
+        if (base.tag == TAG_UNION) {
+            const ut = switch (base) { Type.union_type |u| => u, else => UnionType { name: "", variant_count: 0, variants: 0, tag_type: 0 } }
+            if (strEqual(field_name, "tag")) { return I64 }
+            var vi: int = 0
+            while (vi < ut.variant_count) {
+                const uv = @intToPtr(*UnionVariant, ut.variants + vi * @sizeOf(UnionVariant))
+                if (strEqual(uv.name, field_name)) {
+                    if (uv.payload_type == invalid_type) { return base_type }
+                    return uv.payload_type
+                }
+                vi = vi + 1
+            }
+            self.reportError(idx, ErrorCode.e306, "field not found")
+            return invalid_type
+        }
+
+        // Slice fields: .ptr, .len
+        if (base.tag == TAG_SLICE or base_type == STRING) {
+            if (strEqual(field_name, "len")) { return I64 }
+            if (strEqual(field_name, "ptr")) { return I64 }
+            // String methods
+            if (base_type == STRING) {
+                const mi = self.types.lookupMethod("string", field_name)
+                if (mi >= 0) {
+                    return self.types.getMethodInfo(mi).func_type
+                }
+            }
+        }
+
+        // Map/List methods
+        if (base.tag == TAG_MAP) {
+            if (strEqual(field_name, "set") or strEqual(field_name, "get") or strEqual(field_name, "has")) {
+                return I64  // simplified — would need func type construction
+            }
+        }
+        if (base.tag == TAG_LIST) {
+            if (strEqual(field_name, "append") or strEqual(field_name, "get") or strEqual(field_name, "len")) {
+                return I64  // simplified
+            }
+        }
+
+        self.reportError(idx, ErrorCode.e306, "field not found")
+        return invalid_type
+    }
+
+    fn checkStructInit(idx: int) int {
+        // struct_init: [type_name_s, fi_count, ...fi_nodes, ta_count, ...ta_nodes, span_s, span_e]
+        const type_name = self.ast.getStr(self.ast.getData(idx, 0))
+        const fi_count = self.ast.getData(idx, 1)
+
+        const struct_type_idx = self.types.lookupByName(type_name)
+        if (struct_type_idx < 0) {
+            self.reportError(idx, ErrorCode.e301, "undefined type")
+            return invalid_type
+        }
+        const st = self.types.get(struct_type_idx)
+        if (st.tag != TAG_STRUCT) {
+            self.reportError(idx, ErrorCode.e300, "not a struct type")
+            return invalid_type
+        }
+
+        // Check field initializers
+        var fi: int = 0
+        while (fi < fi_count) {
+            const fi_idx = self.ast.getData(idx, 2 + fi)
+            // field_init_node: [name_s, value_n, span_s, span_e]
+            const value_n = self.ast.getData(fi_idx, 1)
+            self.checkExpr(value_n)
+            fi = fi + 1
+        }
+
+        return struct_type_idx
+    }
+
+    fn checkNewExpr(idx: int) int {
+        // new_expr: [type_name_s, is_ctor, fi_count, ...fi_nodes, ta_count, ...ta_nodes, ca_count, ...ca_nodes, span_s, span_e]
+        const type_name = self.ast.getStr(self.ast.getData(idx, 0))
+
+        const struct_type_idx = self.types.lookupByName(type_name)
+        if (struct_type_idx < 0) {
+            self.reportError(idx, ErrorCode.e301, "undefined type")
+            return invalid_type
+        }
+        const st = self.types.get(struct_type_idx)
+        if (st.tag != TAG_STRUCT) {
+            self.reportError(idx, ErrorCode.e300, "new requires a struct type")
+            return invalid_type
+        }
+
+        // Check field initializers
+        const fi_count = self.ast.getData(idx, 2)
+        var fi: int = 0
+        while (fi < fi_count) {
+            const fi_idx = self.ast.getData(idx, 3 + fi)
+            const value_n = self.ast.getData(fi_idx, 1)
+            self.checkExpr(value_n)
+            fi = fi + 1
+        }
+
+        // Return pointer to struct (heap-allocated)
+        return self.types.makePointer(struct_type_idx)
+    }
+
+    fn checkArrayLiteral(idx: int) int {
+        // array_literal: [elems_count, ...elem_nodes, span_s, span_e]
+        const count = self.ast.getData(idx, 0)
+        if (count == 0) {
+            self.reportError(idx, ErrorCode.e300, "cannot infer type of empty array")
+            return invalid_type
+        }
+        const first_type = self.checkExpr(self.ast.getData(idx, 1))
+        var i: int = 1
+        while (i < count) {
+            self.checkExpr(self.ast.getData(idx, 1 + i))
+            i = i + 1
+        }
+        return self.types.makeArray(first_type, count)
+    }
+
+    fn checkTupleLiteral(idx: int) int {
+        // tuple_literal: [elems_count, ...elem_nodes, span_s, span_e]
+        const count = self.ast.getData(idx, 0)
+        // For self-hosted we simplified tuple type representation
+        // Just check all elements
+        var i: int = 0
+        while (i < count) {
+            self.checkExpr(self.ast.getData(idx, 1 + i))
+            i = i + 1
+        }
+        return I64  // simplified
+    }
+
+    fn checkIfExpr(idx: int) int {
+        // if_expr: [cond_n, then_n, else_n, capture_s, span_s, span_e]
+        const cond_n = self.ast.getData(idx, 0)
+        const then_n = self.ast.getData(idx, 1)
+        const else_n = self.ast.getData(idx, 2)
+        const capture_s = self.ast.getData(idx, 3)
+        const capture = self.ast.getStr(capture_s)
+
+        const cond_type = self.checkExpr(cond_n)
+
+        // Optional capture
+        if (@lenOf(capture) > 0) {
+            const cond_t = self.types.get(cond_type)
+            if (cond_t.tag == TAG_OPTIONAL) {
+                const elem_type = switch (cond_t) { Type.optional |o| => o.elem, else => invalid_type }
+                self.pushScope()
+                self.defineSymbol(makeSymbol(capture, elem_type, null_node, false))
+                const then_type = self.checkExpr(then_n)
+                self.popScope()
+                if (else_n != null_node) { self.checkExpr(else_n) }
+                return then_type
+            }
+        }
+
+        // Comptime dead branch elimination
+        const cv = self.evalConstExpr(cond_n)
+        if (cv.0 != 0) {
+            if (cv.1 != 0) { return self.checkExpr(then_n) }
+            if (else_n != null_node) { return self.checkExpr(else_n) }
+            return VOID
+        }
+
+        const then_type = self.checkExpr(then_n)
+        if (else_n != null_node) {
+            self.checkExpr(else_n)
+        }
+        return then_type
+    }
+
+    fn checkSwitchExpr(idx: int) int {
+        // switch_expr: [subject_n, else_body_n, cases_count, ...case_nodes, span_s, span_e]
+        const subject_n = self.ast.getData(idx, 0)
+        const else_body_n = self.ast.getData(idx, 1)
+        const cases_count = self.ast.getData(idx, 2)
+
+        self.checkExpr(subject_n)
+
+        var result_type: int = VOID
+        var first = true
+
+        var ci: int = 0
+        while (ci < cases_count) {
+            const case_idx = self.ast.getData(idx, 3 + ci)
+            // switch_case: [capture_s, guard_n, is_range, body_n, patterns_count, ...patterns, span_s, span_e]
+            const body_n = self.ast.getData(case_idx, 3)
+            const body_type = self.checkExpr(body_n)
+            if (first) {
+                result_type = self.materializeType(body_type)
+                first = false
+            }
+            ci = ci + 1
+        }
+        if (else_body_n != null_node) {
+            self.checkExpr(else_body_n)
+        }
+
+        return result_type
+    }
+
+    fn checkBlockExpr(idx: int) int {
+        // block_expr: [result_expr_n, stmts_count, ...stmt_nodes, span_s, span_e]
+        const result_expr = self.ast.getData(idx, 0)
+        const stmts_count = self.ast.getData(idx, 1)
+
+        self.pushScope()
+        var i: int = 0
+        while (i < stmts_count) {
+            self.checkStmt(self.ast.getData(idx, 2 + i))
+            i = i + 1
+        }
+        var result: int = VOID
+        if (result_expr != null_node) {
+            result = self.checkExpr(result_expr)
+        }
+        self.popScope()
+        return result
+    }
+
+    fn checkBuiltinCall(idx: int) int {
+        // builtin_call: [kind, type_arg_n, args_count, ...arg_nodes, span_s, span_e]
+        const kind = self.ast.getData(idx, 0)
+        const type_arg_n = self.ast.getData(idx, 1)
+        const args_count = self.ast.getData(idx, 2)
+
+        // @sizeOf, @alignOf → I64
+        if (kind == @intFromEnum(BuiltinKind.size_of) or kind == @intFromEnum(BuiltinKind.align_of)) {
+            if (type_arg_n != null_node) { self.resolveTypeExpr(type_arg_n) }
+            return I64
+        }
+        // @enumLen → I64
+        if (kind == @intFromEnum(BuiltinKind.enum_len)) {
+            if (type_arg_n != null_node) { self.resolveTypeExpr(type_arg_n) }
+            return I64
+        }
+        // @assert, @assertEq → VOID
+        if (kind == @intFromEnum(BuiltinKind.assert)) {
+            if (args_count >= 1) { self.checkExpr(self.ast.getData(idx, 3)) }
+            return VOID
+        }
+        if (kind == @intFromEnum(BuiltinKind.assertEq)) {
+            if (args_count >= 1) { self.checkExpr(self.ast.getData(idx, 3)) }
+            if (args_count >= 2) { self.checkExpr(self.ast.getData(idx, 4)) }
+            return VOID
+        }
+        // @intFromEnum → I64
+        if (kind == @intFromEnum(BuiltinKind.int_from_enum)) {
+            if (args_count >= 1) { self.checkExpr(self.ast.getData(idx, 3)) }
+            return I64
+        }
+        // @enumFromInt → target type
+        if (kind == @intFromEnum(BuiltinKind.enum_from_int)) {
+            if (type_arg_n != null_node) {
+                const target = self.resolveTypeExpr(type_arg_n)
+                if (args_count >= 1) { self.checkExpr(self.ast.getData(idx, 3)) }
+                return target
+            }
+            if (args_count >= 1) { self.checkExpr(self.ast.getData(idx, 3)) }
+            return invalid_type
+        }
+        // @as → target type
+        if (kind == @intFromEnum(BuiltinKind.@"as")) {
+            if (type_arg_n != null_node) {
+                const target = self.resolveTypeExpr(type_arg_n)
+                if (args_count >= 1) { self.checkExpr(self.ast.getData(idx, 3)) }
+                return target
+            }
+            return invalid_type
+        }
+        // @intCast → target type
+        if (kind == @intFromEnum(BuiltinKind.int_cast)) {
+            if (type_arg_n != null_node) {
+                const target = self.resolveTypeExpr(type_arg_n)
+                if (args_count >= 1) { self.checkExpr(self.ast.getData(idx, 3)) }
+                return target
+            }
+            return invalid_type
+        }
+        // @intToPtr → target type
+        if (kind == @intFromEnum(BuiltinKind.int_to_ptr)) {
+            if (type_arg_n != null_node) {
+                const target = self.resolveTypeExpr(type_arg_n)
+                if (args_count >= 1) { self.checkExpr(self.ast.getData(idx, 3)) }
+                return target
+            }
+            return invalid_type
+        }
+        // @ptrOf → I64
+        if (kind == @intFromEnum(BuiltinKind.ptr_of)) {
+            if (args_count >= 1) { self.checkExpr(self.ast.getData(idx, 3)) }
+            return I64
+        }
+        // @lenOf → I64
+        if (kind == @intFromEnum(BuiltinKind.len_of)) {
+            if (args_count >= 1) { self.checkExpr(self.ast.getData(idx, 3)) }
+            return I64
+        }
+        // @string → STRING
+        if (kind == @intFromEnum(BuiltinKind.@"string")) {
+            if (args_count >= 1) { self.checkExpr(self.ast.getData(idx, 3)) }
+            if (args_count >= 2) { self.checkExpr(self.ast.getData(idx, 4)) }
+            return STRING
+        }
+        // @trap, @panic → NORETURN
+        if (kind == @intFromEnum(BuiltinKind.trap) or kind == @intFromEnum(BuiltinKind.panic)) {
+            if (args_count >= 1) { self.checkExpr(self.ast.getData(idx, 3)) }
+            return NORETURN
+        }
+        // @targetOs, @targetArch, @target → STRING
+        if (kind == @intFromEnum(BuiltinKind.targetOs) or kind == @intFromEnum(BuiltinKind.targetArch) or kind == @intFromEnum(BuiltinKind.target)) {
+            return STRING
+        }
+        // @ptrToInt → I64
+        if (kind == @intFromEnum(BuiltinKind.ptr_to_int)) {
+            if (args_count >= 1) { self.checkExpr(self.ast.getData(idx, 3)) }
+            return I64
+        }
+        // @intFromBool → I64
+        if (kind == @intFromEnum(BuiltinKind.int_from_bool)) {
+            if (args_count >= 1) { self.checkExpr(self.ast.getData(idx, 3)) }
+            return I64
+        }
+        // @ptrCast → target type
+        if (kind == @intFromEnum(BuiltinKind.ptr_cast)) {
+            if (type_arg_n != null_node) {
+                const target = self.resolveTypeExpr(type_arg_n)
+                if (args_count >= 1) { self.checkExpr(self.ast.getData(idx, 3)) }
+                return target
+            }
+            return invalid_type
+        }
+        // @bitCast, @truncate → target type
+        if (kind == @intFromEnum(BuiltinKind.bit_cast) or kind == @intFromEnum(BuiltinKind.truncate)) {
+            if (type_arg_n != null_node) {
+                const target = self.resolveTypeExpr(type_arg_n)
+                if (args_count >= 1) { self.checkExpr(self.ast.getData(idx, 3)) }
+                return target
+            }
+            return invalid_type
+        }
+        // @floatCast, @floatFromInt → target type
+        if (kind == @intFromEnum(BuiltinKind.float_cast) or kind == @intFromEnum(BuiltinKind.float_from_int)) {
+            if (type_arg_n != null_node) {
+                const target = self.resolveTypeExpr(type_arg_n)
+                if (args_count >= 1) { self.checkExpr(self.ast.getData(idx, 3)) }
+                return target
+            }
+            return invalid_type
+        }
+        // @intFromFloat → I64
+        if (kind == @intFromEnum(BuiltinKind.int_from_float)) {
+            if (args_count >= 1) { self.checkExpr(self.ast.getData(idx, 3)) }
+            return I64
+        }
+        // @arcRetain, @arcRelease → VOID
+        if (kind == @intFromEnum(BuiltinKind.arcRetain) or kind == @intFromEnum(BuiltinKind.arcRelease)) {
+            if (args_count >= 1) { self.checkExpr(self.ast.getData(idx, 3)) }
+            return VOID
+        }
+        // @typeName, @enumName, @tagName, @errorName → STRING
+        if (kind == @intFromEnum(BuiltinKind.type_name) or kind == @intFromEnum(BuiltinKind.enum_name) or
+            kind == @intFromEnum(BuiltinKind.tag_name) or kind == @intFromEnum(BuiltinKind.error_name)) {
+            if (type_arg_n != null_node) { self.resolveTypeExpr(type_arg_n) }
+            if (args_count >= 1) { self.checkExpr(self.ast.getData(idx, 3)) }
+            return STRING
+        }
+        // @ctz, @clz, @popCount → I64
+        if (kind == @intFromEnum(BuiltinKind.ctz) or kind == @intFromEnum(BuiltinKind.clz) or kind == @intFromEnum(BuiltinKind.pop_count)) {
+            if (args_count >= 1) { self.checkExpr(self.ast.getData(idx, 3)) }
+            return I64
+        }
+        // @min, @max → check both args, return common type
+        if (kind == @intFromEnum(BuiltinKind.min) or kind == @intFromEnum(BuiltinKind.max)) {
+            var a_type: int = I64
+            var b_type: int = I64
+            if (args_count >= 1) { a_type = self.checkExpr(self.ast.getData(idx, 3)) }
+            if (args_count >= 2) { b_type = self.checkExpr(self.ast.getData(idx, 4)) }
+            return TypeRegistry.commonType(a_type, b_type)
+        }
+        // @hasField → BOOL
+        if (kind == @intFromEnum(BuiltinKind.has_field)) {
+            if (type_arg_n != null_node) { self.resolveTypeExpr(type_arg_n) }
+            if (args_count >= 1) { self.checkExpr(self.ast.getData(idx, 3)) }
+            return BOOL
+        }
+        // @compileError → NORETURN
+        if (kind == @intFromEnum(BuiltinKind.compile_error)) {
+            return NORETURN
+        }
+        // @embedFile → STRING
+        if (kind == @intFromEnum(BuiltinKind.embed_file)) {
+            return STRING
+        }
+        // Math builtins: @abs, @ceil, @floor, @trunc, @round → F64
+        if (kind == @intFromEnum(BuiltinKind.abs) or kind == @intFromEnum(BuiltinKind.ceil) or
+            kind == @intFromEnum(BuiltinKind.floor) or kind == @intFromEnum(BuiltinKind.trunc) or
+            kind == @intFromEnum(BuiltinKind.round)) {
+            if (args_count >= 1) { self.checkExpr(self.ast.getData(idx, 3)) }
+            return F64
+        }
+        // @fmin, @fmax → F64
+        if (kind == @intFromEnum(BuiltinKind.fmin) or kind == @intFromEnum(BuiltinKind.fmax)) {
+            if (args_count >= 1) { self.checkExpr(self.ast.getData(idx, 3)) }
+            if (args_count >= 2) { self.checkExpr(self.ast.getData(idx, 4)) }
+            return F64
+        }
+
+        // Check all args as fallback
+        var ai: int = 0
+        while (ai < args_count) {
+            self.checkExpr(self.ast.getData(idx, 3 + ai))
+            ai = ai + 1
+        }
+        return invalid_type
+    }
+
+    fn checkStringInterp(idx: int) int {
+        // string_interp: [segments_count, ...segment_nodes, span_s, span_e]
+        const count = self.ast.getData(idx, 0)
+        var i: int = 0
+        while (i < count) {
+            self.checkExpr(self.ast.getData(idx, 1 + i))
+            i = i + 1
+        }
+        return STRING
+    }
+
+    fn checkTryExpr(idx: int) int {
+        // try_expr: [operand_n, span_s, span_e]
+        const operand_type = self.checkExpr(self.ast.getData(idx, 0))
+        const ot = self.types.get(operand_type)
+        if (ot.tag == TAG_ERROR_UNION) {
+            return switch (ot) { Type.error_union |eu| => eu.elem, else => invalid_type }
+        }
+        self.reportError(idx, ErrorCode.e300, "try requires error union type")
+        return invalid_type
+    }
+
+    fn checkCatchExpr(idx: int) int {
+        // catch_expr: [operand_n, capture_s, fallback_n, span_s, span_e]
+        const operand_n = self.ast.getData(idx, 0)
+        const capture_s = self.ast.getData(idx, 1)
+        const fallback_n = self.ast.getData(idx, 2)
+        const capture = self.ast.getStr(capture_s)
+
+        const operand_type = self.checkExpr(operand_n)
+        const ot = self.types.get(operand_type)
+        if (ot.tag != TAG_ERROR_UNION) {
+            self.reportError(idx, ErrorCode.e300, "catch requires error union type")
+            return self.checkExpr(fallback_n)
+        }
+        const elem_type = switch (ot) { Type.error_union |eu| => eu.elem, else => invalid_type }
+
+        if (@lenOf(capture) > 0) {
+            self.pushScope()
+            self.defineSymbol(makeSymbol(capture, I64, null_node, false))
+            self.checkExpr(fallback_n)
+            self.popScope()
+        } else {
+            self.checkExpr(fallback_n)
+        }
+        return elem_type
+    }
+
+    fn checkAddrOf(idx: int) int {
+        // addr_of: [operand_n, span_s, span_e]
+        const operand_type = self.checkExpr(self.ast.getData(idx, 0))
+        return self.types.makePointer(operand_type)
+    }
+
+    fn checkDeref(idx: int) int {
+        // deref: [operand_n, span_s, span_e]
+        const operand_type = self.checkExpr(self.ast.getData(idx, 0))
+        if (self.types.isPointer(operand_type)) {
+            return self.types.pointerElem(operand_type)
+        }
+        self.reportError(idx, ErrorCode.e300, "cannot dereference non-pointer")
+        return invalid_type
+    }
+
+    // ---- Type resolution ----
+
+    fn resolveTypeExpr(idx: int) int {
+        if (idx == null_node) { return invalid_type }
+        const tag = self.ast.getTag(idx)
+
+        // Named type (ident node used in type position)
+        if (tag == @intFromEnum(NodeTag.ident)) {
+            const name = self.ast.getStr(self.ast.getData(idx, 0))
+            const type_idx = self.types.lookupByName(name)
+            if (type_idx >= 0) { return type_idx }
+            // Check scope for type aliases
+            const sym_idx = self.lookupSymbol(name)
+            if (sym_idx >= 0) {
+                const sym = self.getSymbol(sym_idx)
+                if (sym.is_type) { return sym.type_idx }
+            }
+            self.reportError(idx, ErrorCode.e301, "undefined type")
+            return invalid_type
+        }
+
+        // type_expr node: [kind, data1, data2, span_s, span_e]
+        if (tag != @intFromEnum(NodeTag.type_expr)) { return invalid_type }
+
+        const kind = self.ast.getData(idx, 0)
+        const d1 = self.ast.getData(idx, 1)
+        const d2 = self.ast.getData(idx, 2)
+
+        if (kind == TYPE_NAMED) {
+            // Named type: d1 is an ident node (or null_node for void)
+            return self.resolveTypeExpr(d1)
+        }
+        if (kind == TYPE_POINTER) {
+            return self.types.makePointer(self.resolveTypeExpr(d1))
+        }
+        if (kind == TYPE_OPTIONAL) {
+            return self.types.makeOptional(self.resolveTypeExpr(d1))
+        }
+        if (kind == TYPE_ERROR_UNION) {
+            return self.types.makeErrorUnion(self.resolveTypeExpr(d1))
+        }
+        if (kind == TYPE_SLICE) {
+            return self.types.makeSlice(self.resolveTypeExpr(d1))
+        }
+        if (kind == TYPE_ARRAY) {
+            const elem = self.resolveTypeExpr(d1)
+            // Evaluate array size
+            var size: int = 0
+            const cv = self.evalConstExpr(d2)
+            if (cv.0 != 0 and cv.1 > 0) {
+                size = cv.1
+            } else {
+                // Try literal
+                if (self.ast.getTag(d2) == @intFromEnum(NodeTag.literal)) {
+                    const lit_kind = self.ast.getData(d2, 0)
+                    if (lit_kind == @intFromEnum(LiteralKind.@"int")) {
+                        const val_str = self.ast.getStr(self.ast.getData(d2, 1))
+                        size = parseInt(val_str)
+                    }
+                }
+            }
+            return self.types.makeArray(elem, size)
+        }
+
+        return invalid_type
+    }
+
+    // ---- Type building ----
+
+    fn buildStructType(idx: int, name: string) int {
+        // struct_decl: [name_s, layout, doc_s, fields_count, ...field_nodes, ...]
+        const fields_count = self.ast.getData(idx, 3)
+        var total_size: int = 0
+
+        // Build struct fields using raw pointer array
+        const fields_ptr = alloc(0, fields_count * @sizeOf(StructField))
+        var fi: int = 0
+        while (fi < fields_count) {
+            const field_idx = self.ast.getData(idx, 4 + fi)
+            // field_def: [name_s, type_expr_n, default_val_n, doc_s, span_s, span_e]
+            const fname = self.ast.getStr(self.ast.getData(field_idx, 0))
+            const ftype_n = self.ast.getData(field_idx, 1)
+            const fdefault = self.ast.getData(field_idx, 2)
+            const ftype = self.resolveTypeExpr(ftype_n)
+
+            const sf = @intToPtr(*StructField, fields_ptr + fi * @sizeOf(StructField))
+            sf.name = fname
+            sf.type_idx = ftype
+            sf.offset = total_size
+            sf.default_value = fdefault
+
+            total_size = total_size + self.types.sizeOf(ftype)
+            // Align to 8 bytes
+            total_size = (total_size + 7) / 8 * 8
+            fi = fi + 1
+        }
+
+        return self.types.add(Type.struct_type(StructType {
+            name: name,
+            field_count: fields_count,
+            fields: fields_ptr,
+            size: total_size,
+            alignment: 8,
+            layout: 0,
+        }))
+    }
+
+    fn buildEnumType(idx: int) int {
+        // enum_decl: [name_s, backing_type_n, doc_s, variants_count, ...variants, span_s, span_e]
+        const name = self.ast.getStr(self.ast.getData(idx, 0))
+        const backing_n = self.ast.getData(idx, 1)
+        const variants_count = self.ast.getData(idx, 3)
+
+        var backing_type: int = I32
+        if (backing_n != null_node) {
+            backing_type = self.resolveTypeExpr(backing_n)
+        }
+
+        const variants_ptr = alloc(0, variants_count * @sizeOf(EnumVariant))
+        var next_value: int = 0
+        var vi: int = 0
+        while (vi < variants_count) {
+            const v_idx = self.ast.getData(idx, 4 + vi)
+            // enum_variant: [name_s, value_n, span_s, span_e]
+            const vname = self.ast.getStr(self.ast.getData(v_idx, 0))
+            const value_n = self.ast.getData(v_idx, 1)
+
+            var value = next_value
+            if (value_n != null_node) {
+                const cv = self.evalConstExpr(value_n)
+                if (cv.0 != 0) { value = cv.1 }
+            }
+
+            const ev = @intToPtr(*EnumVariant, variants_ptr + vi * @sizeOf(EnumVariant))
+            ev.name = vname
+            ev.value = value
+            next_value = value + 1
+            vi = vi + 1
+        }
+
+        return self.types.add(Type.enum_type(EnumType {
+            name: name,
+            variant_count: variants_count,
+            variants: variants_ptr,
+            backing_type: backing_type,
+        }))
+    }
+
+    fn buildUnionType(idx: int) int {
+        // union_decl: [name_s, doc_s, variants_count, ...variants, span_s, span_e]
+        const name = self.ast.getStr(self.ast.getData(idx, 0))
+        const variants_count = self.ast.getData(idx, 2)
+
+        const variants_ptr = alloc(0, variants_count * @sizeOf(UnionVariant))
+        var vi: int = 0
+        while (vi < variants_count) {
+            const v_idx = self.ast.getData(idx, 3 + vi)
+            // union_variant: [name_s, type_expr_n, span_s, span_e]
+            const vname = self.ast.getStr(self.ast.getData(v_idx, 0))
+            const vtype_n = self.ast.getData(v_idx, 1)
+            var payload_type: int = invalid_type
+            if (vtype_n != null_node) {
+                payload_type = self.resolveTypeExpr(vtype_n)
+            }
+
+            const uv = @intToPtr(*UnionVariant, variants_ptr + vi * @sizeOf(UnionVariant))
+            uv.name = vname
+            uv.payload_type = payload_type
+            vi = vi + 1
+        }
+
+        const tag_type = if (variants_count <= 256) { U8 } else { U16 }
+        return self.types.add(Type.union_type(UnionType {
+            name: name,
+            variant_count: variants_count,
+            variants: variants_ptr,
+            tag_type: tag_type,
+        }))
+    }
+
+    fn buildFuncType(idx: int) int {
+        // fn_decl: [name_s, ret_type_n, body_n, is_extern, is_async, doc_s, params_count, ...param_nodes, ...]
+        const ret_type_n = self.ast.getData(idx, 1)
+        const params_count = self.ast.getData(idx, 6)
+
+        const params_ptr = alloc(0, params_count * @sizeOf(FuncParam))
+        var pi: int = 0
+        while (pi < params_count) {
+            const param_idx = self.ast.getData(idx, 7 + pi)
+            // field_def: [name_s, type_expr_n, default_val_n, doc_s, span_s, span_e]
+            var pname = ""
+            var ptype: int = invalid_type
+            if (self.ast.getTag(param_idx) == @intFromEnum(NodeTag.field_def)) {
+                pname = self.ast.getStr(self.ast.getData(param_idx, 0))
+                const ptype_n = self.ast.getData(param_idx, 1)
+                ptype = self.resolveTypeExpr(ptype_n)
+            }
+
+            const fp = @intToPtr(*FuncParam, params_ptr + pi * @sizeOf(FuncParam))
+            fp.name = pname
+            fp.type_idx = ptype
+            pi = pi + 1
+        }
+
+        var ret_type: int = VOID
+        if (ret_type_n != null_node) {
+            ret_type = self.resolveTypeExpr(ret_type_n)
+        }
+
+        return self.types.add(Type.func(FuncType {
+            param_count: params_count,
+            params: params_ptr,
+            return_type: ret_type,
+        }))
+    }
+
+    // ---- Const evaluation ----
+
+    fn evalConstExpr(idx: int) (int, int) {
+        if (idx == null_node) { return (0, 0) }
+        const tag = self.ast.getTag(idx)
+
+        if (tag == @intFromEnum(NodeTag.literal)) {
+            const kind = self.ast.getData(idx, 0)
+            if (kind == @intFromEnum(LiteralKind.@"int")) {
+                const val_str = self.ast.getStr(self.ast.getData(idx, 1))
+                return (1,parseInt(val_str))
+            }
+            if (kind == @intFromEnum(LiteralKind.true_lit)) { return (1,1) }
+            if (kind == @intFromEnum(LiteralKind.false_lit)) { return (1,0) }
+            return (0, 0)
+        }
+
+        if (tag == @intFromEnum(NodeTag.unary)) {
+            const op = self.ast.getData(idx, 0)
+            const inner = self.evalConstExpr(self.ast.getData(idx, 1))
+            if (inner.0 == 0) { return (0, 0) }
+            if (op == @intFromEnum(Token.sub)) { return (1,0 - inner.1) }
+            if (op == @intFromEnum(Token.lnot)) { return (1,if (inner.1 == 0) { 1 } else { 0 }) }
+            return (0, 0)
+        }
+
+        if (tag == @intFromEnum(NodeTag.binary)) {
+            const op = self.ast.getData(idx, 0)
+            const lv = self.evalConstExpr(self.ast.getData(idx, 1))
+            const rv = self.evalConstExpr(self.ast.getData(idx, 2))
+            if (lv.0 == 0 or rv.0 == 0) { return (0, 0) }
+            const l = lv.1
+            const r = rv.1
+            if (op == @intFromEnum(Token.add)) { return (1,l + r) }
+            if (op == @intFromEnum(Token.sub)) { return (1,l - r) }
+            if (op == @intFromEnum(Token.mul)) { return (1,l * r) }
+            if (op == @intFromEnum(Token.quo) and r != 0) { return (1,l / r) }
+            if (op == @intFromEnum(Token.rem) and r != 0) { return (1,l % r) }
+            if (op == @intFromEnum(Token.eql)) { return (1,if (l == r) { 1 } else { 0 }) }
+            if (op == @intFromEnum(Token.neq)) { return (1,if (l != r) { 1 } else { 0 }) }
+            if (op == @intFromEnum(Token.lss)) { return (1,if (l < r) { 1 } else { 0 }) }
+            if (op == @intFromEnum(Token.leq)) { return (1,if (l <= r) { 1 } else { 0 }) }
+            if (op == @intFromEnum(Token.gtr)) { return (1,if (l > r) { 1 } else { 0 }) }
+            if (op == @intFromEnum(Token.geq)) { return (1,if (l >= r) { 1 } else { 0 }) }
+            return (0, 0)
+        }
+
+        if (tag == @intFromEnum(NodeTag.paren)) {
+            return self.evalConstExpr(self.ast.getData(idx, 0))
+        }
+
+        if (tag == @intFromEnum(NodeTag.ident)) {
+            const name = self.ast.getStr(self.ast.getData(idx, 0))
+            const sym_idx = self.lookupSymbol(name)
+            if (sym_idx >= 0) {
+                const sym = self.getSymbol(sym_idx)
+                if (sym.is_const_val) {
+                    return (1,sym.const_value)
+                }
+            }
+            return (0, 0)
+        }
+
+        // @sizeOf(T) comptime
+        if (tag == @intFromEnum(NodeTag.builtin_call)) {
+            const kind = self.ast.getData(idx, 0)
+            const type_arg_n = self.ast.getData(idx, 1)
+            if (kind == @intFromEnum(BuiltinKind.size_of) and type_arg_n != null_node) {
+                const type_idx = self.resolveTypeExpr(type_arg_n)
+                if (type_idx != invalid_type) {
+                    return (1,self.types.sizeOf(type_idx))
+                }
+            }
+            if (kind == @intFromEnum(BuiltinKind.enum_len) and type_arg_n != null_node) {
+                const type_idx = self.resolveTypeExpr(type_arg_n)
+                if (type_idx != invalid_type) {
+                    const t = self.types.get(type_idx)
+                    if (t.tag == TAG_ENUM) {
+                        const et = switch (t) { Type.enum_type |e| => e, else => EnumType { name: "", variant_count: 0, variants: 0, backing_type: 0 } }
+                        return (1,et.variant_count)
+                    }
+                }
+            }
+            return (0, 0)
+        }
+
+        // Enum field access: Color.Red → variant value
+        if (tag == @intFromEnum(NodeTag.field_access)) {
+            const base_n = self.ast.getData(idx, 0)
+            const field_name = self.ast.getStr(self.ast.getData(idx, 1))
+            if (self.ast.getTag(base_n) == @intFromEnum(NodeTag.ident)) {
+                const base_name = self.ast.getStr(self.ast.getData(base_n, 0))
+                const type_idx = self.types.lookupByName(base_name)
+                if (type_idx >= 0) {
+                    const t = self.types.get(type_idx)
+                    if (t.tag == TAG_ENUM) {
+                        const et = switch (t) { Type.enum_type |e| => e, else => EnumType { name: "", variant_count: 0, variants: 0, backing_type: 0 } }
+                        var vi: int = 0
+                        while (vi < et.variant_count) {
+                            const ev = @intToPtr(*EnumVariant, et.variants + vi * @sizeOf(EnumVariant))
+                            if (strEqual(ev.name, field_name)) {
+                                return (1,ev.value)
+                            }
+                            vi = vi + 1
+                        }
+                    }
+                }
+            }
+            return (0, 0)
+        }
+
+        return (0, 0)
+    }
+
+    // ---- Helper methods ----
+
+    fn materializeType(idx: int) int {
+        if (idx == UNTYPED_INT) { return INT }
+        if (idx == UNTYPED_FLOAT) { return FLOAT }
+        if (idx == UNTYPED_BOOL) { return BOOL }
+        return idx
+    }
+
+    fn isBoolType(idx: int) bool {
+        return idx == BOOL or idx == UNTYPED_BOOL
+    }
+
+    fn isNumericType(idx: int) bool {
+        return idx == I8 or idx == I16 or idx == I32 or idx == I64 or
+               idx == U8 or idx == U16 or idx == U32 or idx == U64 or
+               idx == F32 or idx == F64 or idx == UNTYPED_INT or idx == UNTYPED_FLOAT
+    }
+
+    fn isIntegerType(idx: int) bool {
+        return idx == I8 or idx == I16 or idx == I32 or idx == I64 or
+               idx == U8 or idx == U16 or idx == U32 or idx == U64 or
+               idx == UNTYPED_INT
+    }
+
+    fn reportError(idx: int, code: ErrorCode, msg: string) void {
+        // Extract span from the node's data
+        const tag = self.ast.getTag(idx)
+        var offset: int = 0
+        // Most nodes have span at the end of their data
+        // Use a simple heuristic: get the node's offset and compute span position
+        const node_offset = self.ast.offsets.get(idx)
+        const data_count = self.getNodeDataCount(idx)
+        if (data_count >= 2) {
+            offset = self.ast.data.get(node_offset + data_count - 2)
+        }
+        self.err.report(offset, code, msg)
+    }
+
+    fn getNodeDataCount(idx: int) int {
+        // Estimate data count based on tag
+        if (idx + 1 < self.ast.tags.count) {
+            return self.ast.offsets.get(idx + 1) - self.ast.offsets.get(idx)
+        }
+        return self.ast.data.count - self.ast.offsets.get(idx)
+    }
+}
+
+// ============================================================================
+// Helper functions
+// ============================================================================
+
+// parseInt is provided by std/string (imported via main.cot)
+
+/// Allocate a zero-initialized Map(string, int) on the heap.
+/// Returns the raw pointer (int) to the Map struct.
+fn allocMap() int {
+    const size = 40  // Map has 5 fields × 8 bytes: keys, values, states, count, capacity
+    const ptr = alloc(0, size)
+    // Zero-init all fields
+    var mp = @intToPtr(*Map(string, int), ptr)
+    mp.keys = 0
+    mp.values = 0
+    mp.states = 0
+    mp.count = 0
+    mp.capacity = 0
+    return ptr
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "checker init" {
+    var ast = Ast.init("test.cot")
+    var types = TypeRegistry.init()
+    var errs = ErrorReporter.init()
+    var c = Checker.init(ast, types, errs)
+    @assertEq(c.current_scope, 0)
+    @assertEq(c.global_scope, 0)
+    @assertEq(c.in_loop, false)
+}
+
+test "checker scope push pop" {
+    var ast = Ast.init("test.cot")
+    var types = TypeRegistry.init()
+    var errs = ErrorReporter.init()
+    var c = Checker.init(ast, types, errs)
+    @assertEq(c.current_scope, 0)
+
+    c.pushScope()
+    @assertEq(c.current_scope, 1)
+
+    c.pushScope()
+    @assertEq(c.current_scope, 2)
+
+    c.popScope()
+    @assertEq(c.current_scope, 1)
+
+    c.popScope()
+    @assertEq(c.current_scope, 0)
+}
+
+test "checker define and lookup symbol" {
+    var ast = Ast.init("test.cot")
+    var types = TypeRegistry.init()
+    var errs = ErrorReporter.init()
+    var c = Checker.init(ast, types, errs)
+
+    c.defineSymbol(makeSymbol("x", I64, 0, true))
+    const idx = c.lookupSymbol("x")
+    @assert(idx >= 0)
+    @assertEq(c.getSymbol(idx).name, "x")
+    @assertEq(c.getSymbol(idx).type_idx, I64)
+    @assertEq(c.getSymbol(idx).mutable, true)
+}
+
+test "checker parent scope lookup" {
+    var ast = Ast.init("test.cot")
+    var types = TypeRegistry.init()
+    var errs = ErrorReporter.init()
+    var c = Checker.init(ast, types, errs)
+
+    c.defineSymbol(makeSymbol("x", I64, 0, true))
+    c.pushScope()
+    c.defineSymbol(makeSymbol("y", BOOL, 1, false))
+
+    // Can find both x and y from child scope
+    @assert(c.lookupSymbol("x") >= 0)
+    @assert(c.lookupSymbol("y") >= 0)
+
+    c.popScope()
+    // x still visible, y not
+    @assert(c.lookupSymbol("x") >= 0)
+    @assertEq(c.lookupSymbol("y"), -1)
+}
+
+test "checker isDefined local only" {
+    var ast = Ast.init("test.cot")
+    var types = TypeRegistry.init()
+    var errs = ErrorReporter.init()
+    var c = Checker.init(ast, types, errs)
+
+    c.defineSymbol(makeSymbol("x", I64, 0, true))
+    c.pushScope()
+
+    // isDefined only checks current scope
+    @assertEq(c.isDefined("x"), false)
+    // lookup walks up
+    @assert(c.lookupSymbol("x") >= 0)
+}
+
+test "checker materializeType" {
+    var ast = Ast.init("test.cot")
+    var types = TypeRegistry.init()
+    var errs = ErrorReporter.init()
+    var c = Checker.init(ast, types, errs)
+
+    @assertEq(c.materializeType(UNTYPED_INT), INT)
+    @assertEq(c.materializeType(UNTYPED_FLOAT), FLOAT)
+    @assertEq(c.materializeType(UNTYPED_BOOL), BOOL)
+    @assertEq(c.materializeType(I64), I64)
+    @assertEq(c.materializeType(STRING), STRING)
+}
+
+test "checker isBoolType" {
+    var ast = Ast.init("test.cot")
+    var types = TypeRegistry.init()
+    var errs = ErrorReporter.init()
+    var c = Checker.init(ast, types, errs)
+
+    @assert(c.isBoolType(BOOL))
+    @assert(c.isBoolType(UNTYPED_BOOL))
+    @assertEq(c.isBoolType(I64), false)
+    @assertEq(c.isBoolType(STRING), false)
+}
+
+test "checker isNumericType" {
+    var ast = Ast.init("test.cot")
+    var types = TypeRegistry.init()
+    var errs = ErrorReporter.init()
+    var c = Checker.init(ast, types, errs)
+
+    @assert(c.isNumericType(I64))
+    @assert(c.isNumericType(F64))
+    @assert(c.isNumericType(U8))
+    @assert(c.isNumericType(UNTYPED_INT))
+    @assertEq(c.isNumericType(BOOL), false)
+    @assertEq(c.isNumericType(STRING), false)
+}
+
+
+test "checker checkFile simple const" {
+    const src = "const x = 42"
+    var s = Scanner.init(src)
+    var ast = Ast.init("test.cot")
+    var errs = ErrorReporter.init()
+    var p = Parser.init(s, ast, errs)
+    p.parseFile()
+    @assertEq(errs.hasErrors(), false)
+
+    var types = TypeRegistry.init()
+    var c = Checker.init(ast, types, errs)
+    c.checkFile()
+    @assertEq(errs.hasErrors(), false)
+}
+
+test "checker checkFile simple fn" {
+    const src = "fn foo() void { return }"
+    var s = Scanner.init(src)
+    var ast = Ast.init("test.cot")
+    var errs = ErrorReporter.init()
+    var p = Parser.init(s, ast, errs)
+    p.parseFile()
+    @assertEq(errs.hasErrors(), false)
+
+    var types = TypeRegistry.init()
+    var c = Checker.init(ast, types, errs)
+    c.checkFile()
+    @assertEq(errs.hasErrors(), false)
+}
+
+test "checker detects undefined identifier" {
+    const src = "fn foo() int { return xyz }"
+    var s = Scanner.init(src)
+    var ast = Ast.init("test.cot")
+    var errs = ErrorReporter.init()
+    var p = Parser.init(s, ast, errs)
+    p.parseFile()
+    @assertEq(errs.hasErrors(), false)
+
+    var types = TypeRegistry.init()
+    var c = Checker.init(ast, types, errs)
+    c.checkFile()
+    @assert(errs.hasErrors())
+}
+
+test "checker struct type" {
+    const src = "struct Point { x: int, y: int }"
+    var s = Scanner.init(src)
+    var ast = Ast.init("test.cot")
+    var errs = ErrorReporter.init()
+    var p = Parser.init(s, ast, errs)
+    p.parseFile()
+    @assertEq(errs.hasErrors(), false)
+
+    var types = TypeRegistry.init()
+    var c = Checker.init(ast, types, errs)
+    c.checkFile()
+    @assertEq(errs.hasErrors(), false)
+    @assert(types.lookupByName("Point") >= 0)
+}
+
+test "checker enum type" {
+    const src = "const Color = enum { red, green, blue }"
+    var s = Scanner.init(src)
+    var ast = Ast.init("test.cot")
+    var errs = ErrorReporter.init()
+    var p = Parser.init(s, ast, errs)
+    p.parseFile()
+    @assertEq(errs.hasErrors(), false)
+
+    var types = TypeRegistry.init()
+    var c = Checker.init(ast, types, errs)
+    c.checkFile()
+    @assertEq(errs.hasErrors(), false)
+    @assert(types.lookupByName("Color") >= 0)
+}
+
+test "checker const evaluation" {
+    var ast = Ast.init("test.cot")
+    var types = TypeRegistry.init()
+    var errs = ErrorReporter.init()
+    var c = Checker.init(ast, types, errs)
+
+    // Create a literal node for "42"
+    const s = Span { start: 0, end: 2 }
+    const lit = ast.addLiteral(@intFromEnum(LiteralKind.@"int"), "42", s)
+    const cv = c.evalConstExpr(lit)
+    @assert(cv.0 != 0)
+    @assertEq(cv.1, 42)
+}
+
+test "checker const evaluation binary" {
+    var ast = Ast.init("test.cot")
+    var types = TypeRegistry.init()
+    var errs = ErrorReporter.init()
+    var c = Checker.init(ast, types, errs)
+
+    const s = Span { start: 0, end: 5 }
+    const left = ast.addLiteral(@intFromEnum(LiteralKind.@"int"), "10", s)
+    const right = ast.addLiteral(@intFromEnum(LiteralKind.@"int"), "3", s)
+    const bin = ast.addBinary(@intFromEnum(Token.add), left, right, s)
+    const cv = c.evalConstExpr(bin)
+    @assert(cv.0 != 0)
+    @assertEq(cv.1, 13)
+}
+
+test "checker literal types" {
+    var ast = Ast.init("test.cot")
+    var types = TypeRegistry.init()
+    var errs = ErrorReporter.init()
+    var c = Checker.init(ast, types, errs)
+
+    const s = Span { start: 0, end: 2 }
+    const int_lit = ast.addLiteral(@intFromEnum(LiteralKind.@"int"), "42", s)
+    @assertEq(c.checkExpr(int_lit), UNTYPED_INT)
+
+    const str_lit = ast.addLiteral(@intFromEnum(LiteralKind.@"string"), "\"hello\"", s)
+    @assertEq(c.checkExpr(str_lit), STRING)
+
+    const true_lit = ast.addLiteral(@intFromEnum(LiteralKind.true_lit), "true", s)
+    @assertEq(c.checkExpr(true_lit), UNTYPED_BOOL)
+}

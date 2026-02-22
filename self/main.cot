@@ -3,6 +3,7 @@
 ///
 /// Commands:
 ///   parse <file>  — Parse and report syntax errors
+///   check <file>  — Type-check and report errors
 ///   lex <file>    — Tokenize and print tokens
 ///   help          — Print usage
 
@@ -15,6 +16,8 @@ import "frontend/scanner"
 import "frontend/ast"
 import "frontend/errors"
 import "frontend/parser"
+import "frontend/types"
+import "frontend/checker"
 
 fn main() void {
     if (argsCount() < 2) {
@@ -50,6 +53,8 @@ fn main() void {
 
     if (strEqual(cmd, "parse")) {
         cmdParse(path, content)
+    } else if (strEqual(cmd, "check")) {
+        cmdCheck(path, content)
     } else if (strEqual(cmd, "lex")) {
         cmdLex(path, content)
     } else {
@@ -84,6 +89,40 @@ fn cmdParse(path: string, content: string) void {
     writeOut(path ++ ": ok (" ++ intToString(decl_count) ++ " declarations)\n")
 }
 
+/// Type-check a file and report errors.
+fn cmdCheck(path: string, content: string) void {
+    var s = Scanner.init(content)
+    var ast = Ast.init(path)
+    var errs = ErrorReporter.init()
+    var p = Parser.init(s, ast, errs)
+    p.parseFile()
+
+    if (errs.hasErrors()) {
+        const diag = Diagnostic { offset: errs.first_offset, code: errs.first_code, msg: errs.first_msg }
+        const msg = formatDiagnostic(path, content, diag)
+        writeErr(msg)
+        writeErr("\n")
+        exit(1)
+    }
+
+    var types = TypeRegistry.init()
+    var checker = Checker.init(ast, types, errs)
+    checker.checkFile()
+
+    if (errs.hasErrors()) {
+        const diag = Diagnostic { offset: errs.first_offset, code: errs.first_code, msg: errs.first_msg }
+        const msg = formatDiagnostic(path, content, diag)
+        writeErr(msg)
+        writeErr("\n")
+        if (errs.errorCount() > 1) {
+            writeErr("... and " ++ intToString(errs.errorCount() - 1) ++ " more error(s)\n")
+        }
+        exit(1)
+    }
+
+    writeOut(path ++ ": ok\n")
+}
+
 /// Tokenize a file and print each token.
 fn cmdLex(path: string, content: string) void {
     var s = Scanner.init(content)
@@ -111,6 +150,7 @@ fn printUsage() void {
     writeErr("\n")
     writeErr("Commands:\n")
     writeErr("  parse <file>    Parse and report syntax errors\n")
+    writeErr("  check <file>    Type-check and report errors\n")
     writeErr("  lex <file>      Tokenize and print tokens\n")
     writeErr("  version         Print version\n")
     writeErr("  help            Print this help\n")

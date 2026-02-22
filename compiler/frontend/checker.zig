@@ -1752,7 +1752,14 @@ pub const Checker = struct {
                 const is_safe_struct = self.safe_mode and pt == .pointer and
                     self.types.get(pt.pointer.elem) == .struct_type and
                     self.types.isAssignable(arg_type, pt.pointer.elem);
-                if (!is_safe_struct) {
+                // @safe reverse coercion: *Struct arg → Struct param (generic methods keep T as value)
+                // When a generic method has param T=Struct (not wrapped because is_substituted),
+                // but the arg is *Struct (auto-ref'd by @safe), allow the deref coercion.
+                const at = self.types.get(arg_type);
+                const is_safe_deref = self.safe_mode and at == .pointer and
+                    self.types.get(at.pointer.elem) == .struct_type and
+                    self.types.isAssignable(at.pointer.elem, param_tidx);
+                if (!is_safe_struct and !is_safe_deref) {
                     self.err.errorWithCode(c.span.start, .e300, "type mismatch");
                 }
             }

@@ -9,7 +9,7 @@ import "std/string"
 // Constants
 // ============================================================================
 
-const null_node: int = 0xFFFFFFFF
+// null_node: defined in ast.cot
 const invalid_type: int = 0xFFFFFFFF
 
 // Pre-registered basic type indices (match Zig compiler's TypeRegistry constants)
