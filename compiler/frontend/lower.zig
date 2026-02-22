@@ -81,7 +81,7 @@ pub const Lowerer = struct {
     /// Reference: references/zig/src/codegen/wasm/CodeGen.zig:1354 firstParamSRet()
     fn needsSret(self: *const Lowerer, type_idx: TypeIndex) bool {
         const info = self.type_reg.get(type_idx);
-        return (info == .struct_type or info == .tuple) and self.type_reg.sizeOf(type_idx) > 8;
+        return (info == .struct_type or info == .tuple or info == .union_type) and self.type_reg.sizeOf(type_idx) > 8;
     }
 
     const LoopContext = struct {
@@ -3363,7 +3363,14 @@ pub const Lowerer = struct {
                         const base_val = try self.lowerExprNode(fa.base);
                         return try fb.emitFieldValue(base_val, 1, 8, variant.payload_type, fa.span);
                     }
-                    // Unit variant: return tag index
+                    // Unit variant: create temp local with tag stored
+                    const union_size = self.type_reg.sizeOf(base_type_idx);
+                    if (union_size > 8) {
+                        const tmp_local = try fb.addLocalWithSize("__union_tmp", base_type_idx, false, union_size);
+                        const tag_val = try fb.emitConstInt(@intCast(i), TypeRegistry.I64, fa.span);
+                        _ = try fb.emitStoreLocalField(tmp_local, 0, 0, tag_val, fa.span);
+                        return try fb.emitLoadLocal(tmp_local, base_type_idx, fa.span);
+                    }
                     return try fb.emitConstInt(@intCast(i), base_type_idx, fa.span);
                 }
             }
@@ -4535,15 +4542,21 @@ pub const Lowerer = struct {
 
         // Store subject into a local so we can extract tag/payload via field offsets
         const subject_local = blk: {
-            // Check if subject is already a local (ident)
+            // Check if subject is already a local (ident), unwrapping paren from switch(v)
             const subj_node = self.tree.getNode(se.subject) orelse break :blk null;
             const subj_expr = subj_node.asExpr() orelse break :blk null;
-            if (subj_expr == .ident) {
-                break :blk fb.lookupLocal(subj_expr.ident.name);
+            // Unwrap paren expression — switch(v) parses as switch(paren(v))
+            const inner_expr = if (subj_expr == .paren) inner: {
+                const inner_node = self.tree.getNode(subj_expr.paren.inner) orelse break :blk null;
+                break :inner inner_node.asExpr() orelse break :blk null;
+            } else subj_expr;
+            if (inner_expr == .ident) {
+                break :blk fb.lookupLocal(inner_expr.ident.name);
             }
             break :blk null;
         } orelse blk: {
             // Create temp local for the subject
+            // SSA-level convertStoreLocal handles union_type > 8 bytes via bulk move
             const size = self.type_reg.sizeOf(subject_type);
             const tmp_name = "__switch_subj";
             const tmp_local = try fb.addLocalWithSize(tmp_name, subject_type, false, size);
@@ -4818,6 +4831,18 @@ pub const Lowerer = struct {
                 if (base_type == .union_type) {
                     for (base_type.union_type.variants, 0..) |v, i| {
                         if (std.mem.eql(u8, v.name, fa.field)) {
+                            const union_size = self.type_reg.sizeOf(base_type_idx);
+                            if (union_size > 8) {
+                                // Multi-word union: create temp local, store tag+payload
+                                const tmp_local = try fb.addLocalWithSize("__union_tmp", base_type_idx, false, union_size);
+                                const tag_val = try fb.emitConstInt(@intCast(i), TypeRegistry.I64, fa.span);
+                                _ = try fb.emitStoreLocalField(tmp_local, 0, 0, tag_val, fa.span);
+                                if (call.args.len > 0) {
+                                    const payload_val = try self.lowerExprNode(call.args[0]);
+                                    _ = try fb.emitStoreLocalField(tmp_local, 1, 8, payload_val, fa.span);
+                                }
+                                return try fb.emitLoadLocal(tmp_local, base_type_idx, fa.span);
+                            }
                             const payload: ?ir.NodeIndex = if (call.args.len > 0)
                                 try self.lowerExprNode(call.args[0])
                             else
@@ -4904,7 +4929,14 @@ pub const Lowerer = struct {
                 var gen_args = std.ArrayListUnmanaged(ir.NodeIndex){};
                 defer gen_args.deinit(self.allocator);
                 // Get concrete func type for param checking
-                const concrete_func_type = self.type_reg.lookupByName(inst_info.concrete_name) orelse TypeRegistry.VOID;
+                // Generic function types are registered in global_scope by the checker's
+                // instantiateGenericFunc, NOT in the type registry's name_map.
+                const concrete_func_type = blk: {
+                    if (self.chk.global_scope.lookup(inst_info.concrete_name)) |sym| {
+                        break :blk sym.type_idx;
+                    }
+                    break :blk self.type_reg.lookupByName(inst_info.concrete_name) orelse TypeRegistry.VOID;
+                };
                 const concrete_info = self.type_reg.get(concrete_func_type);
                 const cparam_types: ?[]const types.FuncParam = if (concrete_info == .func) concrete_info.func.params else null;
                 for (call.args, 0..) |arg_idx, arg_i| {
@@ -4929,7 +4961,30 @@ pub const Lowerer = struct {
                         arg_node = try self.lowerExprNode(arg_idx);
                     }
                     if (arg_node == ir.null_node) continue;
-                    try gen_args.append(self.allocator, arg_node);
+
+                    // Decompose large compound args (struct/union/tuple > 8 bytes)
+                    // into per-slot values. The callee expects N i64 params.
+                    // Same pattern as string/slice decomposition at other call sites.
+                    var is_large_compound = false;
+                    if (cparam_types) |params| {
+                        if (arg_i < params.len) {
+                            const pt = self.type_reg.get(params[arg_i].type_idx);
+                            const ps = self.type_reg.sizeOf(params[arg_i].type_idx);
+                            is_large_compound = (pt == .struct_type or pt == .union_type or pt == .tuple) and ps > 8;
+                        }
+                    }
+                    if (is_large_compound) {
+                        const param_type_idx = cparam_types.?[arg_i].type_idx;
+                        const param_size = self.type_reg.sizeOf(param_type_idx);
+                        const num_slots: u32 = @intCast((param_size + 7) / 8);
+                        for (0..num_slots) |slot| {
+                            const offset: i64 = @intCast(slot * 8);
+                            const field = try fb.emitFieldValue(arg_node, @intCast(slot), offset, TypeRegistry.I64, call.span);
+                            try gen_args.append(self.allocator, field);
+                        }
+                    } else {
+                        try gen_args.append(self.allocator, arg_node);
+                    }
                 }
                 const ret_type = if (concrete_info == .func) concrete_info.func.return_type else TypeRegistry.VOID;
                 // SRET for generic function calls
@@ -5053,7 +5108,27 @@ pub const Lowerer = struct {
                 try args.append(self.allocator, ptr_val);
                 try args.append(self.allocator, len_val);
             } else {
-                try args.append(self.allocator, arg_node);
+                // Decompose large compound args (struct/union/tuple > 8 bytes)
+                var is_large_compound = false;
+                if (param_types) |params| {
+                    if (arg_i < params.len) {
+                        const pt = self.type_reg.get(params[arg_i].type_idx);
+                        const ps = self.type_reg.sizeOf(params[arg_i].type_idx);
+                        is_large_compound = (pt == .struct_type or pt == .union_type or pt == .tuple) and ps > 8;
+                    }
+                }
+                if (is_large_compound) {
+                    const param_type_idx = param_types.?[arg_i].type_idx;
+                    const param_size = self.type_reg.sizeOf(param_type_idx);
+                    const num_slots: u32 = @intCast((param_size + 7) / 8);
+                    for (0..num_slots) |slot| {
+                        const offset: i64 = @intCast(slot * 8);
+                        const field = try fb.emitFieldValue(arg_node, @intCast(slot), offset, TypeRegistry.I64, call.span);
+                        try args.append(self.allocator, field);
+                    }
+                } else {
+                    try args.append(self.allocator, arg_node);
+                }
             }
         }
 
@@ -5376,7 +5451,29 @@ pub const Lowerer = struct {
                 try args.append(self.allocator, ptr_val);
                 try args.append(self.allocator, len_val);
             } else {
-                try args.append(self.allocator, arg_node);
+                // Decompose large compound args (struct/union/tuple > 8 bytes)
+                var is_large_compound = false;
+                if (param_types) |params| {
+                    const param_idx = arg_i + 1; // +1 for self receiver
+                    if (param_idx < params.len) {
+                        const pt = self.type_reg.get(params[param_idx].type_idx);
+                        const ps = self.type_reg.sizeOf(params[param_idx].type_idx);
+                        is_large_compound = (pt == .struct_type or pt == .union_type or pt == .tuple) and ps > 8;
+                    }
+                }
+                if (is_large_compound) {
+                    const param_idx = arg_i + 1;
+                    const param_type_idx = param_types.?[param_idx].type_idx;
+                    const param_size = self.type_reg.sizeOf(param_type_idx);
+                    const num_slots: u32 = @intCast((param_size + 7) / 8);
+                    for (0..num_slots) |slot| {
+                        const offset: i64 = @intCast(slot * 8);
+                        const field = try fb.emitFieldValue(arg_node, @intCast(slot), offset, TypeRegistry.I64, call.span);
+                        try args.append(self.allocator, field);
+                    }
+                } else {
+                    try args.append(self.allocator, arg_node);
+                }
             }
         }
 

@@ -1,0 +1,50 @@
+/// Minimal test: List(union) with payloads
+import "std/list"
+
+union Value {
+    int_val: i64,
+    none,
+}
+
+test "local union switch capture" {
+    const v = Value.int_val(42)
+    switch (v) {
+        Value.int_val |x| => @assertEq(x, 42),
+        else => @assert(false),
+    }
+}
+
+fn makeValue() Value {
+    return Value.int_val(42)
+}
+
+test "returned union switch capture" {
+    const v = makeValue()
+    switch (v) {
+        Value.int_val |x| => @assertEq(x, 42),
+        else => @assert(false),
+    }
+}
+
+test "list get union tag" {
+    var items: List(Value) = undefined
+    items.items = 0
+    items.count = 0
+    items.capacity = 0
+    items.append(Value.int_val(42))
+    const got = items.get(0)
+    @assertEq(got.tag, 0)
+}
+
+test "list get union switch capture" {
+    var items: List(Value) = undefined
+    items.items = 0
+    items.count = 0
+    items.capacity = 0
+    items.append(Value.int_val(42))
+    const got = items.get(0)
+    switch (got) {
+        Value.int_val |x| => @assertEq(x, 42),
+        else => @assert(false),
+    }
+}

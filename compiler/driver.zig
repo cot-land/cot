@@ -4254,7 +4254,7 @@ pub const Driver = struct {
                     const param_type = type_reg.get(param.type_idx);
                     const is_string_or_slice = !is_wasm_gc and (param.type_idx == types_mod.TypeRegistry.STRING or param_type == .slice);
                     const type_size = type_reg.sizeOf(param.type_idx);
-                    const is_large_struct = !is_wasm_gc and param_type == .struct_type and type_size > 8;
+                    const is_large_struct = !is_wasm_gc and (param_type == .struct_type or param_type == .union_type or param_type == .tuple) and type_size > 8;
 
                     // WasmGC: struct and pointer-to-struct params are single (ref null $typeidx)
                     // Reference: Kotlin/Dart WasmGC — struct refs in params, including self: *Type

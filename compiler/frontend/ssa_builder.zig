@@ -77,7 +77,7 @@ pub const SSABuilder = struct {
             const local_type = type_registry.get(param.type_idx);
             const is_string_or_slice = !is_wasm_gc and (param.type_idx == TypeRegistry.STRING or local_type == .slice);
             const type_size = type_registry.sizeOf(param.type_idx);
-            const is_large_struct = !is_wasm_gc and local_type == .struct_type and type_size > 8;
+            const is_large_struct = !is_wasm_gc and (local_type == .struct_type or local_type == .union_type) and type_size > 8;
 
             if (is_string_or_slice) {
                 // String/slice: two registers (ptr, len)
@@ -546,7 +546,7 @@ pub const SSABuilder = struct {
         // use that loaded value as an address → SIGSEGV.
         // convertStoreLocal handles this via OpMove (else branch extracts addr).
         const type_size = self.type_registry.sizeOf(type_idx);
-        if ((load_type == .struct_type or load_type == .tuple) and type_size > 8) {
+        if ((load_type == .struct_type or load_type == .tuple or load_type == .union_type) and type_size > 8) {
             addr_val.type_idx = type_idx;
             return addr_val;
         }
@@ -609,13 +609,15 @@ pub const SSABuilder = struct {
 
         const addr_val = try self.emitLocalAddr(local_idx, TypeRegistry.VOID, cur);
         const type_size = self.type_registry.sizeOf(value.type_idx);
-        const is_large_struct = (value_type == .struct_type or value_type == .tuple) and type_size > 8;
+        const is_large_struct = (value_type == .struct_type or value_type == .tuple or value_type == .union_type) and type_size > 8;
 
         if (is_large_struct) {
-            // Use OpMove for bulk memory copy
-            // For non-call results (e.g. load from another local): extract src addr from load
-            // For call results: value IS the returned address (callee returns addr for large types)
-            const src_addr = if (value.op == .load and value.args.len > 0) value.args[0] else value;
+            // Use OpMove for bulk memory copy.
+            // Source address: convertLoadLocal returns local_addr (op=local_addr), so
+            // we use value directly. convertPtrLoadValue returns a loaded pointer
+            // (op=load), which IS the address to copy from — use value directly too.
+            // Both cases: use value as src_addr.
+            const src_addr = value;
             const move_val = try self.func.newValue(.move, TypeRegistry.VOID, cur, self.cur_pos);
             move_val.addArg2(addr_val, src_addr);
             move_val.aux_int = @intCast(type_size);
@@ -953,7 +955,7 @@ pub const SSABuilder = struct {
         // Large struct/tuple: use OpMove for bulk memory copy (same as convertStoreLocal).
         // Extract source address from load result, copy to dest field offset.
         const type_size = self.type_registry.sizeOf(value.type_idx);
-        const is_large = (value_type == .struct_type or value_type == .tuple) and type_size > 8;
+        const is_large = (value_type == .struct_type or value_type == .tuple or value_type == .union_type) and type_size > 8;
         if (is_large) {
             const src_addr = if (value.op == .load and value.args.len > 0) value.args[0] else value;
             const move_val = try self.func.newValue(.move, TypeRegistry.VOID, cur, self.cur_pos);
@@ -1330,6 +1332,15 @@ pub const SSABuilder = struct {
             return make_val;
         }
 
+        // Large compound types (structs, tuples, unions > 8 bytes): return pointer directly.
+        // Same pattern as convertLoadLocal — the pointer IS the value representation.
+        // Consumer uses move for bulk copy when storing to a local.
+        const type_size = self.type_registry.sizeOf(type_idx);
+        if ((value_type == .struct_type or value_type == .tuple or value_type == .union_type) and type_size > 8) {
+            ptr_val.type_idx = type_idx;
+            return ptr_val;
+        }
+
         const load_op = self.getLoadOp(type_idx);
         const load_val = try self.func.newValue(load_op, type_idx, cur, self.cur_pos);
         load_val.addArg(ptr_val);
@@ -1399,7 +1410,7 @@ pub const SSABuilder = struct {
             return len_store;
         }
 
-        const is_large_struct = (value_type == .struct_type or value_type == .tuple) and type_size > 8;
+        const is_large_struct = (value_type == .struct_type or value_type == .tuple or value_type == .union_type) and type_size > 8;
 
         if (is_large_struct) {
             const src_addr = if (value.op == .load and value.args.len > 0) value.args[0] else value;
