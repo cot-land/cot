@@ -333,7 +333,7 @@ impl Parser {
                 var pi = 0
                 while (pi < params.count) {
                     new_params.append(params.get(pi))
-                    pi = pi + 1
+                    pi += 1
                 }
                 params = new_params
             }
@@ -357,7 +357,7 @@ impl Parser {
             var bi = 0
             while (bi < type_params.len()) {
                 type_param_bounds.append("")
-                bi = bi + 1
+                bi += 1
             }
             self.advance()  // consume 'where'
             while (self.tok == @intFromEnum(Token.ident)) {
@@ -379,7 +379,7 @@ impl Parser {
                         type_param_bounds.set(wi, trait_name)
                         break
                     }
-                    wi = wi + 1
+                    wi += 1
                 }
                 if (!self.match(@intFromEnum(Token.comma))) {
                     break
@@ -1012,10 +1012,10 @@ impl Parser {
             self.errors.report(self.tok_start, ErrorCode.e200, "maximum nesting depth exceeded")
             return null_node
         }
-        self.nest_level = self.nest_level + 1
+        self.nest_level += 1
         var left = self.parseUnaryExpr()
         if (left == null_node) {
-            self.nest_level = self.nest_level - 1
+            self.nest_level -= 1
             return null_node
         }
 
@@ -1052,7 +1052,7 @@ impl Parser {
             const right = self.parseBinaryExpr(@as(int, prec) + 1)
             left = self.ast.addBinary(op, left, right, self.spanSE(self.tok_start, self.tok_end))
         }
-        self.nest_level = self.nest_level - 1
+        self.nest_level -= 1
         return left
     }
 
@@ -1678,7 +1678,7 @@ impl Parser {
             const last_tag = self.ast.getTag(stmts.get(stmts.count - 1))
             if (last_tag == @intFromEnum(NodeTag.expr_stmt)) {
                 result_expr = self.ast.getData(stmts.get(stmts.count - 1), 0)
-                stmts.count = stmts.count - 1
+                stmts.count -= 1
             }
         }
         self.expect(@intFromEnum(Token.rbrace))
@@ -2188,7 +2188,7 @@ impl Parser {
         var param_count = 0
         while (self.tok != @intFromEnum(Token.rparen) and self.tok != @intFromEnum(Token.eof)) {
             self.parseType()
-            param_count = param_count + 1
+            param_count += 1
             if (!self.match(@intFromEnum(Token.comma))) {
                 break
             }

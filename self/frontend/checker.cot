@@ -203,7 +203,7 @@ impl Checker {
         ptr.is_type = sym.is_type
         ptr.is_const_val = sym.is_const_val
         ptr.const_value = sym.const_value
-        self.sym_count = self.sym_count + 1
+        self.sym_count += 1
         // Register in current scope's map
         var map = @intToPtr(*Map(string, int), self.scope_maps.get(self.current_scope))
         map.set(sym.name, idx)
@@ -239,21 +239,21 @@ impl Checker {
         var i: int = 0
         while (i < self.ast.file_decls.count) {
             self.collectTypeDecl(self.ast.file_decls.get(i))
-            i = i + 1
+            i += 1
         }
 
         // Pass 2: collect non-type declarations (fn, var/const, impl)
         i = 0
         while (i < self.ast.file_decls.count) {
             self.collectNonTypeDecl(self.ast.file_decls.get(i))
-            i = i + 1
+            i += 1
         }
 
         // Pass 3: check declaration bodies
         i = 0
         while (i < self.ast.file_decls.count) {
             self.checkDecl(self.ast.file_decls.get(i))
-            i = i + 1
+            i += 1
         }
     }
 
@@ -442,7 +442,7 @@ impl Checker {
                 const is_const = self.ast.getData(method_idx, 3)
                 self.defineSymbol(makeSymbol(synth_name, invalid_type, method_idx, is_const == 0))
             }
-            mi = mi + 1
+            mi += 1
         }
     }
 
@@ -483,7 +483,7 @@ impl Checker {
                 const synth_name = type_name ++ "_" ++ method_name
                 self.checkFnDeclBody(method_idx, synth_name)
             }
-            mi = mi + 1
+            mi += 1
         }
     }
 
@@ -535,7 +535,7 @@ impl Checker {
                 var ptype = self.resolveTypeExpr(ptype_n)
                 self.defineSymbol(makeSymbol(pname, ptype, idx, false))
             }
-            pi = pi + 1
+            pi += 1
         }
 
         self.checkBlockBody(body)
@@ -848,7 +848,7 @@ impl Checker {
         var i: int = 0
         while (i < stmts_count) {
             self.checkStmt(self.ast.getData(idx, 1 + i))
-            i = i + 1
+            i += 1
         }
         self.popScope()
     }
@@ -881,7 +881,7 @@ impl Checker {
             var elem_type = @intToPtr(*int, tup.elem_types + i * 8).*
             elem_type = self.materializeType(elem_type)
             self.defineSymbol(makeSymbol(bname, elem_type, idx, is_const != 0))
-            i = i + 1
+            i += 1
         }
     }
 
@@ -905,7 +905,7 @@ impl Checker {
         var i: int = 0
         while (i < stmts_count) {
             self.checkStmt(self.ast.getData(idx, 2 + i))
-            i = i + 1
+            i += 1
         }
         if (result_expr != null_node) {
             self.checkExpr(result_expr)
@@ -1132,7 +1132,7 @@ impl Checker {
                 var ai: int = 0
                 while (ai < args_count) {
                     self.checkExpr(self.ast.getData(idx, 2 + ai))
-                    ai = ai + 1
+                    ai += 1
                 }
                 return VOID
             }
@@ -1173,7 +1173,7 @@ impl Checker {
         // Check argument count (subtract self for instance methods)
         var expected = func_info.param_count
         if (is_method and expected > 0) {
-            expected = expected - 1
+            expected -= 1
         }
         if (args_count != expected) {
             self.reportError(idx, ErrorCode.e304, "wrong number of arguments")
@@ -1189,7 +1189,7 @@ impl Checker {
             if (!self.types.isAssignable(arg_type, param.type_idx)) {
                 self.reportError(idx, ErrorCode.e300, "type mismatch")
             }
-            ai = ai + 1
+            ai += 1
         }
 
         return func_info.return_type
@@ -1303,7 +1303,7 @@ impl Checker {
                 if (strEqual(sf.name, field_name)) {
                     return sf.type_idx
                 }
-                fi = fi + 1
+                fi += 1
             }
             // Check methods
             const mi = self.types.lookupMethod(st.name, field_name)
@@ -1323,7 +1323,7 @@ impl Checker {
                 if (strEqual(ev.name, field_name)) {
                     return base_type
                 }
-                vi = vi + 1
+                vi += 1
             }
             // Check methods
             const mi = self.types.lookupMethod(et.name, field_name)
@@ -1345,7 +1345,7 @@ impl Checker {
                     if (uv.payload_type == invalid_type) { return base_type }
                     return uv.payload_type
                 }
-                vi = vi + 1
+                vi += 1
             }
             self.reportError(idx, ErrorCode.e306, "field not found")
             return invalid_type
@@ -1403,7 +1403,7 @@ impl Checker {
             // field_init_node: [name_s, value_n, span_s, span_e]
             const value_n = self.ast.getData(fi_idx, 1)
             self.checkExpr(value_n)
-            fi = fi + 1
+            fi += 1
         }
 
         return struct_type_idx
@@ -1431,7 +1431,7 @@ impl Checker {
             const fi_idx = self.ast.getData(idx, 3 + fi)
             const value_n = self.ast.getData(fi_idx, 1)
             self.checkExpr(value_n)
-            fi = fi + 1
+            fi += 1
         }
 
         // Return pointer to struct (heap-allocated)
@@ -1449,7 +1449,7 @@ impl Checker {
         var i: int = 1
         while (i < count) {
             self.checkExpr(self.ast.getData(idx, 1 + i))
-            i = i + 1
+            i += 1
         }
         return self.types.makeArray(first_type, count)
     }
@@ -1462,7 +1462,7 @@ impl Checker {
         var i: int = 0
         while (i < count) {
             self.checkExpr(self.ast.getData(idx, 1 + i))
-            i = i + 1
+            i += 1
         }
         return I64  // simplified
     }
@@ -1527,7 +1527,7 @@ impl Checker {
                 result_type = self.materializeType(body_type)
                 first = false
             }
-            ci = ci + 1
+            ci += 1
         }
         if (else_body_n != null_node) {
             self.checkExpr(else_body_n)
@@ -1545,7 +1545,7 @@ impl Checker {
         var i: int = 0
         while (i < stmts_count) {
             self.checkStmt(self.ast.getData(idx, 2 + i))
-            i = i + 1
+            i += 1
         }
         var result: int = VOID
         if (result_expr != null_node) {
@@ -1747,7 +1747,7 @@ impl Checker {
         var ai: int = 0
         while (ai < args_count) {
             self.checkExpr(self.ast.getData(idx, 3 + ai))
-            ai = ai + 1
+            ai += 1
         }
         return invalid_type
     }
@@ -1758,7 +1758,7 @@ impl Checker {
         var i: int = 0
         while (i < count) {
             self.checkExpr(self.ast.getData(idx, 1 + i))
-            i = i + 1
+            i += 1
         }
         return STRING
     }
@@ -1910,7 +1910,7 @@ impl Checker {
             total_size = total_size + self.types.sizeOf(ftype)
             // Align to 8 bytes
             total_size = (total_size + 7) / 8 * 8
-            fi = fi + 1
+            fi += 1
         }
 
         return self.types.add(Type.struct_type(StructType {
@@ -1953,7 +1953,7 @@ impl Checker {
             ev.name = vname
             ev.value = value
             next_value = value + 1
-            vi = vi + 1
+            vi += 1
         }
 
         return self.types.add(Type.enum_type(EnumType {
@@ -1984,7 +1984,7 @@ impl Checker {
             const uv = @intToPtr(*UnionVariant, variants_ptr + vi * @sizeOf(UnionVariant))
             uv.name = vname
             uv.payload_type = payload_type
-            vi = vi + 1
+            vi += 1
         }
 
         const tag_type = if (variants_count <= 256) { U8 } else { U16 }
@@ -2017,7 +2017,7 @@ impl Checker {
             const fp = @intToPtr(*FuncParam, params_ptr + pi * @sizeOf(FuncParam))
             fp.name = pname
             fp.type_idx = ptype
-            pi = pi + 1
+            pi += 1
         }
 
         var ret_type: int = VOID
@@ -2135,7 +2135,7 @@ impl Checker {
                             if (strEqual(ev.name, field_name)) {
                                 return (1,ev.value)
                             }
-                            vi = vi + 1
+                            vi += 1
                         }
                     }
                 }

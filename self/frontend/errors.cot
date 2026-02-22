@@ -89,7 +89,7 @@ impl ErrorReporter {
             self.first_code = code
             self.first_offset = offset
         }
-        self.count = self.count + 1
+        self.count += 1
     }
 
     /// Whether any errors have been recorded.
@@ -111,12 +111,12 @@ fn offsetToLineCol(content: string, offset: int) (int, int) {
     const len = @lenOf(content)
     while (i < len and i < offset) {
         if (charAt(content, i) == '\n') {
-            line = line + 1
+            line += 1
             col = 1
         } else {
-            col = col + 1
+            col += 1
         }
-        i = i + 1
+        i += 1
     }
     return (line, col)
 }

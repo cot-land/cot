@@ -99,7 +99,7 @@ test "source at" {
 test "source at past end" {
     var src = Source { filename: "test.cot", content: "abc" }
     const result = src.at(3)
-    @assertEq(result == null, true)
+    @assert(result == null)
 }
 
 test "source slice" {

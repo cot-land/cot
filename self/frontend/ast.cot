@@ -257,7 +257,7 @@ impl Ast {
         var i = 0
         while (i < args.count) {
             self.addData(args.get(i))
-            i = i + 1
+            i += 1
         }
         self.addData(s.start)
         self.addData(s.end)
@@ -299,7 +299,7 @@ impl Ast {
         var i = 0
         while (i < elems.count) {
             self.addData(elems.get(i))
-            i = i + 1
+            i += 1
         }
         self.addData(s.start)
         self.addData(s.end)
@@ -334,7 +334,7 @@ impl Ast {
         var i = 0
         while (i < cases.count) {
             self.addData(cases.get(i))
-            i = i + 1
+            i += 1
         }
         self.addData(s.start)
         self.addData(s.end)
@@ -352,7 +352,7 @@ impl Ast {
         var i = 0
         while (i < patterns.count) {
             self.addData(patterns.get(i))
-            i = i + 1
+            i += 1
         }
         self.addData(s.start)
         self.addData(s.end)
@@ -366,7 +366,7 @@ impl Ast {
         var i = 0
         while (i < stmts.count) {
             self.addData(stmts.get(i))
-            i = i + 1
+            i += 1
         }
         self.addData(s.start)
         self.addData(s.end)
@@ -381,13 +381,13 @@ impl Ast {
         var i = 0
         while (i < fields.count) {
             self.addData(fields.get(i))
-            i = i + 1
+            i += 1
         }
         self.addData(type_args.count)
         i = 0
         while (i < type_args.count) {
             self.addData(type_args.get(i))
-            i = i + 1
+            i += 1
         }
         self.addData(s.start)
         self.addData(s.end)
@@ -403,19 +403,19 @@ impl Ast {
         var fi = 0
         while (fi < fields.count) {
             self.addData(fields.get(fi))
-            fi = fi + 1
+            fi += 1
         }
         self.addData(type_args.count)
         var ti = 0
         while (ti < type_args.count) {
             self.addData(type_args.get(ti))
-            ti = ti + 1
+            ti += 1
         }
         self.addData(ctor_args.count)
         var ci = 0
         while (ci < ctor_args.count) {
             self.addData(ctor_args.get(ci))
-            ci = ci + 1
+            ci += 1
         }
         self.addData(s.start)
         self.addData(s.end)
@@ -430,7 +430,7 @@ impl Ast {
         var i = 0
         while (i < args.count) {
             self.addData(args.get(i))
-            i = i + 1
+            i += 1
         }
         self.addData(s.start)
         self.addData(s.end)
@@ -443,7 +443,7 @@ impl Ast {
         var i = 0
         while (i < segments.count) {
             self.addData(segments.get(i))
-            i = i + 1
+            i += 1
         }
         self.addData(s.start)
         self.addData(s.end)
@@ -504,7 +504,7 @@ impl Ast {
         var i = 0
         while (i < params.count) {
             self.addData(params.get(i))
-            i = i + 1
+            i += 1
         }
         self.addData(s.start)
         self.addData(s.end)
@@ -517,7 +517,7 @@ impl Ast {
         var i = 0
         while (i < elems.count) {
             self.addData(elems.get(i))
-            i = i + 1
+            i += 1
         }
         self.addData(s.start)
         self.addData(s.end)
@@ -563,7 +563,7 @@ impl Ast {
         var i = 0
         while (i < type_args.count) {
             self.addData(type_args.get(i))
-            i = i + 1
+            i += 1
         }
         self.addData(s.start)
         self.addData(s.end)
@@ -648,14 +648,14 @@ impl Ast {
         var i = 0
         while (i < params.count) {
             self.addData(params.get(i))
-            i = i + 1
+            i += 1
         }
         self.addData(type_params.count)
         i = 0
         while (i < type_params.count) {
             const tp_str = self.addStr(type_params.get(i))
             self.addData(tp_str)
-            i = i + 1
+            i += 1
         }
         // Where clause bounds: one per type param, "" = no bound
         self.addData(type_param_bounds.count)
@@ -663,7 +663,7 @@ impl Ast {
         while (i < type_param_bounds.count) {
             const bound_str = self.addStr(type_param_bounds.get(i))
             self.addData(bound_str)
-            i = i + 1
+            i += 1
         }
         self.addData(s.start)
         self.addData(s.end)
@@ -695,20 +695,20 @@ impl Ast {
         var i = 0
         while (i < fields.count) {
             self.addData(fields.get(i))
-            i = i + 1
+            i += 1
         }
         self.addData(type_params.count)
         i = 0
         while (i < type_params.count) {
             const tp_str = self.addStr(type_params.get(i))
             self.addData(tp_str)
-            i = i + 1
+            i += 1
         }
         self.addData(nested.count)
         i = 0
         while (i < nested.count) {
             self.addData(nested.get(i))
-            i = i + 1
+            i += 1
         }
         self.addData(s.start)
         self.addData(s.end)
@@ -726,7 +726,7 @@ impl Ast {
         var i = 0
         while (i < variants.count) {
             self.addData(variants.get(i))
-            i = i + 1
+            i += 1
         }
         self.addData(s.start)
         self.addData(s.end)
@@ -743,7 +743,7 @@ impl Ast {
         var i = 0
         while (i < variants.count) {
             self.addData(variants.get(i))
-            i = i + 1
+            i += 1
         }
         self.addData(s.start)
         self.addData(s.end)
@@ -781,14 +781,14 @@ impl Ast {
         var i = 0
         while (i < methods.count) {
             self.addData(methods.get(i))
-            i = i + 1
+            i += 1
         }
         self.addData(type_params.count)
         i = 0
         while (i < type_params.count) {
             const tp_str = self.addStr(type_params.get(i))
             self.addData(tp_str)
-            i = i + 1
+            i += 1
         }
         self.addData(s.start)
         self.addData(s.end)
@@ -805,7 +805,7 @@ impl Ast {
         var i = 0
         while (i < methods.count) {
             self.addData(methods.get(i))
-            i = i + 1
+            i += 1
         }
         self.addData(s.start)
         self.addData(s.end)
@@ -824,14 +824,14 @@ impl Ast {
         var i = 0
         while (i < methods.count) {
             self.addData(methods.get(i))
-            i = i + 1
+            i += 1
         }
         self.addData(type_params.count)
         i = 0
         while (i < type_params.count) {
             const tp_str = self.addStr(type_params.get(i))
             self.addData(tp_str)
-            i = i + 1
+            i += 1
         }
         self.addData(s.start)
         self.addData(s.end)
@@ -849,7 +849,7 @@ impl Ast {
         while (i < variants.count) {
             const v_str = self.addStr(variants.get(i))
             self.addData(v_str)
-            i = i + 1
+            i += 1
         }
         self.addData(s.start)
         self.addData(s.end)
@@ -974,7 +974,7 @@ impl Ast {
         var i = 0
         while (i < stmts.count) {
             self.addData(stmts.get(i))
-            i = i + 1
+            i += 1
         }
         self.addData(s.start)
         self.addData(s.end)
@@ -1016,7 +1016,7 @@ impl Ast {
         var i = 0
         while (i < bindings.count) {
             self.addData(bindings.get(i))
-            i = i + 1
+            i += 1
         }
         self.addData(s.start)
         self.addData(s.end)
@@ -1171,10 +1171,10 @@ test "builtinFromString known" {
 }
 
 test "builtinFromString unknown" {
-    @assertEq(builtinFromString("nonexistent") == null, true)
-    @assertEq(builtinFromString("") == null, true)
-    @assertEq(builtinFromString("fd_write") == null, true)
-    @assertEq(builtinFromString("alloc") == null, true)
+    @assert(builtinFromString("nonexistent") == null)
+    @assert(builtinFromString("") == null)
+    @assert(builtinFromString("fd_write") == null)
+    @assert(builtinFromString("alloc") == null)
 }
 
 test "BuiltinKind quoted identifiers" {

@@ -39,7 +39,7 @@ impl Scanner {
 
     /// Advance one byte forward.
     fn advance() void {
-        self.pos = self.pos + 1
+        self.pos += 1
         if (self.pos >= @lenOf(self.content)) {
             self.ch = null
         } else {
@@ -390,7 +390,7 @@ impl Scanner {
 
         // String interpolation brace tracking
         if (c == '{' and self.in_interp_string) {
-            self.interp_brace_depth = self.interp_brace_depth + 1
+            self.interp_brace_depth += 1
             return TokenInfo {
                 tok: @intFromEnum(Token.lbrace),
                 start_offset: start,
@@ -399,7 +399,7 @@ impl Scanner {
             }
         }
         if (c == '}' and self.in_interp_string) {
-            self.interp_brace_depth = self.interp_brace_depth - 1
+            self.interp_brace_depth -= 1
             if (self.interp_brace_depth == 0) {
                 return self.scanStringContinuation(start)
             }
