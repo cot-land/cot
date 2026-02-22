@@ -180,6 +180,12 @@ test "offsetToLineCol first char" {
     @assertEq(col, 1)
 }
 
+test "offsetToLineCol middle of first line" {
+    const line, col = offsetToLineCol("hello\nworld", 3)
+    @assertEq(line, 1)
+    @assertEq(col, 4)
+}
+
 test "offsetToLineCol second line" {
     const line, col = offsetToLineCol("hello\nworld", 6)
     @assertEq(line, 2)

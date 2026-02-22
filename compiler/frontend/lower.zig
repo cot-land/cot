@@ -3209,6 +3209,11 @@ pub const Lowerer = struct {
         if (expr == .struct_init and expr.struct_init.type_name.len == 0) {
             return try self.lowerStructInitExpr(expr.struct_init, idx);
         }
+        // Pass node index for switch expressions so lowerSwitchExpr can query
+        // the checker's authoritative type (handles ?T when arms mix T and null).
+        if (expr == .switch_expr) {
+            return try self.lowerSwitchExpr(expr.switch_expr, idx);
+        }
         return try self.lowerExpr(expr);
     }
 
@@ -3238,7 +3243,7 @@ pub const Lowerer = struct {
             .catch_expr => |ce| return try self.lowerCatchExpr(ce),
             .error_literal => |el| return try self.lowerErrorLiteral(el),
             .builtin_call => |bc| return try self.lowerBuiltinCall(bc),
-            .switch_expr => |se| return try self.lowerSwitchExpr(se),
+            .switch_expr => |se| return try self.lowerSwitchExpr(se, null),
             .struct_init => |si| return try self.lowerStructInitExpr(si, null),
             .tuple_literal => |tl| return try self.lowerTupleLiteral(tl),
             .new_expr => |ne| return try self.lowerNewExpr(ne),
@@ -4828,17 +4833,25 @@ pub const Lowerer = struct {
         return try fb.emitLoadLocal(result_local, result_type, if_expr.span);
     }
 
-    fn lowerSwitchExpr(self: *Lowerer, se: ast.SwitchExpr) Error!ir.NodeIndex {
-        // Infer result type from the first case that produces a non-void type.
-        // Arms with early returns (e.g., `{ return expr }`) infer as VOID from the
-        // switch perspective, but other arms may produce values.
+    fn lowerSwitchExpr(self: *Lowerer, se: ast.SwitchExpr, switch_idx: ?NodeIndex) Error!ir.NodeIndex {
+        // Use the checker's authoritative type when available. The checker considers
+        // all arms (including null) and the expected return type, so it produces the
+        // correct result type (e.g., ?T when arms mix T and null). Falling back to
+        // arm-scanning only when no checker type exists (statement context).
         var result_type: TypeIndex = TypeRegistry.VOID;
-        for (se.cases) |case| {
-            const t = self.inferExprType(case.body);
-            if (t != TypeRegistry.VOID) { result_type = t; break; }
+        if (switch_idx) |idx| {
+            result_type = self.inferExprType(idx);
         }
-        if (result_type == TypeRegistry.VOID and se.else_body != null_node) {
-            result_type = self.inferExprType(se.else_body);
+        if (result_type == TypeRegistry.VOID or result_type == TypeRegistry.UNTYPED_NULL) {
+            // Fallback: infer from first non-void case body
+            result_type = TypeRegistry.VOID;
+            for (se.cases) |case| {
+                const t = self.inferExprType(case.body);
+                if (t != TypeRegistry.VOID) { result_type = t; break; }
+            }
+            if (result_type == TypeRegistry.VOID and se.else_body != null_node) {
+                result_type = self.inferExprType(se.else_body);
+            }
         }
         const subject_type = self.inferExprType(se.subject);
         const is_union = self.type_reg.get(subject_type) == .union_type;

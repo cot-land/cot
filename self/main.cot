@@ -170,30 +170,6 @@ fn writeErr(msg: string) void {
 // Tests
 // ============================================================================
 
-test "offsetToLineCol first char" {
-    const line, col = offsetToLineCol("hello\nworld", 0)
-    @assertEq(line, 1)
-    @assertEq(col, 1)
-}
-
-test "offsetToLineCol middle of first line" {
-    const line, col = offsetToLineCol("hello\nworld", 3)
-    @assertEq(line, 1)
-    @assertEq(col, 4)
-}
-
-test "offsetToLineCol start of second line" {
-    const line, col = offsetToLineCol("hello\nworld", 6)
-    @assertEq(line, 2)
-    @assertEq(col, 1)
-}
-
-test "offsetToLineCol third line" {
-    const line, col = offsetToLineCol("a\nb\ncde", 5)
-    @assertEq(line, 3)
-    @assertEq(col, 2)
-}
-
 test "parse valid source" {
     var s = Scanner.init("const x = 42")
     var ast = Ast.init("test.cot")
@@ -213,8 +189,4 @@ test "parse reports errors" {
     @assertEq(errs.hasErrors(), true)
 }
 
-test "formatDiagnostic output" {
-    const diag = Diagnostic { offset: 6, code: ErrorCode.e203, msg: "expected identifier" }
-    const result = formatDiagnostic("test.cot", "hello\nworld", diag)
-    @assertEq(result, "test.cot:2:1: error[E203]: expected identifier")
-}
+
