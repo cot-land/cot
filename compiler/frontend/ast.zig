@@ -52,6 +52,7 @@ pub const FnDecl = struct {
     return_type: NodeIndex,
     body: NodeIndex,
     is_extern: bool,
+    is_export: bool = false,
     is_async: bool = false,
     is_static: bool = false,
     doc_comment: []const u8 = "",

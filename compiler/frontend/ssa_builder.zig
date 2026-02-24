@@ -52,6 +52,7 @@ pub const SSABuilder = struct {
     pub fn init(allocator: Allocator, ir_func: *const ir.Func, type_registry: *TypeRegistry, target: Target) !SSABuilder {
         const func = try allocator.create(Func);
         func.* = Func.init(allocator, ir_func.name);
+        func.is_export = ir_func.is_export;
         const entry = try func.newBlock(.plain);
         func.entry = entry;
 
@@ -644,7 +645,24 @@ pub const SSABuilder = struct {
             const elem_info = self.type_registry.get(value_type.optional.elem);
             break :blk elem_info != .pointer;
         };
-        const is_large_struct = ((value_type == .struct_type or value_type == .tuple or value_type == .union_type) and type_size > 8) or is_compound_opt;
+        var is_large_struct = ((value_type == .struct_type or value_type == .tuple or value_type == .union_type) and type_size > 8) or is_compound_opt;
+
+        // When the value is a VOID-typed address (from convertFieldValue for compound struct
+        // fields), check the TARGET local's type to determine if bulk copy is needed.
+        // convertFieldValue returns off_ptr with VOID type for struct/array fields — the
+        // address is valid but untyped. The local knows the expected compound type.
+        if (!is_large_struct and value.op == .off_ptr and value.type_idx == TypeRegistry.VOID) {
+            const local_type_idx = self.ir_func.locals[local_idx].type_idx;
+            const local_type = self.type_registry.get(local_type_idx);
+            const local_size = self.ir_func.locals[local_idx].size;
+            const local_is_compound_opt = local_type == .optional and blk: {
+                const elem_info = self.type_registry.get(local_type.optional.elem);
+                break :blk elem_info != .pointer;
+            };
+            if (((local_type == .struct_type or local_type == .tuple or local_type == .union_type) and local_size > 8) or local_is_compound_opt) {
+                is_large_struct = true;
+            }
+        }
 
         if (is_large_struct) {
             // Use OpMove for bulk memory copy.
@@ -655,7 +673,10 @@ pub const SSABuilder = struct {
             const src_addr = value;
             const move_val = try self.func.newValue(.move, TypeRegistry.VOID, cur, self.cur_pos);
             move_val.addArg2(addr_val, src_addr);
-            move_val.aux_int = @intCast(type_size);
+            // Use value's type_size when available, fall back to local's size for
+            // VOID-typed addresses (from convertFieldValue for struct fields).
+            const move_size = if (type_size > 0) type_size else self.ir_func.locals[local_idx].size;
+            move_val.aux_int = @intCast(move_size);
             try cur.addValue(self.allocator, move_val);
             self.assign(local_idx, value);
             return value;
@@ -1107,6 +1128,23 @@ pub const SSABuilder = struct {
             len_store.addArg2(len_addr, len_component);
             try cur.addValue(self.allocator, len_store);
             return len_store;
+        }
+
+        // Compound struct/tuple/union (> 8 bytes): use .move (memcpy)
+        // Same pattern as convertStoreLocal and convertPtrStoreValue.
+        const type_size = self.type_registry.sizeOf(value.type_idx);
+        const is_compound_opt = value_type == .optional and blk: {
+            const elem_info = self.type_registry.get(value_type.optional.elem);
+            break :blk elem_info != .pointer;
+        };
+        const is_large_struct = ((value_type == .struct_type or value_type == .tuple or value_type == .union_type) and type_size > 8) or is_compound_opt;
+        if (is_large_struct) {
+            const src_addr = if (value.op == .load and value.args.len > 0) value.args[0] else value;
+            const move_val = try self.func.newValue(.move, TypeRegistry.VOID, cur, self.cur_pos);
+            move_val.addArg2(off_val, src_addr);
+            move_val.aux_int = @intCast(type_size);
+            try cur.addValue(self.allocator, move_val);
+            return move_val;
         }
 
         const store_op = self.getStoreOp(value.type_idx);

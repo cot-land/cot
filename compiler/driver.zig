@@ -68,6 +68,7 @@ pub const Driver = struct {
     bench_filter: ?[]const u8 = null,
     bench_n: ?i64 = null,
     release_mode: bool = false,
+    lib_mode: bool = false,
     project_safe: ?bool = null, // cached cot.json "safe" field, loaded lazily
     // Debug info: source file/text and IR funcs for DWARF generation
     debug_source_file: []const u8 = "",
@@ -927,15 +928,26 @@ pub const Driver = struct {
                 main_func_index = i;
             }
 
+            // MachO C ABI: all symbols get _ prefix (Zig convention: _funcname in Mach-O)
+            // export fn functions use standard C naming — the _ is the platform convention, not mangling.
             const mangled_name = if (is_main)
                 try self.allocator.dupe(u8, "__wasm_main")
             else
                 try std.fmt.allocPrint(self.allocator, "_{s}", .{func_name});
             defer self.allocator.free(mangled_name);
 
+            // Zig pattern: export fn → Export linkage (global visibility), internal fn → Local
+            const is_export_fn = blk: {
+                for (self.debug_ir_funcs) |ir_func| {
+                    if (std.mem.eql(u8, ir_func.name, func_name) and ir_func.is_export) break :blk true;
+                }
+                break :blk false;
+            };
             const linkage: object_module.Linkage = if (is_main)
                 .Local
             else if (func_name_allocated)
+                .Local
+            else if (self.lib_mode and !is_export_fn)
                 .Local
             else
                 .Export;
@@ -1781,7 +1793,8 @@ pub const Driver = struct {
         }
 
         // If we have a main function, generate the wrapper and static vmctx
-        if (main_func_index != null) {
+        // Skip in lib mode — shared libraries don't have entry points
+        if (main_func_index != null and !self.lib_mode) {
             try self.generateMainWrapperMachO(&module, data_segments, globals, @intCast(compiled_funcs.len));
         }
 
@@ -2550,14 +2563,24 @@ pub const Driver = struct {
                 main_func_index = i;
             }
 
+            // ELF: no underscore prefix (Linux C ABI uses bare names)
             const mangled_name = if (is_main)
                 "__wasm_main"
             else
                 func_name;
 
+            // Zig pattern: export fn → Export linkage (global visibility), internal fn → Local
+            const is_export_fn = blk: {
+                for (self.debug_ir_funcs) |ir_func| {
+                    if (std.mem.eql(u8, ir_func.name, func_name) and ir_func.is_export) break :blk true;
+                }
+                break :blk false;
+            };
             const linkage: object_module.Linkage = if (is_main)
                 .Local
             else if (func_name_allocated)
+                .Local
+            else if (self.lib_mode and !is_export_fn)
                 .Local
             else
                 .Export;
@@ -3367,7 +3390,8 @@ pub const Driver = struct {
         }
 
         // If we have a main function, generate the wrapper and static vmctx
-        if (main_func_index != null) {
+        // Skip in lib mode — shared libraries don't have entry points
+        if (main_func_index != null and !self.lib_mode) {
             try self.generateMainWrapperElf(&module, data_segments, globals, @intCast(compiled_funcs.len));
         }
 

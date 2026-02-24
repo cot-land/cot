@@ -463,6 +463,7 @@ pub const Lowerer = struct {
             if (uses_sret) fb.sret_return_type = return_type;
             // Free-function-style destructors: fn TypeName_deinit(self: *TypeName) void
             fb.is_destructor = std.mem.endsWith(u8, fn_decl.name, "_deinit");
+            fb.is_export = fn_decl.is_export;
             self.current_func = fb;
             self.cleanup_stack.clear();
             self.comptime_value_vars.clearRetainingCapacity();
@@ -2422,6 +2423,20 @@ pub const Lowerer = struct {
                         const fld_info = self.type_reg.get(field.type_idx);
                         if (fld_info == .optional and !self.isPtrLikeOptional(field.type_idx)) {
                             try self.storeCompoundOptFieldPtr(fb, ptr_val, field_idx, field_offset, value_node, rhs_ast, span);
+                        } else if ((fld_info == .struct_type or fld_info == .tuple or fld_info == .union_type) and self.type_reg.sizeOf(field.type_idx) > 8) {
+                            // Compound struct field assignment through pointer:
+                            // Store value to temp local (triggers .move for bulk copy from
+                            // VOID-typed off_ptr addresses), then decompose into per-word
+                            // stores to the target field. Matches SRET return pattern.
+                            const fld_size = self.type_reg.sizeOf(field.type_idx);
+                            const num_words = fld_size / 8;
+                            const tmp_local = try fb.addLocalWithSize("__fld_assign_src", field.type_idx, false, fld_size);
+                            _ = try fb.emitStoreLocal(tmp_local, value_node, span);
+                            for (0..num_words) |w| {
+                                const w_offset: i64 = @intCast(w * 8);
+                                const word = try fb.emitFieldLocal(tmp_local, @intCast(w), w_offset, TypeRegistry.I64, span);
+                                _ = try fb.emitStoreField(ptr_val, field_idx, field_offset + w_offset, word, span);
+                            }
                         } else {
                             _ = try fb.emitStoreFieldValue(ptr_val, field_idx, field_offset, value_node, span);
                         }
@@ -2440,6 +2455,16 @@ pub const Lowerer = struct {
                         const fld_info = self.type_reg.get(field.type_idx);
                         if (fld_info == .optional and !self.isPtrLikeOptional(field.type_idx)) {
                             try self.storeCompoundOptFieldPtr(fb, global_addr, field_idx, field_offset, value_node, rhs_ast, span);
+                        } else if ((fld_info == .struct_type or fld_info == .tuple or fld_info == .union_type) and self.type_reg.sizeOf(field.type_idx) > 8) {
+                            const fld_size = self.type_reg.sizeOf(field.type_idx);
+                            const num_words = fld_size / 8;
+                            const tmp_local = try fb.addLocalWithSize("__fld_assign_src", field.type_idx, false, fld_size);
+                            _ = try fb.emitStoreLocal(tmp_local, value_node, span);
+                            for (0..num_words) |w| {
+                                const w_offset: i64 = @intCast(w * 8);
+                                const word = try fb.emitFieldLocal(tmp_local, @intCast(w), w_offset, TypeRegistry.I64, span);
+                                _ = try fb.emitStoreField(global_addr, field_idx, field_offset + w_offset, word, span);
+                            }
                         } else {
                             _ = try fb.emitStoreFieldValue(global_addr, field_idx, field_offset, value_node, span);
                         }
@@ -2452,6 +2477,16 @@ pub const Lowerer = struct {
                         const fld_info = self.type_reg.get(field.type_idx);
                         if (fld_info == .optional and !self.isPtrLikeOptional(field.type_idx)) {
                             try self.storeCompoundOptFieldPtr(fb, base_addr, field_idx, field_offset, value_node, rhs_ast, span);
+                        } else if ((fld_info == .struct_type or fld_info == .tuple or fld_info == .union_type) and self.type_reg.sizeOf(field.type_idx) > 8) {
+                            const fld_size = self.type_reg.sizeOf(field.type_idx);
+                            const num_words = fld_size / 8;
+                            const tmp_local = try fb.addLocalWithSize("__fld_assign_src", field.type_idx, false, fld_size);
+                            _ = try fb.emitStoreLocal(tmp_local, value_node, span);
+                            for (0..num_words) |w| {
+                                const w_offset: i64 = @intCast(w * 8);
+                                const word = try fb.emitFieldLocal(tmp_local, @intCast(w), w_offset, TypeRegistry.I64, span);
+                                _ = try fb.emitStoreField(base_addr, field_idx, field_offset + w_offset, word, span);
+                            }
                         } else {
                             _ = try fb.emitStoreFieldValue(base_addr, field_idx, field_offset, value_node, span);
                         }

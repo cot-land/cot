@@ -1,0 +1,12 @@
+export fn add(a: i64, b: i64) i64 {
+    return a + b
+}
+
+export fn multiply(a: i64, b: i64) i64 {
+    return a * b
+}
+
+test "export functions work locally too" {
+    @assertEq(add(2, 3), 5)
+    @assertEq(multiply(4, 5), 20)
+}

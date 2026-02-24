@@ -42,6 +42,7 @@ pub const Symbol = struct {
     node: NodeIndex,
     mutable: bool,
     is_extern: bool = false,
+    is_export: bool = false,
     const_value: ?i64 = null,
     float_const_value: ?f64 = null,
     comptime_val: ?ComptimeValue = null,
@@ -351,6 +352,11 @@ pub const Checker = struct {
                     self.reportRedefined(f.span.start, f.name);
                     return;
                 }
+                // Export functions cannot be generic (generics aren't C ABI compatible)
+                if (f.is_export and f.type_params.len > 0) {
+                    self.err.errorWithCode(f.span.start, .e302, "export functions cannot be generic");
+                    return;
+                }
                 // Generic functions: store definition, don't build concrete type yet
                 if (f.type_params.len > 0) {
                     try self.generics.generic_functions.put(f.name, .{ .type_params = f.type_params, .type_param_bounds = f.type_param_bounds, .node_idx = idx, .tree = self.tree });
@@ -365,7 +371,9 @@ pub const Checker = struct {
                     const future_ret = try self.types.makeFuture(inner_ret);
                     func_type = try self.types.makeFunc(self.types.get(func_type).func.params, future_ret);
                 }
-                try self.scope.define(Symbol.initExtern(f.name, .function, func_type, idx, false, f.is_extern));
+                var sym = Symbol.initExtern(f.name, .function, func_type, idx, false, f.is_extern);
+                sym.is_export = f.is_export;
+                try self.scope.define(sym);
                 if (f.params.len > 0 and std.mem.eql(u8, f.params[0].name, "self"))
                     try self.registerMethod(f.name, f.params[0].type_expr, func_type);
             },

@@ -35,6 +35,7 @@ pub const Func = struct {
     cached_idom: ?[]*Block = null,
     scheduled: bool = false,
     laidout: bool = false,
+    is_export: bool = false,
     local_sizes: []u32 = &.{},
     local_offsets: []i32 = &.{},
     string_literals: []const []const u8 = &.{},

@@ -25,6 +25,7 @@ pub const BuildOptions = struct {
     target: Target = Target.native(),
     watch: bool = false,
     release: bool = false,
+    lib: bool = false,
 };
 
 pub const RunOptions = struct {
@@ -166,6 +167,8 @@ fn parseBuild(args: *std.process.ArgIterator) ?Command {
             opts.watch = true;
         } else if (std.mem.eql(u8, arg, "--release")) {
             opts.release = true;
+        } else if (std.mem.eql(u8, arg, "--lib")) {
+            opts.lib = true;
         } else if (!std.mem.startsWith(u8, arg, "-")) {
             opts.input_file = arg;
             has_input = true;

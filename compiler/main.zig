@@ -163,6 +163,14 @@ fn buildCommand(allocator: std.mem.Allocator, opts: cli.BuildOptions) void {
             std.debug.print("Error: Failed to create cot-out/ directory\n", .{});
             std.process.exit(1);
         };
+        if (opts.lib) {
+            // Shared library: lib<name>.dylib (macOS) or lib<name>.so (Linux)
+            const ext: []const u8 = if (compile_target.os == .linux) ".so" else ".dylib";
+            break :blk std.fmt.allocPrint(allocator, "cot-out/lib{s}{s}", .{ stem, ext }) catch {
+                std.debug.print("Error: Allocation failed\n", .{});
+                std.process.exit(1);
+            };
+        }
         break :blk std.fmt.allocPrint(allocator, "cot-out/{s}", .{stem}) catch {
             std.debug.print("Error: Allocation failed\n", .{});
             std.process.exit(1);
@@ -182,7 +190,7 @@ fn buildCommand(allocator: std.mem.Allocator, opts: cli.BuildOptions) void {
         }
         watchLoop(allocator, input_file, argv.items);
     } else {
-        compileAndLinkFull(allocator, input_file, output_name, compile_target, false, false, null, false, null, null, opts.release, false);
+        compileAndLinkFull(allocator, input_file, output_name, compile_target, false, false, null, false, null, null, opts.release, false, opts.lib);
     }
 }
 
@@ -222,7 +230,7 @@ fn runOnce(allocator: std.mem.Allocator, input_file: []const u8, compile_target:
         std.process.exit(1);
     };
 
-    compileAndLinkFull(allocator, input_file, tmp_output, compile_target, false, true, null, false, null, null, release, false);
+    compileAndLinkFull(allocator, input_file, tmp_output, compile_target, false, true, null, false, null, null, release, false, false);
 
     // Build argv: wasmtime for wasm targets, direct execution for native
     const run_path = if (compile_target.isWasm())
@@ -311,7 +319,7 @@ fn testCommand(allocator: std.mem.Allocator, opts: cli.TestOptions) void {
         std.process.exit(1);
     };
 
-    compileAndLinkFull(allocator, input_file, tmp_output, opts.target, true, true, opts.filter, false, null, null, opts.release, opts.fail_fast);
+    compileAndLinkFull(allocator, input_file, tmp_output, opts.target, true, true, opts.filter, false, null, null, opts.release, opts.fail_fast, false);
 
     // Run the test: wasmtime for wasm targets, direct execution for native
     const run_path = if (opts.target.isWasm())
@@ -386,7 +394,7 @@ fn benchCommand(allocator: std.mem.Allocator, opts: cli.BenchOptions) void {
         std.process.exit(1);
     };
 
-    compileAndLinkFull(allocator, input_file, tmp_output, opts.target, false, true, null, true, opts.filter, opts.n, false, false);
+    compileAndLinkFull(allocator, input_file, tmp_output, opts.target, false, true, null, true, opts.filter, opts.n, false, false, false);
 
     // Run the benchmark: wasmtime for wasm targets, direct execution for native
     const run_path = if (opts.target.isWasm())
@@ -1264,7 +1272,7 @@ fn compileAndLink(
     quiet: bool,
     test_filter: ?[]const u8,
 ) void {
-    compileAndLinkFull(allocator, input_file, output_name, compile_target, test_mode, quiet, test_filter, false, null, null, false, false);
+    compileAndLinkFull(allocator, input_file, output_name, compile_target, test_mode, quiet, test_filter, false, null, null, false, false, false);
 }
 
 fn compileAndLinkFull(
@@ -1280,10 +1288,12 @@ fn compileAndLinkFull(
     bench_n: ?i64,
     release_mode: bool,
     fail_fast: bool,
+    lib_mode: bool,
 ) void {
     var compile_driver = Driver.init(allocator);
     compile_driver.setTarget(compile_target);
     compile_driver.release_mode = release_mode;
+    compile_driver.lib_mode = lib_mode;
     if (test_mode) compile_driver.setTestMode(true);
     if (fail_fast) compile_driver.setFailFast(true);
     if (test_filter) |f| compile_driver.setTestFilter(f);
@@ -1392,6 +1402,14 @@ fn compileAndLinkFull(
         };
     } else {
         link_args.appendSlice(allocator, &.{ "zig", "cc", "-o", output_name, obj_path }) catch {
+            std.debug.print("Error: Allocation failed\n", .{});
+            std.process.exit(1);
+        };
+    }
+
+    // Shared library mode: add -shared flag
+    if (lib_mode) {
+        link_args.append(allocator, "-shared") catch {
             std.debug.print("Error: Allocation failed\n", .{});
             std.process.exit(1);
         };
