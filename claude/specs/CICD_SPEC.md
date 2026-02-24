@@ -228,11 +228,11 @@ esac
 
 # Fetch latest version from GitHub API
 if [ -z "$COT_VERSION" ]; then
-    COT_VERSION=$(curl -fsSL https://api.github.com/repos/cot-land/cot/releases/latest | grep '"tag_name"' | sed 's/.*"v\(.*\)".*/\1/')
+    COT_VERSION=$(curl -fsSL https://api.github.com/repos/cotlang/cot/releases/latest | grep '"tag_name"' | sed 's/.*"v\(.*\)".*/\1/')
 fi
 
 FILENAME="cot-${ARCH_NAME}-${OS_NAME}.tar.gz"
-URL="https://github.com/cot-land/cot/releases/download/v${COT_VERSION}/${FILENAME}"
+URL="https://github.com/cotlang/cot/releases/download/v${COT_VERSION}/${FILENAME}"
 
 echo "Installing cot ${COT_VERSION} (${ARCH_NAME}-${OS_NAME})..."
 
@@ -333,14 +333,14 @@ curl -fsSL https://cot.dev/install.sh | sh
 
 ### From GitHub Releases
 
-Download the latest binary from [GitHub Releases](https://github.com/cot-land/cot/releases).
+Download the latest binary from [GitHub Releases](https://github.com/cotlang/cot/releases).
 
 ### Build from Source
 
 Requires [Zig 0.15+](https://ziglang.org/download/).
 
 ```sh
-git clone https://github.com/cot-land/cot.git
+git clone https://github.com/cotlang/cot.git
 cd cot
 zig build
 ./zig-out/bin/cot version
@@ -358,7 +358,7 @@ Create `homebrew-cot` tap repo:
 class Cot < Formula
   desc "Wasm-first compiled language for full-stack web development"
   homepage "https://cot.dev"
-  url "https://github.com/cot-land/cot/releases/download/v0.5.0/cot-aarch64-macos.tar.gz"
+  url "https://github.com/cotlang/cot/releases/download/v0.5.0/cot-aarch64-macos.tar.gz"
   sha256 "..."
   def install
     bin.install "cot"
@@ -369,7 +369,7 @@ class Cot < Formula
 end
 ```
 
-Usage: `brew install cot-land/tap/cot`
+Usage: `brew install cotlang/tap/cot`
 
 ### npm wrapper (0.5)
 

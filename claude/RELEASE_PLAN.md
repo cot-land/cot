@@ -36,7 +36,7 @@ The About page on cot.dev tells the story: *"Cot takes its name from Cottrell â€
 | **Cot** | â€” | The language and compiler |
 | **Cotland** | cot.land | Package registry (real English word: land held by a cotter) |
 | **cot.dev** | cot.dev | Documentation site + interactive playground |
-| **cot-land** | github.com/cot-land | GitHub organization |
+| **cotlang** | github.com/cotlang | GitHub organization |
 
 ### Visual Identity
 
@@ -156,7 +156,7 @@ These are planned and ready to execute when the language is mature enough for pu
 
 | # | Item | Description | Effort |
 |---|------|-------------|--------|
-| D1 | Homebrew tap | Create `homebrew-tap` repo, write formula, publish. `brew install cot-land/tap/cot` | Hours |
+| D1 | Homebrew tap | Create `homebrew-tap` repo, write formula, publish. `brew install cotlang/tap/cot` | Hours |
 | D2 | x86_64-macos binary | Add to release matrix in `.github/workflows/release.yml`. Cross-compile or add runner. | Hours |
 | D3 | VS Code marketplace | Publish `cot-lang` extension to marketplace. Configure `package.json` publisher, icon, README. | Hours |
 | D4 | `cot upgrade` | Self-update: fetch latest release from GitHub API, download binary, replace self. | 1 day |
@@ -243,7 +243,7 @@ These run in parallel with Phases 1-3. Some are already in progress from the oth
 
 Before tagging 0.4, all of these must be true:
 
-1. `brew install cot-land/tap/cot` works on macOS (ARM64 + x86_64)
+1. `brew install cotlang/tap/cot` works on macOS (ARM64 + x86_64)
 2. ~~`cot init myapp && cd myapp && cot run` works end-to-end~~ **Done** (Feb 15)
 3. ~~`cot fmt src/main.cot` modifies the file in-place~~ **Done** (Feb 15)
 4. `cot test` shows colored pass/fail with timing and failure diffs

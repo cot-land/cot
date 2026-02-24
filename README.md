@@ -1,7 +1,7 @@
 # Cot Compiler
 
-[![CI](https://github.com/cot-land/cot/actions/workflows/test.yml/badge.svg)](https://github.com/cot-land/cot/actions/workflows/test.yml)
-[![Release](https://github.com/cot-land/cot/actions/workflows/release.yml/badge.svg)](https://github.com/cot-land/cot/actions/workflows/release.yml)
+[![CI](https://github.com/cotlang/cot/actions/workflows/test.yml/badge.svg)](https://github.com/cotlang/cot/actions/workflows/test.yml)
+[![Release](https://github.com/cotlang/cot/actions/workflows/release.yml/badge.svg)](https://github.com/cotlang/cot/actions/workflows/release.yml)
 
 A Wasm-first language for full-stack web development.
 
@@ -14,20 +14,21 @@ See **[VISION.md](VISION.md)** for the complete language vision and strategy.
 ### Quick Install (macOS / Linux)
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/cot-land/cot/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/cotlang/cot/main/install.sh | sh
 ```
 
 ### From GitHub Releases
 
-Download the latest binary from [GitHub Releases](https://github.com/cot-land/cot/releases).
+Download the latest binary from [GitHub Releases](https://github.com/cotlang/cot/releases).
 
 ### Build from Source
 
 Requires [Zig 0.15+](https://ziglang.org/download/).
 
 ```sh
-git clone https://github.com/cot-land/cot.git
+git clone https://github.com/cotlang/cot.git
 cd cot
+git submodule update --init stdlib
 zig build
 ./zig-out/bin/cot version
 ```
@@ -46,7 +47,7 @@ cot build hello.cot -o myapp     # → myapp
 cot build --target=wasm32 hello.cot   # → hello.wasm
 
 # Version
-cot version                      # → cot 0.3.1 (arm64-macos)
+cot version                      # → cot 0.3.2 (arm64-macos)
 
 # Run tests
 cot test myfile.cot
@@ -60,20 +61,20 @@ import "std/list"
 struct Point { x: i64, y: i64 }
 
 fn distance_sq(a: *Point, b: *Point) i64 {
-    var dx = b.x - a.x;
-    var dy = b.y - a.y;
-    return dx * dx + dy * dy;
+    var dx = b.x - a.x
+    var dy = b.y - a.y
+    return dx * dx + dy * dy
 }
 
 fn main() i64 {
-    var a = Point { .x = 0, .y = 0 };
-    var b = Point { .x = 3, .y = 4 };
-    println(distance_sq(&a, &b));  // Prints 25
+    var a = Point { .x = 0, .y = 0 }
+    var b = Point { .x = 3, .y = 4 }
+    println(distance_sq(&a, &b))  // Prints 25
 
-    var scores: List(i64) = .{};
-    scores.append(100);
-    scores.append(200);
-    return scores.get(0) + scores.get(1);  // Returns 300
+    var scores: List(i64) = .{}
+    scores.append(100)
+    scores.append(200)
+    return scores.get(0) + scores.get(1)  // Returns 300
 }
 ```
 
@@ -111,7 +112,7 @@ Cot Source → Scanner → Parser → Checker → IR → SSA
 
 **Compiler written in Zig. Both Wasm and native AOT targets working.**
 
-All tests passing across Wasm E2E, native E2E, and unit tests.
+~1,620 tests passing across 66 files (Wasm E2E, native E2E, and unit tests).
 
 | Component | Status |
 |-----------|--------|
@@ -120,8 +121,11 @@ All tests passing across Wasm E2E, native E2E, and unit tests.
 | Wasm backend (bytecode gen + linking) | Complete |
 | Native AOT (Cranelift-port: CLIF IR → regalloc2 → ARM64/x64) | Complete |
 | ARC runtime (retain/release, heap, destructors) | Complete |
+| Self-hosted compiler (`self/`) | 81% — 10,896 lines (scanner, parser, types, checker done) |
 
-**Next:** Browser async, `std/crypto`, database driver, web framework. See [claude/ROADMAP_1_0.md](claude/ROADMAP_1_0.md).
+**Self-hosting:** The `self/` directory contains a Cot compiler written in Cot (10,896 lines across 9 files). The scanner, parser, type registry, and checker are complete. The self-hosted binary can parse all its own source files. Next: multi-file import resolution, then IR/SSA lowerer port. See [claude/VERSION_TRAJECTORY.md](claude/VERSION_TRAJECTORY.md).
+
+**Next:** Distribution polish (Homebrew, VS Code marketplace), package manager. See [claude/ROADMAP.md](claude/ROADMAP.md).
 
 ## Design Decisions
 
@@ -144,7 +148,8 @@ All tests passing across Wasm E2E, native E2E, and unit tests.
 | [CLAUDE.md](CLAUDE.md) | AI session instructions |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Debugging methodology |
 | [docs/syntax.md](docs/syntax.md) | Complete language syntax reference |
-| [claude/ROADMAP_1_0.md](claude/ROADMAP_1_0.md) | Road to 1.0 |
+| [claude/ROADMAP.md](claude/ROADMAP.md) | Roadmap: 0.4→1.0, competitive positioning |
+| [claude/VERSION_TRAJECTORY.md](claude/VERSION_TRAJECTORY.md) | Self-hosting trajectory, benchmarked against Zig |
 | [claude/PIPELINE_ARCHITECTURE.md](claude/PIPELINE_ARCHITECTURE.md) | Full pipeline reference map |
 | [claude/BR_TABLE_ARCHITECTURE.md](claude/BR_TABLE_ARCHITECTURE.md) | br_table dispatch pattern |
 | [claude/specs/WASM_3_0_REFERENCE.md](claude/specs/WASM_3_0_REFERENCE.md) | Wasm 3.0 features |
@@ -161,6 +166,7 @@ cot/
 │   ├── core/              # Types, errors, target config
 │   ├── frontend/          # Scanner, parser, checker, IR, lowerer
 │   ├── ssa/               # SSA infrastructure + passes
+│   ├── lsp/               # Language server (LSP over stdio)
 │   └── codegen/
 │       ├── wasm/          # Wasm backend (gen, link, preprocess)
 │       ├── print_runtime.zig  # Print/println runtime functions
@@ -170,25 +176,55 @@ cot/
 │           ├── isa/aarch64/   # ARM64 backend
 │           ├── isa/x64/       # x64 backend
 │           └── regalloc/      # Register allocator (regalloc2 port)
-├── stdlib/                # Standard library (15 modules, .cot files)
-│   ├── list.cot           # List(T) — ~20 methods
+├── self/                  # Self-hosted compiler in Cot (10,896 lines)
+│   ├── main.cot           # CLI entry point (parse, check, lex commands)
+│   └── frontend/
+│       ├── token.cot      # Token enum + keyword lookup
+│       ├── scanner.cot    # Full lexer
+│       ├── source.cot     # Source positions + spans
+│       ├── errors.cot     # Error reporter
+│       ├── ast.cot        # AST nodes + 54 builtins
+│       ├── parser.cot     # Recursive descent parser (2,769 lines)
+│       ├── types.cot      # TypeRegistry + type structs
+│       └── checker.cot    # Type checker (3,966 lines)
+├── stdlib/                # Standard library (31 modules, git submodule → cotlang/std)
+│   ├── list.cot           # List(T) — dynamic array
 │   ├── map.cot            # Map(K,V) — hash map with splitmix64
 │   ├── set.cot            # Set(T) — thin wrapper over Map
 │   ├── string.cot         # ~25 string functions + StringBuilder
+│   ├── string_map.cot     # String-keyed hash map
 │   ├── math.cot           # Integer/float math utilities
 │   ├── json.cot           # JSON parser + encoder
 │   ├── sort.cot           # Insertion sort for List(T)
 │   ├── fs.cot             # File I/O (File struct, openFile, readFile, etc.)
 │   ├── os.cot             # Process args, env, exit
+│   ├── process.cot        # Process spawning, pipes
 │   ├── time.cot           # Timestamps, Timer struct
 │   ├── random.cot         # Random bytes, ints, ranges
 │   ├── io.cot             # Buffered reader/writer
 │   ├── encoding.cot       # Base64 + hex encode/decode
 │   ├── url.cot            # URL parsing
 │   ├── http.cot           # TCP sockets + HTTP response builder
-│   └── async.cot          # Event loop (kqueue/epoll) + async I/O wrappers
+│   ├── async.cot          # Event loop (kqueue/epoll) + async I/O wrappers
+│   ├── crypto.cot         # SHA-256, HMAC
+│   ├── regex.cot          # Regular expressions
+│   ├── path.cot           # Path manipulation
+│   ├── fmt.cot            # Number formatting (hex, binary, octal, pad)
+│   ├── cli.cot            # CLI argument parser
+│   ├── log.cot            # Structured logging
+│   ├── semver.cot         # Semantic versioning
+│   ├── uuid.cot           # UUID generation
+│   ├── dotenv.cot         # .env file loading
+│   ├── mem.cot            # Memory utilities
+│   ├── debug.cot          # Debug assertions
+│   ├── testing.cot        # Test utilities
+│   └── sys.cot            # Runtime extern fn declarations
+├── editors/vscode/        # VS Code/Cursor extension (syntax + LSP client)
 ├── runtime/               # Native runtime (.o files)
-├── test/cases/            # .cot test files
+├── test/
+│   ├── e2e/               # End-to-end tests (46 files, ~1500 tests)
+│   ├── cases/             # Category unit tests (21 files, ~120 tests)
+│   └── run_all.sh         # Run all Cot tests (glob discovery)
 ├── VERSION                # Semantic version (single source of truth)
 ├── docs/                  # Developer documentation (→ cot.dev)
 │   └── syntax.md          # Language syntax reference

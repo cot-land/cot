@@ -9,7 +9,7 @@ Cot uses inline test blocks (Zig syntax) with error-union-based test isolation. 
 | Tier | Command | What it runs | Speed |
 |------|---------|-------------|-------|
 | **Zig compiler tests** | `zig build test` | ~163 Zig-level tests with inline Cot snippets | Fast (<10s) |
-| **Cot language tests** | `./test/run_all.sh` | ~1610 Cot tests across 66 `.cot` files | Slower (~60s) |
+| **Cot language tests** | `./test/run_all.sh` | ~1,620 Cot tests across 66 `.cot` files | Slower (~60s) |
 | **Single file** | `cot test file.cot` | Tests in one file | Fast |
 
 ### `zig build test` — Compiler internals
@@ -32,11 +32,11 @@ Discovers all `.cot` files in `test/e2e/` and `test/cases/`, runs each with `cot
 # test/e2e/auto_free.cot                       ok  5 passed
 # test/e2e/control_flow.cot                    ok  82 passed
 # ...
-# test/e2e/json.cot                            ok  38 passed
+# test/e2e/features.cot                        ok  341 passed
 # ...
 # test/cases/arithmetic.cot                    ok  10 passed
 # ...
-# 41/41 files passed
+# 66/66 files passed
 ```
 
 ## Syntax
@@ -118,13 +118,13 @@ Exit code = number of failures (0 = all pass).
 ```
 test/
   run_all.sh            # Run all Cot tests (glob discovery, no hardcoded lists)
-  cases/                # Category unit tests (21 files, ~106 tests)
-    arithmetic.cot, arrays.cot, arc.cot, bitwise.cot, builtins.cot,
+  cases/                # Category unit tests (21 files, ~122 tests)
+    arc.cot, arithmetic.cot, arrays.cot, bitwise.cot, builtins.cot,
     chars.cot, compound.cot, control_flow.cot, enum.cot, extern.cot,
     float.cot, functions.cot, loops.cot, memory.cot, methods.cot,
     optional.cot, strings.cot, structs.cot, switch.cot, types.cot,
     union.cot
-  e2e/                  # Comprehensive feature tests (46 files, ~1500+ tests)
+  e2e/                  # Comprehensive feature tests (46 files, ~1,500 tests)
     arc.cot, async.cot, auto_free.cot, bench_test.cot,
     browser_async.cot, cli.cot, control_flow.cot, crypto.cot,
     debug.cot, dotenv.cot, encoding.cot, event_loop.cot,

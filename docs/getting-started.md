@@ -7,19 +7,19 @@ This guide walks you through installing Cot, writing your first program, and exp
 ### Quick Install (macOS / Linux)
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/cot-land/cot/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/cotlang/cot/main/install.sh | sh
 ```
 
 ### From GitHub Releases
 
-Download the latest binary from [GitHub Releases](https://github.com/cot-land/cot/releases).
+Download the latest binary from [GitHub Releases](https://github.com/cotlang/cot/releases).
 
 ### Build from Source
 
 Requires [Zig 0.15+](https://ziglang.org/download/).
 
 ```sh
-git clone https://github.com/cot-land/cot.git
+git clone https://github.com/cotlang/cot.git
 cd cot
 zig build
 ./zig-out/bin/cot version
@@ -418,5 +418,5 @@ This creates:
 ## Next Steps
 
 - **[Language Syntax Reference](syntax.md)** — Complete reference for every language feature
-- **[Examples](https://github.com/cot-land/cot/tree/main/examples)** — Runnable example programs
-- **[Vision](https://github.com/cot-land/cot/blob/main/VISION.md)** — Language design philosophy
+- **[Examples](https://github.com/cotlang/cot/tree/main/examples)** — Runnable example programs
+- **[Vision](https://github.com/cotlang/cot/blob/main/VISION.md)** — Language design philosophy

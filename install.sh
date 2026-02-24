@@ -2,7 +2,7 @@
 set -e
 
 # Cot installer — downloads pre-built binary from GitHub Releases.
-# Usage: curl -fsSL https://raw.githubusercontent.com/cot-land/cot/main/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/cotlang/cot/main/install.sh | sh
 #
 # Environment variables:
 #   COT_INSTALL_DIR  Override install location (default: ~/.cot)
@@ -28,7 +28,7 @@ esac
 
 # Fetch latest version from GitHub API if not pinned
 if [ -z "${COT_VERSION:-}" ]; then
-    COT_VERSION=$(curl -fsSL https://api.github.com/repos/cot-land/cot/releases/latest \
+    COT_VERSION=$(curl -fsSL https://api.github.com/repos/cotlang/cot/releases/latest \
         | grep '"tag_name"' | sed 's/.*"v\(.*\)".*/\1/')
     if [ -z "$COT_VERSION" ]; then
         echo "Error: could not determine latest version"
@@ -37,7 +37,7 @@ if [ -z "${COT_VERSION:-}" ]; then
 fi
 
 FILENAME="cot-${ARCH_NAME}-${OS_NAME}.tar.gz"
-URL="https://github.com/cot-land/cot/releases/download/v${COT_VERSION}/${FILENAME}"
+URL="https://github.com/cotlang/cot/releases/download/v${COT_VERSION}/${FILENAME}"
 
 echo "Installing cot ${COT_VERSION} (${ARCH_NAME}-${OS_NAME})..."
 

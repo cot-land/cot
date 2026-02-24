@@ -2,7 +2,7 @@
 
 ## Current: 0.3.2 (Feb 2026)
 
-Compiler is feature-complete for the core language. 31 stdlib modules, 66 test files (~1100+ tests), LSP with 7 features, @safe mode, comptime infrastructure, ARC memory management. All 6 waves of 0.4 feature work are **DONE**. Runtime builtins moved to stdlib via `extern fn`.
+Compiler is feature-complete for the core language. 31 stdlib modules, 66 test files (~1,620 tests), LSP with 7 features, @safe mode, comptime infrastructure, ARC memory management. All 6 waves of 0.4 feature work are **DONE**. Runtime builtins moved to stdlib via `extern fn`.
 
 **What ships:** A developer can `cot init`, write an HTTP server with crypto + regex + path handling, `cot test --watch` during development, `cot lint` + `cot check` for fast feedback, `cot bench` for performance, `cot doc` for API docs, and `cot build` for a native binary. Like Deno, but compiled to native with zero runtime overhead.
 
@@ -25,9 +25,9 @@ All language features and stdlib are done. What remains is distribution polish:
 | 7 | Improved `@assert_eq` failure output (expected vs actual diff) | Not started |
 | 8 | Logo & brand assets | Not started |
 | 9 | cot.dev launch (docs site + playground) | Not started |
-| 10 | Self-hosting progress (frontend in Cot) | ~41% (scanner+parser+CLI done, 5,599 lines) |
+| 10 | Self-hosting progress (frontend in Cot) | ~81% (scanner+parser+types+checker done, 10,896 lines) |
 
-**Release criteria:** `brew install cot-land/tap/cot` works, VS Code extension on marketplace, all tests pass on native + Wasm.
+**Release criteria:** `brew install cotlang/tap/cot` works, VS Code extension on marketplace, all tests pass on native + Wasm.
 
 ---
 
@@ -70,8 +70,8 @@ All language features and stdlib are done. What remains is distribution polish:
 | Version | Focus |
 |---------|-------|
 | 0.7 | Incremental compilation, compiler performance |
-| 0.8 | Self-hosted parser + checker in Cot |
-| 0.9 | Self-hosted SSA + Wasm codegen in Cot |
+| 0.8 | Self-hosted IR + SSA in Cot |
+| 0.9 | Self-hosted Wasm codegen in Cot |
 
 ---
 

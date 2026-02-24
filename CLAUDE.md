@@ -152,10 +152,10 @@ Two categories:
 
 ```bash
 zig build test                                    # Compiler internals (~163 tests, run once)
-cot test test/e2e/features.cot                    # Primary: 127 feature tests, native
+cot test test/e2e/features.cot                    # Primary: 341 feature tests, native
 cot test test/e2e/features.cot --target=wasm32    # Primary: same tests, wasm via wasmtime
 cot test test/cases/<category>.cot                # Targeted: specific category
-./test/run_all.sh                                 # Full suite (~1020 tests across 46 files)
+./test/run_all.sh                                 # Full suite (~1,620 tests across 66 files)
 ```
 
 **`cot test --target=wasm32`** runs Wasm binaries via `wasmtime` (must be installed). Use this to verify Wasm codegen — bugs often manifest on one target but not the other.
@@ -167,8 +167,8 @@ cot test test/cases/<category>.cot                # Targeted: specific category
 **Never embed `.cot` test files in Zig code.** Use `cot test` for that.
 
 **Test directories:**
-- `test/cases/` — Category unit tests (21 files, ~106 tests)
-- `test/e2e/` — Comprehensive feature tests (25 files, ~904 tests)
+- `test/cases/` — Category unit tests (21 files, ~122 tests)
+- `test/e2e/` — Comprehensive feature tests (46 files, ~1,500 tests)
 - All tests use inline `test "name" { @assertEq(...) }` format
 - See `claude/TESTING.md` for full details
 
@@ -269,5 +269,5 @@ cursor --uninstall-extension cot-lang.cot-lang 2>/dev/null; cursor --install-ext
 | `claude/CONCURRENCY_DESIGN.md` | Concurrency roadmap: spawn, channels, work-stealing, atomic ARC |
 | `claude/BUSINESS_MODEL.md` | Licensing, trademark, revenue model, funding strategy |
 | `claude/RELEASE_PLAN.md` | 0.4 release plan: branding, distribution, polish, criteria |
-| `claude/TESTING.md` | Test system: 66 files, ~1100+ tests, error-union isolation |
+| `claude/TESTING.md` | Test system: 66 files, ~1,620 tests, error-union isolation |
 | `claude/archive/` | Historical: 17 archived docs (completed milestones, past plans) |
