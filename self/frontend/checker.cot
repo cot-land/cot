@@ -114,6 +114,84 @@ struct ErrorVariant {
 }
 
 // ============================================================================
+// SharedCheckerState — persists across Checkers in multi-file mode
+// ============================================================================
+// Copied from Zig compiler pattern: driver.zig creates shared state,
+// passes to each Checker. After checkFile(), caller syncs back.
+
+struct SharedCheckerState {
+    global_map: int,                         // raw ptr to Map(string, int) — global scope
+    symbols: List(Symbol),
+    generic_structs: Map(string, int),
+    generic_functions: Map(string, int),
+    instantiation_cache: Map(string, int),
+    generic_impl_entries: List(GenericImplEntry),
+    trait_defs: Map(string, int),
+    trait_impls: Map(string, string),
+}
+
+impl SharedCheckerState {
+    static fn init() SharedCheckerState {
+        var symbols: List(Symbol) = undefined
+        symbols.items = 0
+        symbols.count = 0
+        symbols.capacity = 0
+
+        var generic_structs: Map(string, int) = undefined
+        generic_structs.keys = 0
+        generic_structs.values = 0
+        generic_structs.states = 0
+        generic_structs.count = 0
+        generic_structs.capacity = 0
+
+        var generic_functions: Map(string, int) = undefined
+        generic_functions.keys = 0
+        generic_functions.values = 0
+        generic_functions.states = 0
+        generic_functions.count = 0
+        generic_functions.capacity = 0
+
+        var instantiation_cache: Map(string, int) = undefined
+        instantiation_cache.keys = 0
+        instantiation_cache.values = 0
+        instantiation_cache.states = 0
+        instantiation_cache.count = 0
+        instantiation_cache.capacity = 0
+
+        var generic_impl_entries: List(GenericImplEntry) = undefined
+        generic_impl_entries.items = 0
+        generic_impl_entries.count = 0
+        generic_impl_entries.capacity = 0
+
+        var trait_defs: Map(string, int) = undefined
+        trait_defs.keys = 0
+        trait_defs.values = 0
+        trait_defs.states = 0
+        trait_defs.count = 0
+        trait_defs.capacity = 0
+
+        var trait_impls: Map(string, string) = undefined
+        trait_impls.keys = 0
+        trait_impls.values = 0
+        trait_impls.states = 0
+        trait_impls.count = 0
+        trait_impls.capacity = 0
+
+        return SharedCheckerState {
+            global_map: allocMap(),
+            symbols: symbols,
+            generic_structs: generic_structs,
+            generic_functions: generic_functions,
+            instantiation_cache: instantiation_cache,
+            generic_impl_entries: generic_impl_entries,
+            trait_defs: trait_defs,
+            trait_impls: trait_impls,
+        }
+    }
+
+}
+
+// ============================================================================
 // Checker — type checking state
 // ============================================================================
 
@@ -248,6 +326,43 @@ impl Checker {
             expected_type: invalid_type,
             current_switch_enum_type: invalid_type,
         }
+    }
+
+    /// Initialize a Checker with a shared global scope map pointer.
+    /// For multi-file mode: all Checkers share the same global scope map
+    /// (scope_maps[0]) so symbols from File A are visible in File B.
+    /// Uses the regular init pattern but overrides scope_maps[0].
+    static fn initShared(ast: *Ast, types: *TypeRegistry, err: *ErrorReporter, global_map_ptr: int) Checker {
+        var c = Checker.init(ast, types, err)
+        // Replace the fresh global scope map with the shared one
+        // scope_maps[0] is a raw pointer to a heap Map(string, int)
+        @intToPtr(*int, c.scope_maps.items).* = global_map_ptr
+        return c
+    }
+
+    /// Load shared state from SharedCheckerState for multi-file mode.
+    /// Call AFTER initShared, BEFORE checkFile.
+    fn loadSharedState(shared_ptr: int) void {
+        var shared = @intToPtr(*SharedCheckerState, shared_ptr)
+        self.symbols = shared.symbols
+        self.generic_structs = shared.generic_structs
+        self.generic_functions = shared.generic_functions
+        self.instantiation_cache = shared.instantiation_cache
+        self.trait_defs = shared.trait_defs
+        self.trait_impls = shared.trait_impls
+        self.generic_impl_entries = shared.generic_impl_entries
+    }
+
+    /// Write checker state back to SharedCheckerState after checkFile().
+    fn syncToShared(shared_ptr: int) void {
+        var shared = @intToPtr(*SharedCheckerState, shared_ptr)
+        shared.symbols = self.symbols
+        shared.generic_structs = self.generic_structs
+        shared.generic_functions = self.generic_functions
+        shared.instantiation_cache = self.instantiation_cache
+        shared.generic_impl_entries = self.generic_impl_entries
+        shared.trait_defs = self.trait_defs
+        shared.trait_impls = self.trait_impls
     }
 
     // ---- Scope management ----
@@ -1222,7 +1337,8 @@ impl Checker {
 
         const sym_idx = self.lookupSymbol(name)
         if (sym_idx >= 0) {
-            return self.getSymbol(sym_idx).type_idx
+            const sym = self.getSymbol(sym_idx)
+            return sym.type_idx
         }
         self.reportError(idx, ErrorCode.e301, "undefined identifier")
         return invalid_type

@@ -11,6 +11,9 @@ import "std/os"
 import "std/fs"
 import "std/sys"
 import "std/string"
+import "std/path"
+import "std/map"
+import "std/debug"
 import "frontend/token"
 import "frontend/scanner"
 import "frontend/ast"
@@ -81,8 +84,10 @@ fn cmdParse(path: string, content: string) void {
     writeOut("${path}: ok (${ast.file_decls.len()} declarations)\n")
 }
 
-/// Type-check a file and report errors.
+/// Type-check a file and all its imports.
+/// Port of driver.zig compileFile phases 1+2: recursive parse, shared check.
 fn cmdCheck(path: string, content: string) void {
+    // Single-file fast path: parse and check directly (no import resolution)
     var s = Scanner.init(content)
     var ast = Ast.init(path)
     var errs = ErrorReporter.init()
@@ -95,6 +100,14 @@ fn cmdCheck(path: string, content: string) void {
         exit(1)
     }
 
+    // Check if file has imports — use multi-file path
+    var imports = ast.getImports()
+    if (imports.count > 0) {
+        cmdCheckMultiFile(path)
+        return
+    }
+
+    // No imports — single-file check
     var types = TypeRegistry.init()
     var checker = Checker.init(ast, types, errs)
     checker.checkFile()
@@ -109,6 +122,145 @@ fn cmdCheck(path: string, content: string) void {
     }
 
     writeOut("${path}: ok\n")
+}
+
+/// Multi-file check: recursively parse and check all imports.
+fn cmdCheckMultiFile(path: string) void {
+    var seen: Map(string, int) = undefined
+    seen.keys = 0
+    seen.values = 0
+    seen.states = 0
+    seen.count = 0
+    seen.capacity = 0
+
+    var in_progress: Map(string, int) = undefined
+    in_progress.keys = 0
+    in_progress.values = 0
+    in_progress.states = 0
+    in_progress.count = 0
+    in_progress.capacity = 0
+
+    var types = TypeRegistry.init()
+    var shared = SharedCheckerState.init()
+    const project_safe = isProjectSafe(path)
+
+    checkFileRecursive(path, &shared, &types, &seen, &in_progress, project_safe)
+
+    writeOut("${path}: ok\n")
+}
+
+/// Recursively parse and type-check a file and all its imports.
+/// Dependencies are checked first (depth-first), matching driver.zig pattern.
+fn checkFileRecursive(file_path: string, shared: *SharedCheckerState, types: *TypeRegistry, seen: *Map(string, int), in_progress: *Map(string, int), project_safe: bool) void {
+    // Circular import detection (must check BEFORE seen)
+    if (in_progress.getOrDefault(file_path, 0) == 1) {
+        println("error: circular import detected: ${file_path}")
+        exit(1)
+    }
+
+    // Already processed
+    if (seen.has(file_path) != 0) { return }
+
+    // Mark as seen and in-progress
+    seen.set(file_path, 1)
+    in_progress.set(file_path, 1)
+
+    const content = readFile(file_path) catch {
+        println("error: cannot read file: ${file_path}")
+        exit(1)
+    }
+
+    // Parse
+    var s = Scanner.init(content)
+    var ast = Ast.init(file_path)
+    var errs = ErrorReporter.init()
+    var p = Parser.init(s, ast, errs)
+    if (project_safe) { p.safe_mode = true }
+    p.parseFile()
+    ast.safe_mode = p.safe_mode
+
+    if (errs.hasErrors()) {
+        const diag = Diagnostic { offset: errs.first_offset, code: errs.first_code, msg: errs.first_msg }
+        println(formatDiagnostic(file_path, content, diag))
+        exit(1)
+    }
+
+    // Recurse into imports (dependencies checked first)
+    var imports = ast.getImports()
+    const source_dir = dirname(file_path)
+    for i in 0..imports.count {
+        const resolved = resolveImportPath(imports.get(i), source_dir)
+        checkFileRecursive(resolved, shared, types, seen, in_progress, project_safe)
+    }
+
+    // Done with this file's imports — unmark in-progress
+    in_progress.set(file_path, 0)
+
+    // Type check with shared state (all dependencies already checked)
+    var check_errs = ErrorReporter.init()
+    var checker = Checker.initShared(ast, types, check_errs, shared.global_map)
+    checker.loadSharedState(@ptrToInt(shared))
+    checker.checkFile()
+    checker.syncToShared(@ptrToInt(shared))
+
+    if (check_errs.hasErrors()) {
+        const diag = Diagnostic { offset: check_errs.first_offset, code: check_errs.first_code, msg: check_errs.first_msg }
+        println(formatDiagnostic(file_path, content, diag))
+        if (check_errs.errorCount() > 1) {
+            println("... and ${check_errs.errorCount() - 1} more error(s)")
+        }
+        exit(1)
+    }
+}
+
+/// Resolve an import path to a file path.
+fn resolveImportPath(import_str: string, source_dir: string) string {
+    if (startsWith(import_str, "std/")) {
+        return resolveStdImport(import_str, source_dir)
+    }
+    // Relative import: source_dir + import_str + ".cot"
+    return join(source_dir, import_str ++ ".cot")
+}
+
+/// Resolve stdlib import: "std/list" → "<stdlib_dir>/list.cot"
+/// Port of driver.zig resolveStdImport: walk up looking for stdlib/.
+fn resolveStdImport(import_path: string, source_dir: string) string {
+    const module = substring(import_path, 4, @lenOf(import_path))
+    const filename = module ++ ".cot"
+
+    // Walk up from source directory looking for stdlib/
+    var dir = source_dir
+    while (@lenOf(dir) > 0) {
+        const candidate = join3(dir, "stdlib", filename)
+        if (fileExists(candidate)) {
+            return candidate
+        }
+        const parent = dirname(dir)
+        if (parent == dir) { break }
+        dir = parent
+    }
+
+    // Fallback: stdlib/ from CWD
+    return join("stdlib", filename)
+}
+
+/// Check if file is in a @safe project (cot.json has "safe": true).
+fn isProjectSafe(file_path: string) bool {
+    var dir = dirname(file_path)
+    while (@lenOf(dir) > 0) {
+        const candidate = join(dir, "cot.json")
+        if (fileExists(candidate)) {
+            const content = readFile(candidate) catch { return false }
+            if (contains(content, "\"safe\": true") or contains(content, "\"safe\":true")) {
+                return true
+            }
+            return false
+        }
+        const parent = dirname(dir)
+        if (parent == dir) { return false }
+        dir = parent
+    }
+    return false
 }
 
 /// Tokenize a file and print each token.

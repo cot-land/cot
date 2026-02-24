@@ -8,6 +8,7 @@
 /// This cache-friendly layout matches Zig's own std.zig.Ast design.
 
 import "std/list"
+import "std/string"
 
 // ============================================================================
 // Constants and basic types
@@ -207,6 +208,28 @@ impl Ast {
     /// Get a string by its index.
     fn getStr(idx: int) string {
         return self.strings.get(idx)
+    }
+
+    /// Extract import paths from file declarations.
+    /// Returns a List of import path strings (e.g. "std/list", "frontend/token").
+    /// Port of compiler/frontend/ast.zig:getImports.
+    fn getImports() List(string) {
+        var imports: List(string) = undefined
+        imports.items = 0
+        imports.count = 0
+        imports.capacity = 0
+        for i in 0..self.file_decls.count {
+            const decl_idx = self.file_decls.get(i)
+            if (self.getTag(decl_idx) == @intFromEnum(NodeTag.import_decl)) {
+                // import_decl: [path_s, span_s, span_e]
+                // Scanner stores string literal with quotes: "std/list"
+                // Strip quotes to get clean path: std/list
+                const raw = self.getStr(self.getData(decl_idx, 0))
+                const path_str = substring(raw, 1, @lenOf(raw) - 1)
+                imports.append(path_str)
+            }
+        }
+        return imports
     }
 
     // ---- Typed add helpers: Expressions ----
