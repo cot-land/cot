@@ -153,6 +153,18 @@ fn rewriteSlicePtr(allocator: std.mem.Allocator, f: *Func, block: *Block, v: *Va
         }
     }
 
+    // Pattern 5: SlicePtr(ConstNil<string/slice>) → ConstInt(0)
+    // Null string/slice has ptr=0. Without this, the native backend tries to
+    // load from address 0, causing SIGSEGV.
+    if (v_0.op == .const_nil and (v_0.type_idx == TypeRegistry.STRING or isSliceType(v_0.type_idx))) {
+        const zero = try f.newValue(.const_int, TypeRegistry.I64, block, v.pos);
+        zero.aux_int = 0;
+        try block.addValue(allocator, zero);
+        debug.log(.codegen, "  v{d}: slice_ptr(const_nil) -> const_int(0)", .{v.id});
+        copyOf(v, zero);
+        return true;
+    }
+
     return false;
 }
 
@@ -232,6 +244,17 @@ fn rewriteSliceLen(allocator: std.mem.Allocator, f: *Func, block: *Block, v: *Va
         }
     }
 
+    // Pattern 5: SliceLen(ConstNil<string/slice>) → ConstInt(0)
+    // Null string/slice has len=0.
+    if (v_0.op == .const_nil and (v_0.type_idx == TypeRegistry.STRING or isSliceType(v_0.type_idx))) {
+        const zero = try f.newValue(.const_int, TypeRegistry.I64, block, v.pos);
+        zero.aux_int = 0;
+        try block.addValue(allocator, zero);
+        debug.log(.codegen, "  v{d}: slice_len(const_nil) -> const_int(0)", .{v.id});
+        copyOf(v, zero);
+        return true;
+    }
+
     return false;
 }
 
@@ -288,6 +311,16 @@ fn rewriteSliceCap(allocator: std.mem.Allocator, f: *Func, block: *Block, v: *Va
         }
     }
 
+    // Pattern 3: SliceCap(ConstNil<slice>) → ConstInt(0)
+    if (v_0.op == .const_nil and isSliceType(v_0.type_idx)) {
+        const zero = try f.newValue(.const_int, TypeRegistry.I64, block, v.pos);
+        zero.aux_int = 0;
+        try block.addValue(allocator, zero);
+        debug.log(.codegen, "  v{d}: slice_cap(const_nil) -> const_int(0)", .{v.id});
+        copyOf(v, zero);
+        return true;
+    }
+
     return false;
 }
 
@@ -321,6 +354,16 @@ fn rewriteStringPtr(allocator: std.mem.Allocator, f: *Func, block: *Block, v: *V
             copyOf(v, load_val);
             return true;
         }
+    }
+
+    // Pattern 3: StringPtr(ConstNil<string>) → ConstInt(0)
+    if (v_0.op == .const_nil and v_0.type_idx == TypeRegistry.STRING) {
+        const zero = try f.newValue(.const_int, TypeRegistry.I64, block, v.pos);
+        zero.aux_int = 0;
+        try block.addValue(allocator, zero);
+        debug.log(.codegen, "  v{d}: string_ptr(const_nil) -> const_int(0)", .{v.id});
+        copyOf(v, zero);
+        return true;
     }
 
     return false;
@@ -361,6 +404,16 @@ fn rewriteStringLen(allocator: std.mem.Allocator, f: *Func, block: *Block, v: *V
             copyOf(v, load_val);
             return true;
         }
+    }
+
+    // Pattern 3: StringLen(ConstNil<string>) → ConstInt(0)
+    if (v_0.op == .const_nil and v_0.type_idx == TypeRegistry.STRING) {
+        const zero = try f.newValue(.const_int, TypeRegistry.I64, block, v.pos);
+        zero.aux_int = 0;
+        try block.addValue(allocator, zero);
+        debug.log(.codegen, "  v{d}: string_len(const_nil) -> const_int(0)", .{v.id});
+        copyOf(v, zero);
+        return true;
     }
 
     return false;
