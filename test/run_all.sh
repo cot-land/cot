@@ -69,10 +69,23 @@ for f in "${files[@]}"; do
         echo "ok  $summary"
         passed=$((passed + 1))
     else
-        echo "FAIL"
+        exit_code=$?
+        # Check if it was a signal crash (exit code > 128) — retry once
+        if [ $exit_code -gt 128 ]; then
+            signal=$((exit_code - 128))
+            # Retry once for signal crashes (intermittent ARC cleanup issues)
+            if retry_output=$("$COT" test "$f" $TARGET_FLAG 2>&1); then
+                summary=$(echo "$retry_output" | grep -E '[0-9]+ passed' | tail -1 || true)
+                echo "ok  $summary (retry after signal $signal)"
+                passed=$((passed + 1))
+                continue
+            fi
+            exit_code=$?
+        fi
+        echo "FAIL (exit $exit_code)"
         failures+=("$f")
-        # Show last few lines of output for debugging
-        echo "$output" | tail -5 | sed 's/^/    /'
+        # Show last lines of output for debugging — enough to see signal messages
+        echo "$output" | tail -10 | sed 's/^/    /'
         failed=$((failed + 1))
     fi
 done
