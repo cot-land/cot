@@ -207,7 +207,7 @@ fn generateAlloc(
 // ============================================================================
 // dealloc(obj: i64) -> void
 //
-// Simplified native dealloc: call free(obj - 16).
+// Simplified native dealloc: call free(obj - 24).
 // Reference: arc.zig:689-748 (simplified, no freelist).
 // ============================================================================
 
