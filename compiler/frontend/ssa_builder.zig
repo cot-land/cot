@@ -1520,7 +1520,12 @@ pub const SSABuilder = struct {
             return move_val;
         }
 
-        const store_op = self.getStoreOp(value.type_idx);
+        // Use the pointee type from the pointer to determine store width.
+        // The value type may be wider (e.g. i64 literal stored through *u8 pointer).
+        // Reference: C store semantics — width comes from lvalue type, not rvalue.
+        const ptr_type = self.type_registry.get(ptr_val.type_idx);
+        const store_type = if (ptr_type == .pointer) ptr_type.pointer.elem else value.type_idx;
+        const store_op = self.getStoreOp(store_type);
         const store_val = try self.func.newValue(store_op, TypeRegistry.VOID, cur, self.cur_pos);
         store_val.addArg2(ptr_val, value);
         try cur.addValue(self.allocator, store_val);
