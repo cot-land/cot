@@ -981,6 +981,8 @@ pub const Driver = struct {
             // Process runtime (waitpid/pipe need wrappers with different linker names
             // to avoid collision with libc symbols; fork/dup2/execve are libc-only)
             "cot_waitpid",   "cot_pipe",
+            // Terminal PTY runtime (openpty/ioctl_winsize need wrappers)
+            "cot_openpty",   "cot_ioctl_winsize",
             // Print runtime (print_native.generate order)
             "print_int",     "eprint_int",       "int_to_string",
             // Test runtime (test_native.generate order)
@@ -997,6 +999,7 @@ pub const Driver = struct {
             "connect",       "setsockopt",     "kqueue",        "kevent",
             "fcntl",         "fork",           "c_waitpid",     "c_pipe",
             "dup2",          "execve",
+            "c_openpty",     "setsid",        "ioctl",
         };
         const runtime_start_idx: u32 = @intCast(funcs.len);
         for (runtime_func_names, 0..) |name, i| {
@@ -1011,6 +1014,12 @@ pub const Driver = struct {
         }
         if (func_index_map.get("cot_pipe")) |idx| {
             try func_index_map.put(self.allocator, "pipe", idx);
+        }
+        if (func_index_map.get("cot_openpty")) |idx| {
+            try func_index_map.put(self.allocator, "openpty", idx);
+        }
+        if (func_index_map.get("cot_ioctl_winsize")) |idx| {
+            try func_index_map.put(self.allocator, "ioctl_winsize", idx);
         }
 
         // String data symbol index — used by ssa_to_clif for globalValue references

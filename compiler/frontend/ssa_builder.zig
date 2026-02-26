@@ -1512,7 +1512,10 @@ pub const SSABuilder = struct {
         const is_large_struct = (value_type == .struct_type or value_type == .tuple or value_type == .union_type) and type_size > 8;
 
         if (is_large_struct) {
-            const src_addr = if (value.op == .load and value.args.len > 0) value.args[0] else value;
+            // Use value directly as src_addr — convertPtrLoadValue returns the
+            // pointer itself for large structs (type rewritten but value is addr).
+            // Same pattern as convertStoreLocal (line ~673).
+            const src_addr = value;
             const move_val = try self.func.newValue(.move, TypeRegistry.VOID, cur, self.cur_pos);
             move_val.addArg2(ptr_val, src_addr);
             move_val.aux_int = @intCast(type_size);

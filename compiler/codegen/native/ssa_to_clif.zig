@@ -33,6 +33,7 @@ const gv_ExternalName = @import("../../ir/clif/globalvalue.zig").ExternalName;
 const frontend_mod = @import("frontend/mod.zig");
 const FunctionBuilder = frontend_mod.FunctionBuilder;
 const FunctionBuilderContext = frontend_mod.FunctionBuilderContext;
+const Variable = frontend_mod.Variable;
 
 const debug = @import("../../pipeline_debug.zig");
 
@@ -110,10 +111,6 @@ const SsaToClifTranslator = struct {
     /// SSA block ID → CLIF block
     block_map: std.AutoHashMapUnmanaged(ssa_value.ID, clif.Block),
 
-    /// SSA block ID → list of phi CLIF block params (in order)
-    /// Used when emitting terminators to pass phi args to successors.
-    block_phi_params: std.AutoHashMapUnmanaged(ssa_value.ID, std.ArrayListUnmanaged(PhiInfo)),
-
     /// External function references for calls.
     func_refs: std.StringHashMapUnmanaged(clif.FuncRef),
 
@@ -151,12 +148,12 @@ const SsaToClifTranslator = struct {
     /// normal block terminator.
     block_terminated: bool,
 
-    const Self = @This();
+    /// Map from SSA phi value ID → Cranelift Variable.
+    /// Used with defVar/useVar (Braun et al. 2013 SSA construction) to
+    /// automatically handle block params and branch args for phis.
+    phi_vars: std.AutoHashMapUnmanaged(ssa_value.ID, Variable),
 
-    const PhiInfo = struct {
-        clif_param: clif.Value,
-        ssa_value_id: ssa_value.ID,
-    };
+    const Self = @This();
 
     fn init(
         allocator: Allocator,
@@ -187,7 +184,6 @@ const SsaToClifTranslator = struct {
             .func_ctx = func_ctx,
             .value_map = .{},
             .block_map = .{},
-            .block_phi_params = .{},
             .func_refs = .{},
             .stack_slot_map = .{},
             .compound_extra_map = .{},
@@ -196,19 +192,15 @@ const SsaToClifTranslator = struct {
             .string_offset_ids = .{},
             .global_symbol_map = global_symbol_map,
             .block_terminated = false,
+            .phi_vars = .{},
         };
     }
 
     fn deinit(self: *Self) void {
         self.value_map.deinit(self.allocator);
         self.block_map.deinit(self.allocator);
-        var phi_iter = self.block_phi_params.valueIterator();
-        while (phi_iter.next()) |list| {
-            var l = list.*;
-            l.deinit(self.allocator);
-        }
-        self.block_phi_params.deinit(self.allocator);
         self.func_refs.deinit(self.allocator);
+        self.phi_vars.deinit(self.allocator);
         self.stack_slot_map.deinit(self.allocator);
         self.compound_extra_map.deinit(self.allocator);
         self.string_offset_ids.deinit(self.allocator);
@@ -269,22 +261,15 @@ const SsaToClifTranslator = struct {
         try self.builder.ensureInsertedBlock();
         try self.builder.sealBlock(entry_clif);
 
-        // Phase 3: Pre-scan all blocks for phi values and add block params
+        // Phase 3: Declare a Variable for each phi value.
+        // The FunctionBuilder's SSA construction (Braun et al. 2013) will automatically
+        // insert block params and branch args when sealBlock resolves useVar calls.
         for (ssa_func.blocks.items) |ssa_block_ptr| {
-            const clif_block = self.block_map.get(ssa_block_ptr.id) orelse continue;
             for (ssa_block_ptr.values.items) |v| {
                 if (v.op == .phi) {
                     const clif_ty = self.ssaTypeToClifType(v.type_idx);
-                    const param = try self.builder.appendBlockParam(clif_block, clif_ty);
-                    // Record phi info for this block
-                    const gop = try self.block_phi_params.getOrPut(self.allocator, ssa_block_ptr.id);
-                    if (!gop.found_existing) gop.value_ptr.* = .{};
-                    try gop.value_ptr.append(self.allocator, .{
-                        .clif_param = param,
-                        .ssa_value_id = v.id,
-                    });
-                    // Map phi's SSA value to the block param
-                    try self.value_map.put(self.allocator, v.id, param);
+                    const phi_var = try self.builder.declareVar(clif_ty);
+                    try self.phi_vars.put(self.allocator, v.id, phi_var);
                 }
             }
         }
@@ -924,7 +909,14 @@ const SsaToClifTranslator = struct {
                 }
             },
             .phi => {
-                // Already handled in Phase 3 (block params)
+                // Phi values are resolved via defVar/useVar (Braun et al. 2013).
+                // Definitions happen in predecessor blocks (definePhiArgsForSuccessor).
+                // Here we useVar to get the resolved value, which may trigger
+                // automatic block param insertion by the FunctionBuilder.
+                if (self.phi_vars.get(v.id)) |phi_var| {
+                    const resolved = try self.builder.useVar(phi_var);
+                    try self.putValue(v.id, resolved);
+                }
             },
             .cond_select => {
                 const cond = self.getClif(v.args[0]);
@@ -1263,8 +1255,8 @@ const SsaToClifTranslator = struct {
                 if (ssa_blk.succs.len > 0) {
                     const target_ssa = ssa_blk.succs[0].b;
                     const target_clif = self.block_map.get(target_ssa.id) orelse return error.BlockNotFound;
-                    const phi_args = try self.gatherPhiArgs(ssa_blk, target_ssa);
-                    _ = try ins.jump(target_clif, phi_args);
+                    try self.definePhiArgsForSuccessor(ssa_blk, target_ssa);
+                    _ = try ins.jump(target_clif, &.{});
                 } else {
                     // No explicit successor. Check if this block is a trap-only block
                     // (e.g., div-by-zero fail block). These blocks contain wasm_unreachable
@@ -1319,9 +1311,9 @@ const SsaToClifTranslator = struct {
                     const else_ssa = ssa_blk.succs[1].b;
                     const then_clif = self.block_map.get(then_ssa.id) orelse return error.BlockNotFound;
                     const else_clif = self.block_map.get(else_ssa.id) orelse return error.BlockNotFound;
-                    const then_args = try self.gatherPhiArgs(ssa_blk, then_ssa);
-                    const else_args = try self.gatherPhiArgs(ssa_blk, else_ssa);
-                    _ = try ins.brif(cond, then_clif, then_args, else_clif, else_args);
+                    try self.definePhiArgsForSuccessor(ssa_blk, then_ssa);
+                    try self.definePhiArgsForSuccessor(ssa_blk, else_ssa);
+                    _ = try ins.brif(cond, then_clif, &.{}, else_clif, &.{});
                 } else {
                     _ = try ins.trap(.unreachable_code_reached);
                 }
@@ -1359,43 +1351,37 @@ const SsaToClifTranslator = struct {
     }
 
     // ========================================================================
-    // Phi resolution — gather args for successor block params
+    // Phi resolution — defVar incoming values in predecessor blocks
     // ========================================================================
 
-    fn gatherPhiArgs(self: *Self, from_block: *const ssa_block.Block, to_block: *const ssa_block.Block) ![]const clif.Value {
-        const phi_infos = self.block_phi_params.get(to_block.id) orelse return &[_]clif.Value{};
-
-        var args = std.ArrayListUnmanaged(clif.Value){};
-        defer args.deinit(self.allocator);
-
-        for (phi_infos.items) |phi_info| {
-            // Find the phi value in the target block
-            var found = false;
-            for (to_block.values.items) |phi_v| {
-                if (phi_v.id == phi_info.ssa_value_id and phi_v.op == .phi) {
-                    // Find which arg of this phi corresponds to from_block
-                    const pred_idx = self.findPredIndex(to_block, from_block);
-                    if (pred_idx) |idx| {
-                        if (idx < phi_v.args.len) {
-                            const arg_val = self.getClif(phi_v.args[idx]);
-                            try args.append(self.allocator, arg_val);
-                            found = true;
+    /// Before emitting a jump/brif to a successor block, define all phi
+    /// variables that the successor's phis expect from this predecessor.
+    /// The FunctionBuilder's SSA construction (sealBlock/sealAllBlocks) will
+    /// automatically insert block params and branch args based on these defs.
+    fn definePhiArgsForSuccessor(self: *Self, from_block: *const ssa_block.Block, to_block: *const ssa_block.Block) !void {
+        const pred_idx = self.findPredIndex(to_block, from_block) orelse return;
+        for (to_block.values.items) |v| {
+            if (v.op == .phi) {
+                if (self.phi_vars.get(v.id)) |phi_var| {
+                    if (pred_idx < v.args.len) {
+                        var arg_val = self.getClif(v.args[pred_idx]);
+                        // Type-convert if needed (e.g., I64→I8 for bool phis)
+                        const var_ty = self.builder.func_ctx.variables.items[phi_var.asU32()];
+                        const arg_ty = self.clif_func.dfg.valueType(arg_val);
+                        if (!arg_ty.eql(var_ty)) {
+                            if (arg_ty.isInt() and var_ty.isInt()) {
+                                if (arg_ty.laneBits() > var_ty.laneBits()) {
+                                    arg_val = try self.builder.ins().ireduce(var_ty, arg_val);
+                                } else {
+                                    arg_val = try self.builder.ins().uextend(var_ty, arg_val);
+                                }
+                            }
                         }
+                        try self.builder.defVar(phi_var, arg_val);
                     }
-                    break;
                 }
             }
-            if (!found) {
-                // Phi arg not found — use zero
-                const zero = try self.builder.ins().iconst(clif.Type.I64, 0);
-                try args.append(self.allocator, zero);
-            }
         }
-
-        // Return a stable slice by allocating
-        const result = try self.allocator.alloc(clif.Value, args.items.len);
-        @memcpy(result, args.items);
-        return result;
     }
 
     fn findPredIndex(self: *Self, block: *const ssa_block.Block, pred: *const ssa_block.Block) ?usize {
@@ -1742,8 +1728,6 @@ const SsaToClifTranslator = struct {
 
     fn getClif(self: *const Self, ssa_val: *const ssa_value.Value) clif.Value {
         return self.value_map.get(ssa_val.id) orelse {
-            // Value not yet translated — this can happen for forward references.
-            // Return a sentinel value; the caller should handle this.
             debug.log(.codegen, "ssa_to_clif: missing value v{d} (op={s})", .{ ssa_val.id, @tagName(ssa_val.op) });
             return clif.Value.fromIndex(0);
         };

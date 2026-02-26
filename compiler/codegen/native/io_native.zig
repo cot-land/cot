@@ -229,6 +229,20 @@ pub fn generate(
     // isatty(fd) → i64: no wrapper needed, libc isatty is ABI-compatible.
     // User code calls the libc symbol directly via external reference.
 
+    // --- Terminal PTY runtime ---
+
+    // openpty() → i64 (calls libc openpty, packs fds: master | (slave << 32))
+    try result.append(allocator, .{
+        .name = "cot_openpty",
+        .compiled = try generateOpenpty(allocator, isa, ctrl_plane, func_index_map),
+    });
+    // setsid() → i64: no wrapper needed, libc setsid is ABI-compatible.
+    // ioctl_winsize(fd, rows, cols) → i64 (builds winsize struct, calls ioctl)
+    try result.append(allocator, .{
+        .name = "cot_ioctl_winsize",
+        .compiled = try generateIoctlWinsize(allocator, isa, ctrl_plane, func_index_map),
+    });
+
     return result;
 }
 
@@ -2123,6 +2137,154 @@ fn generatePipe(
     const write_shifted = try ins.ishl(write_fd, v_32);
     const result = try ins.bor(read_fd, write_shifted);
     _ = try ins.return_(&[_]clif.Value{result});
+
+    try builder.sealAllBlocks();
+    builder.finalize();
+    return native_compile.compile(allocator, &clif_func, isa, ctrl_plane);
+}
+
+// ============================================================================
+// openpty() → i64: calls libc openpty(&master, &slave, NULL, NULL, NULL)
+// Returns master_fd | (slave_fd << 32)
+// ============================================================================
+
+fn generateOpenpty(
+    allocator: Allocator,
+    isa: native_compile.TargetIsa,
+    ctrl_plane: *native_compile.ControlPlane,
+    func_index_map: *const std.StringHashMapUnmanaged(u32),
+) !native_compile.CompiledCode {
+    var clif_func = clif.Function.init(allocator);
+    defer clif_func.deinit();
+    var func_ctx = FunctionBuilderContext.init(allocator);
+    defer func_ctx.deinit();
+    var builder = FunctionBuilder.init(&clif_func, &func_ctx);
+
+    try clif_func.signature.addReturn(allocator, clif.AbiParam.init(clif.Type.I64));
+
+    const block_entry = try builder.createBlock();
+    builder.switchToBlock(block_entry);
+    try builder.ensureInsertedBlock();
+
+    const ins = builder.ins();
+
+    // Stack slots for int master_fd and int slave_fd (4 bytes each)
+    const master_slot = try builder.createSizedStackSlot(clif.StackSlotData.explicit(4, 2));
+    const slave_slot = try builder.createSizedStackSlot(clif.StackSlotData.explicit(4, 2));
+    const master_addr = try ins.stackAddr(clif.Type.I64, master_slot, 0);
+    const slave_addr = try ins.stackAddr(clif.Type.I64, slave_slot, 0);
+
+    // openpty(&master, &slave, NULL, NULL, NULL)
+    const pty_idx = func_index_map.get("c_openpty") orelse 0;
+    var sig = clif.Signature.init(.system_v);
+    try sig.addParam(allocator, clif.AbiParam.init(clif.Type.I64)); // &master
+    try sig.addParam(allocator, clif.AbiParam.init(clif.Type.I64)); // &slave
+    try sig.addParam(allocator, clif.AbiParam.init(clif.Type.I64)); // name (NULL)
+    try sig.addParam(allocator, clif.AbiParam.init(clif.Type.I64)); // termp (NULL)
+    try sig.addParam(allocator, clif.AbiParam.init(clif.Type.I64)); // winp (NULL)
+    try sig.addReturn(allocator, clif.AbiParam.init(clif.Type.I64));
+    const sig_ref = try builder.importSignature(sig);
+    const func_ref = try builder.importFunction(.{
+        .name = .{ .user = .{ .namespace = 0, .index = pty_idx } },
+        .signature = sig_ref,
+        .colocated = false,
+    });
+    const v_null = try ins.iconst(clif.Type.I64, 0);
+    _ = try ins.call(func_ref, &[_]clif.Value{ master_addr, slave_addr, v_null, v_null, v_null });
+
+    // Load master_fd (i32) and slave_fd (i32), pack as master | (slave << 32)
+    const master_i32 = try ins.stackLoad(clif.Type.I32, master_slot, 0);
+    const slave_i32 = try ins.stackLoad(clif.Type.I32, slave_slot, 0);
+    const master_fd = try ins.uextend(clif.Type.I64, master_i32);
+    const slave_fd = try ins.uextend(clif.Type.I64, slave_i32);
+    const v_32 = try ins.iconst(clif.Type.I64, 32);
+    const slave_shifted = try ins.ishl(slave_fd, v_32);
+    const packed_fds = try ins.bor(master_fd, slave_shifted);
+    _ = try ins.return_(&[_]clif.Value{packed_fds});
+
+    try builder.sealAllBlocks();
+    builder.finalize();
+    return native_compile.compile(allocator, &clif_func, isa, ctrl_plane);
+}
+
+// ============================================================================
+// ioctl_winsize(fd, rows, cols) → i64: ioctl(fd, TIOCSWINSZ, &ws)
+// macOS: TIOCSWINSZ = 0x80087467
+// struct winsize: { ws_row(u16), ws_col(u16), ws_xpixel(u16), ws_ypixel(u16) } = 8 bytes
+// ============================================================================
+
+fn generateIoctlWinsize(
+    allocator: Allocator,
+    isa: native_compile.TargetIsa,
+    ctrl_plane: *native_compile.ControlPlane,
+    func_index_map: *const std.StringHashMapUnmanaged(u32),
+) !native_compile.CompiledCode {
+    var clif_func = clif.Function.init(allocator);
+    defer clif_func.deinit();
+    var func_ctx = FunctionBuilderContext.init(allocator);
+    defer func_ctx.deinit();
+    var builder = FunctionBuilder.init(&clif_func, &func_ctx);
+
+    try clif_func.signature.addParam(allocator, clif.AbiParam.init(clif.Type.I64)); // fd
+    try clif_func.signature.addParam(allocator, clif.AbiParam.init(clif.Type.I64)); // rows
+    try clif_func.signature.addParam(allocator, clif.AbiParam.init(clif.Type.I64)); // cols
+    try clif_func.signature.addReturn(allocator, clif.AbiParam.init(clif.Type.I64));
+
+    const block_entry = try builder.createBlock();
+    builder.switchToBlock(block_entry);
+    try builder.appendBlockParamsForFunctionParams(block_entry);
+    try builder.ensureInsertedBlock();
+
+    const ins = builder.ins();
+    const params = builder.blockParams(block_entry);
+    const fd = params[0];
+    const rows = params[1];
+    const cols = params[2];
+
+    // Stack slot for struct winsize (8 bytes, 2-byte aligned)
+    const ws_slot = try builder.createSizedStackSlot(clif.StackSlotData.explicit(8, 1));
+    const ws_addr = try ins.stackAddr(clif.Type.I64, ws_slot, 0);
+
+    // Zero-fill the struct
+    const memset_idx = func_index_map.get("memset") orelse 0;
+    var ms_sig = clif.Signature.init(.system_v);
+    try ms_sig.addParam(allocator, clif.AbiParam.init(clif.Type.I64));
+    try ms_sig.addParam(allocator, clif.AbiParam.init(clif.Type.I64));
+    try ms_sig.addParam(allocator, clif.AbiParam.init(clif.Type.I64));
+    try ms_sig.addReturn(allocator, clif.AbiParam.init(clif.Type.I64));
+    const ms_sig_ref = try builder.importSignature(ms_sig);
+    const ms_ref = try builder.importFunction(.{
+        .name = .{ .user = .{ .namespace = 0, .index = memset_idx } },
+        .signature = ms_sig_ref,
+        .colocated = false,
+    });
+    const v_zero = try ins.iconst(clif.Type.I64, 0);
+    const v_8 = try ins.iconst(clif.Type.I64, 8);
+    _ = try ins.call(ms_ref, &[_]clif.Value{ ws_addr, v_zero, v_8 });
+
+    // ws_row = rows (offset 0, u16)
+    const rows_u16 = try ins.ireduce(clif.Type.I16, rows);
+    _ = try ins.store(.{}, rows_u16, ws_addr, 0);
+    // ws_col = cols (offset 2, u16)
+    const cols_u16 = try ins.ireduce(clif.Type.I16, cols);
+    _ = try ins.store(.{}, cols_u16, ws_addr, 2);
+
+    // ioctl(fd, TIOCSWINSZ, &ws)
+    const ioctl_idx = func_index_map.get("ioctl") orelse 0;
+    var ioctl_sig = clif.Signature.init(.system_v);
+    try ioctl_sig.addParam(allocator, clif.AbiParam.init(clif.Type.I64)); // fd
+    try ioctl_sig.addParam(allocator, clif.AbiParam.init(clif.Type.I64)); // request
+    try ioctl_sig.addParam(allocator, clif.AbiParam.init(clif.Type.I64)); // argp
+    try ioctl_sig.addReturn(allocator, clif.AbiParam.init(clif.Type.I64));
+    const ioctl_sig_ref = try builder.importSignature(ioctl_sig);
+    const ioctl_ref = try builder.importFunction(.{
+        .name = .{ .user = .{ .namespace = 0, .index = ioctl_idx } },
+        .signature = ioctl_sig_ref,
+        .colocated = false,
+    });
+    const tiocswinsz = try ins.iconst(clif.Type.I64, 0x80087467); // macOS TIOCSWINSZ
+    const call_result = try ins.call(ioctl_ref, &[_]clif.Value{ fd, tiocswinsz, ws_addr });
+    _ = try ins.return_(&[_]clif.Value{call_result.results[0]});
 
     try builder.sealAllBlocks();
     builder.finalize();
