@@ -718,6 +718,12 @@ impl Parser {
         const start = self.tok_start
         const doc = self.consumeDocComment()
         self.advance()  // consume 'enum'
+        // Optional name: enum Color { ... }
+        var name = ""
+        if (self.tok == @intFromEnum(Token.ident)) {
+            name = self.tok_text
+            self.advance()
+        }
         // Optional backing type: enum(u8)
         var backing = null_node
         if (self.match(@intFromEnum(Token.lparen))) {
@@ -755,8 +761,7 @@ impl Parser {
             self.match(@intFromEnum(Token.comma))
         }
         self.expect(@intFromEnum(Token.rbrace))
-        // enum is declared as `const Name = enum { ... }`, name comes from the var decl
-        return self.ast.addEnumDecl("", backing, doc, variants, self.spanSE(start, self.tok_end))
+        return self.ast.addEnumDecl(name, backing, doc, variants, self.spanSE(start, self.tok_end))
     }
 
     /// union { variants }
