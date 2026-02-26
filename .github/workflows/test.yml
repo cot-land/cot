@@ -30,15 +30,18 @@ jobs:
         run: ./test/run_all.sh
 
       - name: Install wasmtime
+        if: always()
         run: |
           curl -fsSL "https://github.com/bytecodealliance/wasmtime/releases/download/v${WASMTIME_VERSION}/wasmtime-v${WASMTIME_VERSION}-aarch64-macos.tar.xz" | tar -xJ
           mv wasmtime-v${WASMTIME_VERSION}-aarch64-macos/wasmtime /usr/local/bin/
           wasmtime --version
 
       - name: Cot tests (wasm - features)
+        if: always()
         run: ./zig-out/bin/cot test test/e2e/features.cot --target=wasm32
 
       - name: Cot tests (wasm - full suite)
+        if: always()
         continue-on-error: true
         run: ./test/run_all.sh --target=wasm32
 
@@ -59,8 +62,8 @@ jobs:
       - name: Build compiler
         run: zig build
 
-      - name: Cot tests (native)
-        run: ./test/run_all.sh
+      # Native tests skipped on Linux x64 — native backend targets ARM64 macOS only.
+      # x64 ELF support (entry point naming, kevent→epoll) is not yet implemented.
 
       - name: Install wasmtime
         run: |

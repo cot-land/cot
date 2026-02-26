@@ -618,8 +618,12 @@ fn generateFdOpen(
     const v_zero_byte = try insb.iconst(clif.Type.I8, 0);
     _ = try insb.store(.{}, v_zero_byte, null_addr, 0);
 
-    // Call open(buf_addr, flags, 0o666) → fd
-    const open_idx = func_index_map.get("open") orelse 0;
+    // Call __open(buf_addr, flags, 0o666) → fd
+    // IMPORTANT: Use __open (non-variadic) instead of open (variadic).
+    // On Apple ARM64, variadic arguments go on the stack, not in registers.
+    // Our CLIF code passes all args in registers, so open() reads garbage mode
+    // from the stack. __open is the internal non-variadic syscall wrapper.
+    const open_idx = func_index_map.get("__open") orelse 0;
     var open_sig = clif.Signature.init(.system_v);
     try open_sig.addParam(allocator, clif.AbiParam.init(clif.Type.I64)); // path
     try open_sig.addParam(allocator, clif.AbiParam.init(clif.Type.I64)); // flags

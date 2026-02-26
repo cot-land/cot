@@ -991,7 +991,7 @@ pub const Driver = struct {
             // ABI-compatible with libc memcpy(dst,src,n)→void* (return ignored).
             "write",         "malloc",         "free",          "memset",
             "memcmp",        "memcpy",         "read",          "close",
-            "open",          "lseek",          "_exit",         "gettimeofday",
+            "__open",        "lseek",          "_exit",         "gettimeofday",
             "getentropy",    "isatty",         "strlen",        "__error",
             "socket",        "bind",           "listen",        "accept",
             "connect",       "setsockopt",     "kqueue",        "kevent",
