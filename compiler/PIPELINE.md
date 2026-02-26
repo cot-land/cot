@@ -2,12 +2,12 @@
 
 ## IMPORTANT: Read This First
 
-This document explains the compiler architecture. **There are TWO backends:**
+This document explains the compiler architecture. **There are TWO backends with separate paths from SSA onwards:**
 
-1. **Wasm Backend** (default) - Cot source → `.wasm`
-2. **Native Backend** - Cot source → Wasm → CLIF IR → Native binary (~80% complete)
+1. **Native Backend** (default) — SSA → CLIF IR → MachInst → regalloc → ARM64/x64 → executable
+2. **Wasm Backend** (`--target=wasm32`) — SSA → Wasm bytecode → `.wasm` file
 
-**Key Rule:** The Wasm backend does NOT use register allocation. Wasm is a stack machine.
+**Key Rule:** The Wasm backend does NOT use register allocation. Wasm is a stack machine. The native backend does NOT go through Wasm — it translates SSA directly to CLIF IR.
 
 ---
 
@@ -56,8 +56,13 @@ compiler/
 │   ├── wasm.zig            # Old module builder (CodeBuilder)
 │   ├── wasm_gen.zig        # SSA → Wasm (main entry point)
 │   │
-│   └── native/             # NATIVE BACKEND: Wasm → Native (Cranelift port)
-│       │                   # ~80% complete - see CRANELIFT_PORT_MASTER_PLAN.md
+│   └── native/             # NATIVE BACKEND: SSA → Native (Cranelift-style)
+│       │
+│       ├── ssa_to_clif.zig     # SSA → CLIF IR translation (~1400 lines)
+│       ├── arc_native.zig      # ARC runtime as CLIF IR (alloc, retain, release, realloc)
+│       ├── io_native.zig       # I/O runtime as CLIF IR (fd_open, fd_write, fd_read, etc.)
+│       ├── print_native.zig    # Print runtime as CLIF IR (print_int, print_string, etc.)
+│       ├── test_native.zig     # Test runner as CLIF IR
 │       │
 │       ├── ir/clif/        # CLIF IR representation (from Cranelift)
 │       │   ├── mod.zig         # Package index
@@ -66,9 +71,9 @@ compiler/
 │       │   ├── function.zig    # Function representation
 │       │   └── instructions.zig # CLIF opcodes
 │       │
-│       ├── wasm_to_clif/   # Wasm → CLIF translation
-│       │   ├── translator.zig  # Main translator
-│       │   └── func_translator.zig # Per-function translation
+│       ├── frontend/       # CLIF IR construction helpers
+│       │   ├── frontend.zig    # FunctionBuilder
+│       │   └── ssa.zig         # SSA construction
 │       │
 │       ├── machinst/       # Machine instruction framework
 │       │   ├── lower.zig       # CLIF → MachInst lowering
@@ -76,10 +81,6 @@ compiler/
 │       │   ├── buffer.zig      # Code buffer
 │       │   ├── reg.zig         # Register types
 │       │   └── blockorder.zig  # Block ordering
-│       │
-│       ├── frontend/       # CLIF IR construction helpers
-│       │   ├── frontend.zig    # FunctionBuilder
-│       │   └── ssa.zig         # SSA construction
 │       │
 │       ├── regalloc/       # Register allocator (ion-based)
 │       │   ├── regalloc.zig    # Main entry point
@@ -99,7 +100,6 @@ compiler/
 │       │   ├── lower.zig       # CLIF → x64 MachInst
 │       │   └── inst/           # x64 instruction types
 │       │
-│       ├── wasm_parser.zig     # Parse .wasm binary
 │       ├── compile.zig         # Main compilation entry
 │       ├── elf.zig             # Linux executables
 │       ├── macho.zig           # macOS executables
@@ -114,81 +114,94 @@ compiler/
 
 ## Pipeline Flows
 
-### Wasm Backend (default)
+### Native Backend (default)
 
 ```
-cot build app.cot -o app.wasm
+cot build app.cot -o app
 
 ┌─────────────────────────────────────────────────────────────────┐
 │  frontend/                                                      │
 │  Scanner → Parser → Checker → Lowerer → IR → SSA Builder        │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │ SSA (generic ops)
-                                  ▼
+└─────────────────────────────┬───────────────────────────────────┘
+                              │ SSA (generic ops)
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  ssa/passes/                                                    │
+│  rewritegeneric → decompose → rewritedec → schedule             │
+└─────────────────────────────┬───────────────────────────────────┘
+                              │ SSA (lowered ops)
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  codegen/native/ssa_to_clif.zig                                 │
+│  Translate SSA ops → CLIF IR (register-based SSA)              │
+│  Uses FunctionBuilder for SSA construction with block params    │
+└─────────────────────────────┬───────────────────────────────────┘
+                              │ CLIF IR
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  codegen/native/machinst/lower.zig                              │
+│  Lower CLIF IR → Machine Instructions (virtual registers)       │
+└─────────────────────────────┬───────────────────────────────────┘
+                              │ MachInst (vregs)
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  codegen/native/regalloc/                                       │
+│  Register allocation (ion-based, from regalloc2)               │
+└─────────────────────────────┬───────────────────────────────────┘
+                              │ MachInst (pregs)
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  codegen/native/isa/*/emit.zig                                  │
+│  Emit native machine code bytes                                 │
+└─────────────────────────────┬───────────────────────────────────┘
+                              │
+                              ▼
+                        Native binary (ELF/Mach-O)
+```
+
+Runtime functions (ARC, I/O, print, test runner) are also compiled through this same CLIF → MachInst → emit pipeline. They are generated as CLIF IR by `arc_native.zig`, `io_native.zig`, `print_native.zig`, and `test_native.zig`, which call libc functions (e.g., `write`, `read`, `__open`, `malloc`) via undefined symbols resolved at link time by `zig cc`.
+
+### Wasm Backend
+
+```
+cot build app.cot --target=wasm32 -o app.wasm
+
+┌─────────────────────────────────────────────────────────────────┐
+│  frontend/                                                      │
+│  Scanner → Parser → Checker → Lowerer → IR → SSA Builder        │
+└─────────────────────────────┬───────────────────────────────────┘
+                              │ SSA (generic ops)
+                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  ssa/passes/                                                    │
 │  schedule → layout → lower_wasm                                 │
 │                                                                 │
 │  NO REGALLOC - Wasm is a stack machine!                        │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │ SSA (wasm ops)
-                                  ▼
+└─────────────────────────────┬───────────────────────────────────┘
+                              │ SSA (wasm ops)
+                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  codegen/wasm/                                                  │
 │  wasm_gen → preprocess → assemble → link                       │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │
-                                  ▼
-                            .wasm file
-```
-
-### Native Backend (Cranelift Architecture)
-
-```
-cot build app.cot --target=native -o app
-
-┌─────────────────────────────────────────────────────────────────┐
-│  Wasm Backend (same as above)                                   │
-│  Cot source → .wasm (in memory)                                │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │ .wasm bytes
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  codegen/native/wasm_parser.zig                                 │
-│  Parse Wasm binary format                                       │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │ Wasm module
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  codegen/native/wasm_to_clif/                                   │
-│  Translate Wasm stack ops → CLIF IR (SSA form)                 │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │ CLIF IR
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  codegen/native/machinst/lower.zig                              │
-│  Lower CLIF IR → Machine Instructions (virtual registers)       │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │ MachInst (vregs)
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  codegen/native/regalloc/                                       │
-│  Register allocation (ion-based, from regalloc2)               │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │ MachInst (pregs)
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  codegen/native/isa/*/emit.zig                                  │
-│  Emit native machine code bytes                                 │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │
-                                  ▼
-                          Native binary (ELF/Mach-O)
+└─────────────────────────────┬───────────────────────────────────┘
+                              │
+                              ▼
+                        .wasm file
 ```
 
 ---
 
 ## What Each Pass Does
+
+### Native Backend Passes
+
+| Pass | File | Purpose |
+|------|------|---------|
+| schedule | ssa/passes/schedule.zig | Order values within blocks for deterministic emission |
+| ssa_to_clif | codegen/native/ssa_to_clif.zig | Translate SSA ops to CLIF IR (register-based SSA) |
+| machinst/lower | codegen/native/machinst/lower.zig | CLIF IR → MachInst with virtual registers |
+| regalloc | codegen/native/regalloc/ | Assign physical registers (ion-based) |
+| emit | codegen/native/isa/*/emit.zig | MachInst → native bytes |
 
 ### Wasm Backend Passes
 
@@ -199,44 +212,25 @@ cot build app.cot --target=native -o app
 | lower_wasm | ssa/passes/lower_wasm.zig | Convert generic ops (add, mul) to wasm ops (wasm_i64_add) |
 | wasm_gen | codegen/wasm_gen.zig | Emit Wasm bytecode for each SSA value |
 
-### Native Backend Passes (Cranelift Port)
-
-| Pass | File | Purpose |
-|------|------|---------|
-| wasm_parser | codegen/native/wasm_parser.zig | Parse .wasm binary format |
-| wasm_to_clif | codegen/native/wasm_to_clif/ | Convert Wasm stack ops to CLIF SSA |
-| machinst/lower | codegen/native/machinst/lower.zig | CLIF IR → MachInst with virtual registers |
-| regalloc | codegen/native/regalloc/ | Assign physical registers (ion-based) |
-| emit | codegen/native/isa/*/emit.zig | MachInst → native bytes |
-
 ---
 
 ## Common Mistakes to Avoid
 
-### ❌ DON'T run regalloc for Wasm targets
+### Do NOT confuse the two backend paths
 
-```zig
-// WRONG - regalloc is for native only!
-if (target.isWasm()) {
-    var regalloc_state = try regalloc(allocator, ssa_func, target);  // NO!
-}
-```
+The native and Wasm backends are independent from SSA onwards. They share the frontend (scanner, parser, checker, lowerer, SSA builder) but diverge at code generation:
+- **Native:** SSA → `ssa_to_clif.zig` → CLIF IR → machinst → regalloc → emit → .o → linker
+- **Wasm:** SSA → `lower_wasm.zig` → `wasm_gen.zig` → Wasm bytecode → .wasm
 
-### ✅ DO check target before using native passes
+### Do NOT run regalloc for Wasm targets
 
-```zig
-// CORRECT
-if (target.isWasm()) {
-    // Wasm path: no regalloc
-    try schedule.schedule(ssa_func);
-    try layout.layout(ssa_func);
-    try lower_wasm.lower(ssa_func);
-    return generateWasmCode(ssa_func);
-} else {
-    // Native path: use Cranelift architecture
-    return generateNativeCode(ssa_func, target);
-}
-```
+Wasm is a stack machine — register allocation is only for native targets.
+
+### Do NOT mix runtime function patterns
+
+Runtime functions have different implementations per target:
+- **Wasm:** Generated as Wasm bytecode by `arc.zig`, `wasi_runtime.zig`, `test_runtime.zig`, `print_runtime.zig`
+- **Native:** Generated as CLIF IR by `arc_native.zig`, `io_native.zig`, `test_native.zig`, `print_native.zig`
 
 ---
 
@@ -248,46 +242,46 @@ if (target.isWasm()) {
 | ssa/passes/layout.zig | WASM | Block ordering for structured control flow |
 | ssa/passes/lower_wasm.zig | WASM | Generic → Wasm ops |
 | codegen/wasm/* | WASM | Wasm bytecode emission |
-| codegen/native/* | NATIVE | Cranelift-based AOT compilation |
+| codegen/native/ssa_to_clif.zig | NATIVE | SSA → CLIF IR translation |
+| codegen/native/*_native.zig | NATIVE | Runtime functions as CLIF IR |
+| codegen/native/machinst/* | NATIVE | CLIF → MachInst lowering |
+| codegen/native/regalloc/* | NATIVE | Register allocation |
+| codegen/native/isa/* | NATIVE | ISA-specific backends |
 
 ---
 
 ## Testing
 
-### Wasm Backend Tests
-```bash
-zig test compiler/codegen/wasm/wasm.zig     # Wasm package tests
-zig test compiler/codegen/wasm_gen.zig      # Codegen tests
-zig test compiler/ssa/passes/lower_wasm.zig # Lowering tests
-```
-
 ### Native Backend Tests
 ```bash
-zig build test  # Includes 700+ native codegen tests
+zig build test                              # Compiler internals (includes native codegen tests)
+cot test test/e2e/features.cot              # 341 E2E tests (native)
+./test/run_all.sh                           # Full suite: 67/67 files, ~1,623 tests
 ```
 
-### E2E Tests
+### Wasm Backend Tests
 ```bash
-# All tests (Wasm + Native)
-zig build test
-
-# With debug output
-COT_DEBUG=codegen zig build test
+cot test test/e2e/features.cot --target=wasm32   # 341 E2E tests (wasm, via wasmtime)
+./test/run_all.sh --target=wasm32                 # Full suite via wasmtime
 ```
 
 ---
 
 ## Adding New Features
 
+### Adding a new native backend feature
+1. Add SSA op to `ssa/op.zig` if needed
+2. Add CLIF translation in `codegen/native/ssa_to_clif.zig`
+3. Ensure CLIF → MachInst lowering exists in `machinst/lower.zig` + `isa/aarch64/lower.zig`
+4. Test with `cot test test/e2e/features.cot`
+
 ### Adding a new Wasm feature
 1. Add op to `ssa/op.zig` if needed
 2. Add lowering in `ssa/passes/lower_wasm.zig`
 3. Add codegen in `codegen/wasm_gen.zig`
-4. Test with `zig test compiler/codegen/wasm_gen.zig`
+4. Test with `cot test test/e2e/features.cot --target=wasm32`
 
-### Adding native backend support
-1. Check `CRANELIFT_PORT_MASTER_PLAN.md` for current status
-2. Follow Cranelift's architecture exactly
-3. Add instruction lowering in `isa/aarch64/lower.zig` or `isa/x64/lower.zig`
-4. Add emission in `isa/*/emit.zig`
-5. Run tests with `zig build test`
+### Adding a new runtime function
+1. **Wasm:** Add to `arc.zig` or `wasi_runtime.zig` (body + addToLinker) → `driver.zig` (`func_indices`)
+2. **Native:** Add to appropriate `*_native.zig` module (CLIF IR generation) → `driver.zig` (`runtime_func_names` + `func_index_map`)
+3. **Both:** Add `extern fn` declaration to `stdlib/sys.cot`

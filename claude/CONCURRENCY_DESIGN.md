@@ -124,16 +124,16 @@ scheduler.zig (new):
   - spawn(): push task to global queue, wake idle worker
 ```
 
-### Implementation in the Wasm-First Pipeline
+### Implementation in the Pipeline
 
 Spawn compiles through the existing pipeline with minimal changes:
 
 1. **Frontend:** `spawn { body }` parsed as a spawn expression. The body becomes an anonymous function.
 2. **Checker:** Validates captured variables. Mutable captures require `var` (no implicit sharing).
 3. **Lowerer:** Emits a closure-like capture (reuses closure infrastructure) + a call to `@spawn(fn_ptr, env_ptr)`.
-4. **Wasm codegen:** `@spawn` is a runtime builtin (like `@alloc`). On Wasm target, it's a no-op stub (Wasm is single-threaded). On native, the driver overrides it with the real scheduler call.
+4. **Codegen:** `@spawn` is a runtime function. On Wasm target, it's a no-op stub (Wasm is single-threaded). On native, it calls the work-stealing scheduler.
 
-This follows the same pattern as networking builtins: Wasm stubs + native overrides.
+This follows the same pattern as networking functions: Wasm stubs + native CLIF IR implementations.
 
 ### Channel Implementation
 
@@ -293,4 +293,4 @@ fn processInParallel(items: List(Item)) List(Result) {
 | Atomic ARC | Swift (`stdlib/public/runtime/HeapObject.cpp`) |
 | Select statement | Go select (`runtime/select.go`) |
 
-*Extracted from pre-0.1 design docs (`~/cotlang/roadmap/03-feature-roadmap.md`), refactored for Cot 0.3+ Wasm-first architecture.*
+*Extracted from pre-0.1 design docs (`~/cotlang/roadmap/03-feature-roadmap.md`), refactored for Cot 0.3+ dual-backend architecture (native + Wasm).*

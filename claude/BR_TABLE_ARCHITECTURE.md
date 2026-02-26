@@ -110,7 +110,7 @@ Operator::BrTable { targets } => {
 }
 ```
 
-**Cot's copy**: `compiler/codegen/native/wasm_to_clif/translator.zig` `translateBrTable()`
+**Cot's copy**: `compiler/codegen/native/ssa_to_clif.zig` (br_table handling in SSA → CLIF translation)
 
 ### 3. Cranelift ARM64 Backend (CLIF → Native source)
 
@@ -210,7 +210,7 @@ fn caller() i64 { return helper() }
 |-----------|------|-------|
 | Dispatch loop generation | `compiler/codegen/wasm/preprocess.zig` | 265-315 |
 | br_table assembly | `compiler/codegen/wasm/assemble.zig` | 267-275 |
-| Wasm → CLIF translation | `compiler/codegen/native/wasm_to_clif/translator.zig` | `translateBrTable()` |
+| SSA → CLIF translation | `compiler/codegen/native/ssa_to_clif.zig` | br_table handling |
 | CLIF → ARM64 lowering | `compiler/codegen/native/isa/aarch64/lower.zig` | 282-369 |
 | ARM64 jt_sequence emit | `compiler/codegen/native/isa/aarch64/inst/emit.zig` | 2605-2634 |
 

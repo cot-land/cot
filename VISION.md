@@ -99,20 +99,19 @@ fn example() {
 // No manual free, no GC pauses, no borrow checker fights
 ```
 
-### 3. Wasm as Compilation Target AND Internal IR
+### 3. Dual Backend: Native-First with Wasm Deployment
 
-Cot uses Wasm in two ways:
+Cot compiles to native and Wasm through independent backend paths:
 
-**As internal IR:** All code compiles through Wasm bytecode before AOT compilation to native. This simplifies the compiler — one backend, consistent semantics, every feature works on both targets automatically.
+**Native (default):** SSA → CLIF IR → ARM64/x64 machine code. The compiler translates its SSA representation directly to CLIF IR (Cranelift's intermediate representation), then lowers through register allocation and instruction emission to produce native binaries. Runtime functions (ARC memory management, I/O, print) are generated as CLIF IR and call libc directly. No Wasm involved.
 
-**As deployment format:** `--target=wasm32` outputs `.wasm` files that run directly in browsers. The same code runs natively on the server and as Wasm in the browser.
+**Wasm (`--target=wasm32`):** SSA → Wasm bytecode. Outputs `.wasm` files that run in browsers, WASI runtimes, or edge platforms.
 
-**The key differentiator:** Other languages that target Wasm (Rust, Go, C) require an external Wasm runtime (wasmtime, wasmer) to run on the server. Cot doesn't — the compiler itself AOT-compiles Wasm to native. No runtime dependency. You get a regular native binary.
+**The key differentiator:** Other languages that target Wasm (Rust, Go, C) require an external Wasm runtime (wasmtime, wasmer) to run on the server. Cot doesn't — native is the default target, producing regular native binaries with no runtime dependency. Wasm is available as a deployment target for browsers and edge.
 
 ```
-Other languages:  Source → Wasm → wasmtime REQUIRED to run on server
-Cot:              Source → Wasm → native binary (runs directly)
-                              └──→ .wasm (for browser, or optionally WASI runtimes)
+Cot:  Source → SSA → native binary (default, runs directly)
+                   └─→ .wasm (for browser, edge, WASI runtimes)
 ```
 
 ### 4. WASI-Modeled I/O
@@ -200,16 +199,16 @@ For standalone use (CLI tools, libraries, Wasm modules), the `cot` compiler CLI 
                       ┌─────────────────────────────────┐
                       │         Cot Compiler (Zig)      │
                       │  Scanner → Parser → Checker     │
-                      │  → Lowerer → SSA → Wasm Codegen │
+                      │  → Lowerer → SSA                │
                       └─────────────────────────────────┘
                                        │
-                              Wasm bytecode (internal)
+                              SSA (internal IR)
                                        │
                     ┌──────────────────┼──────────────────┐
                     ▼                  ▼                  ▼
               Native (default)    Wasm (browser)    Wasm (WASI)
-              AOT → ARM64/x64    Runs in V8,       Runs on edge,
-              No runtime needed   SpiderMonkey      Cloudflare, etc.
+              SSA → CLIF → ARM64  SSA → Wasm        SSA → Wasm
+              No runtime needed   Runs in V8        Runs on edge
 ```
 
 ### Why Zig for the Compiler?
@@ -260,13 +259,13 @@ See [claude/ROADMAP_1_0.md](claude/ROADMAP_1_0.md) for the detailed roadmap.
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | Primary competitor | TypeScript + Next.js | Only full-stack web language; Cot does it better |
-| Primary target | Wasm | Universal — browser, server, edge from same source |
+| Primary target | Native + Wasm | Native by default; Wasm for browser, server, edge |
 | Memory management | ARC | No GC pauses, no borrow checker, fits Wasm perfectly |
 | I/O model | WASI-designed | Standardized, portable, maps to libc on native |
 | Compiler language | Zig | Simple, fast, good Wasm support |
 | Self-hosting | Deferred | Ship first, prove later |
 | Syntax | Zig-inspired | Familiar, readable, minimal |
-| Server deployment | Native binary (default) | No Wasm runtime required — AOT compiles directly |
+| Server deployment | Native binary (default) | Direct SSA → CLIF → native compilation, no Wasm runtime |
 | Framework model | Next.js-style | @server/@client annotations, transparent compilation |
 
 ---

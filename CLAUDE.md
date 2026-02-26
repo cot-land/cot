@@ -39,7 +39,7 @@ Read `claude/BR_TABLE_ARCHITECTURE.md` if confused. br_table is copied from Go's
 
 ## Project Overview
 
-**Cot** is a Wasm-first compiled language for full-stack web development.
+**Cot** is a compiled language for full-stack web development with native and Wasm targets.
 **Pitch:** Write like TypeScript, run like Rust, deploy anywhere, never think about memory.
 **Compiler:** Written in Zig (permanent, like Deno's Rust dependency).
 
@@ -90,15 +90,15 @@ cot help [command]              # Print help (per-subcommand help available)
 
 ## Architecture
 
-Two native compilation paths exist. The direct path (`--direct-native`) bypasses Wasm entirely.
+Native and Wasm targets use separate backend paths from SSA onwards.
 
 ```
 Cot Source → Scanner → Parser → Checker → IR → SSA
   ├── --target=wasm32 → lower_wasm.zig → wasm/ → .wasm file
-  ├── --target=native (default, indirect) → lower_wasm.zig → wasm/ → wasm_parser
-  │     → wasm_to_clif/ → ir/clif/ → machinst/ → isa/ → emit → .o → linker → executable
-  └── --direct-native → ssa_to_clif.zig → ir/clif/ → machinst/ → isa/ → emit → .o → linker → executable
+  └── --target=native (default) → ssa_to_clif.zig → ir/clif/ → machinst/ → isa/ → emit → .o → linker → executable
 ```
+
+The native path translates SSA directly to CLIF IR (Cranelift's intermediate representation), then lowers through MachInst → register allocation → ARM64/x64 emission → object file → system linker. Runtime functions (ARC, I/O, print, test runner) are generated as CLIF IR by dedicated modules (`arc_native.zig`, `io_native.zig`, `print_native.zig`, `test_native.zig`) rather than going through Wasm.
 
 **Key directories:**
 | Path | Purpose | Reference |
@@ -107,9 +107,12 @@ Cot Source → Scanner → Parser → Checker → IR → SSA
 | `compiler/main.zig` | Command dispatch, compileAndLink | — |
 | `compiler/frontend/` | Scanner, parser, checker, lowerer | — |
 | `compiler/ssa/passes/` | rewritegeneric, decompose, rewritedec, schedule, layout, lower_wasm | Go `ssa/*.go` |
-| `compiler/codegen/wasm/` | Wasm bytecode generation + linking | Go `wasm/ssa.go`, `wasmobj.go` |
-| `compiler/codegen/native/ssa_to_clif.zig` | SSA → CLIF IR (direct native path) | `rustc_codegen_cranelift` `src/base.rs`, `pointer.rs` |
-| `compiler/codegen/native/wasm_to_clif/` | Wasm → CLIF IR translation (indirect path) | Cranelift `cranelift/src/translate/` |
+| `compiler/codegen/wasm/` | Wasm bytecode generation + linking (Wasm target only) | Go `wasm/ssa.go`, `wasmobj.go` |
+| `compiler/codegen/native/ssa_to_clif.zig` | SSA → CLIF IR translation (native target) | `rustc_codegen_cranelift` `src/base.rs`, `pointer.rs` |
+| `compiler/codegen/native/arc_native.zig` | ARC runtime as CLIF IR (alloc, retain, release, realloc) | Swift `HeapObject.cpp` |
+| `compiler/codegen/native/io_native.zig` | I/O runtime as CLIF IR (fd_open, fd_write, fd_read, etc.) | libc wrappers |
+| `compiler/codegen/native/print_native.zig` | Print runtime as CLIF IR (print_int, print_string, etc.) | — |
+| `compiler/codegen/native/test_native.zig` | Test runner runtime as CLIF IR | — |
 | `compiler/codegen/native/machinst/` | CLIF → MachInst lowering | Cranelift `machinst/` |
 | `compiler/codegen/native/isa/aarch64/` | ARM64 backend | Cranelift `isa/aarch64/` |
 | `compiler/codegen/native/isa/x64/` | x64 backend | Cranelift `isa/x64/` |
@@ -122,8 +125,7 @@ Cot Source → Scanner → Parser → Checker → IR → SSA
 | Component | Reference Location |
 |-----------|-------------------|
 | Cot → Wasm | `references/go/src/cmd/compile/internal/wasm/` |
-| SSA → CLIF (direct native) | `references/rust/compiler/rustc_codegen_cranelift/src/` |
-| Wasm → CLIF (indirect path) | `references/wasmtime/crates/cranelift/src/translate/` |
+| SSA → CLIF (native) | `references/rust/compiler/rustc_codegen_cranelift/src/` |
 | CLIF → ARM64 | `references/wasmtime/cranelift/codegen/src/isa/aarch64/` |
 | Language semantics | Zig (error unions, defer, comptime) |
 
@@ -139,9 +141,14 @@ Two categories:
 
 **Runtime functions are NOT builtins.** They are regular functions exposed via `extern fn` declarations in `stdlib/sys.cot`. User code imports `std/sys` to access them. The compiler links them by name through `func_indices`.
 
-**Runtime functions are Wasm MODULE functions, NOT host imports.** The compiler has ZERO host imports. If a function name is missing from `func_indices`, `wasm_gen.zig` silently calls function index 0 (alloc) — a silent bug.
+**Wasm target:** Runtime functions are Wasm MODULE functions, NOT host imports. The compiler has ZERO host imports. If a function name is missing from `func_indices`, `wasm_gen.zig` silently calls function index 0 (alloc) — a silent bug.
 
-**To add a new runtime function:** arc.zig or wasi_runtime.zig (body + addToLinker) → driver.zig (func_indices + native override) → stdlib/sys.cot (extern fn declaration)
+**Native target:** Runtime functions are generated as CLIF IR by dedicated modules (`arc_native.zig`, `io_native.zig`, `print_native.zig`, `test_native.zig`). They call libc functions (e.g., `write`, `read`, `__open`, `malloc`) via undefined symbols resolved at link time.
+
+**To add a new runtime function:**
+- Wasm: `arc.zig` or `wasi_runtime.zig` (body + addToLinker) → `driver.zig` (`func_indices`)
+- Native: `*_native.zig` module (CLIF IR generation) → `driver.zig` (`runtime_func_names` + `func_index_map`)
+- Both: `stdlib/sys.cot` (extern fn declaration)
 
 ---
 
@@ -149,14 +156,14 @@ Two categories:
 
 **Workflow: `zig build test` once, then `cot test` for everything else.**
 
-`zig build test` validates the Zig compiler internals. Run it once after changes to confirm the compiler builds correctly. After that, **use `cot test` as the primary verification tool** — it exercises the full pipeline (parse → check → SSA → Wasm → execute) and catches real-world regressions that unit tests miss.
+`zig build test` validates the Zig compiler internals. Run it once after changes to confirm the compiler builds correctly. After that, **use `cot test` as the primary verification tool** — it exercises the full pipeline (parse → check → SSA → native/Wasm → execute) and catches real-world regressions that unit tests miss.
 
 ```bash
 zig build test                                    # Compiler internals (~163 tests, run once)
 cot test test/e2e/features.cot                    # Primary: 341 feature tests, native
 cot test test/e2e/features.cot --target=wasm32    # Primary: same tests, wasm via wasmtime
 cot test test/cases/<category>.cot                # Targeted: specific category
-./test/run_all.sh                                 # Full suite (~1,620 tests across 66 files)
+./test/run_all.sh                                 # Full suite (~1,623 tests across 67 files)
 ```
 
 **`cot test --target=wasm32`** runs Wasm binaries via `wasmtime` (must be installed). Use this to verify Wasm codegen — bugs often manifest on one target but not the other.
@@ -270,5 +277,5 @@ cursor --uninstall-extension cot-lang.cot-lang 2>/dev/null; cursor --install-ext
 | `claude/CONCURRENCY_DESIGN.md` | Concurrency roadmap: spawn, channels, work-stealing, atomic ARC |
 | `claude/BUSINESS_MODEL.md` | Licensing, trademark, revenue model, funding strategy |
 | `claude/RELEASE_PLAN.md` | 0.4 release plan: branding, distribution, polish, criteria |
-| `claude/TESTING.md` | Test system: 66 files, ~1,620 tests, error-union isolation |
-| `claude/archive/` | Historical: 17 archived docs (completed milestones, past plans) |
+| `claude/TESTING.md` | Test system: 67 files, ~1,623 tests, error-union isolation |
+| `claude/archive/` | Historical: archived docs (completed milestones, past plans) |

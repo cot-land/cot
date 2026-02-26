@@ -356,7 +356,7 @@ zig build
 Create `homebrew-cot` tap repo:
 ```ruby
 class Cot < Formula
-  desc "Wasm-first compiled language for full-stack web development"
+  desc "Compiled language for full-stack web development"
   homepage "https://cot.dev"
   url "https://github.com/cotlang/cot/releases/download/v0.5.0/cot-aarch64-macos.tar.gz"
   sha256 "..."

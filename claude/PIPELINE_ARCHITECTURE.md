@@ -22,49 +22,38 @@ This document maps **every stage of the Cot compilation pipeline** to its refere
                     │  Checker → IR → SSA    │
                     └───────────┬───────────┘
                                 │
-                    ┌───────────▼───────────┐
-                    │  STAGE 2: WASM CODEGEN │  Reference: Go
-                    │  SSA → Wasm bytecode   │
-                    │  (always, both targets)│
-                    └───────────┬───────────┘
-                                │
               ┌─────────────────┼─────────────────┐
               │                                   │
     ┌─────────▼─────────┐             ┌───────────▼───────────┐
     │ --target=wasm32    │             │ --target=native       │
     │                    │             │ (DEFAULT)              │
-    │  Write .wasm file  │             │                        │
-    │  Done.             │             │  STAGE 3: WASM PARSE   │ Ref: wasmparser
-    └────────────────────┘             │  Parse Wasm binary     │
-                                       └───────────┬───────────┘
-                                                   │
+    │  STAGE 2: WASM     │             │                        │
+    │  SSA → Wasm ops    │ Ref: Go     │  STAGE 3: CLIF IR      │ Ref: cg_clif
+    │  → .wasm file      │             │  SSA → CLIF IR         │
+    │  Done.             │             └───────────┬───────────┘
+    └────────────────────┘                         │
                                        ┌───────────▼───────────┐
-                                       │  STAGE 4: CLIF IR      │ Ref: Cranelift
-                                       │  Wasm → CLIF IR        │
-                                       └───────────┬───────────┘
-                                                   │
-                                       ┌───────────▼───────────┐
-                                       │  STAGE 5: LOWERING     │ Ref: Cranelift
+                                       │  STAGE 4: LOWERING     │ Ref: Cranelift
                                        │  CLIF → MachInst       │
                                        └───────────┬───────────┘
                                                    │
                                        ┌───────────▼───────────┐
-                                       │  STAGE 6: REGALLOC     │ Ref: regalloc2
+                                       │  STAGE 5: REGALLOC     │ Ref: regalloc2
                                        │  VReg → PReg           │
                                        └───────────┬───────────┘
                                                    │
                                        ┌───────────▼───────────┐
-                                       │  STAGE 7: EMIT         │ Ref: Cranelift
+                                       │  STAGE 6: EMIT         │ Ref: Cranelift
                                        │  MachInst → bytes      │
                                        └───────────┬───────────┘
                                                    │
                                        ┌───────────▼───────────┐
-                                       │  STAGE 8: OBJECT FILE  │ Ref: cranelift-object
+                                       │  STAGE 7: OBJECT FILE  │ Ref: cranelift-object
                                        │  Mach-O or ELF .o      │
                                        └───────────┬───────────┘
                                                    │
                                        ┌───────────▼───────────┐
-                                       │  STAGE 9: LINK         │ External: zig cc
+                                       │  STAGE 8: LINK         │ External: zig cc
                                        │  .o → executable       │
                                        └───────────────────────┘
 ```
@@ -96,7 +85,7 @@ This document maps **every stage of the Cot compilation pipeline** to its refere
 - `references/go/src/cmd/compile/internal/ssa/rewritegeneric.go` — algebraic rewrites
 - `references/go/src/cmd/compile/internal/ssa/rewritedec.go` — compound type decomposition
 
-### Stage 2: Wasm Codegen (SSA → Wasm bytecode)
+### Stage 2: Wasm Codegen (SSA → Wasm bytecode) — Wasm target only
 
 **Reference: Go's Wasm backend**
 
@@ -112,74 +101,69 @@ This document maps **every stage of the Cot compilation pipeline** to its refere
 - Transforms SSA ops into Wasm-specific ops (e.g., `add` → `i64.add`)
 - Generates Wasm bytecode for each function body
 - Assembles a complete Wasm module (types, functions, memory, table, data sections)
-- This stage runs for BOTH targets (Wasm and native use this output)
+- This stage runs ONLY for Wasm targets (`--target=wasm32`)
 
 **Key files in Go reference:**
 - `references/go/src/cmd/compile/internal/wasm/ssa.go` — SSA op → Wasm instruction mapping
 - `references/go/src/cmd/internal/obj/wasm/wasmobj.go` — Wasm binary format encoding
 - `references/go/src/cmd/link/internal/wasm/asm.go` — Wasm section layout, import handling
 
-**ARC runtime functions** (`cot_alloc`, `cot_retain`, `cot_release`) are generated as Wasm bytecode at this stage by `arc.zig`. They become regular Wasm functions in the module. The ARC pattern is ported from **Swift** (`HeapObject.cpp`), but the implementation is Wasm bytecode using Go's codegen patterns.
+**Wasm-target ARC runtime functions** (`cot_alloc`, `cot_retain`, `cot_release`) are generated as Wasm bytecode by `arc.zig`. They become regular Wasm functions in the module. The ARC pattern is ported from **Swift** (`HeapObject.cpp`), but the implementation is Wasm bytecode using Go's codegen patterns.
 
 | ARC Function | Reference | What It Does |
 |-------------|-----------|--------------|
-| `cot_alloc` | Swift `swift_allocObject` + Go `sbrk` | Freelist-first allocator with memory.grow fallback. 16-byte header: `[total_size:i32][metadata:i32][refcount:i64]`. Null sentinel at data offset 0 |
+| `cot_alloc` | Swift `swift_allocObject` + Go `sbrk` | Freelist-first allocator with memory.grow fallback. Wasm: 16-byte header `[total_size:i32][metadata:i32][refcount:i64]`. Native: 24-byte header `[total_size:i64][metadata:i64][refcount:i64]` |
 | `cot_dealloc` | Swift `swift_deallocObject` | Return freed block to freelist for reuse |
 | `cot_realloc` | C `realloc` semantics | Shrink in-place or alloc+copy+dealloc. Used by growable containers |
 | `cot_retain` | Swift `swift_retain` (HeapObject.cpp:476) | Increment refcount (null-safe, immortal-safe) |
-| `cot_release` | Swift `swift_release` (HeapObject.cpp:835) | Decrement refcount, call destructor via `call_indirect` at zero, then dealloc |
+| `cot_release` | Swift `swift_release` (HeapObject.cpp:835) | Decrement refcount, call destructor at zero, then dealloc |
 
-**Networking runtime functions** are generated as WASI stubs (return -1) by `wasi_runtime.zig`. On native, `driver.zig` overrides them with raw ARM64/x64 syscall implementations. Reference: POSIX sockets API.
+**Networking runtime functions** are generated as WASI stubs (return -1) by `wasi_runtime.zig` for Wasm targets. On native, they are generated as CLIF IR by `io_native.zig` and call libc directly.
 
 | Net Function | Syscall (macOS/Linux) | What It Does |
 |-------------|----------------------|--------------|
 | `cot_net_socket` | 97/41 | Create TCP socket (AF_INET, SOCK_STREAM, IPPROTO_TCP) |
-| `cot_net_bind` | 104/49 | Bind socket to address (translates Wasm ptr → real ptr) |
+| `cot_net_bind` | 104/49 | Bind socket to address |
 | `cot_net_listen` | 106/50 | Start listening with backlog |
-| `cot_net_accept` | 30/43 | Accept connection (NULL addr/addrlen) |
+| `cot_net_accept` | 30/43 | Accept connection |
 | `cot_net_connect` | 98/42 | Connect to remote address |
 | `cot_net_set_reuse_addr` | 105/54 (setsockopt) | Set SO_REUSEADDR on socket |
 
-### Stage 3: Wasm Parse (native path only)
+### Stage 3: SSA → CLIF IR Translation (native path)
 
-**Reference: wasmparser crate (Rust)**
-
-| Component | Reference | Location |
-|-----------|-----------|----------|
-| Wasm parser | `wasmparser` crate | `compiler/codegen/native/wasm_parser.zig` |
-| Wasm decoder | Wasm spec binary format | `compiler/codegen/native/wasm_to_clif/decoder.zig` |
-
-**What this stage does:**
-- Parses the Wasm bytecode that Stage 2 produced
-- Extracts types, functions, memory, table, data, element sections
-- Provides structured data for the CLIF translator
-
-**Important:** The native compiler reads its OWN Wasm output. The Wasm is an internal IR, never saved to disk for native targets.
-
-### Stage 4: CLIF IR Translation (native path only)
-
-**Reference: Cranelift's `cranelift-wasm` crate**
+**Reference: rustc_codegen_cranelift (cg_clif)**
 
 | Component | Reference | Location |
 |-----------|-----------|----------|
-| Function translator | `cranelift-wasm/src/code_translator.rs` | `compiler/codegen/native/wasm_to_clif/translator.zig` |
-| Func environment | `cranelift-wasm/src/environ.rs` | `compiler/codegen/native/wasm_to_clif/func_environ.zig` |
+| SSA → CLIF translator | `rustc_codegen_cranelift/src/base.rs` | `compiler/codegen/native/ssa_to_clif.zig` |
+| Value/Place model | `rustc_codegen_cranelift/src/value_and_place.rs` | `compiler/codegen/native/ssa_to_clif.zig` |
 | CLIF types | `cranelift/codegen/src/ir/types.rs` | `compiler/codegen/native/ir/clif/types.zig` |
 | DFG (data flow graph) | `cranelift/codegen/src/ir/dfg.rs` | `compiler/codegen/native/ir/clif/dfg.zig` |
-| SSA frontend | `cranelift/frontend/src/frontend.rs` | `compiler/codegen/native/ir/clif/frontend.zig` |
+| SSA frontend | `cranelift/frontend/src/frontend.rs` | `compiler/codegen/native/frontend/frontend.zig` |
 
 **What this stage does:**
-- Walks each Wasm function's opcodes
-- Translates Wasm stack machine ops → CLIF IR (register-based SSA)
-- Handles Wasm-specific constructs (blocks, loops, br_table, memory ops)
-- Manages the VMContext (heap base pointer, globals)
+- Iterates SSA blocks and values, translating each SSA op to CLIF IR instructions
+- Uses `FunctionBuilder` for SSA construction with automatic block parameter insertion
+- Handles all Cot-specific operations: ARC retain/release calls, struct layout, closures, error unions, etc.
+- Maps SSA values to CLIF values via `value_map` and the Variable system for cross-block SSA
 
-**Key Cranelift files:**
-- `references/wasmtime/crates/cranelift/src/translate/` — Wasm → CLIF translation
-- `references/wasmtime/cranelift/codegen/src/ir/` — CLIF IR types
-- `references/wasmtime/cranelift/frontend/src/frontend.rs` — SSA construction with block params
+**Runtime functions as CLIF IR:** Unlike the Wasm path (which generates runtime functions as Wasm bytecode), the native path generates runtime functions directly as CLIF IR:
 
-### Stage 5: Machine Instruction Lowering (native path only)
+| Module | Functions | What It Does |
+|--------|-----------|--------------|
+| `arc_native.zig` | alloc, dealloc, realloc, retain, release | ARC memory management via libc malloc/free |
+| `io_native.zig` | fd_write, fd_read, fd_close, fd_open, fd_seek, time, random, net_*, fork, waitpid, pipe, execve | I/O and process ops via libc |
+| `print_native.zig` | print_int, print_string, eprint_*, println_*, int_to_string | Console output via libc write() |
+| `test_native.zig` | __test_print_name, __test_pass, __test_fail, __test_summary | Test runner via libc write() |
+
+These CLIF IR functions call libc via undefined symbols (e.g., `write`, `read`, `__open`, `malloc`, `free`) that are resolved at link time by `zig cc`.
+
+**Key cg_clif files:**
+- `references/rust/compiler/rustc_codegen_cranelift/src/base.rs` — Core MIR → CLIF translation loop
+- `references/rust/compiler/rustc_codegen_cranelift/src/value_and_place.rs` — How values live in regs vs memory
+- `references/rust/compiler/rustc_codegen_cranelift/src/pointer.rs` — Load/store offset handling
+
+### Stage 4: Machine Instruction Lowering (native path)
 
 **Reference: Cranelift's `machinst` framework**
 
@@ -196,7 +180,7 @@ This document maps **every stage of the Cot compilation pipeline** to its refere
 - Handles ISA-specific instruction selection (ARM64 vs x64)
 - Manages calling conventions and stack frames
 
-### Stage 6: Register Allocation (native path only)
+### Stage 5: Register Allocation (native path)
 
 **Reference: regalloc2 (Rust crate)**
 
@@ -212,7 +196,7 @@ This document maps **every stage of the Cot compilation pipeline** to its refere
 - Handles spilling (when not enough physical registers)
 - Resolves register moves at block boundaries
 
-### Stage 7: Code Emission (native path only)
+### Stage 6: Code Emission (native path)
 
 **Reference: Cranelift's ISA-specific emitters**
 
@@ -227,7 +211,7 @@ This document maps **every stage of the Cot compilation pipeline** to its refere
 - Handles fixups for branch offsets
 - Records relocations for function calls
 
-### Stage 8: Object File Generation (native path only)
+### Stage 7: Object File Generation (native path)
 
 **Reference: cranelift-object crate**
 
@@ -247,7 +231,7 @@ This document maps **every stage of the Cot compilation pipeline** to its refere
 - Two-pass: declare ALL functions first, then define ALL functions
 - This handles forward references (function A calls function B defined later)
 
-### Stage 9: Linking (external tool)
+### Stage 8: Linking (external tool)
 
 **Current: `zig cc` (Zig's bundled clang/lld)**
 
@@ -345,34 +329,14 @@ Linker resolves "_write" against libc → linked into executable
 ```
 
 **Pipeline:**
-1. Frontend: Same as Wasm (extern fn parsed, checked, lowerer skips body)
-2. Wasm codegen: Generates Wasm import for the function
-3. Wasm parser: Must parse the import section to know which functions are imports
-4. CLIF translation: Must handle calls to imported functions differently
-5. Object file: Emits undefined symbol for the import
-6. Linker (`zig cc`): Resolves undefined symbol against libc
+1. Frontend: extern fn parsed, checked, lowerer skips body
+2. SSA → CLIF: `ssa_to_clif.zig` emits `call` to an external function name (non-colocated)
+3. Object file: Emits undefined symbol for the external function
+4. Linker (`zig cc`): Resolves undefined symbol against libc
 
-**Current status:** Steps 3-5 are **not implemented**. The native path doesn't parse Wasm imports and treats all functions as locally defined.
+Extern functions become undefined symbols in the object file via `declareExternalName` in `driver.zig`. The Mach-O linker adds an underscore prefix (`write` → `_write`). The system linker resolves them against libc.
 
-**Two approaches exist in Cranelift:**
-
-**Approach A: Full VMContext (what Cranelift/Wasmtime does)**
-- Imported functions are called indirectly via function pointers stored in VMContext
-- Runtime populates VMContext with function addresses at module instantiation
-- Reference: `references/wasmtime/crates/cranelift/src/translate/func_environ.rs`
-- This is for JIT/runtime scenarios — overkill for AOT
-
-**Approach B: Undefined symbols (what AOT compilers do)**
-- Imported functions become undefined symbols in the object file
-- The system linker resolves them at link time
-- Reference: How Cranelift-object handles `colocated = false` external names
-- This is the right approach for Cot's AOT compiler
-
-**To implement (Approach B):**
-1. `wasm_parser.zig`: Parse import section (section 2) — track `num_imported_funcs`
-2. `func_environ.zig`: Set `colocated = false` for imported function references
-3. `object_module.zig`: Emit undefined symbol for non-colocated functions
-4. Linker resolves these against libc or user-provided .o files
+**Important:** Some libc functions are variadic (e.g., `open(const char *, int, ...)`). On Apple ARM64, variadic arguments go on the stack, not in registers. CLIF always passes arguments in registers. Workaround: use the non-variadic internal wrapper (e.g., `__open` instead of `open`).
 
 ---
 
@@ -408,14 +372,11 @@ Allocation header (16 bytes):
 │← USER_DATA_OFFSET = 16 →│
 ```
 
-### Why this works on native
+### How it works on native
 
-The Wasm bytecode (including `cot_alloc`) goes through the same AOT pipeline:
-```
-cot_alloc Wasm bytecode → CLIF IR → ARM64 → machine code in .o file
-```
+On native, ARC runtime functions (`alloc`, `dealloc`, `realloc`, `retain`, `release`) are generated directly as CLIF IR by `arc_native.zig`. They use libc `malloc`/`free` for heap allocation instead of the Wasm freelist allocator. The native ARC header is 24 bytes: `[total_size:i64][metadata:i64][refcount:i64]` (vs 16 bytes on Wasm where fields are i32+i32+i64).
 
-The native binary has a 16MB pre-allocated vmctx region that serves as "linear memory." Global variables use a fixed 16-byte stride (Cranelift's `VMGlobalDefinition` pattern). Init values are written to vmctx_data before execution (Cranelift's `initialize_globals` pattern).
+The native binary has a 16MB pre-allocated vmctx region for global variables. Global variables use a fixed 16-byte stride (Cranelift's `VMGlobalDefinition` pattern). Init values are written to vmctx_data before execution (Cranelift's `initialize_globals` pattern).
 
 ### ARC Runtime (COMPLETE)
 
@@ -444,7 +405,7 @@ The allocator runs INSIDE the module. No host imports needed. This ensures:
 - **Sandboxing:** Wasm memory is self-contained
 - **Performance:** No host function call overhead
 
-On the **native path**, the AOT-compiled allocator becomes regular native code. It's the same allocator, just compiled to ARM64/x64 instead of running as Wasm. Native uses a pre-allocated 16MB vmctx with bounds-checked inline `memory.grow`.
+On the **native path**, ARC uses libc `malloc`/`free` (via `arc_native.zig`). The allocator is generated as CLIF IR, not compiled from Wasm. Native uses a pre-allocated 16MB vmctx for global variables.
 
 ---
 
@@ -521,7 +482,7 @@ The same `extern fn` declarations generate Wasm import entries. The host runtime
 When the Cot compiler is rewritten in Cot:
 
 ### What stays the same
-- The 9-stage pipeline is identical
+- The 8-stage pipeline is identical
 - Each stage ports from the same reference implementation
 - `extern fn` works the same way (libc on native, imports on Wasm)
 - The allocator is self-contained (no extern needed)
@@ -536,7 +497,7 @@ cot compiler.cot -o cot        # Build the compiler itself
 
 The compiler is a **native executable** that:
 1. Reads .cot source files
-2. Runs all 9 pipeline stages
+2. Runs all 8 pipeline stages
 3. Writes a .o file
 4. Shells out to a linker (`cc`, `ld`, or `lld`) to produce the final executable
 
@@ -655,16 +616,16 @@ These patterns have confused Claude repeatedly. Read before debugging.
 |--------------------|-------------|-------------------|
 | Frontend (parser, checker) | Zig language spec | `references/zig/` |
 | SSA construction | Go compiler | `references/go/src/cmd/compile/internal/ssa/` |
+| SSA → CLIF (native) | rustc_codegen_cranelift | `references/rust/compiler/rustc_codegen_cranelift/src/` |
 | Wasm codegen | Go Wasm backend | `references/go/src/cmd/compile/internal/wasm/` |
 | Wasm linking | Go Wasm linker | `references/go/src/cmd/link/internal/wasm/` |
 | Wasm import handling | Go Wasm linker | `references/go/src/cmd/link/internal/wasm/asm.go:154-334` |
-| ARC runtime | Swift | Swift `stdlib/public/runtime/HeapObject.cpp` |
-| Wasm → CLIF translation | Cranelift | `references/wasmtime/crates/cranelift/src/translate/` |
+| ARC runtime (Wasm) | Swift | Swift `stdlib/public/runtime/HeapObject.cpp` |
+| ARC runtime (native) | Swift + libc | `arc_native.zig` → libc malloc/free |
 | CLIF IR types | Cranelift | `references/wasmtime/cranelift/codegen/src/ir/` |
 | Machine lowering | Cranelift | `references/wasmtime/cranelift/codegen/src/isa/aarch64/` |
 | Register allocation | regalloc2 | `references/regalloc2/src/` |
 | Code emission | Cranelift | `references/wasmtime/cranelift/codegen/src/isa/aarch64/inst/emit.rs` |
 | Object file generation | cranelift-object | `references/wasmtime/cranelift/object/src/backend.rs` |
-| Memory allocator | Go + Zig | Go `runtime/mem_wasm.go`, Zig `lib/std/heap/WasmAllocator.zig` |
 | Extern fn (native) | Cranelift-object | `references/wasmtime/cranelift/object/src/backend.rs` |
 | Extern fn (Wasm) | Go linker | `references/go/src/cmd/link/internal/wasm/asm.go` |

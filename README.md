@@ -3,7 +3,7 @@
 [![CI](https://github.com/cotlang/cot/actions/workflows/test.yml/badge.svg)](https://github.com/cotlang/cot/actions/workflows/test.yml)
 [![Release](https://github.com/cotlang/cot/actions/workflows/release.yml/badge.svg)](https://github.com/cotlang/cot/actions/workflows/release.yml)
 
-A Wasm-first language for full-stack web development.
+A compiled language for full-stack web development with native and Wasm targets.
 
 **The pitch:** Write like TypeScript, run like Rust, deploy anywhere, never think about memory.
 
@@ -80,15 +80,14 @@ fn main() i64 {
 
 ## Architecture
 
-All code goes through Wasm first. Native output is AOT-compiled from Wasm via a Cranelift-style backend.
+Native and Wasm targets use separate backend paths. Native compilation translates SSA directly to CLIF IR (Cranelift's intermediate representation) without any Wasm intermediate step.
 
 ```
 Cot Source → Scanner → Parser → Checker → IR → SSA
-  → lower_wasm (SSA → Wasm ops) → wasm/ (Wasm bytecode)
-      ├── --target=wasm32 → .wasm file
-      └── --target=native (default)
-          → wasm_parser → wasm_to_clif/ → CLIF IR
-          → machinst/lower → isa/{aarch64,x64}/ → emit → .o → linker → executable
+  ├── --target=wasm32 → lower_wasm → wasm/ → .wasm file
+  └── --target=native (default)
+      → ssa_to_clif → CLIF IR → machinst/lower → regalloc
+      → isa/{aarch64,x64}/ → emit → .o → linker → executable
 ```
 
 ## Language Features
@@ -112,7 +111,7 @@ Cot Source → Scanner → Parser → Checker → IR → SSA
 
 **Compiler written in Zig. Both Wasm and native AOT targets working.**
 
-~1,620 tests passing across 66 files (Wasm E2E, native E2E, and unit tests).
+~1,623 tests passing across 67 files (native E2E, Wasm E2E, and unit tests).
 
 | Component | Status |
 |-----------|--------|
@@ -129,11 +128,10 @@ Cot Source → Scanner → Parser → Checker → IR → SSA
 
 ## Design Decisions
 
-### Why Wasm-First
-1. Stack machine eliminates register allocation complexity in the primary path
-2. Same binary runs in browser, server, and edge
-3. AOT compilation from Wasm provides native performance when needed
-4. Previous direct native codegen attempts failed 5 times — Wasm-first succeeded
+### Dual Backend Architecture
+Native and Wasm targets have independent backend paths from SSA onwards:
+1. **Native (default):** SSA → CLIF IR → MachInst → register allocation → ARM64/x64 machine code. Runtime functions (ARC, I/O, print) are generated as CLIF IR and call libc directly.
+2. **Wasm:** SSA → Wasm bytecode. Runtime functions are generated as Wasm module functions. Same binary runs in browser, server, and edge runtimes.
 
 ### Why ARC
 - Predictable performance (no GC pauses)
@@ -169,13 +167,17 @@ cot/
 │   ├── lsp/               # Language server (LSP over stdio)
 │   └── codegen/
 │       ├── wasm/          # Wasm backend (gen, link, preprocess)
-│       ├── print_runtime.zig  # Print/println runtime functions
-│       └── native/        # AOT backend (Cranelift-style)
-│           ├── wasm_to_clif/  # Wasm → CLIF translation
-│           ├── machinst/      # CLIF → MachInst lowering
-│           ├── isa/aarch64/   # ARM64 backend
-│           ├── isa/x64/       # x64 backend
-│           └── regalloc/      # Register allocator (regalloc2 port)
+│       ├── print_runtime.zig  # Print/println runtime functions (Wasm)
+│       └── native/        # Native backend (Cranelift-style)
+│           ├── ssa_to_clif.zig  # SSA → CLIF IR translation
+│           ├── arc_native.zig   # ARC runtime as CLIF IR
+│           ├── io_native.zig    # I/O runtime as CLIF IR
+│           ├── print_native.zig # Print runtime as CLIF IR
+│           ├── test_native.zig  # Test runner as CLIF IR
+│           ├── machinst/        # CLIF → MachInst lowering
+│           ├── isa/aarch64/     # ARM64 backend
+│           ├── isa/x64/         # x64 backend
+│           └── regalloc/        # Register allocator (regalloc2 port)
 ├── self/                  # Self-hosted compiler in Cot (10,896 lines)
 │   ├── main.cot           # CLI entry point (parse, check, lex commands)
 │   └── frontend/

@@ -93,7 +93,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Traits: `trait`/`impl Trait for Type` (monomorphized, no vtables)
 - Error unions (`E!T`), `try`, `catch` error handling
 - Multi-file imports with `import "std/list"` and cross-file generic instantiation
-- Native AOT backend: Wasm -> CLIF IR -> regalloc2 -> ARM64/x64 -> executable
+- Native AOT backend: SSA -> CLIF IR -> regalloc2 -> ARM64/x64 -> executable
 - Register allocator (regalloc2 port)
 - ARM64 macOS backend
 - x64 Linux backend
