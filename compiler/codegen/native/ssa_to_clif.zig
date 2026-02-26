@@ -557,6 +557,46 @@ const SsaToClifTranslator = struct {
                 try self.putValue(v.id, result);
             },
 
+            // Wasm float builtins — unary
+            .wasm_f64_ceil => try self.emitFloatUnary(v, .ceil, clif.Type.F64),
+            .wasm_f64_floor => try self.emitFloatUnary(v, .floor, clif.Type.F64),
+            .wasm_f64_trunc => try self.emitFloatUnary(v, .trunc, clif.Type.F64),
+            .wasm_f64_nearest => try self.emitFloatUnary(v, .nearest, clif.Type.F64),
+            .wasm_f64_abs => try self.emitFloatUnary(v, .fabs, clif.Type.F64),
+            .wasm_f64_neg => {
+                const arg = self.getClif(v.args[0]);
+                const result = try ins.fneg(clif.Type.F64, arg);
+                try self.putValue(v.id, result);
+            },
+            .wasm_f64_sqrt => {
+                const arg = self.getClif(v.args[0]);
+                const result = try ins.sqrt(clif.Type.F64, arg);
+                try self.putValue(v.id, result);
+            },
+            .wasm_f32_ceil => try self.emitFloatUnary(v, .ceil, clif.Type.F32),
+            .wasm_f32_floor => try self.emitFloatUnary(v, .floor, clif.Type.F32),
+            .wasm_f32_trunc => try self.emitFloatUnary(v, .trunc, clif.Type.F32),
+            .wasm_f32_nearest => try self.emitFloatUnary(v, .nearest, clif.Type.F32),
+            .wasm_f32_abs => try self.emitFloatUnary(v, .fabs, clif.Type.F32),
+            .wasm_f32_neg => {
+                const arg = self.getClif(v.args[0]);
+                const result = try ins.fneg(clif.Type.F32, arg);
+                try self.putValue(v.id, result);
+            },
+            .wasm_f32_sqrt => {
+                const arg = self.getClif(v.args[0]);
+                const result = try ins.sqrt(clif.Type.F32, arg);
+                try self.putValue(v.id, result);
+            },
+
+            // Wasm float builtins — binary (min, max, copysign)
+            .wasm_f64_min => try self.emitFloatBinary(v, .fmin, clif.Type.F64),
+            .wasm_f64_max => try self.emitFloatBinary(v, .fmax, clif.Type.F64),
+            .wasm_f64_copysign => try self.emitFloatBinary(v, .fcopysign, clif.Type.F64),
+            .wasm_f32_min => try self.emitFloatBinary(v, .fmin, clif.Type.F32),
+            .wasm_f32_max => try self.emitFloatBinary(v, .fmax, clif.Type.F32),
+            .wasm_f32_copysign => try self.emitFloatBinary(v, .fcopysign, clif.Type.F32),
+
             // ============================================================
             // Comparisons
             // ============================================================
@@ -638,17 +678,25 @@ const SsaToClifTranslator = struct {
             // load/store instructions. The ARM64/x64 backends honor this.
             // ============================================================
             .load, .load64 => {
-                // Generic load — use I64 for integer types (all SSA values are I64-width;
-                // width-specific loads handle narrow types), but use F32/F64 for floats.
+                // Generic load — use the actual CLIF type matching the SSA type.
+                // For narrow integer types (I8, I16, I32), load the narrow width
+                // and zero-extend to I64 so the value is usable in I64-width ops.
+                // For floats, use the float type directly.
                 const addr = self.getClif(v.args[0]);
                 const offset: i32 = @intCast(v.aux_int);
                 const ty = self.ssaTypeToClifType(v.type_idx);
-                const load_ty = if (ty.repr == clif.Type.F32.repr or ty.repr == clif.Type.F64.repr)
-                    ty
-                else
-                    clif.Type.I64;
-                const result = try ins.load(load_ty, clif.MemFlags.DEFAULT, addr, offset);
-                try self.putValue(v.id, result);
+                if (ty.repr == clif.Type.F32.repr or ty.repr == clif.Type.F64.repr) {
+                    const result = try ins.load(ty, clif.MemFlags.DEFAULT, addr, offset);
+                    try self.putValue(v.id, result);
+                } else if (ty.bits() < 64) {
+                    // Narrow integer: load the actual width, then zero-extend
+                    const loaded = try ins.load(ty, clif.MemFlags.DEFAULT, addr, offset);
+                    const result = try ins.uextend(clif.Type.I64, loaded);
+                    try self.putValue(v.id, result);
+                } else {
+                    const result = try ins.load(clif.Type.I64, clif.MemFlags.DEFAULT, addr, offset);
+                    try self.putValue(v.id, result);
+                }
             },
             .load32 => {
                 const addr = self.getClif(v.args[0]);
@@ -1187,25 +1235,48 @@ const SsaToClifTranslator = struct {
                     const phi_args = try self.gatherPhiArgs(ssa_blk, target_ssa);
                     _ = try ins.jump(target_clif, phi_args);
                 } else {
-                    // No explicit successor — fall through to next layout block if available.
-                    // SSA uses implicit fallthrough for plain blocks (e.g., blocks containing
-                    // wasm_unreachable as a value, where the next block has the actual logic).
-                    const blocks = self.ssa_func.blocks.items;
-                    if (block_idx + 1 < blocks.len) {
-                        // Find the next non-empty block in layout order
-                        var next_idx = block_idx + 1;
-                        while (next_idx < blocks.len and blocks[next_idx].values.items.len == 0 and blocks[next_idx].kind == .plain and blocks[next_idx].succs.len == 0) {
-                            next_idx += 1;
+                    // No explicit successor. Check if this block is a trap-only block
+                    // (e.g., div-by-zero fail block). These blocks contain wasm_unreachable
+                    // as their ONLY value and are branched to as dead ends.
+                    // Important: wasm_unreachable can also appear as a select operand in
+                    // blocks with other values (e.g., switch-else-unreachable) — those
+                    // blocks fall through normally, so only emit trap when the block's
+                    // sole purpose is the unreachable.
+                    var is_trap_block = false;
+                    if (ssa_blk.preds.len > 0) {
+                        // Block is a branch target — check if it only contains unreachable
+                        var non_unreachable_count: usize = 0;
+                        for (ssa_blk.values.items) |v| {
+                            if (v.op != .wasm_unreachable) {
+                                non_unreachable_count += 1;
+                            }
                         }
-                        if (next_idx < blocks.len) {
-                            const next_ssa = blocks[next_idx];
-                            const next_clif = self.block_map.get(next_ssa.id) orelse return error.BlockNotFound;
-                            _ = try ins.jump(next_clif, &.{});
+                        if (non_unreachable_count == 0 and ssa_blk.values.items.len > 0) {
+                            is_trap_block = true;
+                        }
+                    }
+
+                    if (is_trap_block) {
+                        _ = try ins.trap(.unreachable_code_reached);
+                    } else {
+                        // Fall through to next layout block if available.
+                        const blocks = self.ssa_func.blocks.items;
+                        if (block_idx + 1 < blocks.len) {
+                            // Find the next non-empty block in layout order
+                            var next_idx = block_idx + 1;
+                            while (next_idx < blocks.len and blocks[next_idx].values.items.len == 0 and blocks[next_idx].kind == .plain and blocks[next_idx].succs.len == 0) {
+                                next_idx += 1;
+                            }
+                            if (next_idx < blocks.len) {
+                                const next_ssa = blocks[next_idx];
+                                const next_clif = self.block_map.get(next_ssa.id) orelse return error.BlockNotFound;
+                                _ = try ins.jump(next_clif, &.{});
+                            } else {
+                                _ = try ins.trap(.unreachable_code_reached);
+                            }
                         } else {
                             _ = try ins.trap(.unreachable_code_reached);
                         }
-                    } else {
-                        _ = try ins.trap(.unreachable_code_reached);
                     }
                 }
             },
@@ -1524,6 +1595,23 @@ const SsaToClifTranslator = struct {
             .fsub => try ins.fsub(ty, lhs, rhs),
             .fmul => try ins.fmul(ty, lhs, rhs),
             .fdiv => try ins.fdiv(ty, lhs, rhs),
+            .fmin => try ins.fmin(ty, lhs, rhs),
+            .fmax => try ins.fmax(ty, lhs, rhs),
+            .fcopysign => try ins.fcopysign(ty, lhs, rhs),
+            else => unreachable,
+        };
+        try self.putValue(v.id, result);
+    }
+
+    fn emitFloatUnary(self: *Self, v: *const ssa_value.Value, comptime opcode: clif.Opcode, ty: clif.Type) !void {
+        const arg = self.getClif(v.args[0]);
+        const ins = self.builder.ins();
+        const result = switch (opcode) {
+            .ceil => try ins.ceil(ty, arg),
+            .floor => try ins.floor(ty, arg),
+            .trunc => try ins.ftrunc(ty, arg),
+            .nearest => try ins.nearest(ty, arg),
+            .fabs => try ins.fabs(ty, arg),
             else => unreachable,
         };
         try self.putValue(v.id, result);

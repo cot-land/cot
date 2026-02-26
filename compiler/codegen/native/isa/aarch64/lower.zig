@@ -32,6 +32,7 @@ const BranchTarget = inst_mod.BranchTarget;
 const AMode = inst_mod.AMode;
 const MemFlags = inst_mod.MemFlags;
 const Imm12 = inst_mod.Imm12;
+const ImmLogic = inst_mod.ImmLogic;
 const MoveWideConst = inst_mod.MoveWideConst;
 const MoveWideOp = inst_mod.MoveWideOp;
 // MachLabel from machinst (not local args.zig) for compatibility with Lower(I)
@@ -193,6 +194,9 @@ pub const AArch64LowerBackend = struct {
             .floor => self.lowerFpuRound(ctx, ir_inst, .minus_infinity),
             .trunc => self.lowerFpuRound(ctx, ir_inst, .zero),
             .nearest => self.lowerFpuRound(ctx, ir_inst, .nearest),
+            .fmin => self.lowerFpuBinop(ctx, ir_inst, .min),
+            .fmax => self.lowerFpuBinop(ctx, ir_inst, .max),
+            .fcopysign => self.lowerFcopysign(ctx, ir_inst),
             .fcmp => self.lowerFcmp(ctx, ir_inst),
 
             // Conversions
@@ -1748,6 +1752,15 @@ pub const AArch64LowerBackend = struct {
         return output;
     }
 
+    fn lowerFcopysign(self: *const Self, ctx: *LowerCtx, ir_inst: ClifInst) ?InstOutput {
+        // ARM64 copysign: use FABS + FNEG + FCSEL pattern.
+        // Not currently used by any Cot tests. Stubbed for now.
+        _ = self;
+        _ = ctx;
+        _ = ir_inst;
+        return null;
+    }
+
     fn lowerFneg(self: *const Self, ctx: *LowerCtx, ir_inst: ClifInst) ?InstOutput {
         return self.lowerFpuUnaryOp(ctx, ir_inst, .neg);
     }
@@ -1915,21 +1928,62 @@ pub const AArch64LowerBackend = struct {
         _ = self;
         const dst_ty = ctx.outputTy(ir_inst, 0);
 
-        // ireduce is just a move - the value is already in a register
-        // The high bits are simply ignored
+        // ireduce truncates a wider integer to a narrower one.
+        // On ARM64, we mask the value to the target width so that the upper
+        // bits are cleared. This is necessary because our pipeline treats all
+        // values as I64-width in registers, so a subsequent icmp or use will
+        // see the full 64-bit register value.
         const src = ctx.putInputInRegs(ir_inst, 0);
         const src_reg = src.onlyReg() orelse return null;
 
         const dst = ctx.allocTmp(dst_ty) catch return null;
         const dst_reg = dst.onlyReg() orelse return null;
 
-        ctx.emit(Inst{
-            .mov = .{
-                .size = .size64,
-                .rd = dst_reg,
-                .rm = src_reg,
-            },
-        }) catch return null;
+        const bits = dst_ty.bits();
+        if (bits == 32) {
+            // MOV Wd, Wn — 32-bit move implicitly zeroes upper 32 bits
+            ctx.emit(Inst{
+                .mov = .{
+                    .size = .size32,
+                    .rd = dst_reg,
+                    .rm = src_reg,
+                },
+            }) catch return null;
+        } else if (bits == 8 or bits == 16) {
+            // AND Xd, Xn, #mask — clear upper bits
+            const mask: u64 = (@as(u64, 1) << @intCast(bits)) - 1;
+            const imml = ImmLogic.maybeFromU64(mask, ClifType.I64) orelse {
+                // Fallback: shouldn't happen for 0xFF or 0xFFFF
+                ctx.emit(Inst{
+                    .mov = .{
+                        .size = .size64,
+                        .rd = dst_reg,
+                        .rm = src_reg,
+                    },
+                }) catch return null;
+                var output = InstOutput{};
+                output.append(ValueRegs(Reg).one(dst_reg.toReg())) catch return null;
+                return output;
+            };
+            ctx.emit(Inst{
+                .alu_rr_imm_logic = .{
+                    .alu_op = .@"and",
+                    .size = .size64,
+                    .rd = dst_reg,
+                    .rn = src_reg,
+                    .imml = imml,
+                },
+            }) catch return null;
+        } else {
+            // Same size or unknown — just move
+            ctx.emit(Inst{
+                .mov = .{
+                    .size = .size64,
+                    .rd = dst_reg,
+                    .rm = src_reg,
+                },
+            }) catch return null;
+        }
 
         var output = InstOutput{};
         output.append(ValueRegs(Reg).one(dst_reg.toReg())) catch return null;

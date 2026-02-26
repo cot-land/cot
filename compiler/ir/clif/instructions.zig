@@ -425,6 +425,12 @@ pub const Opcode = enum {
     trunc,
     /// Floating point nearest (round to nearest even).
     nearest,
+    /// Floating point minimum.
+    fmin,
+    /// Floating point maximum.
+    fmax,
+    /// Floating point copysign.
+    fcopysign,
     /// Floating point comparison.
     fcmp,
 

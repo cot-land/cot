@@ -966,14 +966,14 @@ pub const Driver = struct {
             "realloc",       "string_concat",  "string_eq",
             // I/O runtime (io_native.generate order)
             "fd_write",      "fd_read",        "fd_close",      "exit",
-            "fd_seek",       "memset_zero",
+            "fd_seek",       "memset_zero",    "fd_open",       "time",
+            "random",
             // Print runtime (print_native.generate order)
             "print_int",     "eprint_int",
             // Test runtime (test_native.generate order)
             "__test_begin",  "__test_print_name", "__test_pass",
             "__test_fail",   "__test_summary",    "__test_store_fail_values",
             // NOT yet compiled as CLIF IR — registered for index allocation only
-            "fd_open",       "time",           "random",
             "int_to_string", "growslice",      "nextslicecap",
             // libc symbols — external references resolved by linker (-lSystem/-lc)
             // "memcpy" is here because the Cot signature (dst,src,len)→void is

@@ -878,6 +878,24 @@ pub const FuncInstBuilder = struct {
         return r.result.?;
     }
 
+    /// Float minimum.
+    pub fn fmin(self: Self, ty: Type, a: Value, b: Value) !Value {
+        const r = try self.Binary(.fmin, ty, a, b);
+        return r.result.?;
+    }
+
+    /// Float maximum.
+    pub fn fmax(self: Self, ty: Type, a: Value, b: Value) !Value {
+        const r = try self.Binary(.fmax, ty, a, b);
+        return r.result.?;
+    }
+
+    /// Float copysign.
+    pub fn fcopysign(self: Self, ty: Type, a: Value, b: Value) !Value {
+        const r = try self.Binary(.fcopysign, ty, a, b);
+        return r.result.?;
+    }
+
     // ========================================================================
     // Comparisons
     // ========================================================================
