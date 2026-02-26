@@ -44,6 +44,12 @@ pub fn generate(
         .compiled = try generatePrintInt(allocator, isa, ctrl_plane, func_index_map, 2), // fd=2 (stderr)
     });
 
+    // int_to_string(val: i64, buf_ptr: i64) → i64  (returns string length)
+    try result.append(allocator, .{
+        .name = "int_to_string",
+        .compiled = try generateIntToString(allocator, isa, ctrl_plane),
+    });
+
     return result;
 }
 
@@ -267,6 +273,205 @@ fn generatePrintInt(
         const v_fd = try ins2.iconst(clif.Type.I64, fd);
         _ = try ins2.call(wfunc_ref, &[_]clif.Value{ v_fd, write_addr, len });
         _ = try ins2.return_(&[_]clif.Value{});
+    }
+
+    try builder.sealAllBlocks();
+    builder.finalize();
+
+    return native_compile.compile(allocator, &clif_func, isa, ctrl_plane);
+}
+
+// ============================================================================
+// int_to_string(val: i64, buf_ptr: i64) → i64
+//
+// Converts an integer to decimal string in the caller-provided 21-byte buffer.
+// Digits are stored right-to-left starting from position 20.
+// Returns the number of bytes written (string length).
+// The string starts at buf_ptr + 21 - result_len.
+//
+// Reference: compiler/codegen/print_runtime.zig generateIntToStringBody
+// ============================================================================
+
+fn generateIntToString(
+    allocator: Allocator,
+    isa: native_compile.TargetIsa,
+    ctrl_plane: *native_compile.ControlPlane,
+) !native_compile.CompiledCode {
+    var clif_func = clif.Function.init(allocator);
+    defer clif_func.deinit();
+
+    var func_ctx = FunctionBuilderContext.init(allocator);
+    defer func_ctx.deinit();
+    var builder = FunctionBuilder.init(&clif_func, &func_ctx);
+
+    // Signature: (val: i64, buf_ptr: i64) → i64 (length)
+    try clif_func.signature.addParam(allocator, clif.AbiParam.init(clif.Type.I64));
+    try clif_func.signature.addParam(allocator, clif.AbiParam.init(clif.Type.I64));
+    try clif_func.signature.addReturn(allocator, clif.AbiParam.init(clif.Type.I64));
+
+    const block_entry = try builder.createBlock();
+    const block_negative = try builder.createBlock();
+    const block_positive = try builder.createBlock();
+    const block_zero = try builder.createBlock();
+    const block_nonzero = try builder.createBlock();
+    const block_loop = try builder.createBlock();
+    const block_done = try builder.createBlock();
+    const block_add_sign = try builder.createBlock();
+    const block_ret = try builder.createBlock();
+
+    // --- Entry block ---
+    builder.switchToBlock(block_entry);
+    try builder.appendBlockParamsForFunctionParams(block_entry);
+    try builder.ensureInsertedBlock();
+
+    const ins = builder.ins();
+    const entry_params = builder.blockParams(block_entry);
+    const val = entry_params[0];
+    const buf_ptr = entry_params[1];
+
+    // Check if negative
+    const v_zero = try ins.iconst(clif.Type.I64, 0);
+    const is_neg = try ins.icmp(.slt, val, v_zero);
+    _ = try ins.brif(is_neg, block_negative, &.{}, block_positive, &.{});
+
+    // --- Negative block: negate, remember sign ---
+    builder.switchToBlock(block_negative);
+    try builder.ensureInsertedBlock();
+    {
+        const i = builder.ins();
+        const abs_val = try i.isub(v_zero, val);
+        const v_one = try i.iconst(clif.Type.I64, 1); // is_negative = 1
+        _ = try i.jump(block_nonzero, &[_]clif.Value{ abs_val, v_one });
+    }
+
+    // --- Positive block: check if zero ---
+    builder.switchToBlock(block_positive);
+    try builder.ensureInsertedBlock();
+    {
+        const i = builder.ins();
+        const is_zero = try i.icmp(.eq, val, v_zero);
+        const v_zero2 = try i.iconst(clif.Type.I64, 0); // is_negative = 0
+        _ = try i.brif(is_zero, block_zero, &.{}, block_nonzero, &[_]clif.Value{ val, v_zero2 });
+    }
+
+    // --- Zero block: store '0', return length 1 ---
+    builder.switchToBlock(block_zero);
+    try builder.ensureInsertedBlock();
+    {
+        const i = builder.ins();
+
+        // Store '0' at buf[20] (last position in 21-byte buffer)
+        const v_20 = try i.iconst(clif.Type.I64, 20);
+        const write_addr = try i.iadd(buf_ptr, v_20);
+        const zero_char = try i.iconst(clif.Type.I8, 0x30); // '0'
+        _ = try i.store(clif.MemFlags.DEFAULT, zero_char, write_addr, 0);
+        const v_one = try i.iconst(clif.Type.I64, 1);
+        _ = try i.return_(&[_]clif.Value{v_one});
+    }
+
+    // --- Nonzero block: entry to digit loop ---
+    // Block params: (abs_val: i64, is_negative: i64)
+    _ = try builder.appendBlockParam(block_nonzero, clif.Type.I64);
+    _ = try builder.appendBlockParam(block_nonzero, clif.Type.I64);
+    builder.switchToBlock(block_nonzero);
+    try builder.ensureInsertedBlock();
+    {
+        const i = builder.ins();
+        const nonzero_params = builder.blockParams(block_nonzero);
+        const abs_val = nonzero_params[0];
+        const is_negative = nonzero_params[1];
+        // Start at idx = 20 (rightmost position in 21-byte buffer)
+        const v_20 = try i.iconst(clif.Type.I64, 20);
+        _ = try i.jump(block_loop, &[_]clif.Value{ abs_val, v_20, is_negative });
+    }
+
+    // --- Digit loop ---
+    // Block params: (remaining: i64, idx: i64, is_negative: i64)
+    _ = try builder.appendBlockParam(block_loop, clif.Type.I64);
+    _ = try builder.appendBlockParam(block_loop, clif.Type.I64);
+    _ = try builder.appendBlockParam(block_loop, clif.Type.I64);
+    builder.switchToBlock(block_loop);
+    try builder.ensureInsertedBlock();
+    {
+        const i = builder.ins();
+        const loop_params = builder.blockParams(block_loop);
+        const remaining = loop_params[0];
+        const idx = loop_params[1];
+        const is_negative = loop_params[2];
+
+        // digit = remaining % 10
+        const v_ten = try i.iconst(clif.Type.I64, 10);
+        const digit = try i.urem(remaining, v_ten);
+        // char = digit + '0'
+        const v_0 = try i.iconst(clif.Type.I64, 0x30);
+        const char_val = try i.iadd(digit, v_0);
+        const char_i8 = try i.ireduce(clif.Type.I8, char_val);
+
+        // Store char at buf[idx]
+
+        const write_addr = try i.iadd(buf_ptr, idx);
+        _ = try i.store(clif.MemFlags.DEFAULT, char_i8, write_addr, 0);
+
+        // next_remaining = remaining / 10
+        const next_remaining = try i.udiv(remaining, v_ten);
+        // next_idx = idx - 1
+        const v_one = try i.iconst(clif.Type.I64, 1);
+        const next_idx = try i.isub(idx, v_one);
+
+        // if next_remaining == 0 → go to done, else loop
+        const v_zero2 = try i.iconst(clif.Type.I64, 0);
+        const is_done = try i.icmp(.eq, next_remaining, v_zero2);
+        _ = try i.brif(is_done, block_done, &[_]clif.Value{ next_idx, is_negative }, block_loop, &[_]clif.Value{ next_remaining, next_idx, is_negative });
+    }
+
+    // --- Done block: check if we need to add sign ---
+    // Block params: (last_idx: i64, is_negative: i64)
+    _ = try builder.appendBlockParam(block_done, clif.Type.I64);
+    _ = try builder.appendBlockParam(block_done, clif.Type.I64);
+    builder.switchToBlock(block_done);
+    try builder.ensureInsertedBlock();
+    {
+        const i = builder.ins();
+        const done_params = builder.blockParams(block_done);
+        const last_idx = done_params[0];
+        const is_negative = done_params[1];
+
+        const v_zero2 = try i.iconst(clif.Type.I64, 0);
+        const need_sign = try i.icmp(.ne, is_negative, v_zero2);
+        _ = try i.brif(need_sign, block_add_sign, &[_]clif.Value{last_idx}, block_ret, &[_]clif.Value{last_idx});
+    }
+
+    // --- Add sign block: store '-' at last_idx ---
+    // Block param: (last_idx: i64)
+    _ = try builder.appendBlockParam(block_add_sign, clif.Type.I64);
+    builder.switchToBlock(block_add_sign);
+    try builder.ensureInsertedBlock();
+    {
+        const i = builder.ins();
+        const last_idx = builder.blockParams(block_add_sign)[0];
+
+        const write_addr = try i.iadd(buf_ptr, last_idx);
+        const minus_char = try i.iconst(clif.Type.I8, 0x2D); // '-'
+        _ = try i.store(clif.MemFlags.DEFAULT, minus_char, write_addr, 0);
+
+        // Adjust idx: idx - 1
+        const v_one = try i.iconst(clif.Type.I64, 1);
+        const new_idx = try i.isub(last_idx, v_one);
+        _ = try i.jump(block_ret, &[_]clif.Value{new_idx});
+    }
+
+    // --- Return block: compute length ---
+    // Block param: (final_idx: i64) — position before first character
+    _ = try builder.appendBlockParam(block_ret, clif.Type.I64);
+    builder.switchToBlock(block_ret);
+    try builder.ensureInsertedBlock();
+    {
+        const i = builder.ins();
+        const final_idx = builder.blockParams(block_ret)[0];
+        // length = 20 - final_idx  (characters at final_idx+1..20 inclusive)
+        const v_20 = try i.iconst(clif.Type.I64, 20);
+        const len = try i.isub(v_20, final_idx);
+        _ = try i.return_(&[_]clif.Value{len});
     }
 
     try builder.sealAllBlocks();

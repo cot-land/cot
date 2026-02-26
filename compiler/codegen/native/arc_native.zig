@@ -373,19 +373,21 @@ fn generateRetain(
 //     metadata->destroy(object);
 //   }
 //
-// Native flow:
+// Native flow (simplified — metadata IS the destructor function pointer):
 //   1. if obj == 0: return
-//   2. header = obj - 16
-//   3. rc = load_i64(header + 8)
+//   2. header = obj - 24
+//   3. rc = load_i64(header + 16)
 //   4. if rc >= IMMORTAL: return
-//   5. rc -= 1; store_i64(header + 8, rc)
+//   5. rc -= 1; store_i64(header + 16, rc)
 //   6. if rc != 0: return
-//   7. metadata_ptr = load_i64(header + 0)   // HeapMetadata*
-//   8. if metadata_ptr == 0: goto dealloc
-//   9. destructor = load_i64(metadata_ptr + 8) // destructor function pointer
-//  10. if destructor == 0: goto dealloc
-//  11. call_indirect(destructor, obj)          // metadata->destroy(obj)
-//  12. dealloc: call dealloc(obj)
+//   7. destructor = load_i64(header + 8)   // destructor function pointer (0 if none)
+//   8. if destructor == 0: goto dealloc
+//   9. call_indirect(destructor, obj)       // destroy(obj)
+//  10. dealloc: call dealloc(obj)
+//
+// Note: In the Wasm path, metadata points to a struct with type_id+destructor_idx.
+// In the native path, metadata stores the destructor function pointer directly
+// (set by ssa_to_clif.zig's metadata_addr handler using funcAddr).
 //
 // Reference: arc.zig:912-998 (Wasm release with destructor dispatch)
 // Reference: swift/stdlib/public/runtime/HeapObject.cpp:548-552, 835-837
@@ -411,7 +413,6 @@ fn generateRelease(
     const block_return = try builder.createBlock();
     const block_check_immortal = try builder.createBlock();
     const block_decrement = try builder.createBlock();
-    const block_check_metadata = try builder.createBlock();
     const block_check_destructor = try builder.createBlock();
     const block_call_destructor = try builder.createBlock();
     const block_dealloc = try builder.createBlock();
@@ -462,12 +463,13 @@ fn generateRelease(
 
         const v_zero = try ins.iconst(clif.Type.I64, 0);
         const is_zero = try ins.icmp(.eq, new_rc, v_zero);
-        _ = try ins.brif(is_zero, block_check_metadata, &.{}, block_return, &.{});
+        _ = try ins.brif(is_zero, block_check_destructor, &.{}, block_return, &.{});
     }
 
-    // ---- Check metadata: load metadata_ptr from header ----
-    // Reference: arc.zig:969-976 (load metadata_ptr, check non-zero)
-    builder.switchToBlock(block_check_metadata);
+    // ---- Check destructor: load destructor function pointer from metadata field ----
+    // In native path, metadata field stores the destructor function pointer directly
+    // (not a pointer to a metadata struct). Set by ssa_to_clif.zig metadata_addr handler.
+    builder.switchToBlock(block_check_destructor);
     try builder.ensureInsertedBlock();
     {
         const ins = builder.ins();
@@ -475,25 +477,8 @@ fn generateRelease(
         const v_header = try ins.iconst(clif.Type.I64, HEAP_OBJECT_HEADER_SIZE);
         const header_ptr = try ins.isub(obj, v_header);
 
-        // Load metadata pointer (i64, full native pointer)
-        const metadata_ptr = try ins.load(clif.Type.I64, clif.MemFlags.DEFAULT, header_ptr, METADATA_OFFSET);
-
-        const v_zero = try ins.iconst(clif.Type.I64, 0);
-        const has_metadata = try ins.icmp(.ne, metadata_ptr, v_zero);
-        _ = try ins.brif(has_metadata, block_check_destructor, &[_]clif.Value{metadata_ptr}, block_dealloc, &.{});
-    }
-
-    // ---- Check destructor: load destructor ptr from metadata struct ----
-    // Reference: arc.zig:978-984 (load destructor_ptr at metadata+8)
-    _ = try builder.appendBlockParam(block_check_destructor, clif.Type.I64); // metadata_ptr
-    builder.switchToBlock(block_check_destructor);
-    try builder.ensureInsertedBlock();
-    {
-        const ins = builder.ins();
-        const metadata_ptr = builder.blockParams(block_check_destructor)[0];
-
-        // Load destructor function pointer from metadata + METADATA_DESTRUCTOR_OFFSET
-        const destructor_ptr = try ins.load(clif.Type.I64, clif.MemFlags.DEFAULT, metadata_ptr, METADATA_DESTRUCTOR_OFFSET);
+        // Load destructor function pointer directly from metadata field
+        const destructor_ptr = try ins.load(clif.Type.I64, clif.MemFlags.DEFAULT, header_ptr, METADATA_OFFSET);
 
         const v_zero = try ins.iconst(clif.Type.I64, 0);
         const has_destructor = try ins.icmp(.ne, destructor_ptr, v_zero);
@@ -517,7 +502,6 @@ fn generateRelease(
         const dtor_sig_ref = try builder.importSignature(dtor_sig);
 
         // call_indirect: invoke destructor via function pointer
-        // Reference: Swift metadata->destroy(object) — indirect call through metadata vtable
         _ = try ins.callIndirect(dtor_sig_ref, destructor_ptr, &[_]clif.Value{obj});
 
         // Fall through to dealloc

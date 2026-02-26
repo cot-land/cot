@@ -849,6 +849,37 @@ const SsaToClifTranslator = struct {
                 }
             },
 
+            .metadata_addr => {
+                // Type metadata for ARC destructor dispatch.
+                // In the native path, we store the destructor function pointer directly
+                // as the metadata value (no metadata struct indirection).
+                // Reference: lower.zig:4459 — emitTypeMetadata(type_name)
+                // Reference: arc.zig:978-984 — Wasm path uses metadata struct in data segment
+                const type_name: ?[]const u8 = switch (v.aux) {
+                    .string => |s| s,
+                    else => null,
+                };
+                if (type_name) |tname| {
+                    // Look up destructor function: "{TypeName}_deinit"
+                    // Note: dtor_name is NOT freed because getOrCreateFuncRef stores it
+                    // in self.func_refs as a hash map key (arena-style, freed at translator deinit)
+                    const dtor_name = try std.fmt.allocPrint(self.allocator, "{s}_deinit", .{tname});
+                    if (self.func_index_map.get(dtor_name) != null) {
+                        const func_ref = try self.getOrCreateFuncRef(dtor_name, 1, 0);
+                        const result = try ins.funcAddr(clif.Type.I64, func_ref);
+                        try self.putValue(v.id, result);
+                    } else {
+                        // No destructor — pass 0 (null metadata)
+                        self.allocator.free(dtor_name);
+                        const result = try ins.iconst(clif.Type.I64, 0);
+                        try self.putValue(v.id, result);
+                    }
+                } else {
+                    const result = try ins.iconst(clif.Type.I64, 0);
+                    try self.putValue(v.id, result);
+                }
+            },
+
             // ============================================================
             // Control flow / structural ops
             // ============================================================

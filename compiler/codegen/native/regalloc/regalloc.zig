@@ -484,7 +484,7 @@ pub fn runWithCtx(
         ctx.liveins.items,
         &ctx.multi_fixed_reg_fixups,
         &ctx.extra_spillslots_by_class,
-        .{ PReg.invalid(), PReg.invalid(), PReg.invalid() },
+        liveness_ctx.preferred_victim_by_class,
         &ctx.output.num_spillslots,
     );
 

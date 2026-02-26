@@ -967,27 +967,50 @@ pub const Driver = struct {
             // I/O runtime (io_native.generate order)
             "fd_write",      "fd_read",        "fd_close",      "exit",
             "fd_seek",       "memset_zero",    "fd_open",       "time",
-            "random",
+            "random",        "growslice",      "nextslicecap",
+            "args_count",    "arg_len",        "arg_ptr",
+            "environ_count", "environ_len",    "environ_ptr",
+            // Network runtime
+            "net_socket",    "net_bind",       "net_listen",
+            "net_accept",    "net_connect",    "net_set_reuse_addr",
+            "set_nonblocking",
+            // Event loop runtime (kqueue on macOS)
+            "kqueue_create", "kevent_add",     "kevent_del",    "kevent_wait",
+            // Epoll stubs (return -1 on macOS)
+            "epoll_create",  "epoll_add",      "epoll_del",     "epoll_wait",
+            // Process runtime (waitpid/pipe need wrappers with different linker names
+            // to avoid collision with libc symbols; fork/dup2/execve are libc-only)
+            "cot_waitpid",   "cot_pipe",
             // Print runtime (print_native.generate order)
-            "print_int",     "eprint_int",
+            "print_int",     "eprint_int",       "int_to_string",
             // Test runtime (test_native.generate order)
             "__test_begin",  "__test_print_name", "__test_pass",
             "__test_fail",   "__test_summary",    "__test_store_fail_values",
-            // NOT yet compiled as CLIF IR — registered for index allocation only
-            "int_to_string", "growslice",      "nextslicecap",
             // libc symbols — external references resolved by linker (-lSystem/-lc)
             // "memcpy" is here because the Cot signature (dst,src,len)→void is
             // ABI-compatible with libc memcpy(dst,src,n)→void* (return ignored).
             "write",         "malloc",         "free",          "memset",
             "memcmp",        "memcpy",         "read",          "close",
             "open",          "lseek",          "_exit",         "gettimeofday",
-            "getentropy",    "isatty",
+            "getentropy",    "isatty",         "strlen",        "__error",
+            "socket",        "bind",           "listen",        "accept",
+            "connect",       "setsockopt",     "kqueue",        "kevent",
+            "fcntl",         "fork",           "c_waitpid",     "c_pipe",
+            "dup2",          "execve",
         };
         const runtime_start_idx: u32 = @intCast(funcs.len);
         for (runtime_func_names, 0..) |name, i| {
             if (!func_index_map.contains(name)) {
                 try func_index_map.put(self.allocator, name, runtime_start_idx + @as(u32, @intCast(i)));
             }
+        }
+        // Aliases: user code calls "waitpid"/"pipe" but compiled wrappers are "cot_waitpid"/"cot_pipe"
+        // (different linker names to avoid collision with libc symbols of the same name)
+        if (func_index_map.get("cot_waitpid")) |idx| {
+            try func_index_map.put(self.allocator, "waitpid", idx);
+        }
+        if (func_index_map.get("cot_pipe")) |idx| {
+            try func_index_map.put(self.allocator, "pipe", idx);
         }
 
         // String data symbol index — used by ssa_to_clif for globalValue references
@@ -1002,11 +1025,17 @@ pub const Driver = struct {
         const ctxt_base_idx = runtime_start_idx + @as(u32, @intCast(runtime_func_names.len)) + @as(u32, if (string_data.items.len > 0) 1 else 0);
         const ctxt_symbol_idx: u32 = ctxt_base_idx;
 
+        // Argc/argv/envp global symbol indices — used by args and environ runtime functions.
+        // _main stores argc, argv, envp to these data section variables before calling __cot_main.
+        const argc_symbol_idx: u32 = ctxt_symbol_idx + 1;
+        const argv_symbol_idx: u32 = argc_symbol_idx + 1;
+        const envp_symbol_idx: u32 = argv_symbol_idx + 1;
+
         // Global variable symbol indices — each module-level var gets a data section entry.
         // Maps global name → external name index for globalValue references in ssa_to_clif.
         var global_symbol_map = std.StringHashMapUnmanaged(u32){};
         defer global_symbol_map.deinit(self.allocator);
-        const globals_base_idx: u32 = ctxt_symbol_idx + 1;
+        const globals_base_idx: u32 = envp_symbol_idx + 1;
         for (globals, 0..) |g, i| {
             try global_symbol_map.put(self.allocator, g.name, globals_base_idx + @as(u32, @intCast(i)));
         }
@@ -1106,7 +1135,7 @@ pub const Driver = struct {
             }
 
             // I/O runtime: fd_write, fd_read, fd_close, exit, fd_seek, memcpy, memset_zero
-            var io_funcs = try io_native.generate(self.allocator, isa, &ctrl_plane, &func_index_map);
+            var io_funcs = try io_native.generate(self.allocator, isa, &ctrl_plane, &func_index_map, argc_symbol_idx, argv_symbol_idx, envp_symbol_idx);
             defer io_funcs.deinit(self.allocator);
             for (io_funcs.items) |rf| {
                 try compiled_funcs.append(self.allocator, rf.compiled);
@@ -1144,6 +1173,9 @@ pub const Driver = struct {
             string_data.items,
             string_data_symbol_idx,
             ctxt_symbol_idx,
+            argc_symbol_idx,
+            argv_symbol_idx,
+            envp_symbol_idx,
             &func_index_map,
             globals,
             globals_base_idx,
@@ -1162,6 +1194,9 @@ pub const Driver = struct {
         string_data: []const u8,
         string_data_symbol_idx: ?u32,
         ctxt_symbol_idx: u32,
+        argc_symbol_idx: u32,
+        argv_symbol_idx: u32,
+        envp_symbol_idx: u32,
         func_index_map: *const std.StringHashMapUnmanaged(u32),
         globals: []const ir_mod.Global,
         globals_base_idx: u32,
@@ -1238,6 +1273,28 @@ pub const Driver = struct {
             try module.declareExternalName(ctxt_symbol_idx, ctxt_sym_name);
         }
 
+        // Pass 3b2: Add _cot_argc and _cot_argv globals (8 bytes each).
+        // _main stores argc/argv here; args_count/arg_len/arg_ptr read from them.
+        {
+            const argc_sym_name = "_cot_argc";
+            const argc_data_id = try module.declareData(argc_sym_name, .Local, true);
+            const argc_data = &[_]u8{ 0, 0, 0, 0, 0, 0, 0, 0 };
+            try module.defineData(argc_data_id, argc_data);
+            try module.declareExternalName(argc_symbol_idx, argc_sym_name);
+
+            const argv_sym_name = "_cot_argv";
+            const argv_data_id = try module.declareData(argv_sym_name, .Local, true);
+            const argv_data = &[_]u8{ 0, 0, 0, 0, 0, 0, 0, 0 };
+            try module.defineData(argv_data_id, argv_data);
+            try module.declareExternalName(argv_symbol_idx, argv_sym_name);
+
+            const envp_sym_name = "_cot_envp";
+            const envp_data_id = try module.declareData(envp_sym_name, .Local, true);
+            const envp_data = &[_]u8{ 0, 0, 0, 0, 0, 0, 0, 0 };
+            try module.defineData(envp_data_id, envp_data);
+            try module.declareExternalName(envp_symbol_idx, envp_sym_name);
+        }
+
         // Pass 3c: Add global variable data section entries.
         // Each module-level var gets an 8-byte zero-initialized data section entry.
         for (globals, 0..) |g, i| {
@@ -1272,14 +1329,22 @@ pub const Driver = struct {
                 if (string_data_symbol_idx != null and idx == string_data_symbol_idx.?) continue;
                 // Skip CTXT symbol (already registered above)
                 if (idx == ctxt_symbol_idx) continue;
+                // Skip argc/argv/envp symbols (already registered in Pass 3b2)
+                if (idx == argc_symbol_idx or idx == argv_symbol_idx or idx == envp_symbol_idx) continue;
                 // Skip global variable symbols (already registered in Pass 3c)
                 if (globals.len > 0 and idx >= globals_base_idx and idx < globals_base_idx + @as(u32, @intCast(globals.len))) continue;
 
-                // Runtime/libc functions: mangle with platform-appropriate prefix
-                const mangled = if (is_macos)
-                    try std.fmt.allocPrint(self.allocator, "_{s}", .{name})
+                // Runtime/libc functions: mangle with platform-appropriate prefix.
+                // Names prefixed with "c_" are libc aliases (e.g. c_waitpid → _waitpid)
+                // to avoid collision with same-named compiled wrappers.
+                const actual_name = if (std.mem.startsWith(u8, name, "c_"))
+                    name[2..]
                 else
-                    try self.allocator.dupe(u8, name);
+                    name;
+                const mangled = if (is_macos)
+                    try std.fmt.allocPrint(self.allocator, "_{s}", .{actual_name})
+                else
+                    try self.allocator.dupe(u8, actual_name);
                 defer self.allocator.free(mangled);
                 try module.declareExternalName(idx, mangled);
             }
@@ -1289,41 +1354,57 @@ pub const Driver = struct {
         if (main_func_index != null) {
             const main_wrapper_id = try module.declareFunction("_main", .Export);
 
-            // ARM64 _main wrapper: call __cot_main and return
-            // This is a minimal stub — no vmctx setup needed
+            // ARM64 _main wrapper: store argc/argv/envp to globals, call __cot_main, return
+            // C runtime passes: x0=argc, x1=argv, x2=envp (Apple extension)
             if (self.target.arch == .arm64) {
                 const wrapper = [_]u8{
-                    0xFD, 0x7B, 0xBF, 0xA9, // stp x29, x30, [sp, #-16]!
-                    0xFD, 0x03, 0x00, 0x91, // mov x29, sp
-                    0x00, 0x00, 0x00, 0x94, // bl __cot_main (relocation)
-                    0xFD, 0x7B, 0xC1, 0xA8, // ldp x29, x30, [sp], #16
-                    0xC0, 0x03, 0x5F, 0xD6, // ret
+                    0xFD, 0x7B, 0xBF, 0xA9, //  0: stp x29, x30, [sp, #-16]!
+                    0xFD, 0x03, 0x00, 0x91, //  4: mov x29, sp
+                    0x08, 0x00, 0x00, 0x90, //  8: adrp x8, _cot_argc@PAGE
+                    0x08, 0x01, 0x00, 0x91, // 12: add x8, x8, _cot_argc@PAGEOFF
+                    0x00, 0x01, 0x00, 0xF9, // 16: str x0, [x8]
+                    0x08, 0x00, 0x00, 0x90, // 20: adrp x8, _cot_argv@PAGE
+                    0x08, 0x01, 0x00, 0x91, // 24: add x8, x8, _cot_argv@PAGEOFF
+                    0x01, 0x01, 0x00, 0xF9, // 28: str x1, [x8]
+                    0x08, 0x00, 0x00, 0x90, // 32: adrp x8, _cot_envp@PAGE
+                    0x08, 0x01, 0x00, 0x91, // 36: add x8, x8, _cot_envp@PAGEOFF
+                    0x02, 0x01, 0x00, 0xF9, // 40: str x2, [x8]
+                    0x00, 0x00, 0x00, 0x94, // 44: bl __cot_main
+                    0xFD, 0x7B, 0xC1, 0xA8, // 48: ldp x29, x30, [sp], #16
+                    0xC0, 0x03, 0x5F, 0xD6, // 52: ret
                 };
-                // Relocation for the bl instruction at offset 8
                 const main_idx: u32 = @intCast(main_func_index.?);
-                const relocs = [_]buffer_mod.FinalizedMachReloc{.{
-                    .offset = 8,
-                    .kind = .Arm64Call,
-                    .target = .{ .ExternalName = .{ .User = .{ .namespace = 0, .index = main_idx } } },
-                    .addend = 0,
-                }};
+                const relocs = [_]buffer_mod.FinalizedMachReloc{
+                    .{ .offset = 8, .kind = .Aarch64AdrPrelPgHi21, .target = .{ .ExternalName = .{ .User = .{ .namespace = 0, .index = argc_symbol_idx } } }, .addend = 0 },
+                    .{ .offset = 12, .kind = .Aarch64AddAbsLo12Nc, .target = .{ .ExternalName = .{ .User = .{ .namespace = 0, .index = argc_symbol_idx } } }, .addend = 0 },
+                    .{ .offset = 20, .kind = .Aarch64AdrPrelPgHi21, .target = .{ .ExternalName = .{ .User = .{ .namespace = 0, .index = argv_symbol_idx } } }, .addend = 0 },
+                    .{ .offset = 24, .kind = .Aarch64AddAbsLo12Nc, .target = .{ .ExternalName = .{ .User = .{ .namespace = 0, .index = argv_symbol_idx } } }, .addend = 0 },
+                    .{ .offset = 32, .kind = .Aarch64AdrPrelPgHi21, .target = .{ .ExternalName = .{ .User = .{ .namespace = 0, .index = envp_symbol_idx } } }, .addend = 0 },
+                    .{ .offset = 36, .kind = .Aarch64AddAbsLo12Nc, .target = .{ .ExternalName = .{ .User = .{ .namespace = 0, .index = envp_symbol_idx } } }, .addend = 0 },
+                    .{ .offset = 44, .kind = .Arm64Call, .target = .{ .ExternalName = .{ .User = .{ .namespace = 0, .index = main_idx } } }, .addend = 0 },
+                };
                 try module.defineFunctionBytes(main_wrapper_id, &wrapper, &relocs);
             } else {
-                // x64 _main wrapper
+                // x64 _main wrapper: store argc/argv/envp to globals, call __cot_main, return
+                // System V ABI: edi=argc, rsi=argv, rdx=envp
                 const main_idx: u32 = @intCast(main_func_index.?);
                 const wrapper = [_]u8{
-                    0x55, // push rbp
-                    0x48, 0x89, 0xE5, // mov rbp, rsp
-                    0xE8, 0x00, 0x00, 0x00, 0x00, // call __cot_main (relocation)
-                    0x5D, // pop rbp
-                    0xC3, // ret
+                    0x55, //  0: push rbp
+                    0x48, 0x89, 0xE5, //  1: mov rbp, rsp
+                    0x48, 0x63, 0xC7, //  4: movsxd rax, edi (sign-extend argc)
+                    0x48, 0x89, 0x05, 0x00, 0x00, 0x00, 0x00, //  7: mov [rip+disp32], rax (_cot_argc)
+                    0x48, 0x89, 0x35, 0x00, 0x00, 0x00, 0x00, // 14: mov [rip+disp32], rsi (_cot_argv)
+                    0x48, 0x89, 0x15, 0x00, 0x00, 0x00, 0x00, // 21: mov [rip+disp32], rdx (_cot_envp)
+                    0xE8, 0x00, 0x00, 0x00, 0x00, // 28: call __cot_main
+                    0x5D, // 33: pop rbp
+                    0xC3, // 34: ret
                 };
-                const relocs = [_]buffer_mod.FinalizedMachReloc{.{
-                    .offset = 5,
-                    .kind = .X86CallPCRel4,
-                    .target = .{ .ExternalName = .{ .User = .{ .namespace = 0, .index = main_idx } } },
-                    .addend = -4,
-                }};
+                const relocs = [_]buffer_mod.FinalizedMachReloc{
+                    .{ .offset = 10, .kind = .X86PCRel4, .target = .{ .ExternalName = .{ .User = .{ .namespace = 0, .index = argc_symbol_idx } } }, .addend = -4 },
+                    .{ .offset = 17, .kind = .X86PCRel4, .target = .{ .ExternalName = .{ .User = .{ .namespace = 0, .index = argv_symbol_idx } } }, .addend = -4 },
+                    .{ .offset = 24, .kind = .X86PCRel4, .target = .{ .ExternalName = .{ .User = .{ .namespace = 0, .index = envp_symbol_idx } } }, .addend = -4 },
+                    .{ .offset = 29, .kind = .X86CallPCRel4, .target = .{ .ExternalName = .{ .User = .{ .namespace = 0, .index = main_idx } } }, .addend = -4 },
+                };
                 try module.defineFunctionBytes(main_wrapper_id, &wrapper, &relocs);
             }
         }
