@@ -167,3 +167,30 @@ test "arc: raw pointer alias stays unmanaged" {
     @assertEq(alias.value, 99)
     // alias inherits unmanaged type from raw — no double-free
 }
+
+// -- Unowned references (Swift unowned pattern) --
+// unowned var increments unowned RC, traps if accessed after strong RC hits 0.
+// Memory stays alive (for unowned safety check) until unowned RC also hits 0.
+
+test "arc: unowned var basic usage" {
+    var strong = new ArcNode { value: 42, next: 0 }
+    unowned var u = strong
+    @assertEq(u.value, 42)
+    // u's unowned RC decremented at scope exit, strong's strong RC released
+}
+
+test "arc: multiple unowned refs" {
+    var n = new ArcNode { value: 99, next: 0 }
+    unowned var u1 = n
+    unowned var u2 = n
+    @assertEq(u1.value, 99)
+    @assertEq(u2.value, 99)
+}
+
+test "arc: unowned and strong coexist" {
+    var n = new ArcNode { value: 55, next: 0 }
+    unowned var u = n
+    var n2 = n
+    @assertEq(u.value, 55)
+    @assertEq(n2.value, 55)
+}

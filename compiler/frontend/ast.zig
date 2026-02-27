@@ -405,7 +405,7 @@ pub const Stmt = union(enum) {
 
 pub const ExprStmt = struct { expr: NodeIndex, span: Span };
 pub const ReturnStmt = struct { value: NodeIndex, span: Span };
-pub const VarStmt = struct { name: []const u8, type_expr: NodeIndex, value: NodeIndex, is_const: bool, is_weak: bool = false, span: Span };
+pub const VarStmt = struct { name: []const u8, type_expr: NodeIndex, value: NodeIndex, is_const: bool, is_weak: bool = false, is_unowned: bool = false, span: Span };
 pub const DestructureBinding = struct { name: []const u8, type_expr: NodeIndex, span: Span };
 pub const DestructureStmt = struct { bindings: []const DestructureBinding, value: NodeIndex, is_const: bool, span: Span };
 pub const AssignStmt = struct { target: NodeIndex, op: Token, value: NodeIndex, span: Span };

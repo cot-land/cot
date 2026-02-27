@@ -57,7 +57,32 @@ const HEAP_OBJECT_HEADER_SIZE: i64 = 24;
 const SIZE_OFFSET: i32 = 0; // alloc_size (i64) — needed for realloc copy calculation
 const METADATA_OFFSET: i32 = 8; // HeapMetadata* (i64) — type metadata pointer
 const REFCOUNT_OFFSET: i32 = 16; // InlineRefCounts (i64) — reference count
-const IMMORTAL_REFCOUNT: i64 = 0x7FFFFFFFFFFFFFFF;
+
+// Swift InlineRefCounts bit layout (RefCount.h:241-285)
+//
+//   Bit  0:       PureSwiftDealloc (1 bit)  — always 1 (no ObjC)
+//   Bits 1-31:    UnownedRefCount  (31 bits) — extra count (+1 = 1 logical)
+//   Bits 0-31:    IsImmortal       (32 bits) — overlaps above; all 32 bits set = immortal
+//   Bit  32:      IsDeiniting      (1 bit)   — strong RC hit zero, destructor running
+//   Bits 33-62:   StrongExtraRC    (30 bits) — extra count (+1 = 1 logical)
+//   Bit  63:      UseSlowRC        (1 bit)   — side table mode (Phase 3)
+//
+// Strong uses "extra count": physical 0 = logical 1 (new object: StrongExtra=0 → 1 strong ref).
+// Unowned uses DIRECT count: physical 1 = logical 1 (initial +1 on behalf of strong refs).
+const STRONG_RC_ONE: i64 = @as(i64, 1) << 33; // 0x0000000200000000
+const IS_DEINITING_BIT: i64 = @as(i64, 1) << 32; // 0x0000000100000000
+const UNOWNED_RC_ONE: i64 = @as(i64, 1) << 1; // 0x0000000000000002
+const PURE_SWIFT_DEALLOC: i64 = 1; // 0x0000000000000001
+// Initial: PureSwiftDealloc=1, UnownedRefCount=1 (the +1 on behalf of strong references).
+// Swift RefCount.h:751 — RefCountBits(0, 1) = (0 << 33) | (1 << 0) | (1 << 1) = 3
+// NOTE: Unowned uses DIRECT count (physical=logical), NOT extra count.
+// Only StrongExtra uses extra count (physical 0 = logical 1).
+const INITIAL_REFCOUNT: i64 = PURE_SWIFT_DEALLOC | UNOWNED_RC_ONE; // = 3
+// Immortal: all 64 bits set — passes Swift's IsImmortal mask (low 32 bits all set)
+const IMMORTAL_REFCOUNT: i64 = @bitCast(@as(u64, 0xFFFFFFFF_FFFFFFFF));
+const STRONG_EXTRA_MASK: i64 = @bitCast(@as(u64, 0x7FFFFFFE_00000000)); // bits 33-62
+const USE_SLOW_RC_BIT: i64 = @bitCast(@as(u64, 0x8000000000000000)); // bit 63
+const STRONG_EXTRA_SHIFT: u6 = 33;
 
 // Metadata struct offsets (when metadata pointer is non-null)
 // Reference: Swift TypeMetadata struct — contains destroy function pointer
@@ -115,6 +140,18 @@ pub fn generate(
     try result.append(allocator, .{
         .name = "string_eq",
         .compiled = try generateStringEq(allocator, isa, ctrl_plane, func_index_map),
+    });
+    try result.append(allocator, .{
+        .name = "unowned_retain",
+        .compiled = try generateUnownedRetain(allocator, isa, ctrl_plane),
+    });
+    try result.append(allocator, .{
+        .name = "unowned_release",
+        .compiled = try generateUnownedRelease(allocator, isa, ctrl_plane, func_index_map),
+    });
+    try result.append(allocator, .{
+        .name = "unowned_load_strong",
+        .compiled = try generateUnownedLoadStrong(allocator, isa, ctrl_plane, func_index_map),
     });
 
     return result;
@@ -191,8 +228,8 @@ fn generateAlloc(
     _ = try ins.store(clif.MemFlags.DEFAULT, alloc_size, raw_ptr, SIZE_OFFSET);
     _ = try ins.store(clif.MemFlags.DEFAULT, metadata, raw_ptr, METADATA_OFFSET);
 
-    const v_one = try ins.iconst(clif.Type.I64, 1);
-    _ = try ins.store(clif.MemFlags.DEFAULT, v_one, raw_ptr, REFCOUNT_OFFSET);
+    const v_init_rc = try ins.iconst(clif.Type.I64, INITIAL_REFCOUNT);
+    _ = try ins.store(clif.MemFlags.DEFAULT, v_init_rc, raw_ptr, REFCOUNT_OFFSET);
 
     // return raw_ptr + HEADER_SIZE (pointer to user data)
     const user_ptr = try ins.iadd(raw_ptr, v_header);
@@ -319,7 +356,7 @@ fn generateRetain(
     const v_zero2 = try builder.ins().iconst(clif.Type.I64, 0);
     _ = try builder.ins().return_(&[_]clif.Value{v_zero2});
 
-    // Check immortal: header_ptr = obj - 16, load refcount
+    // Check immortal: header_ptr = obj - 24, load refcount
     builder.switchToBlock(block_check_immortal);
     try builder.ensureInsertedBlock();
     {
@@ -328,7 +365,7 @@ fn generateRetain(
         const header_ptr = try ins3.isub(obj, v_header);
         const refcount = try ins3.load(clif.Type.I64, clif.MemFlags.DEFAULT, header_ptr, REFCOUNT_OFFSET);
         const v_immortal = try ins3.iconst(clif.Type.I64, IMMORTAL_REFCOUNT);
-        const is_immortal = try ins3.icmp(.sge, refcount, v_immortal);
+        const is_immortal = try ins3.icmp(.eq, refcount, v_immortal);
         _ = try ins3.brif(is_immortal, block_return_obj, &.{}, block_increment, &.{});
     }
 
@@ -342,7 +379,7 @@ fn generateRetain(
     // Simpler: just return the original obj value (it dominates all blocks).
     _ = try builder.ins().return_(&[_]clif.Value{obj});
 
-    // Increment block
+    // Increment block: add STRONG_RC_ONE to bits 33-62
     builder.switchToBlock(block_increment);
     try builder.ensureInsertedBlock();
     {
@@ -350,8 +387,8 @@ fn generateRetain(
         const v_header = try ins4.iconst(clif.Type.I64, HEAP_OBJECT_HEADER_SIZE);
         const header_ptr = try ins4.isub(obj, v_header);
         const refcount = try ins4.load(clif.Type.I64, clif.MemFlags.DEFAULT, header_ptr, REFCOUNT_OFFSET);
-        const v_one = try ins4.iconst(clif.Type.I64, 1);
-        const new_rc = try ins4.iadd(refcount, v_one);
+        const v_strong_one = try ins4.iconst(clif.Type.I64, STRONG_RC_ONE);
+        const new_rc = try ins4.iadd(refcount, v_strong_one);
         _ = try ins4.store(clif.MemFlags.DEFAULT, new_rc, header_ptr, REFCOUNT_OFFSET);
         _ = try ins4.return_(&[_]clif.Value{obj});
     }
@@ -413,6 +450,7 @@ fn generateRelease(
     const block_return = try builder.createBlock();
     const block_check_immortal = try builder.createBlock();
     const block_decrement = try builder.createBlock();
+    const block_store_and_return = try builder.createBlock();
     const block_check_destructor = try builder.createBlock();
     const block_call_destructor = try builder.createBlock();
     const block_dealloc = try builder.createBlock();
@@ -434,7 +472,7 @@ fn generateRelease(
     try builder.ensureInsertedBlock();
     _ = try builder.ins().return_(&[_]clif.Value{});
 
-    // ---- Check immortal: load refcount, skip if >= IMMORTAL ----
+    // ---- Check immortal: load refcount, skip if == IMMORTAL ----
     builder.switchToBlock(block_check_immortal);
     try builder.ensureInsertedBlock();
     {
@@ -444,11 +482,14 @@ fn generateRelease(
         const header_ptr = try ins.isub(obj, v_header);
         const refcount = try ins.load(clif.Type.I64, clif.MemFlags.DEFAULT, header_ptr, REFCOUNT_OFFSET);
         const v_immortal = try ins.iconst(clif.Type.I64, IMMORTAL_REFCOUNT);
-        const is_immortal = try ins.icmp(.sge, refcount, v_immortal);
+        const is_immortal = try ins.icmp(.eq, refcount, v_immortal);
         _ = try ins.brif(is_immortal, block_return, &.{}, block_decrement, &.{});
     }
 
-    // ---- Decrement: new_rc = rc - 1; if new_rc == 0 → destructor dispatch ----
+    // ---- Decrement: subtract STRONG_RC_ONE; if StrongExtra was 0 → last strong ref ----
+    // Swift doDecrementSlow pattern (RefCount.h:1040-1048):
+    //   if (was_last) { newbits = oldbits; newbits.setStrongExtra(0); newbits.setIsDeiniting(true); }
+    //   else { store decremented value; }
     builder.switchToBlock(block_decrement);
     try builder.ensureInsertedBlock();
     {
@@ -457,16 +498,39 @@ fn generateRelease(
         const v_header = try ins.iconst(clif.Type.I64, HEAP_OBJECT_HEADER_SIZE);
         const header_ptr = try ins.isub(obj, v_header);
         const refcount = try ins.load(clif.Type.I64, clif.MemFlags.DEFAULT, header_ptr, REFCOUNT_OFFSET);
-        const v_one = try ins.iconst(clif.Type.I64, 1);
-        const new_rc = try ins.isub(refcount, v_one);
-        _ = try ins.store(clif.MemFlags.DEFAULT, new_rc, header_ptr, REFCOUNT_OFFSET);
 
+        // Extract StrongExtra from original: (rc >> 33) & 0x3FFFFFFF
+        const v_shift = try ins.iconst(clif.Type.I64, @as(i64, STRONG_EXTRA_SHIFT));
+        const shifted = try ins.ushr(refcount, v_shift);
+        const v_mask = try ins.iconst(clif.Type.I64, 0x3FFFFFFF);
+        const strong_extra = try ins.band(shifted, v_mask);
+
+        // If StrongExtra was 0 → this was the last strong reference
         const v_zero = try ins.iconst(clif.Type.I64, 0);
-        const is_zero = try ins.icmp(.eq, new_rc, v_zero);
-        _ = try ins.brif(is_zero, block_check_destructor, &.{}, block_return, &.{});
+        const was_last = try ins.icmp(.eq, strong_extra, v_zero);
+        _ = try ins.brif(was_last, block_check_destructor, &.{}, block_store_and_return, &.{});
     }
 
-    // ---- Check destructor: load destructor function pointer from metadata field ----
+    // ---- Store decremented rc and return (not last strong ref) ----
+    builder.switchToBlock(block_store_and_return);
+    try builder.ensureInsertedBlock();
+    {
+        const ins = builder.ins();
+        const obj = builder.blockParams(block_entry)[0];
+        const v_header = try ins.iconst(clif.Type.I64, HEAP_OBJECT_HEADER_SIZE);
+        const header_ptr = try ins.isub(obj, v_header);
+        const refcount = try ins.load(clif.Type.I64, clif.MemFlags.DEFAULT, header_ptr, REFCOUNT_OFFSET);
+        const v_strong_one = try ins.iconst(clif.Type.I64, STRONG_RC_ONE);
+        const new_rc = try ins.isub(refcount, v_strong_one);
+        _ = try ins.store(clif.MemFlags.DEFAULT, new_rc, header_ptr, REFCOUNT_OFFSET);
+        _ = try ins.return_(&[_]clif.Value{});
+    }
+
+    // ---- Check destructor: clean transition — set StrongExtra=0, IsDeiniting=1 ----
+    // Swift doDecrementSlow (RefCount.h:1046-1048):
+    //   newbits = oldbits;  // Undo failed decrement
+    //   newbits.setStrongExtraRefCount(0);
+    //   newbits.setIsDeiniting(true);
     // In native path, metadata field stores the destructor function pointer directly
     // (not a pointer to a metadata struct). Set by ssa_to_clif.zig metadata_addr handler.
     builder.switchToBlock(block_check_destructor);
@@ -476,6 +540,16 @@ fn generateRelease(
         const obj = builder.blockParams(block_entry)[0];
         const v_header = try ins.iconst(clif.Type.I64, HEAP_OBJECT_HEADER_SIZE);
         const header_ptr = try ins.isub(obj, v_header);
+        const refcount = try ins.load(clif.Type.I64, clif.MemFlags.DEFAULT, header_ptr, REFCOUNT_OFFSET);
+
+        // Clear StrongExtra (bits 33-62) and UseSlowRC (bit 63), keep low 33 bits
+        const v_clear_mask = try ins.iconst(clif.Type.I64, @bitCast(~@as(u64, @bitCast(@as(i64, STRONG_EXTRA_MASK) | USE_SLOW_RC_BIT))));
+        const clean_rc = try ins.band(refcount, v_clear_mask);
+
+        // Set IsDeiniting flag
+        const v_deiniting = try ins.iconst(clif.Type.I64, IS_DEINITING_BIT);
+        const rc_with_deiniting = try ins.bor(clean_rc, v_deiniting);
+        _ = try ins.store(clif.MemFlags.DEFAULT, rc_with_deiniting, header_ptr, REFCOUNT_OFFSET);
 
         // Load destructor function pointer directly from metadata field
         const destructor_ptr = try ins.load(clif.Type.I64, clif.MemFlags.DEFAULT, header_ptr, METADATA_OFFSET);
@@ -508,23 +582,24 @@ fn generateRelease(
         _ = try ins.jump(block_dealloc, &.{});
     }
 
-    // ---- Dealloc block: call dealloc(obj) ----
-    // Reference: arc.zig:993-994 (dealloc after destructor)
+    // ---- Dealloc block: call unowned_release(obj) to decrement unowned RC ----
+    // Swift pattern: after deinit, decrement unowned count. Memory freed only when unowned hits 0.
+    // Reference: swift/stdlib/public/runtime/HeapObject.cpp:548-552
     builder.switchToBlock(block_dealloc);
     try builder.ensureInsertedBlock();
     {
         const ins = builder.ins();
         const obj = builder.blockParams(block_entry)[0];
-        const dealloc_idx = func_index_map.get("dealloc") orelse 0;
-        var dealloc_sig = clif.Signature.init(.system_v);
-        try dealloc_sig.addParam(allocator, clif.AbiParam.init(clif.Type.I64));
-        const dealloc_sig_ref = try builder.importSignature(dealloc_sig);
-        const dealloc_ref = try builder.importFunction(.{
-            .name = .{ .user = .{ .namespace = 0, .index = dealloc_idx } },
-            .signature = dealloc_sig_ref,
+        const unowned_release_idx = func_index_map.get("unowned_release") orelse 0;
+        var sig = clif.Signature.init(.system_v);
+        try sig.addParam(allocator, clif.AbiParam.init(clif.Type.I64));
+        const sig_ref = try builder.importSignature(sig);
+        const func_ref = try builder.importFunction(.{
+            .name = .{ .user = .{ .namespace = 0, .index = unowned_release_idx } },
+            .signature = sig_ref,
             .colocated = true, // Same object file
         });
-        _ = try ins.call(dealloc_ref, &[_]clif.Value{obj});
+        _ = try ins.call(func_ref, &[_]clif.Value{obj});
         _ = try ins.return_(&[_]clif.Value{});
     }
 
@@ -939,6 +1014,310 @@ fn generateStringEq(
         const v_zero_i32 = try ins.iconst(clif.Type.I32, 0);
         const is_eq = try ins.icmp(.eq, cmp_i32, v_zero_i32);
         _ = try ins.brif(is_eq, block_return_1, &.{}, block_return_0, &.{});
+    }
+
+    try builder.sealAllBlocks();
+    builder.finalize();
+
+    return native_compile.compile(allocator, &clif_func, isa, ctrl_plane);
+}
+
+// ============================================================================
+// unowned_retain(obj: i64) -> void
+//
+// Increment unowned reference count (bits 1-31).
+// Called when binding an `unowned var`.
+// Reference: Swift swift_unownedRetain (HeapObject.cpp:596-600)
+// ============================================================================
+
+fn generateUnownedRetain(
+    allocator: Allocator,
+    isa: native_compile.TargetIsa,
+    ctrl_plane: *native_compile.ControlPlane,
+) !native_compile.CompiledCode {
+    var clif_func = clif.Function.init(allocator);
+    defer clif_func.deinit();
+
+    var func_ctx = FunctionBuilderContext.init(allocator);
+    defer func_ctx.deinit();
+    var builder = FunctionBuilder.init(&clif_func, &func_ctx);
+
+    // Signature: (i64) -> void
+    try clif_func.signature.addParam(allocator, clif.AbiParam.init(clif.Type.I64));
+
+    const block_entry = try builder.createBlock();
+    const block_return = try builder.createBlock();
+    const block_check_immortal = try builder.createBlock();
+    const block_increment = try builder.createBlock();
+
+    // Entry: null check
+    builder.switchToBlock(block_entry);
+    try builder.appendBlockParamsForFunctionParams(block_entry);
+    try builder.ensureInsertedBlock();
+    {
+        const ins = builder.ins();
+        const obj = builder.blockParams(block_entry)[0];
+        const v_zero = try ins.iconst(clif.Type.I64, 0);
+        const is_null = try ins.icmp(.eq, obj, v_zero);
+        _ = try ins.brif(is_null, block_return, &.{}, block_check_immortal, &.{});
+    }
+
+    // Return block
+    builder.switchToBlock(block_return);
+    try builder.ensureInsertedBlock();
+    _ = try builder.ins().return_(&[_]clif.Value{});
+
+    // Check immortal
+    builder.switchToBlock(block_check_immortal);
+    try builder.ensureInsertedBlock();
+    {
+        const ins = builder.ins();
+        const obj = builder.blockParams(block_entry)[0];
+        const v_header = try ins.iconst(clif.Type.I64, HEAP_OBJECT_HEADER_SIZE);
+        const header_ptr = try ins.isub(obj, v_header);
+        const refcount = try ins.load(clif.Type.I64, clif.MemFlags.DEFAULT, header_ptr, REFCOUNT_OFFSET);
+        const v_immortal = try ins.iconst(clif.Type.I64, IMMORTAL_REFCOUNT);
+        const is_immortal = try ins.icmp(.eq, refcount, v_immortal);
+        _ = try ins.brif(is_immortal, block_return, &.{}, block_increment, &.{});
+    }
+
+    // Increment unowned: rc += UNOWNED_RC_ONE (bits 1-31)
+    builder.switchToBlock(block_increment);
+    try builder.ensureInsertedBlock();
+    {
+        const ins = builder.ins();
+        const obj = builder.blockParams(block_entry)[0];
+        const v_header = try ins.iconst(clif.Type.I64, HEAP_OBJECT_HEADER_SIZE);
+        const header_ptr = try ins.isub(obj, v_header);
+        const refcount = try ins.load(clif.Type.I64, clif.MemFlags.DEFAULT, header_ptr, REFCOUNT_OFFSET);
+        const v_unowned_one = try ins.iconst(clif.Type.I64, UNOWNED_RC_ONE);
+        const new_rc = try ins.iadd(refcount, v_unowned_one);
+        _ = try ins.store(clif.MemFlags.DEFAULT, new_rc, header_ptr, REFCOUNT_OFFSET);
+        _ = try ins.return_(&[_]clif.Value{});
+    }
+
+    try builder.sealAllBlocks();
+    builder.finalize();
+
+    return native_compile.compile(allocator, &clif_func, isa, ctrl_plane);
+}
+
+// ============================================================================
+// unowned_release(obj: i64) -> void
+//
+// Decrement unowned reference count (bits 1-31). If unowned hits 0, dealloc.
+// Called at scope exit for `unowned var`, and by release() after deinit.
+// Reference: Swift swift_unownedRelease (HeapObject.cpp:608-620)
+// ============================================================================
+
+fn generateUnownedRelease(
+    allocator: Allocator,
+    isa: native_compile.TargetIsa,
+    ctrl_plane: *native_compile.ControlPlane,
+    func_index_map: *const std.StringHashMapUnmanaged(u32),
+) !native_compile.CompiledCode {
+    var clif_func = clif.Function.init(allocator);
+    defer clif_func.deinit();
+
+    var func_ctx = FunctionBuilderContext.init(allocator);
+    defer func_ctx.deinit();
+    var builder = FunctionBuilder.init(&clif_func, &func_ctx);
+
+    // Signature: (i64) -> void
+    try clif_func.signature.addParam(allocator, clif.AbiParam.init(clif.Type.I64));
+
+    const block_entry = try builder.createBlock();
+    const block_return = try builder.createBlock();
+    const block_check_immortal = try builder.createBlock();
+    const block_decrement = try builder.createBlock();
+    const block_dealloc = try builder.createBlock();
+
+    // Entry: null check
+    builder.switchToBlock(block_entry);
+    try builder.appendBlockParamsForFunctionParams(block_entry);
+    try builder.ensureInsertedBlock();
+    {
+        const ins = builder.ins();
+        const obj = builder.blockParams(block_entry)[0];
+        const v_zero = try ins.iconst(clif.Type.I64, 0);
+        const is_null = try ins.icmp(.eq, obj, v_zero);
+        _ = try ins.brif(is_null, block_return, &.{}, block_check_immortal, &.{});
+    }
+
+    // Return block
+    builder.switchToBlock(block_return);
+    try builder.ensureInsertedBlock();
+    _ = try builder.ins().return_(&[_]clif.Value{});
+
+    // Check immortal
+    builder.switchToBlock(block_check_immortal);
+    try builder.ensureInsertedBlock();
+    {
+        const ins = builder.ins();
+        const obj = builder.blockParams(block_entry)[0];
+        const v_header = try ins.iconst(clif.Type.I64, HEAP_OBJECT_HEADER_SIZE);
+        const header_ptr = try ins.isub(obj, v_header);
+        const refcount = try ins.load(clif.Type.I64, clif.MemFlags.DEFAULT, header_ptr, REFCOUNT_OFFSET);
+        const v_immortal = try ins.iconst(clif.Type.I64, IMMORTAL_REFCOUNT);
+        const is_immortal = try ins.icmp(.eq, refcount, v_immortal);
+        _ = try ins.brif(is_immortal, block_return, &.{}, block_decrement, &.{});
+    }
+
+    // Decrement unowned: subtract, extract NEW count, check if zero
+    // Swift decrementUnownedShouldFree (RefCount.h:1190-1216):
+    //   newbits.decrementUnownedRefCount(dec);
+    //   if (newbits.getUnownedRefCount() == 0) → free
+    builder.switchToBlock(block_decrement);
+    try builder.ensureInsertedBlock();
+    {
+        const ins = builder.ins();
+        const obj = builder.blockParams(block_entry)[0];
+        const v_header = try ins.iconst(clif.Type.I64, HEAP_OBJECT_HEADER_SIZE);
+        const header_ptr = try ins.isub(obj, v_header);
+        const refcount = try ins.load(clif.Type.I64, clif.MemFlags.DEFAULT, header_ptr, REFCOUNT_OFFSET);
+
+        // Subtract UNOWNED_RC_ONE
+        const v_unowned_one = try ins.iconst(clif.Type.I64, UNOWNED_RC_ONE);
+        const new_rc = try ins.isub(refcount, v_unowned_one);
+
+        // Store new rc unconditionally (dealloc will free anyway)
+        _ = try ins.store(clif.MemFlags.DEFAULT, new_rc, header_ptr, REFCOUNT_OFFSET);
+
+        // Extract NEW UnownedRefCount after decrement: (new_rc >> 1) & 0x7FFFFFFF
+        const v_one_shift = try ins.iconst(clif.Type.I64, 1);
+        const shifted = try ins.ushr(new_rc, v_one_shift);
+        const v_mask = try ins.iconst(clif.Type.I64, 0x7FFFFFFF);
+        const new_unowned = try ins.band(shifted, v_mask);
+
+        // If new unowned count == 0 → last unowned ref → free memory
+        const v_zero = try ins.iconst(clif.Type.I64, 0);
+        const is_last = try ins.icmp(.eq, new_unowned, v_zero);
+        _ = try ins.brif(is_last, block_dealloc, &.{}, block_return, &.{});
+    }
+
+    // Dealloc block: call dealloc(obj) — free the memory
+    builder.switchToBlock(block_dealloc);
+    try builder.ensureInsertedBlock();
+    {
+        const ins = builder.ins();
+        const obj = builder.blockParams(block_entry)[0];
+        const dealloc_idx = func_index_map.get("dealloc") orelse 0;
+        var dealloc_sig = clif.Signature.init(.system_v);
+        try dealloc_sig.addParam(allocator, clif.AbiParam.init(clif.Type.I64));
+        const dealloc_sig_ref = try builder.importSignature(dealloc_sig);
+        const dealloc_ref = try builder.importFunction(.{
+            .name = .{ .user = .{ .namespace = 0, .index = dealloc_idx } },
+            .signature = dealloc_sig_ref,
+            .colocated = true,
+        });
+        _ = try ins.call(dealloc_ref, &[_]clif.Value{obj});
+        _ = try ins.return_(&[_]clif.Value{});
+    }
+
+    try builder.sealAllBlocks();
+    builder.finalize();
+
+    return native_compile.compile(allocator, &clif_func, isa, ctrl_plane);
+}
+
+// ============================================================================
+// unowned_load_strong(obj: i64) -> i64
+//
+// Check if object is still alive (IsDeiniting not set), then retain and return.
+// If deiniting, trap (fatal error — dangling unowned reference).
+// Reference: Swift swift_unownedRetainStrong (HeapObject.cpp:665-680)
+// ============================================================================
+
+fn generateUnownedLoadStrong(
+    allocator: Allocator,
+    isa: native_compile.TargetIsa,
+    ctrl_plane: *native_compile.ControlPlane,
+    func_index_map: *const std.StringHashMapUnmanaged(u32),
+) !native_compile.CompiledCode {
+    var clif_func = clif.Function.init(allocator);
+    defer clif_func.deinit();
+
+    var func_ctx = FunctionBuilderContext.init(allocator);
+    defer func_ctx.deinit();
+    var builder = FunctionBuilder.init(&clif_func, &func_ctx);
+
+    // Signature: (i64) -> i64
+    try clif_func.signature.addParam(allocator, clif.AbiParam.init(clif.Type.I64));
+    try clif_func.signature.addReturn(allocator, clif.AbiParam.init(clif.Type.I64));
+
+    const block_entry = try builder.createBlock();
+    const block_return_null = try builder.createBlock();
+    const block_check = try builder.createBlock();
+    const block_trap = try builder.createBlock();
+    const block_retain = try builder.createBlock();
+
+    // Entry: null check
+    builder.switchToBlock(block_entry);
+    try builder.appendBlockParamsForFunctionParams(block_entry);
+    try builder.ensureInsertedBlock();
+    {
+        const ins = builder.ins();
+        const obj = builder.blockParams(block_entry)[0];
+        const v_zero = try ins.iconst(clif.Type.I64, 0);
+        const is_null = try ins.icmp(.eq, obj, v_zero);
+        _ = try ins.brif(is_null, block_return_null, &.{}, block_check, &.{});
+    }
+
+    // Return null
+    builder.switchToBlock(block_return_null);
+    try builder.ensureInsertedBlock();
+    {
+        const ins = builder.ins();
+        const v_zero = try ins.iconst(clif.Type.I64, 0);
+        _ = try ins.return_(&[_]clif.Value{v_zero});
+    }
+
+    // Check IsDeiniting
+    builder.switchToBlock(block_check);
+    try builder.ensureInsertedBlock();
+    {
+        const ins = builder.ins();
+        const obj = builder.blockParams(block_entry)[0];
+        const v_header = try ins.iconst(clif.Type.I64, HEAP_OBJECT_HEADER_SIZE);
+        const header_ptr = try ins.isub(obj, v_header);
+        const refcount = try ins.load(clif.Type.I64, clif.MemFlags.DEFAULT, header_ptr, REFCOUNT_OFFSET);
+
+        // Extract IsDeiniting: (rc >> 32) & 1
+        const v_32 = try ins.iconst(clif.Type.I64, 32);
+        const shifted = try ins.ushr(refcount, v_32);
+        const v_one = try ins.iconst(clif.Type.I64, 1);
+        const is_deiniting_val = try ins.band(shifted, v_one);
+
+        const v_zero = try ins.iconst(clif.Type.I64, 0);
+        const is_deiniting = try ins.icmp(.ne, is_deiniting_val, v_zero);
+        _ = try ins.brif(is_deiniting, block_trap, &.{}, block_retain, &.{});
+    }
+
+    // Trap: dangling unowned reference
+    builder.switchToBlock(block_trap);
+    try builder.ensureInsertedBlock();
+    {
+        _ = try builder.ins().trap(.user1);
+    }
+
+    // Retain and return
+    builder.switchToBlock(block_retain);
+    try builder.ensureInsertedBlock();
+    {
+        const ins = builder.ins();
+        const obj = builder.blockParams(block_entry)[0];
+        const retain_idx = func_index_map.get("retain") orelse 0;
+        var retain_sig = clif.Signature.init(.system_v);
+        try retain_sig.addParam(allocator, clif.AbiParam.init(clif.Type.I64));
+        try retain_sig.addReturn(allocator, clif.AbiParam.init(clif.Type.I64));
+        const sig_ref = try builder.importSignature(retain_sig);
+        const func_ref = try builder.importFunction(.{
+            .name = .{ .user = .{ .namespace = 0, .index = retain_idx } },
+            .signature = sig_ref,
+            .colocated = true,
+        });
+        const result = try ins.call(func_ref, &[_]clif.Value{obj});
+        _ = try ins.return_(&[_]clif.Value{result.results[0]});
     }
 
     try builder.sealAllBlocks();

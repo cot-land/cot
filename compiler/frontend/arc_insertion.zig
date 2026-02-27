@@ -45,6 +45,8 @@ pub const CleanupState = enum {
 pub const CleanupKind = enum {
     /// Release a reference-counted value.
     release,
+    /// Decrement unowned RC at scope exit (Swift unowned reference).
+    unowned_release,
     /// End a borrow (not yet used, for future borrow checker).
     end_borrow,
     /// Deferred expression to evaluate at scope exit.

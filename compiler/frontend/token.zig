@@ -40,6 +40,7 @@ pub const Token = enum(u8) {
     kw_unreachable,
     kw_packed,
     kw_weak,
+    kw_unowned,
     kw_static,
     kw_and, kw_or, kw_not,
     kw_int, kw_float, kw_bool, kw_string, kw_byte, kw_void, kw_noreturn,
@@ -202,6 +203,7 @@ const token_strings = blk: {
     s[@intFromEnum(Token.kw_unreachable)] = "unreachable";
     s[@intFromEnum(Token.kw_packed)] = "packed";
     s[@intFromEnum(Token.kw_weak)] = "weak";
+    s[@intFromEnum(Token.kw_unowned)] = "unowned";
     s[@intFromEnum(Token.kw_static)] = "static";
     s[@intFromEnum(Token.kw_and)] = "and";
     s[@intFromEnum(Token.kw_or)] = "or";
@@ -241,6 +243,7 @@ pub const keywords = std.StaticStringMap(Token).initComptime(.{
     .{ "unreachable", .kw_unreachable },
     .{ "packed", .kw_packed },
     .{ "weak", .kw_weak },
+    .{ "unowned", .kw_unowned },
     .{ "static", .kw_static },
     .{ "and", .kw_and }, .{ "or", .kw_or }, .{ "not", .kw_not },
     .{ "int", .kw_int }, .{ "float", .kw_float }, .{ "bool", .kw_bool }, .{ "string", .kw_string },

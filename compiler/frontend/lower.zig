@@ -1615,6 +1615,15 @@ pub const Lowerer = struct {
                         var args = [_]ir.NodeIndex{value};
                         _ = try fb.emitCall("release", &args, false, TypeRegistry.VOID, Span.zero);
                     },
+                    .unowned_release => {
+                        if (self.target.isWasmGC()) continue;
+                        const value = if (cleanup.local_idx) |lidx|
+                            try fb.emitLoadLocal(lidx, cleanup.type_idx, Span.zero)
+                        else
+                            cleanup.value;
+                        var args = [_]ir.NodeIndex{value};
+                        _ = try fb.emitCall("unowned_release", &args, false, TypeRegistry.VOID, Span.zero);
+                    },
                     .defer_expr => {
                         try self.lowerDeferredNode(@intCast(cleanup.value));
                     },
@@ -1844,9 +1853,15 @@ pub const Lowerer = struct {
                     // Register cleanup for ARC values.
                     // Reference: Swift's emitManagedRValueWithCleanup (SILGenExpr.cpp:375-390)
                     // `weak var` skips ARC entirely — no retain, no cleanup.
-                    // This breaks reference cycles (parent↔child, delegate patterns).
+                    // `unowned var` increments unowned RC and registers unowned_release cleanup.
                     // Reference: Swift's `weak` and `unowned` modifiers.
-                    if (!self.target.isWasmGC() and !var_stmt.is_weak and self.type_reg.couldBeARC(type_idx)) {
+                    if (!self.target.isWasmGC() and var_stmt.is_unowned and self.type_reg.couldBeARC(type_idx)) {
+                        // unowned: increment unowned RC, register unowned_release cleanup
+                        var uargs = [_]ir.NodeIndex{value_node};
+                        _ = try fb.emitCall("unowned_retain", &uargs, false, type_idx, var_stmt.span);
+                        const cleanup = arc.Cleanup.initForLocal(.unowned_release, value_node, type_idx, local_idx);
+                        _ = try self.cleanup_stack.push(cleanup);
+                    } else if (!self.target.isWasmGC() and !var_stmt.is_weak and !var_stmt.is_unowned and self.type_reg.couldBeARC(type_idx)) {
                         const is_owned = if (value_expr) |e| (e == .new_expr or e == .call) else false;
 
                         if (is_owned) {
