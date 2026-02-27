@@ -1008,7 +1008,7 @@ impl Ast {
 }
 
 // ============================================================================
-// BuiltinKind — compiler intrinsic @builtin variants (v0.3.2)
+// BuiltinKind — compiler intrinsic @builtin variants (v0.3.3)
 // ============================================================================
 
 /// Compiler intrinsic builtins (the @-prefixed functions).

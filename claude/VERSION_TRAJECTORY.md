@@ -66,22 +66,22 @@ The `self/` directory contains a nearly-complete compiler frontend in Cot:
 ```
 self/
   cot.json              # Project config (safe: true)
-  main.cot              # CLI entry point — parse/check/lex/help/version (176 lines)
+  main.cot              # CLI entry point — parse/check/lex/help/version (318 lines)
   frontend/
-    token.cot           # Token enum + keyword lookup (434 lines)
-    scanner.cot         # Full lexer (732 lines)
+    token.cot           # Token enum + keyword lookup (436 lines)
+    scanner.cot         # Full lexer (736 lines)
     source.cot          # Source positions + spans (111 lines)
     errors.cot          # Error reporter (203 lines)
-    ast.cot             # AST nodes + 54 builtins (1,249 lines)
-    parser.cot          # Recursive descent parser (2,769 lines)
-    types.cot           # TypeRegistry + type structs (1,256 lines)
-    checker.cot         # Type checker — 99% of Zig's 4,001 lines (3,966 lines)
-  total: 10,896 lines
+    ast.cot             # AST nodes + 54 builtins (1,259 lines)
+    parser.cot          # Recursive descent parser (2,691 lines)
+    types.cot           # TypeRegistry + type structs (1,287 lines)
+    checker.cot         # Type checker + SharedCheckerState (4,112 lines)
+  total: 11,153 lines
 ```
 
-**What's done:** Scanner, token, AST, parser, type registry, and checker — all complete. The checker alone is 3,966 lines, covering scope/symbol table, type inference, function/struct/enum/union checking, generics (monomorphization), traits, closures, .variant shorthand, exhaustiveness checking, binary operators, @safe coercion, struct field validation, ErrorSet variant storage, and per-builtin validation. The self-hosted native binary can parse all 9 of its own source files (414KB total). 142+ self-hosted tests pass on both native and wasm32.
+**What's done:** Scanner, token, AST, parser, type registry, checker, and multi-file import resolution — all complete. The checker alone is 4,112 lines, covering scope/symbol table, type inference, function/struct/enum/union checking, generics (monomorphization), traits, closures, .variant shorthand, exhaustiveness checking, binary operators, @safe coercion, struct field validation, ErrorSet variant storage, and per-builtin validation. The self-hosted native binary can parse all 9 of its own source files (414KB total). 142 self-hosted tests pass on native.
 
-**What's next:** Multi-file import resolution for the checker, then IR/SSA lowerer port.
+**What's next:** IR/SSA lowerer port. wasm32 target is broken (multi-file compilation `error.MissingValue`).
 
 ---
 
@@ -91,15 +91,15 @@ self/
 
 | Component | Lines | Status |
 |-----------|-------|--------|
-| Token enum + keyword lookup | 434 | Done |
-| Full lexer | 732 | Done |
+| Token enum + keyword lookup | 436 | Done |
+| Full lexer | 736 | Done |
 | Source positions + spans | 111 | Done |
 | Error reporter | 203 | Done |
-| AST nodes + 54 builtins | 1,249 | Done |
+| AST nodes + 54 builtins | 1,259 | Done |
 
 **Milestone achieved:** All source files lex correctly.
 
-### Phase 2: Parser (DONE — 2,769 lines)
+### Phase 2: Parser (DONE — 2,691 lines)
 
 | Component | Status |
 |-----------|--------|
@@ -112,11 +112,11 @@ self/
 
 **Milestone achieved:** `cot build self/main.cot -o /tmp/selfcot` produces a native binary. Parser self-parses all 9 source files (414KB total).
 
-### Phase 3: Type Registry + Type Checker (DONE — 5,222 lines)
+### Phase 3: Type Registry + Type Checker (DONE — 5,399 lines)
 
 | Component | Lines | Status |
 |-----------|-------|--------|
-| TypeRegistry + type structs | 1,256 | Done |
+| TypeRegistry + type structs | 1,287 | Done |
 | Scope/symbol table | ~600 | Done |
 | Type inference | ~800 | Done |
 | Function/struct/enum/union checking | ~1,000 | Done |
@@ -125,7 +125,7 @@ self/
 | Closures, .variant shorthand, exhaustiveness | ~400 | Done |
 | @safe coercion, struct field validation | ~300 | Done |
 
-**Milestone achieved:** Single-file type checking works. Multi-file import resolution is next.
+**Milestone achieved:** Full type checking with multi-file import resolution works. Next: IR/SSA lowerer.
 
 ### Phase 4: IR + SSA (est. 2,000-3,000 lines)
 
@@ -153,14 +153,14 @@ self/
 
 | Phase | Lines | Cumulative | Status |
 |-------|-------|------------|--------|
-| Scanner + AST + Source + Errors | 2,729 | 2,729 | **Done** |
-| Parser | 2,769 | 5,498 | **Done** |
-| Type Registry + Checker | 5,222 | 10,720 | **Done** |
-| CLI (main.cot) | 176 | 10,896 | **Done** |
-| IR + SSA | ~2,500 | ~13,400 | Planned |
-| Wasm Codegen | ~2,000 | ~15,400 | Planned |
+| Scanner + AST + Source + Errors | 2,745 | 2,745 | **Done** |
+| Parser | 2,691 | 5,436 | **Done** |
+| Type Registry + Checker | 5,399 | 10,835 | **Done** |
+| CLI (main.cot) | 318 | 11,153 | **Done** |
+| IR + SSA | ~2,500 | ~13,650 | Planned |
+| Wasm Codegen | ~2,000 | ~15,650 | Planned |
 
-**~15,400 lines total for MVP self-hosting.** 10,896 done (~71% by lines). ~4,500 to go.
+**~15,650 lines total for MVP self-hosting.** 11,153 done (~71% by lines). ~4,500 to go.
 
 ---
 
@@ -214,8 +214,8 @@ When Stage 1 and Stage 2 produce identical binaries, self-hosting is verified. T
 
 | Version | Date | Self-Hosting Milestone | Status |
 |---------|------|----------------------|--------|
-| 0.3.2 | Feb 2026 | Full frontend in Cot (10,896 LOC) — scanner, parser, types, checker | **Done** |
-| 0.4 | TBD | Multi-file import resolution, IR lowerer begins | Planned |
+| 0.3.2 | Feb 2026 | Full frontend in Cot (11,153 LOC) — scanner, parser, types, checker, multi-file imports | **Done** |
+| 0.4 | TBD | IR lowerer begins | Planned |
 | 0.5-0.6 | TBD | IR + SSA in Cot (~13,400 LOC) | Planned |
 | 0.7-0.9 | TBD | Wasm codegen in Cot (~15,400 LOC) | Planned |
 | 0.10 | TBD | **Self-hosted compiler becomes default** | Goal |
@@ -232,12 +232,12 @@ For perspective, here's what Cot achieved in its first 8 weeks:
 - 31 stdlib modules (list, map, set, string, json, fs, os, time, crypto, regex, http, ...)
 - LSP server with 7 features
 - VS Code/Cursor extension
-- 66 test files, ~1,620 tests
+- 67 test files, ~1,623 tests
 - CLI with 11 subcommands
 - @safe mode for TypeScript-style DX
 - Comptime infrastructure (@typeInfo, inline for, dead branch elimination)
 - MCP server written in Cot
-- Self-hosted frontend (scanner, parser, types, checker — 10,896 lines)
+- Self-hosted frontend (scanner, parser, types, checker, multi-file imports — 11,153 lines)
 
 Zig took 3 years and 36 contributors to reach a comparable 0.3. The LLM-assisted development model compresses implementation dramatically. The same velocity advantage applies to the self-hosting work ahead — the full frontend was ported in under 2 weeks.
 

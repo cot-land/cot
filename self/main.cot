@@ -36,7 +36,7 @@ fn main() void {
     }
 
     if (cmd == "version" or cmd == "--version") {
-        writeOut("cot 0.3.2 (self-hosted)\n")
+        writeOut("cot 0.3.3 (self-hosted)\n")
         return
     }
 

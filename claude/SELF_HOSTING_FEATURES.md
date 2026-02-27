@@ -1036,4 +1036,4 @@ The optional type representation was changed from single-value (`null = 0`) to c
 
 7. **Quoted identifier enum variant access** — `@intFromEnum(BuiltinKind.@"string"))` evaluates to 0 instead of 36 at runtime. Self-hosted test "BuiltinKind quoted identifiers" fails. Likely a lowerer issue with `@"..."` syntax in member/field access paths.
 
-8. **Self-hosted wasm duplicate export** — `cot test self/main.cot --target=wasm32` fails with "duplicate export name" error. Pre-existing multi-file wasm compilation issue with `lowered_generics`.
+8. **Self-hosted wasm compilation failure** — `cot test self/main.cot --target=wasm32` fails with `error.MissingValue`. Pre-existing multi-file wasm compilation issue.
