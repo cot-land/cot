@@ -253,20 +253,62 @@ pub const TypeRegistry = struct {
 
     pub fn registerNamed(self: *TypeRegistry, n: []const u8, idx: TypeIndex) !void { try self.name_map.put(n, idx); }
 
+    /// Go pattern: types.NewPointer(elem) — interns pointer types.
+    /// Deduplicates: returns existing TypeIndex if pointer-to-elem already exists.
     pub fn makePointer(self: *TypeRegistry, elem: TypeIndex) !TypeIndex {
         const pointee = self.get(elem);
         const is_managed = pointee == .struct_type or pointee == .enum_type or pointee == .union_type;
+        // Dedup: scan for existing pointer with same elem and managed flag
+        for (self.types.items, 0..) |t, i| {
+            if (t == .pointer and t.pointer.elem == elem and t.pointer.managed == is_managed)
+                return @intCast(i);
+        }
         return self.add(.{ .pointer = .{ .elem = elem, .managed = is_managed } });
     }
     pub fn makeRawPointer(self: *TypeRegistry, elem: TypeIndex) !TypeIndex {
+        // Dedup: scan for existing raw pointer with same elem
+        for (self.types.items, 0..) |t, i| {
+            if (t == .pointer and t.pointer.elem == elem and !t.pointer.managed)
+                return @intCast(i);
+        }
         return self.add(.{ .pointer = .{ .elem = elem, .managed = false } });
     }
-    pub fn makeOptional(self: *TypeRegistry, elem: TypeIndex) !TypeIndex { return self.add(.{ .optional = .{ .elem = elem } }); }
-    pub fn makeErrorUnion(self: *TypeRegistry, elem: TypeIndex) !TypeIndex { return self.add(.{ .error_union = .{ .elem = elem } }); }
-    pub fn makeErrorUnionWithSet(self: *TypeRegistry, elem: TypeIndex, error_set: TypeIndex) !TypeIndex { return self.add(.{ .error_union = .{ .elem = elem, .error_set = error_set } }); }
-    pub fn makeSlice(self: *TypeRegistry, elem: TypeIndex) !TypeIndex { return self.add(.{ .slice = .{ .elem = elem } }); }
-    pub fn makeArray(self: *TypeRegistry, elem: TypeIndex, len: u64) !TypeIndex { return self.add(.{ .array = .{ .elem = elem, .length = len } }); }
-    pub fn makeMap(self: *TypeRegistry, key: TypeIndex, value: TypeIndex) !TypeIndex { return self.add(.{ .map = .{ .key = key, .value = value } }); }
+    pub fn makeOptional(self: *TypeRegistry, elem: TypeIndex) !TypeIndex {
+        for (self.types.items, 0..) |t, i| {
+            if (t == .optional and t.optional.elem == elem) return @intCast(i);
+        }
+        return self.add(.{ .optional = .{ .elem = elem } });
+    }
+    pub fn makeErrorUnion(self: *TypeRegistry, elem: TypeIndex) !TypeIndex {
+        for (self.types.items, 0..) |t, i| {
+            if (t == .error_union and t.error_union.elem == elem and t.error_union.error_set == invalid_type) return @intCast(i);
+        }
+        return self.add(.{ .error_union = .{ .elem = elem } });
+    }
+    pub fn makeErrorUnionWithSet(self: *TypeRegistry, elem: TypeIndex, error_set: TypeIndex) !TypeIndex {
+        for (self.types.items, 0..) |t, i| {
+            if (t == .error_union and t.error_union.elem == elem and t.error_union.error_set == error_set) return @intCast(i);
+        }
+        return self.add(.{ .error_union = .{ .elem = elem, .error_set = error_set } });
+    }
+    pub fn makeSlice(self: *TypeRegistry, elem: TypeIndex) !TypeIndex {
+        for (self.types.items, 0..) |t, i| {
+            if (t == .slice and t.slice.elem == elem) return @intCast(i);
+        }
+        return self.add(.{ .slice = .{ .elem = elem } });
+    }
+    pub fn makeArray(self: *TypeRegistry, elem: TypeIndex, len: u64) !TypeIndex {
+        for (self.types.items, 0..) |t, i| {
+            if (t == .array and t.array.elem == elem and t.array.length == len) return @intCast(i);
+        }
+        return self.add(.{ .array = .{ .elem = elem, .length = len } });
+    }
+    pub fn makeMap(self: *TypeRegistry, key: TypeIndex, value: TypeIndex) !TypeIndex {
+        for (self.types.items, 0..) |t, i| {
+            if (t == .map and t.map.key == key and t.map.value == value) return @intCast(i);
+        }
+        return self.add(.{ .map = .{ .key = key, .value = value } });
+    }
     pub fn makeList(self: *TypeRegistry, elem: TypeIndex) !TypeIndex { return self.add(.{ .list = .{ .elem = elem } }); }
     pub fn makeTuple(self: *TypeRegistry, element_types: []const TypeIndex) !TypeIndex {
         return self.add(.{ .tuple = .{ .element_types = try self.allocator.dupe(TypeIndex, element_types) } });

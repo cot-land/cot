@@ -482,6 +482,7 @@ pub const Lowerer = struct {
             self.current_func = fb;
             self.cleanup_stack.clear();
             self.comptime_value_vars.clearRetainingCapacity();
+            self.weak_locals.clearRetainingCapacity();
             // SRET: add hidden first parameter (Zig firstParamSRet pattern)
             if (uses_sret) {
                 _ = try fb.addParam("__sret", TypeRegistry.I64, 8);
@@ -672,6 +673,7 @@ pub const Lowerer = struct {
             self.current_func = fb;
             self.cleanup_stack.clear();
             self.comptime_value_vars.clearRetainingCapacity();
+            self.weak_locals.clearRetainingCapacity();
             for (fn_decl.params) |param| {
                 var param_type = self.resolveTypeNode(param.type_expr);
                 param_type = self.chk.safeWrapType(param_type) catch param_type;
@@ -1009,6 +1011,7 @@ pub const Lowerer = struct {
             self.current_test_name = test_decl.name;
             self.cleanup_stack.clear();
             self.comptime_value_vars.clearRetainingCapacity();
+            self.weak_locals.clearRetainingCapacity();
             if (test_decl.body != null_node) {
                 _ = try self.lowerBlockNode(test_decl.body);
                 if (fb.needsTerminator()) {
@@ -2561,10 +2564,10 @@ pub const Lowerer = struct {
                 if (!self.target.isWasmGC()) {
                     const ptr_type_idx = self.inferExprType(d.operand);
                     const ptr_type_info = self.type_reg.get(ptr_type_idx);
-                    if (ptr_type_info == .pointer) {
+                    if (ptr_type_info == .pointer and ptr_type_info.pointer.managed) {
                         const pointee_type = ptr_type_info.pointer.elem;
-                        // ARC Phase 4: Type-based guard — always retain/release for ARC pointees.
-                        // Old guard used baseHasCleanup which fails for method params.
+                        // ARC Phase 4: Type-based guard — retain/release for ARC pointees via managed ptrs.
+                        // Skip for @intToPtr-derived pointers (unmanaged) — stdlib manages ARC explicitly.
                         // Swift SILGen pattern: copy_value %new; store %new; destroy_value %old
                         // Retain-before-release prevents use-after-free when old == new.
                         if (self.type_reg.couldBeARC(pointee_type)) {
@@ -2824,25 +2827,31 @@ pub const Lowerer = struct {
         const base_node = self.tree.getNode(idx.base) orelse return;
         const base_expr = base_node.asExpr() orelse return;
 
-        // ARC: release old element before storing new
+        // ARC: release old element before storing new.
+        // Guard: baseHasCleanup ensures the array base is properly initialized (not undefined).
+        // Retain-before-release ordering (Swift SILGen pattern) prevents use-after-free on self-assignment.
         const arc_elem = self.type_reg.couldBeARC(elem_type) and self.baseHasCleanup(idx.base);
         if (arc_elem) {
-            // Load old element and release it
             if (base_expr == .ident) {
                 if (fb.lookupLocal(base_expr.ident.name)) |local_idx| {
+                    // Load old value BEFORE store (needed for release after)
                     const old_val = try fb.emitIndexLocal(local_idx, index_node, elem_size, elem_type, span);
+
+                    // Retain new value if borrowed (+0), then store
+                    const rhs_node = self.tree.getNode(rhs_ast);
+                    const rhs_expr2 = if (rhs_node) |n| n.asExpr() else null;
+                    const is_owned = if (rhs_expr2) |e| (e == .new_expr or e == .call) else false;
+                    if (!is_owned) {
+                        var retain_args = [_]ir.NodeIndex{value_node};
+                        const retained = try fb.emitCall("retain", &retain_args, false, elem_type, span);
+                        _ = try fb.emitStoreIndexLocal(local_idx, index_node, retained, elem_size, span);
+                    } else {
+                        _ = try fb.emitStoreIndexLocal(local_idx, index_node, value_node, elem_size, span);
+                    }
+
+                    // Release old value AFTER store (safe even if old == new)
                     var release_args = [_]ir.NodeIndex{old_val};
                     _ = try fb.emitCall("release", &release_args, false, TypeRegistry.VOID, span);
-
-                    // Retain new value if borrowed (+0)
-                    const rhs_node = self.tree.getNode(rhs_ast);
-                    const rhs_expr = if (rhs_node) |n| n.asExpr() else null;
-                    const is_owned = if (rhs_expr) |e| (e == .new_expr or e == .call) else false;
-                    const store_val = if (!is_owned) blk: {
-                        var retain_args = [_]ir.NodeIndex{value_node};
-                        break :blk try fb.emitCall("retain", &retain_args, false, elem_type, span);
-                    } else value_node;
-                    _ = try fb.emitStoreIndexLocal(local_idx, index_node, store_val, elem_size, span);
                     return;
                 }
             }
@@ -4219,6 +4228,15 @@ pub const Lowerer = struct {
         }
 
         if (base_expr == .deref) {
+            const operand_type_idx = self.inferExprType(base_expr.deref.operand);
+            const operand_type = self.type_reg.get(operand_type_idx);
+            // For double pointers (**Node), dereference first to get *Node.
+            // emitFieldValue expects a pointer-to-struct, not a pointer-to-pointer.
+            if (operand_type == .pointer and self.type_reg.get(operand_type.pointer.elem) == .pointer) {
+                const outer_ptr = try self.lowerExprNode(base_expr.deref.operand);
+                const inner_ptr = try fb.emitPtrLoadValue(outer_ptr, operand_type.pointer.elem, fa.span);
+                return try fb.emitFieldValue(inner_ptr, field_idx, field_offset, field_type, fa.span);
+            }
             const ptr_val = try self.lowerExprNode(base_expr.deref.operand);
             return try fb.emitFieldValue(ptr_val, field_idx, field_offset, field_type, fa.span);
         }
@@ -6396,6 +6414,8 @@ pub const Lowerer = struct {
             fb.is_destructor = std.mem.eql(u8, f.name, "deinit");
             self.current_func = fb;
             self.cleanup_stack.clear();
+            self.comptime_value_vars.clearRetainingCapacity();
+            self.weak_locals.clearRetainingCapacity();
             if (uses_sret) {
                 _ = try fb.addParam("__sret", TypeRegistry.I64, 8);
             }

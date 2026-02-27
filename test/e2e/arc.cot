@@ -2,6 +2,9 @@
 // Verifies retain/release correctness across all ownership patterns
 // Reference: Swift SILGen — ManagedValue ownership tracking
 
+import "std/sys"
+import "std/list"
+
 struct ArcNode { value: i64, next: i64 }
 
 impl ArcNode {
@@ -127,7 +130,6 @@ test "arc: @arcRetain no-op on non-ARC type" {
 }
 
 // -- ARC Phase 4: Ownership correctness --
-// Must come before weak/unowned tests (native func index ordering issue)
 
 // --- Return ownership ---
 
@@ -247,4 +249,58 @@ test "arc: unowned and strong coexist" {
     var n2 = n
     @assertEq(u.value, 55)
     @assertEq(n2.value, 55)
+}
+
+// -- ARC Phase 5: Collection element ARC --
+// List retains elements on insert, releases on remove/free.
+// Reference: Swift Array — elements retained on insert, released on remove/dealloc.
+
+struct ArcItem { value: i64 }
+impl ArcItem { fn deinit(self: *ArcItem) {} }
+
+test "arc: list append retains element" {
+    var items: List(*ArcItem) = .{}
+    var child = new ArcItem { value: 77 }
+    items.append(child)
+    // child scope cleanup releases → RC from 2 to 1 (list still holds ref)
+    @assertEq(items.get(0).value, 77)
+    items.free()
+}
+
+test "arc: list set retains and releases" {
+    var items: List(*ArcItem) = .{}
+    items.append(new ArcItem { value: 1 })
+    items.set(0, new ArcItem { value: 2 })
+    @assertEq(items.get(0).value, 2)
+    items.free()
+}
+
+test "arc: list multiple elements" {
+    var items: List(*ArcItem) = .{}
+    items.append(new ArcItem { value: 10 })
+    items.append(new ArcItem { value: 20 })
+    items.append(new ArcItem { value: 30 })
+    @assertEq(items.get(0).value, 10)
+    @assertEq(items.get(1).value, 20)
+    @assertEq(items.get(2).value, 30)
+    @assertEq(items.count, 3)
+    items.free()
+}
+
+test "arc: list pop transfers ownership" {
+    var items: List(*ArcItem) = .{}
+    items.append(new ArcItem { value: 42 })
+    var popped = items.pop()
+    @assertEq(popped.value, 42)
+    // popped now owns the reference — its scope cleanup releases it
+    items.free()
+}
+
+test "arc: list free releases all elements" {
+    var items: List(*ArcItem) = .{}
+    items.append(new ArcItem { value: 1 })
+    items.append(new ArcItem { value: 2 })
+    items.append(new ArcItem { value: 3 })
+    // free releases all 3 elements + deallocates buffer
+    items.free()
 }
