@@ -153,9 +153,10 @@ pub const SSABuilder = struct {
                 // Store to stack — but NOT for WasmGC struct/pointer-to-struct params
                 // (they're GC refs, not linear memory values). This covers both
                 // direct struct params and self: *Type method params.
+                // Only managed pointers (from `new`) are GC refs; raw pointers (from @intToPtr) stay as i64.
                 // Reference: Kotlin/Dart WasmGC — struct refs stay in Wasm locals.
                 const is_gc_ref_param = is_wasm_gc and (local_type == .struct_type or
-                    (local_type == .pointer and type_registry.get(local_type.pointer.elem) == .struct_type));
+                    (local_type == .pointer and local_type.pointer.managed and type_registry.get(local_type.pointer.elem) == .struct_type));
                 if (!is_gc_ref_param) {
                     const addr = try func.newValue(.local_addr, TypeRegistry.VOID, entry, .{});
                     addr.aux_int = @intCast(slot_offsets[i]);
@@ -491,11 +492,12 @@ pub const SSABuilder = struct {
     fn convertLoadLocal(self: *SSABuilder, local_idx: ir.LocalIdx, type_idx: TypeIndex, cur: *Block) !*Value {
         const load_type = self.type_registry.get(type_idx);
 
-        // WasmGC: struct and pointer-to-struct locals hold GC refs — return SSA value directly.
+        // WasmGC: struct and managed pointer-to-struct locals hold GC refs — return SSA value directly.
         // Covers both direct struct vars and self: *Type method params.
+        // Raw pointers (@intToPtr) are i64 linear memory addresses, not GC refs.
         // Reference: Kotlin/Dart WasmGC — struct refs are Wasm locals, not memory.
         const is_gc_ref = self.target.isWasmGC() and (load_type == .struct_type or
-            (load_type == .pointer and self.type_registry.get(load_type.pointer.elem) == .struct_type));
+            (load_type == .pointer and load_type.pointer.managed and self.type_registry.get(load_type.pointer.elem) == .struct_type));
         if (is_gc_ref) {
             if (self.vars.get(local_idx)) |v| return v;
             // Check sealed block defs
@@ -571,10 +573,11 @@ pub const SSABuilder = struct {
 
         // WasmGC: struct values are GC refs — assign directly to local, no memory store.
         // The Wasm codegen (setReg) emits local.set for the assigned value.
-        // Covers: struct.new, call results returning structs, pointer-to-struct.
+        // Covers: struct.new, call results returning structs, managed pointer-to-struct.
+        // Raw pointers (@intToPtr) are i64 values, not GC refs.
         if (self.target.isWasmGC()) {
             const is_gc_ref = value.op == .wasm_gc_struct_new or value_type == .struct_type or
-                (value_type == .pointer and self.type_registry.get(value_type.pointer.elem) == .struct_type);
+                (value_type == .pointer and value_type.pointer.managed and self.type_registry.get(value_type.pointer.elem) == .struct_type);
             if (is_gc_ref) {
                 self.assign(local_idx, value);
                 return value;
@@ -826,12 +829,13 @@ pub const SSABuilder = struct {
     /// Must match callee param decomposition in buildSSA.
     /// Go reference: ssagen/ssa.go uses OSPTR()/OLEN() to decompose slice args at call sites.
     fn addCallArg(self: *SSABuilder, call_val: *Value, arg_val: *Value, cur: *Block) !void {
-        // WasmGC: struct/GC-ref args are single ref values — no decomposition
+        // WasmGC: struct/GC-ref args are single ref values — no decomposition.
         // But strings/slices still decompose to (ptr, len) since they're in linear memory.
+        // Raw pointers (@intToPtr) are i64 values, not GC refs — they decompose normally.
         if (self.target.isWasmGC()) {
             const arg_type = self.type_registry.get(arg_val.type_idx);
             const is_gc_ref = arg_type == .struct_type or
-                (arg_type == .pointer and self.type_registry.get(arg_type.pointer.elem) == .struct_type);
+                (arg_type == .pointer and arg_type.pointer.managed and self.type_registry.get(arg_type.pointer.elem) == .struct_type);
             if (is_gc_ref) {
                 try call_val.addArgAlloc(arg_val, self.allocator);
                 return;

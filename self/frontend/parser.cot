@@ -272,10 +272,7 @@ impl Parser {
             return null_node
         }
 
-        var type_params: List(string) = undefined
-        type_params.items = 0
-        type_params.count = 0
-        type_params.capacity = 0
+        var type_params: List(string) = .{}
         if (self.tok == @intFromEnum(Token.ident) and self.peekToken() != @intFromEnum(Token.colon)) {
             // Type parameters: (T) or (T, U)
             while (self.tok != @intFromEnum(Token.rparen) and self.tok != @intFromEnum(Token.eof)) {
@@ -299,10 +296,7 @@ impl Parser {
         }
 
         // Regular parameters (lparen already consumed above)
-        var params: List(int) = undefined
-        params.items = 0
-        params.count = 0
-        params.capacity = 0
+        var params: List(int) = .{}
         while (self.tok != @intFromEnum(Token.rparen) and self.tok != @intFromEnum(Token.eof)) {
             const param_node = self.parseFieldDef()
             if (param_node != null_node) {
@@ -334,10 +328,7 @@ impl Parser {
                 const self_type = self.ast.addIdent(self.current_impl_type, self.spanSE(start, start))
                 const self_param = self.ast.addFieldDef("self", self_type, null_node, "", self.spanSE(start, start))
                 // Prepend self to params
-                var new_params: List(int) = undefined
-                new_params.items = 0
-                new_params.count = 0
-                new_params.capacity = 0
+                var new_params: List(int) = .{}
                 new_params.append(self_param)
                 for pi in 0..params.count {
                     new_params.append(params.get(pi))
@@ -355,10 +346,7 @@ impl Parser {
 
         // Where clause: fn sort(T)(list: *List(T)) void where T: Ord
         // Ported from parser.zig:299-321
-        var type_param_bounds: List(string) = undefined
-        type_param_bounds.items = 0
-        type_param_bounds.count = 0
-        type_param_bounds.capacity = 0
+        var type_param_bounds: List(string) = .{}
         if (self.tok == @intFromEnum(Token.kw_where) and type_params.len() > 0) {
             // Initialize bounds array with "" for each type param
             for bi in 0..type_params.len() {
@@ -452,10 +440,7 @@ impl Parser {
                 if (!self.expect(@intFromEnum(Token.lbrace))) {
                     return null_node
                 }
-                var variants: List(int) = undefined
-                variants.items = 0
-                variants.count = 0
-                variants.capacity = 0
+                var variants: List(int) = .{}
                 while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
                     const vstart = self.tok_start
                     if (self.tok == @intFromEnum(Token.at)) {
@@ -482,10 +467,7 @@ impl Parser {
                 if (self.peekToken() == @intFromEnum(Token.lbrace)) {
                     self.advance()  // consume 'error'
                     self.advance()  // consume '{'
-                    var variants: List(string) = undefined
-                    variants.items = 0
-                    variants.count = 0
-                    variants.capacity = 0
+                    var variants: List(string) = .{}
                     while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
                         if (self.tok != @intFromEnum(Token.ident)) {
                             break
@@ -507,10 +489,7 @@ impl Parser {
                 if (!self.expect(@intFromEnum(Token.lbrace))) {
                     return null_node
                 }
-                var variants: List(int) = undefined
-                variants.items = 0
-                variants.count = 0
-                variants.capacity = 0
+                var variants: List(int) = .{}
                 while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
                     const vstart = self.tok_start
                     if (self.tok != @intFromEnum(Token.ident)) {
@@ -532,18 +511,9 @@ impl Parser {
 
             if (self.tok == @intFromEnum(Token.kw_struct)) {
                 self.advance()  // consume 'struct'
-                var sfields: List(int) = undefined
-                sfields.items = 0
-                sfields.count = 0
-                sfields.capacity = 0
-                var nested: List(int) = undefined
-                nested.items = 0
-                nested.count = 0
-                nested.capacity = 0
-                var type_params: List(string) = undefined
-                type_params.items = 0
-                type_params.count = 0
-                type_params.capacity = 0
+                var sfields: List(int) = .{}
+                var nested: List(int) = .{}
+                var type_params: List(string) = .{}
                 if (!self.expect(@intFromEnum(Token.lbrace))) {
                     return null_node
                 }
@@ -592,10 +562,7 @@ impl Parser {
 
     /// Destructure from first binding: const a, b = expr
     fn parseDestructureDeclFrom(first_name: string, first_type: int, first_start: int, start: int, is_const: int, doc: string) int {
-        var bindings: List(int) = undefined
-        bindings.items = 0
-        bindings.count = 0
-        bindings.capacity = 0
+        var bindings: List(int) = .{}
         bindings.append(self.ast.addDestructureBind(first_name, first_type, self.spanSE(first_start, self.tok_end)))
         while (self.match(@intFromEnum(Token.comma))) {
             if (self.tok != @intFromEnum(Token.ident)) {
@@ -633,10 +600,7 @@ impl Parser {
 
         // Parse optional type parameters: struct Pair(T, U) { ... }
         // Ported from parser.zig:440-454
-        var type_params: List(string) = undefined
-        type_params.items = 0
-        type_params.count = 0
-        type_params.capacity = 0
+        var type_params: List(string) = .{}
         if (self.tok == @intFromEnum(Token.lparen)) {
             self.advance()  // consume (
             while (self.tok != @intFromEnum(Token.rparen) and self.tok != @intFromEnum(Token.eof)) {
@@ -659,10 +623,7 @@ impl Parser {
 
         // Parse nested declarations (const, enum, struct, type, fn) before fields
         // Ported from parser.zig:458-470
-        var nested: List(int) = undefined
-        nested.items = 0
-        nested.count = 0
-        nested.capacity = 0
+        var nested: List(int) = .{}
         while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
             const tok = @as(Token, @enumFromInt(self.tok))
             if (tok == Token.kw_const or tok == Token.kw_enum or tok == Token.kw_type or
@@ -677,10 +638,7 @@ impl Parser {
         }
 
         // Fields
-        var fields: List(int) = undefined
-        fields.items = 0
-        fields.count = 0
-        fields.capacity = 0
+        var fields: List(int) = .{}
         while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
             self.collectDocComment()
             const fd = self.parseFieldDef()
@@ -733,10 +691,7 @@ impl Parser {
         if (!self.expect(@intFromEnum(Token.lbrace))) {
             return null_node
         }
-        var variants: List(int) = undefined
-        variants.items = 0
-        variants.count = 0
-        variants.capacity = 0
+        var variants: List(int) = .{}
         while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
             const vstart = self.tok_start
             if (self.tok == @intFromEnum(Token.at)) {
@@ -778,10 +733,7 @@ impl Parser {
         if (!self.expect(@intFromEnum(Token.lbrace))) {
             return null_node
         }
-        var variants: List(int) = undefined
-        variants.items = 0
-        variants.count = 0
-        variants.capacity = 0
+        var variants: List(int) = .{}
         while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
             const vstart = self.tok_start
             if (self.tok != @intFromEnum(Token.ident)) {
@@ -816,10 +768,7 @@ impl Parser {
 
         // Parse optional type parameters: impl List(T) { ... }
         // Ported from parser.zig:493-507
-        var type_params: List(string) = undefined
-        type_params.items = 0
-        type_params.count = 0
-        type_params.capacity = 0
+        var type_params: List(string) = .{}
         if (self.tok == @intFromEnum(Token.lparen)) {
             self.advance()
             while (self.tok != @intFromEnum(Token.rparen) and self.tok != @intFromEnum(Token.eof)) {
@@ -853,10 +802,7 @@ impl Parser {
         self.current_impl_type = type_name
         self.current_impl_is_generic = type_params.len() > 0
 
-        var methods: List(int) = undefined
-        methods.items = 0
-        methods.count = 0
-        methods.capacity = 0
+        var methods: List(int) = .{}
 
         while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
             self.collectDocComment()
@@ -920,10 +866,7 @@ impl Parser {
         self.current_impl_type = target
         self.current_impl_is_generic = type_params.len() > 0
 
-        var methods: List(int) = undefined
-        methods.items = 0
-        methods.count = 0
-        methods.capacity = 0
+        var methods: List(int) = .{}
 
         while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
             self.collectDocComment()
@@ -966,10 +909,7 @@ impl Parser {
         }
         const name = self.tok_text
         self.advance()
-        var methods: List(int) = undefined
-        methods.items = 0
-        methods.count = 0
-        methods.capacity = 0
+        var methods: List(int) = .{}
         if (!self.expect(@intFromEnum(Token.lbrace))) {
             return null_node
         }
@@ -1180,10 +1120,7 @@ impl Parser {
             } else if (tok == Token.lparen) {
                 // Function call
                 self.advance()  // consume (
-                var args: List(int) = undefined
-                args.items = 0
-                args.count = 0
-                args.capacity = 0
+                var args: List(int) = .{}
                 while (self.tok != @intFromEnum(Token.rparen) and self.tok != @intFromEnum(Token.eof)) {
                     const arg = self.parseExpr()
                     if (arg != null_node) {
@@ -1285,10 +1222,7 @@ impl Parser {
             const inner = self.parseExpr()
             if (self.tok == @intFromEnum(Token.comma)) {
                 // Tuple literal: (a, b, c)
-                var elems: List(int) = undefined
-                elems.items = 0
-                elems.count = 0
-                elems.capacity = 0
+                var elems: List(int) = .{}
                 elems.append(inner)
                 while (self.match(@intFromEnum(Token.comma))) {
                     if (self.tok == @intFromEnum(Token.rparen)) {
@@ -1306,10 +1240,7 @@ impl Parser {
         // Array literal: [1, 2, 3]
         if (tok == Token.lbrack) {
             self.advance()  // consume [
-            var elems: List(int) = undefined
-            elems.items = 0
-            elems.count = 0
-            elems.capacity = 0
+            var elems: List(int) = .{}
             while (self.tok != @intFromEnum(Token.rbrack) and self.tok != @intFromEnum(Token.eof)) {
                 elems.append(self.parseExpr())
                 if (!self.match(@intFromEnum(Token.comma))) {
@@ -1451,10 +1382,7 @@ impl Parser {
     /// string_interp_mid between them, ending with string_interp_end.
     fn parseStringInterp() int {
         const start = self.tok_start
-        var segments: List(int) = undefined
-        segments.items = 0
-        segments.count = 0
-        segments.capacity = 0
+        var segments: List(int) = .{}
         // Start segment text (between " and ${)
         const start_text = self.tok_text
         if (@lenOf(start_text) > 0) {
@@ -1500,10 +1428,7 @@ impl Parser {
         if (!self.expect(@intFromEnum(Token.lparen))) {
             return null_node
         }
-        var params: List(int) = undefined
-        params.items = 0
-        params.count = 0
-        params.capacity = 0
+        var params: List(int) = .{}
         while (self.tok != @intFromEnum(Token.rparen) and self.tok != @intFromEnum(Token.eof)) {
             const param = self.parseFieldDef()
             if (param != null_node) {
@@ -1530,10 +1455,7 @@ impl Parser {
         const start = self.tok_start
         // Determine type name from preceding node
         var type_name = ""
-        var type_args: List(int) = undefined
-        type_args.items = 0
-        type_args.count = 0
-        type_args.capacity = 0
+        var type_args: List(int) = .{}
         const tag = self.ast.getTag(preceding)
         if (tag == @intFromEnum(NodeTag.ident)) {
             type_name = self.ast.getStr(self.ast.getData(preceding, 0))
@@ -1541,10 +1463,7 @@ impl Parser {
         // Determine syntax: period vs colon
         const use_colon = self.peekNextIsIdentColon()
         self.advance()  // consume {
-        var fields: List(int) = undefined
-        fields.items = 0
-        fields.count = 0
-        fields.capacity = 0
+        var fields: List(int) = .{}
         if (use_colon) {
             // Colon syntax (@safe): { name: val, name2: val2 }
             while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
@@ -1627,10 +1546,7 @@ impl Parser {
         if (!self.expect(@intFromEnum(Token.lbrace))) {
             return null_node
         }
-        var cases: List(int) = undefined
-        cases.items = 0
-        cases.count = 0
-        cases.capacity = 0
+        var cases: List(int) = .{}
         var else_body = null_node
         while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
             // else => body
@@ -1660,10 +1576,7 @@ impl Parser {
     /// Ported from parser.zig:1510-1546
     fn parseSwitchCase() int {
         const start = self.tok_start
-        var patterns: List(int) = undefined
-        patterns.items = 0
-        patterns.count = 0
-        patterns.capacity = 0
+        var patterns: List(int) = .{}
         var is_range = 0
 
         // First pattern
@@ -1714,10 +1627,7 @@ impl Parser {
     fn parseBlockExpr() int {
         const start = self.tok_start
         self.advance()  // consume {
-        var stmts: List(int) = undefined
-        stmts.items = 0
-        stmts.count = 0
-        stmts.capacity = 0
+        var stmts: List(int) = .{}
         var result_expr = null_node
         while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
             const prev_pos = self.tok_start
@@ -1757,10 +1667,7 @@ impl Parser {
             return null_node
         }
         var type_arg = null_node
-        var args: List(int) = undefined
-        args.items = 0
-        args.count = 0
-        args.capacity = 0
+        var args: List(int) = .{}
         const kind_val = kind orelse 0
         const bk = @as(BuiltinKind, @enumFromInt(kind_val))
         switch (bk) {
@@ -1837,18 +1744,9 @@ impl Parser {
         const type_name = self.tok_text
         self.advance()
 
-        var type_args: List(int) = undefined
-        type_args.items = 0
-        type_args.count = 0
-        type_args.capacity = 0
-        var ctor_args: List(int) = undefined
-        ctor_args.items = 0
-        ctor_args.count = 0
-        ctor_args.capacity = 0
-        var fields: List(int) = undefined
-        fields.items = 0
-        fields.count = 0
-        fields.capacity = 0
+        var type_args: List(int) = .{}
+        var ctor_args: List(int) = .{}
+        var fields: List(int) = .{}
 
         // Constructor args or type args
         var is_ctor = 0
@@ -2162,10 +2060,7 @@ impl Parser {
 
     /// Destructure statement: const a, b = expr (called after first binding parsed)
     fn parseDestructureStmtFrom(first_name: string, first_type: int, first_start: int, start: int, is_const: int) int {
-        var bindings: List(int) = undefined
-        bindings.items = 0
-        bindings.count = 0
-        bindings.capacity = 0
+        var bindings: List(int) = .{}
         bindings.append(self.ast.addDestructureBind(first_name, first_type, self.spanSE(first_start, self.tok_end)))
         while (self.match(@intFromEnum(Token.comma))) {
             if (self.tok != @intFromEnum(Token.ident)) {
@@ -2218,10 +2113,7 @@ impl Parser {
         if (!self.expect(@intFromEnum(Token.lbrace))) {
             return null_node
         }
-        var stmts: List(int) = undefined
-        stmts.items = 0
-        stmts.count = 0
-        stmts.capacity = 0
+        var stmts: List(int) = .{}
         while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
             const prev_pos = self.tok_start
             const s = self.parseStmt()
@@ -2275,10 +2167,7 @@ impl Parser {
             const first = self.parseType()
             if (self.match(@intFromEnum(Token.comma))) {
                 // It's a tuple type
-                var elems: List(int) = undefined
-                elems.items = 0
-                elems.count = 0
-                elems.capacity = 0
+                var elems: List(int) = .{}
                 elems.append(first)
                 while (self.tok != @intFromEnum(Token.rparen) and self.tok != @intFromEnum(Token.eof)) {
                     elems.append(self.parseType())
@@ -2301,10 +2190,7 @@ impl Parser {
             if (self.tok == @intFromEnum(Token.lparen)) {
                 const name_node = self.ast.addIdent(name, self.spanSE(start, self.tok_end))
                 self.advance()  // consume (
-                var type_args: List(int) = undefined
-                type_args.items = 0
-                type_args.count = 0
-                type_args.capacity = 0
+                var type_args: List(int) = .{}
                 while (self.tok != @intFromEnum(Token.rparen) and self.tok != @intFromEnum(Token.eof)) {
                     type_args.append(self.parseType())
                     if (!self.match(@intFromEnum(Token.comma))) {
@@ -2357,7 +2243,7 @@ impl Parser {
         if (self.match(@intFromEnum(Token.arrow))) {
             ret = self.parseType()
         }
-        return self.ast.addTypeExpr(6, ret, null_node, self.spanSE(start, self.tok_end))  // kind=6 function
+        return self.ast.addTypeExpr(6, ret, param_count, self.spanSE(start, self.tok_end))  // kind=6 function, d2=param_count
     }
 
     // ================================================================

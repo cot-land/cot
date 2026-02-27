@@ -132,30 +132,35 @@ struct Ast {
 impl Ast {
     /// Create a new empty AST for a file.
     static fn init(filename: string) Ast {
-        var tags: List(int) = undefined
-        tags.items = 0
-        tags.count = 0
-        tags.capacity = 0
-        var offsets: List(int) = undefined
-        offsets.items = 0
-        offsets.count = 0
-        offsets.capacity = 0
-        var data_list: List(int) = undefined
-        data_list.items = 0
-        data_list.count = 0
-        data_list.capacity = 0
-        var strings: List(string) = undefined
-        strings.items = 0
-        strings.count = 0
-        strings.capacity = 0
-        var file_decls: List(int) = undefined
-        file_decls.items = 0
-        file_decls.count = 0
-        file_decls.capacity = 0
+        var tags: List(int) = .{}
+        var offsets: List(int) = .{}
+        var data: List(int) = .{}
+        var strings: List(string) = .{}
+        var file_decls: List(int) = .{}
         return Ast {
             tags: tags,
             offsets: offsets,
-            data: data_list,
+            data: data,
+            strings: strings,
+            file_decls: file_decls,
+            filename: filename,
+            safe_mode: false,
+        }
+    }
+
+    /// Create a new empty AST on the heap (survives function return).
+    /// Used in multi-file mode where GenericInfo stores ast_ptr.
+    /// Uses `new` for ARC-managed heap allocation — works on both native and WasmGC.
+    static fn initHeap(filename: string) *Ast {
+        var tags: List(int) = .{}
+        var offsets: List(int) = .{}
+        var data: List(int) = .{}
+        var strings: List(string) = .{}
+        var file_decls: List(int) = .{}
+        return new Ast {
+            tags: tags,
+            offsets: offsets,
+            data: data,
             strings: strings,
             file_decls: file_decls,
             filename: filename,
@@ -214,10 +219,7 @@ impl Ast {
     /// Returns a List of import path strings (e.g. "std/list", "frontend/token").
     /// Port of compiler/frontend/ast.zig:getImports.
     fn getImports() List(string) {
-        var imports: List(string) = undefined
-        imports.items = 0
-        imports.count = 0
-        imports.capacity = 0
+        var imports: List(string) = .{}
         for i in 0..self.file_decls.count {
             const decl_idx = self.file_decls.get(i)
             if (self.getTag(decl_idx) == @intFromEnum(NodeTag.import_decl)) {
@@ -1196,10 +1198,7 @@ test "Ast addCallNode" {
     const callee = ast.addIdent("foo", s)
     const arg0 = ast.addLiteral(0, "1", s)
     const arg1 = ast.addLiteral(0, "2", s)
-    var args: List(int) = undefined
-    args.items = 0
-    args.count = 0
-    args.capacity = 0
+    var args: List(int) = .{}
     args.append(arg0)
     args.append(arg1)
     const call = ast.addCallNode(callee, args, s)
@@ -1214,18 +1213,9 @@ test "Ast addCallNode" {
 test "Ast addFnDecl" {
     var ast = Ast.init("test.cot")
     const s = Span { start: 0, end: 20 }
-    var params: List(int) = undefined
-    params.items = 0
-    params.count = 0
-    params.capacity = 0
-    var tp: List(string) = undefined
-    tp.items = 0
-    tp.count = 0
-    tp.capacity = 0
-    var tpb: List(string) = undefined
-    tpb.items = 0
-    tpb.count = 0
-    tpb.capacity = 0
+    var params: List(int) = .{}
+    var tp: List(string) = .{}
+    var tpb: List(string) = .{}
     const fn_idx = ast.addFnDecl("main", null_node, null_node, 0, 0, "", params, tp, tpb, s)
     @assertEq(ast.getTag(fn_idx), @intFromEnum(NodeTag.fn_decl))
     @assertEq(ast.getStr(ast.getData(fn_idx, 0)), "main")
@@ -1246,10 +1236,7 @@ test "Ast addBlockStmt" {
     const s = Span { start: 0, end: 10 }
     const s0 = ast.addReturnStmt(null_node, s)
     const s1 = ast.addExprStmt(0, s)
-    var stmts: List(int) = undefined
-    stmts.items = 0
-    stmts.count = 0
-    stmts.capacity = 0
+    var stmts: List(int) = .{}
     stmts.append(s0)
     stmts.append(s1)
     const blk = ast.addBlockStmt(stmts, s)

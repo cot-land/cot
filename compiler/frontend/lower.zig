@@ -4735,9 +4735,9 @@ pub const Lowerer = struct {
     fn gcFieldChunks(self: *Lowerer, type_idx: TypeIndex) u32 {
         const info = self.type_reg.get(type_idx);
         if (info == .struct_type) return 1; // GC ref
-        if (info == .pointer) {
+        if (info == .pointer and info.pointer.managed) {
             const elem = self.type_reg.get(info.pointer.elem);
-            if (elem == .struct_type) return 1; // pointer to struct = GC ref
+            if (elem == .struct_type) return 1; // managed pointer to struct = GC ref
         }
         const size = self.type_reg.sizeOf(type_idx);
         return @max(1, (size + 7) / 8);
@@ -6455,9 +6455,10 @@ pub const Lowerer = struct {
             const receiver_val = blk: {
                 if (method_info.receiver_is_ptr) {
                     // WasmGC: struct refs are NOT memory pointers. Pass the ref directly.
+                    // Raw pointers (@intToPtr) are i64 addresses — NOT GC refs.
                     // Reference: Kotlin/Dart WasmGC — method self is a struct ref, not address.
                     if (self.target.isWasmGC() and (base_type == .struct_type or
-                        (base_type == .pointer and self.type_reg.get(base_type.pointer.elem) == .struct_type)))
+                        (base_type == .pointer and base_type.pointer.managed and self.type_reg.get(base_type.pointer.elem) == .struct_type)))
                     {
                         break :blk try self.lowerExprNode(fa.base);
                     }
@@ -6889,7 +6890,7 @@ pub const Lowerer = struct {
                     const arg_type = self.inferExprType(bc.args[0]);
                     const arg_info = self.type_reg.get(arg_type);
                     const is_gc_ref = arg_info == .struct_type or
-                        (arg_info == .pointer and self.type_reg.get(arg_info.pointer.elem) == .struct_type);
+                        (arg_info == .pointer and arg_info.pointer.managed and self.type_reg.get(arg_info.pointer.elem) == .struct_type);
                     if (is_gc_ref) return try fb.emitConstInt(0, TypeRegistry.I64, bc.span);
                 }
                 return try fb.emitPtrToInt(value, TypeRegistry.I64, bc.span);

@@ -302,22 +302,9 @@ impl TypeRegistry {
 
     /// Create and initialize a TypeRegistry with all basic types pre-registered.
     static fn init() TypeRegistry {
-        var types: List(Type) = undefined
-        types.items = 0
-        types.count = 0
-        types.capacity = 0
-
-        var name_map: Map(string, int) = undefined
-        name_map.keys = 0
-        name_map.values = 0
-        name_map.states = 0
-        name_map.count = 0
-        name_map.capacity = 0
-
-        var methods: List(MethodEntry) = undefined
-        methods.items = 0
-        methods.count = 0
-        methods.capacity = 0
+        var types: List(Type) = .{}
+        var name_map: Map(string, int) = .{}
+        var methods: List(MethodEntry) = .{}
 
         // Register basic types in order (0-16)
         types.append(Type.basic(BasicKind.invalid))

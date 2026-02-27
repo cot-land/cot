@@ -5182,10 +5182,11 @@ pub const Driver = struct {
                     const type_size = type_reg.sizeOf(param.type_idx);
                     const is_large_struct = !is_wasm_gc and (param_type == .struct_type or param_type == .union_type or param_type == .tuple) and type_size > 8;
 
-                    // WasmGC: struct and pointer-to-struct params are single (ref null $typeidx)
+                    // WasmGC: struct and managed pointer-to-struct params are single (ref null $typeidx)
+                    // Raw pointers (@intToPtr) are i64 linear memory addresses, not GC refs.
                     // Reference: Kotlin/Dart WasmGC — struct refs in params, including self: *Type
                     const is_gc_struct_param = is_wasm_gc and (param_type == .struct_type or
-                        (param_type == .pointer and type_reg.get(param_type.pointer.elem) == .struct_type));
+                        (param_type == .pointer and param_type.pointer.managed and type_reg.get(param_type.pointer.elem) == .struct_type));
                     if (is_gc_struct_param) {
                         const st = if (param_type == .struct_type)
                             param_type.struct_type
@@ -5243,9 +5244,10 @@ pub const Driver = struct {
                 // Convert results to WasmType, handling GC ref returns
                 var gc_results: [4]wasm.WasmType = undefined;
                 var gc_results_len: usize = results.len;
-                // WasmGC: struct returns become (ref null $T) result types
+                // WasmGC: struct returns become (ref null $T) result types.
+                // Raw pointers (@intToPtr) return i64, not GC refs.
                 const is_gc_struct_return = ret_type_info == .struct_type or
-                    (ret_type_info == .pointer and type_reg.get(ret_type_info.pointer.elem) == .struct_type);
+                    (ret_type_info == .pointer and ret_type_info.pointer.managed and type_reg.get(ret_type_info.pointer.elem) == .struct_type);
                 if (has_return and is_gc_struct_return) {
                     const st = if (ret_type_info == .struct_type)
                         ret_type_info.struct_type

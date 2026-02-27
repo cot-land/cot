@@ -105,6 +105,15 @@ struct GenericImplEntry {
     node_idx: int,
     tp_count: int,
     methods_count: int,
+    ast_ptr: int,  // @ptrToInt of declaring file's *Ast
+}
+
+// GenericInfo — stores generic struct/function definition location.
+// Zig: GenericInfo { type_params, node_idx, tree }.
+// Needed for cross-file generic resolution: node_idx is in declaring file's AST.
+struct GenericInfo {
+    node_idx: int,
+    ast_ptr: int,  // @ptrToInt of declaring file's *Ast
 }
 
 // Error set variant — stores name for dedup in mergeErrorSets.
@@ -132,51 +141,13 @@ struct SharedCheckerState {
 
 impl SharedCheckerState {
     static fn init() SharedCheckerState {
-        var symbols: List(Symbol) = undefined
-        symbols.items = 0
-        symbols.count = 0
-        symbols.capacity = 0
-
-        var generic_structs: Map(string, int) = undefined
-        generic_structs.keys = 0
-        generic_structs.values = 0
-        generic_structs.states = 0
-        generic_structs.count = 0
-        generic_structs.capacity = 0
-
-        var generic_functions: Map(string, int) = undefined
-        generic_functions.keys = 0
-        generic_functions.values = 0
-        generic_functions.states = 0
-        generic_functions.count = 0
-        generic_functions.capacity = 0
-
-        var instantiation_cache: Map(string, int) = undefined
-        instantiation_cache.keys = 0
-        instantiation_cache.values = 0
-        instantiation_cache.states = 0
-        instantiation_cache.count = 0
-        instantiation_cache.capacity = 0
-
-        var generic_impl_entries: List(GenericImplEntry) = undefined
-        generic_impl_entries.items = 0
-        generic_impl_entries.count = 0
-        generic_impl_entries.capacity = 0
-
-        var trait_defs: Map(string, int) = undefined
-        trait_defs.keys = 0
-        trait_defs.values = 0
-        trait_defs.states = 0
-        trait_defs.count = 0
-        trait_defs.capacity = 0
-
-        var trait_impls: Map(string, string) = undefined
-        trait_impls.keys = 0
-        trait_impls.values = 0
-        trait_impls.states = 0
-        trait_impls.count = 0
-        trait_impls.capacity = 0
-
+        var symbols: List(Symbol) = .{}
+        var generic_structs: Map(string, int) = .{}
+        var generic_functions: Map(string, int) = .{}
+        var instantiation_cache: Map(string, int) = .{}
+        var generic_impl_entries: List(GenericImplEntry) = .{}
+        var trait_defs: Map(string, int) = .{}
+        var trait_impls: Map(string, string) = .{}
         return SharedCheckerState {
             global_map: allocMap(),
             symbols: symbols,
@@ -225,82 +196,24 @@ struct Checker {
 
 impl Checker {
     static fn init(ast: *Ast, types: *TypeRegistry, err: *ErrorReporter) Checker {
-        var expr_types: Map(int, int) = undefined
-        expr_types.keys = 0
-        expr_types.values = 0
-        expr_types.states = 0
-        expr_types.count = 0
-        expr_types.capacity = 0
-
-        var trait_defs: Map(string, int) = undefined
-        trait_defs.keys = 0
-        trait_defs.values = 0
-        trait_defs.states = 0
-        trait_defs.count = 0
-        trait_defs.capacity = 0
-
-        var symbols: List(Symbol) = undefined
-        symbols.items = 0
-        symbols.count = 0
-        symbols.capacity = 0
-
-        var scope_parents: List(int) = undefined
-        scope_parents.items = 0
-        scope_parents.count = 0
-        scope_parents.capacity = 0
-
-        var scope_maps: List(int) = undefined
-        scope_maps.items = 0
-        scope_maps.count = 0
-        scope_maps.capacity = 0
-
-        var generic_structs: Map(string, int) = undefined
-        generic_structs.keys = 0
-        generic_structs.values = 0
-        generic_structs.states = 0
-        generic_structs.count = 0
-        generic_structs.capacity = 0
-
-        var generic_functions: Map(string, int) = undefined
-        generic_functions.keys = 0
-        generic_functions.values = 0
-        generic_functions.states = 0
-        generic_functions.count = 0
-        generic_functions.capacity = 0
-
-        var instantiation_cache: Map(string, int) = undefined
-        instantiation_cache.keys = 0
-        instantiation_cache.values = 0
-        instantiation_cache.states = 0
-        instantiation_cache.count = 0
-        instantiation_cache.capacity = 0
-
-        var generic_impl_entries: List(GenericImplEntry) = undefined
-        generic_impl_entries.items = 0
-        generic_impl_entries.count = 0
-        generic_impl_entries.capacity = 0
-
-        var type_sub_keys: List(string) = undefined
-        type_sub_keys.items = 0
-        type_sub_keys.count = 0
-        type_sub_keys.capacity = 0
-
-        var type_sub_vals: List(int) = undefined
-        type_sub_vals.items = 0
-        type_sub_vals.count = 0
-        type_sub_vals.capacity = 0
-
-        var trait_impls: Map(string, string) = undefined
-        trait_impls.keys = 0
-        trait_impls.values = 0
-        trait_impls.states = 0
-        trait_impls.count = 0
-        trait_impls.capacity = 0
+        var symbols: List(Symbol) = .{}
+        var scope_parents: List(int) = .{}
+        var scope_maps: List(int) = .{}
 
         // Create global scope (index 0)
         var global_map = allocMap()
         scope_parents.append(-1)
         scope_maps.append(global_map)
+
+        var expr_types: Map(int, int) = .{}
+        var trait_defs: Map(string, int) = .{}
+        var generic_structs: Map(string, int) = .{}
+        var generic_functions: Map(string, int) = .{}
+        var instantiation_cache: Map(string, int) = .{}
+        var generic_impl_entries: List(GenericImplEntry) = .{}
+        var type_sub_keys: List(string) = .{}
+        var type_sub_vals: List(int) = .{}
+        var trait_impls: Map(string, string) = .{}
 
         return Checker {
             types: types,
@@ -342,8 +255,7 @@ impl Checker {
 
     /// Load shared state from SharedCheckerState for multi-file mode.
     /// Call AFTER initShared, BEFORE checkFile.
-    fn loadSharedState(shared_ptr: int) void {
-        var shared = @intToPtr(*SharedCheckerState, shared_ptr)
+    fn loadSharedState(shared: *SharedCheckerState) void {
         self.symbols = shared.symbols
         self.generic_structs = shared.generic_structs
         self.generic_functions = shared.generic_functions
@@ -354,8 +266,7 @@ impl Checker {
     }
 
     /// Write checker state back to SharedCheckerState after checkFile().
-    fn syncToShared(shared_ptr: int) void {
-        var shared = @intToPtr(*SharedCheckerState, shared_ptr)
+    fn syncToShared(shared: *SharedCheckerState) void {
         shared.symbols = self.symbols
         shared.generic_structs = self.generic_structs
         shared.generic_functions = self.generic_functions
@@ -492,7 +403,14 @@ impl Checker {
         // Generic structs: store definition, don't build concrete type yet
         const tp_count = self.ast.getData(idx, 4 + fields_count)
         if (tp_count > 0) {
-            self.generic_structs.set(name, idx)
+            // Store GenericInfo with AST pointer for cross-file resolution
+            // Zig: self.generics.generic_structs.put(name, .{ .node_idx = idx, .tree = self.tree })
+            // Use raw alloc (not new) — avoids ARC release when local goes out of scope
+            var info_ptr = alloc(0, @sizeOf(GenericInfo))
+            var info = @intToPtr(*GenericInfo, info_ptr)
+            info.node_idx = idx
+            info.ast_ptr = @ptrToInt(self.ast)
+            self.generic_structs.set(name, info_ptr)
             self.defineSymbol(makeTypeSymbol(name, invalid_type, idx))
             return
         }
@@ -648,7 +566,13 @@ impl Checker {
         // Generic functions: store definition, don't build concrete type yet
         const tp_count = self.ast.getData(idx, 7 + params_count)
         if (tp_count > 0) {
-            self.generic_functions.set(name, idx)
+            // Store GenericInfo with AST pointer for cross-file resolution
+            // Use raw alloc (not new) — avoids ARC release when local goes out of scope
+            var info_ptr = alloc(0, @sizeOf(GenericInfo))
+            var info = @intToPtr(*GenericInfo, info_ptr)
+            info.node_idx = idx
+            info.ast_ptr = @ptrToInt(self.ast)
+            self.generic_functions.set(name, info_ptr)
             self.defineSymbol(makeTypeSymbol(name, invalid_type, idx))
             return
         }
@@ -681,6 +605,7 @@ impl Checker {
                 node_idx: idx,
                 tp_count: tp_count,
                 methods_count: methods_count,
+                ast_ptr: @ptrToInt(self.ast),
             })
             return
         }
@@ -1317,7 +1242,7 @@ impl Checker {
             .deref => self.checkDeref(idx),
             .tuple_literal => self.checkTupleLiteral(idx),
             .slice_expr => self.checkSliceExpr(idx),
-            .zero_init => VOID,
+            .zero_init => self.checkZeroInit(),
             else => invalid_type,
         }
     }
@@ -1612,37 +1537,44 @@ impl Checker {
             return func_info.return_type
         }
 
-        // Check argument types
-        const param_offset = if (is_method) { 1 } else { 0 }
-        for ai in 0..args_count {
-            // Zig Sema pattern: set expected_type from param type for result location inference
-            const saved_expected = self.expected_type
-            const param = @intToPtr(*FuncParam, func_info.params + (ai + param_offset) * @sizeOf(FuncParam))
-            self.expected_type = param.type_idx
-            const arg_type = self.checkExpr(self.ast.getData(idx, 2 + ai))
-            self.expected_type = saved_expected
-            if (!self.types.isAssignable(arg_type, param.type_idx)) {
-                // @safe coercion: Struct arg → *Struct param (safeWrapType wraps struct params)
-                const pt = self.types.get(param.type_idx)
-                var is_safe_struct = false
-                if (self.safe_mode and pt.tag == TAG_POINTER) {
-                    const ptr_elem = switch (pt) { Type.pointer |p| => p.elem, else => invalid_type }
-                    if (self.types.get(ptr_elem).tag == TAG_STRUCT and self.types.isAssignable(arg_type, ptr_elem)) {
-                        is_safe_struct = true
+        // Check argument types (skip if param types unknown — fn ptr with params=0)
+        if (func_info.params != 0) {
+            const param_offset = if (is_method) { 1 } else { 0 }
+            for ai in 0..args_count {
+                // Zig Sema pattern: set expected_type from param type for result location inference
+                const saved_expected = self.expected_type
+                const param = @intToPtr(*FuncParam, func_info.params + (ai + param_offset) * @sizeOf(FuncParam))
+                self.expected_type = param.type_idx
+                const arg_type = self.checkExpr(self.ast.getData(idx, 2 + ai))
+                self.expected_type = saved_expected
+                if (!self.types.isAssignable(arg_type, param.type_idx)) {
+                    // @safe coercion: Struct arg → *Struct param (safeWrapType wraps struct params)
+                    const pt = self.types.get(param.type_idx)
+                    var is_safe_struct = false
+                    if (self.safe_mode and pt.tag == TAG_POINTER) {
+                        const ptr_elem = switch (pt) { Type.pointer |p| => p.elem, else => invalid_type }
+                        if (self.types.get(ptr_elem).tag == TAG_STRUCT and self.types.isAssignable(arg_type, ptr_elem)) {
+                            is_safe_struct = true
+                        }
+                    }
+                    // @safe reverse coercion: *Struct arg → Struct param (generic methods keep T as value)
+                    const at = self.types.get(arg_type)
+                    var is_safe_deref = false
+                    if (self.safe_mode and at.tag == TAG_POINTER) {
+                        const arg_elem = switch (at) { Type.pointer |p| => p.elem, else => invalid_type }
+                        if (self.types.get(arg_elem).tag == TAG_STRUCT and self.types.isAssignable(arg_elem, param.type_idx)) {
+                            is_safe_deref = true
+                        }
+                    }
+                    if (!is_safe_struct and !is_safe_deref) {
+                        self.reportError(idx, ErrorCode.e300, "type mismatch")
                     }
                 }
-                // @safe reverse coercion: *Struct arg → Struct param (generic methods keep T as value)
-                const at = self.types.get(arg_type)
-                var is_safe_deref = false
-                if (self.safe_mode and at.tag == TAG_POINTER) {
-                    const arg_elem = switch (at) { Type.pointer |p| => p.elem, else => invalid_type }
-                    if (self.types.get(arg_elem).tag == TAG_STRUCT and self.types.isAssignable(arg_elem, param.type_idx)) {
-                        is_safe_deref = true
-                    }
-                }
-                if (!is_safe_struct and !is_safe_deref) {
-                    self.reportError(idx, ErrorCode.e300, "type mismatch")
-                }
+            }
+        } else {
+            // Function pointer with unknown param types: just check arg expressions
+            for ai in 0..args_count {
+                self.checkExpr(self.ast.getData(idx, 2 + ai))
             }
         }
 
@@ -1868,6 +1800,14 @@ impl Checker {
 
         self.reportError(idx, ErrorCode.e306, "field not found")
         return invalid_type
+    }
+
+    // .{} zero-init: infer type from expected context (Zig pattern).
+    // Without this, `var x: MyStruct = .{}` would fail because zero_init
+    // returned VOID, which doesn't match the type annotation.
+    fn checkZeroInit() int {
+        if (self.expected_type != invalid_type) { return self.expected_type }
+        return VOID
     }
 
     fn checkStructInit(idx: int) int {
@@ -2145,10 +2085,7 @@ impl Checker {
             const et = switch (subject_t) { Type.enum_type |e| => e, else => EnumType { name: "", variant_count: 0, variants: 0, backing_type: 0 } }
             // Build coverage set: track which variants are covered by unguarded cases.
             // Use a parallel list of variant names (Map would be cleaner but we track by name).
-            var covered: List(string) = undefined
-            covered.items = 0
-            covered.count = 0
-            covered.capacity = 0
+            var covered: List(string) = .{}
             for ci in 0..cases_count {
                 const case_idx = self.ast.getData(idx, 3 + ci)
                 const guard_n2 = self.ast.getData(case_idx, 1)
@@ -2893,16 +2830,15 @@ impl Checker {
             return self.types.makeSlice(self.resolveTypeExpr(d1))
         }
         if (kind == TYPE_FUNCTION) {
-            // fn(params...) RetType — d1 is ret_type_n
-            // Note: parser currently discards param type nodes, so we build
-            // a func type with just the return type. Full param storage is a
-            // parser improvement tracked separately.
+            // fn(params...) -> RetType — d1 is ret_type_n, d2 is param_count
+            // Parser stores param count but not individual param types.
+            // We create a func type with correct count but null params pointer.
             var ret_type: int = VOID
             if (d1 != null_node) {
                 ret_type = self.resolveTypeExpr(d1)
             }
             return self.types.add(Type.func(FuncType {
-                param_count: 0,
+                param_count: d2,
                 params: 0,
                 return_type: ret_type,
             }))
@@ -3070,47 +3006,52 @@ impl Checker {
     }
 
     /// Resolve a generic struct instantiation: List(int) → concrete List(5) type.
-    /// Port from Zig checker lines 3268-3333.
+    /// Port from Zig checker lines 3291-3355.
+    /// Cross-file: swaps self.ast to defining file's AST (Zig: self.tree = gen_info.tree).
     fn resolveGenericInstance(idx: int, gi_name: string) int {
         // Look up generic struct definition
         if (self.generic_structs.has(gi_name) == 0) {
             self.reportError(idx, ErrorCode.e301, "undefined generic type")
             return invalid_type
         }
-        const struct_node = self.generic_structs.get(gi_name)
+        const info = @intToPtr(*GenericInfo, self.generic_structs.get(gi_name))
+        const struct_node = info.node_idx
 
-        // Read type arg count from generic_instance AST
+        // Read type arg count from generic_instance AST (CURRENT file)
         // generic_instance: [name_s, ta_count, ...ta_nodes, span_s, span_e]
         const ta_count = self.ast.getData(idx, 1)
 
-        // Read type param count from struct_decl AST
-        // struct_decl: [name_s, layout, doc_s, fields_count, ...fields, tp_count, ...]
-        const s_fields_count = self.ast.getData(struct_node, 3)
-        const tp_count = self.ast.getData(struct_node, 4 + s_fields_count)
-
-        if (ta_count != tp_count) {
-            self.reportError(idx, ErrorCode.e300, "wrong number of type arguments")
-            return invalid_type
-        }
-
-        // Resolve each type argument
-        var resolved_args: List(int) = undefined
-        resolved_args.items = 0
-        resolved_args.count = 0
-        resolved_args.capacity = 0
+        // Resolve each type argument in caller's context (CURRENT file's AST)
+        var resolved_args: List(int) = .{}
         for i in 0..ta_count {
             const arg_node = self.ast.getData(idx, 2 + i)
             const arg_type = self.resolveTypeExpr(arg_node)
             resolved_args.append(arg_type)
         }
 
+        // Swap to defining file's AST (Zig: self.tree = gen_info.tree)
+        const saved_ast = self.ast
+        self.ast = @intToPtr(*Ast, info.ast_ptr)
+
+        // Read struct definition from DEFINING file's AST
+        // struct_decl: [name_s, layout, doc_s, fields_count, ...fields, tp_count, ...]
+        const s_fields_count = self.ast.getData(struct_node, 3)
+        const tp_count = self.ast.getData(struct_node, 4 + s_fields_count)
+
+        if (ta_count != tp_count) {
+            self.ast = saved_ast
+            self.reportError(idx, ErrorCode.e300, "wrong number of type arguments")
+            return invalid_type
+        }
+
         // Build cache key and check cache
         const cache_key = self.buildGenericCacheKey(gi_name, resolved_args)
         if (self.instantiation_cache.has(cache_key) != 0) {
+            self.ast = saved_ast
             return self.instantiation_cache.get(cache_key)
         }
 
-        // Set up type substitution: read param names from struct_decl
+        // Set up type substitution: read param names from DEFINING file's AST
         const old_sub_count = self.type_sub_keys.count
         for i in 0..tp_count {
             const tp_str_idx = self.ast.getData(struct_node, 4 + s_fields_count + 1 + i)
@@ -3118,12 +3059,15 @@ impl Checker {
             self.pushTypeSub(tp_name, resolved_args.get(i))
         }
 
-        // Build concrete struct type with substituted fields
+        // Build concrete struct type with substituted fields (DEFINING file's AST)
         const concrete_type = self.buildStructType(struct_node, cache_key)
 
         // Restore substitution
         self.type_sub_keys.count = old_sub_count
         self.type_sub_vals.count = old_sub_count
+
+        // Restore caller's AST
+        self.ast = saved_ast
 
         // Register and cache
         self.types.registerNamed(cache_key, concrete_type)
@@ -3137,7 +3081,9 @@ impl Checker {
 
     /// Instantiate all methods from generic impl blocks for a concrete struct type.
     /// Two-pass: register signatures, then check bodies (so sibling methods are visible).
-    /// Port from Zig checker lines 3344-3429.
+    /// Port from Zig checker lines 3367-3452.
+    /// Cross-file: swaps self.ast to defining file's AST for each impl entry.
+    /// Also isolates expr_types to avoid NodeIndex collision (Zig lines 3433-3442).
     fn instantiateGenericImplMethods(base_name: string, concrete_name: string, resolved_args: List(int)) void {
         for ei in 0..self.generic_impl_entries.count {
             const entry = @intToPtr(*GenericImplEntry, self.generic_impl_entries.items + ei * @sizeOf(GenericImplEntry))
@@ -3148,7 +3094,23 @@ impl Checker {
             const impl_idx = entry.node_idx
             const methods_count = entry.methods_count
 
-            // Set up type substitution
+            // Swap to defining file's AST and safe_mode (Zig lines 3379-3387)
+            const saved_ast = self.ast
+            const saved_safe_mode = self.safe_mode
+            self.ast = @intToPtr(*Ast, entry.ast_ptr)
+            self.safe_mode = self.ast.safe_mode
+
+            // Cross-file expr_types isolation (Zig lines 3433-3442):
+            // Foreign AST NodeIndexes collide with host file's NodeIndex space.
+            // Save host expr_types, use fresh map, restore after.
+            const is_cross_file = (entry.ast_ptr != @ptrToInt(saved_ast))
+            var saved_expr_types = self.expr_types
+            if (is_cross_file) {
+                var fresh_et: Map(int, int) = .{}
+                self.expr_types = fresh_et
+            }
+
+            // Set up type substitution from DEFINING file's AST
             const old_sub_count = self.type_sub_keys.count
             for i in 0..entry.tp_count {
                 const tp_str_idx = self.ast.getData(impl_idx, 3 + methods_count + 1 + i)
@@ -3195,33 +3157,32 @@ impl Checker {
             // Restore substitution
             self.type_sub_keys.count = old_sub_count
             self.type_sub_vals.count = old_sub_count
+
+            // Restore expr_types for cross-file
+            if (is_cross_file) {
+                self.expr_types = saved_expr_types
+            }
+
+            // Restore caller's AST and safe_mode
+            self.ast = saved_ast
+            self.safe_mode = saved_safe_mode
         }
     }
 
     /// Instantiate a generic function: max(i64) → concrete max(5) func.
     /// Port from Zig checker lines 3434-3540.
+    /// Cross-file: swaps self.ast to defining file's AST.
     fn instantiateGenericFunc(idx: int, name: string) int {
         // Look up generic function definition
-        const fn_node = self.generic_functions.get(name)
+        const info = @intToPtr(*GenericInfo, self.generic_functions.get(name))
+        const fn_node = info.node_idx
 
-        // fn_decl: [name_s, ret_type_n, body_n, is_extern, is_async, doc_s,
-        //           params_count, ...param_nodes, tp_count, ...tp_strings, bounds_count, ...bounds, ...]
-        const params_count = self.ast.getData(fn_node, 6)
-        const tp_count = self.ast.getData(fn_node, 7 + params_count)
-
+        // Read call args from CURRENT file's AST
         // call: [callee_n, args_count, ...arg_nodes, span_s, span_e]
         const call_args_count = self.ast.getData(idx, 1)
 
-        if (call_args_count != tp_count) {
-            self.reportError(idx, ErrorCode.e300, "wrong number of type arguments")
-            return invalid_type
-        }
-
-        // Resolve each type argument (call args ARE type args for generic calls)
-        var resolved_args: List(int) = undefined
-        resolved_args.items = 0
-        resolved_args.count = 0
-        resolved_args.capacity = 0
+        // Resolve each type argument from CURRENT file's AST
+        var resolved_args: List(int) = .{}
         for i in 0..call_args_count {
             const arg_node = self.ast.getData(idx, 2 + i)
             const arg_type = self.resolveTypeExpr(arg_node)
@@ -3241,6 +3202,21 @@ impl Checker {
             resolved_args.append(arg_type)
         }
 
+        // Swap to defining file's AST
+        const saved_ast = self.ast
+        self.ast = @intToPtr(*Ast, info.ast_ptr)
+
+        // fn_decl: [name_s, ret_type_n, body_n, is_extern, is_async, doc_s,
+        //           params_count, ...param_nodes, tp_count, ...tp_strings, bounds_count, ...bounds, ...]
+        const params_count = self.ast.getData(fn_node, 6)
+        const tp_count = self.ast.getData(fn_node, 7 + params_count)
+
+        if (call_args_count != tp_count) {
+            self.ast = saved_ast
+            self.reportError(idx, ErrorCode.e300, "wrong number of type arguments")
+            return invalid_type
+        }
+
         // Validate trait bounds (Zig lines 3460-3474)
         // fn_decl: [..., tp_count, ...tp_strings, bounds_count, ...bounds, ...]
         const bounds_offset = 7 + params_count + 1 + tp_count
@@ -3253,6 +3229,7 @@ impl Checker {
                     const type_name = self.types.typeName(resolved_args.get(bi))
                     const impl_key = "${bound_name}:${type_name}"
                     if (self.trait_impls.has(impl_key) == 0) {
+                        self.ast = saved_ast
                         self.reportError(idx, ErrorCode.e300, "type does not satisfy trait bound")
                         return invalid_type
                     }
@@ -3266,10 +3243,11 @@ impl Checker {
         // Check if already instantiated — return cached func type
         const cached_sym = self.lookupSymbol(cache_key)
         if (cached_sym >= 0) {
+            self.ast = saved_ast
             return self.getSymbol(cached_sym).type_idx
         }
 
-        // Set up type substitution
+        // Set up type substitution from DEFINING file's AST
         const old_sub_count = self.type_sub_keys.count
         for i in 0..tp_count {
             const tp_str_idx = self.ast.getData(fn_node, 7 + params_count + 1 + i)
@@ -3277,7 +3255,7 @@ impl Checker {
             self.pushTypeSub(tp_name, resolved_args.get(i))
         }
 
-        // Build concrete function type
+        // Build concrete function type from DEFINING file's AST
         const func_type = self.buildFuncType(fn_node)
 
         // Define in global scope
@@ -3288,48 +3266,57 @@ impl Checker {
         }
         self.current_scope = old_scope
 
-        // Check the function body
+        // Check the function body (still using DEFINING file's AST)
         self.checkFnDeclBody(fn_node, cache_key)
 
         // Restore substitution
         self.type_sub_keys.count = old_sub_count
         self.type_sub_vals.count = old_sub_count
 
+        // Restore caller's AST
+        self.ast = saved_ast
+
         return func_type
     }
 
     /// Resolve generic struct init: Pair(int, string) { .a = 1, .b = "hi" }
+    /// Cross-file: swaps self.ast to defining file's AST.
     fn resolveGenericStructInit(idx: int, type_name: string, fi_count: int, ta_count: int) int {
         if (self.generic_structs.has(type_name) == 0) {
             self.reportError(idx, ErrorCode.e301, "undefined generic type")
             return invalid_type
         }
-        const struct_node = self.generic_structs.get(type_name)
-        const s_fields_count = self.ast.getData(struct_node, 3)
-        const tp_count = self.ast.getData(struct_node, 4 + s_fields_count)
+        const info = @intToPtr(*GenericInfo, self.generic_structs.get(type_name))
+        const struct_node = info.node_idx
 
-        if (ta_count != tp_count) {
-            self.reportError(idx, ErrorCode.e300, "wrong number of type arguments")
-            return invalid_type
-        }
-
-        // Resolve type args
-        var resolved_args: List(int) = undefined
-        resolved_args.items = 0
-        resolved_args.count = 0
-        resolved_args.capacity = 0
+        // Resolve type args from CURRENT file's AST
+        var resolved_args: List(int) = .{}
         for i in 0..ta_count {
             const arg_node = self.ast.getData(idx, 2 + fi_count + 1 + i)
             const arg_type = self.resolveTypeExpr(arg_node)
             resolved_args.append(arg_type)
         }
 
+        // Swap to defining file's AST
+        const saved_ast = self.ast
+        self.ast = @intToPtr(*Ast, info.ast_ptr)
+
+        const s_fields_count = self.ast.getData(struct_node, 3)
+        const tp_count = self.ast.getData(struct_node, 4 + s_fields_count)
+
+        if (ta_count != tp_count) {
+            self.ast = saved_ast
+            self.reportError(idx, ErrorCode.e300, "wrong number of type arguments")
+            return invalid_type
+        }
+
         const cache_key = self.buildGenericCacheKey(type_name, resolved_args)
         if (self.instantiation_cache.has(cache_key) != 0) {
+            self.ast = saved_ast
             return self.instantiation_cache.get(cache_key)
         }
 
-        // Set up substitution + build + register + instantiate
+        // Set up substitution from DEFINING file's AST
         const old_sub_count = self.type_sub_keys.count
         for i in 0..tp_count {
             const tp_str_idx = self.ast.getData(struct_node, 4 + s_fields_count + 1 + i)
@@ -3340,6 +3327,9 @@ impl Checker {
         const concrete_type = self.buildStructType(struct_node, cache_key)
         self.type_sub_keys.count = old_sub_count
         self.type_sub_vals.count = old_sub_count
+
+        // Restore caller's AST
+        self.ast = saved_ast
 
         self.types.registerNamed(cache_key, concrete_type)
         self.instantiation_cache.set(cache_key, concrete_type)
@@ -3349,36 +3339,43 @@ impl Checker {
     }
 
     /// Resolve generic new expr: new Pair(int, string) { a: 1, b: "hi" }
+    /// Cross-file: swaps self.ast to defining file's AST.
     fn resolveGenericNewExpr(idx: int, type_name: string, fi_count: int, ta_count: int) int {
         if (self.generic_structs.has(type_name) == 0) {
             self.reportError(idx, ErrorCode.e301, "undefined generic type")
             return invalid_type
         }
-        const struct_node = self.generic_structs.get(type_name)
-        const s_fields_count = self.ast.getData(struct_node, 3)
-        const tp_count = self.ast.getData(struct_node, 4 + s_fields_count)
+        const info = @intToPtr(*GenericInfo, self.generic_structs.get(type_name))
+        const struct_node = info.node_idx
 
-        if (ta_count != tp_count) {
-            self.reportError(idx, ErrorCode.e300, "wrong number of type arguments")
-            return invalid_type
-        }
-
-        // Resolve type args
-        var resolved_args: List(int) = undefined
-        resolved_args.items = 0
-        resolved_args.count = 0
-        resolved_args.capacity = 0
+        // Resolve type args from CURRENT file's AST
+        var resolved_args: List(int) = .{}
         for i in 0..ta_count {
             const arg_node = self.ast.getData(idx, 3 + fi_count + 1 + i)
             const arg_type = self.resolveTypeExpr(arg_node)
             resolved_args.append(arg_type)
         }
 
+        // Swap to defining file's AST
+        const saved_ast = self.ast
+        self.ast = @intToPtr(*Ast, info.ast_ptr)
+
+        const s_fields_count = self.ast.getData(struct_node, 3)
+        const tp_count = self.ast.getData(struct_node, 4 + s_fields_count)
+
+        if (ta_count != tp_count) {
+            self.ast = saved_ast
+            self.reportError(idx, ErrorCode.e300, "wrong number of type arguments")
+            return invalid_type
+        }
+
         const cache_key = self.buildGenericCacheKey(type_name, resolved_args)
         if (self.instantiation_cache.has(cache_key) != 0) {
+            self.ast = saved_ast
             return self.instantiation_cache.get(cache_key)
         }
 
+        // Set up substitution from DEFINING file's AST
         const old_sub_count = self.type_sub_keys.count
         for i in 0..tp_count {
             const tp_str_idx = self.ast.getData(struct_node, 4 + s_fields_count + 1 + i)
@@ -3389,6 +3386,9 @@ impl Checker {
         const concrete_type = self.buildStructType(struct_node, cache_key)
         self.type_sub_keys.count = old_sub_count
         self.type_sub_vals.count = old_sub_count
+
+        // Restore caller's AST
+        self.ast = saved_ast
 
         self.types.registerNamed(cache_key, concrete_type)
         self.instantiation_cache.set(cache_key, concrete_type)
@@ -3625,10 +3625,7 @@ impl Checker {
         const b_es = switch (b) { Type.error_set |e| => e, else => ErrorSetType { name: "", variant_count: 0, variant_names: 0 } }
 
         // Build merged variant list with dedup (Zig: ArrayListUnmanaged + string compare)
-        var merged: List(string) = undefined
-        merged.items = 0
-        merged.count = 0
-        merged.capacity = 0
+        var merged: List(string) = .{}
 
         // Add all from a
         for ai in 0..a_es.variant_count {
@@ -4036,18 +4033,12 @@ test "checker generic cache key" {
     var c = Checker.init(ast, types, errs)
 
     // Single arg
-    var args1: List(int) = undefined
-    args1.items = 0
-    args1.count = 0
-    args1.capacity = 0
+    var args1: List(int) = .{}
     args1.append(5)
     @assertEq(c.buildGenericCacheKey("List", args1), "List(5)")
 
     // Two args
-    var args2: List(int) = undefined
-    args2.items = 0
-    args2.count = 0
-    args2.capacity = 0
+    var args2: List(int) = .{}
     args2.append(5)
     args2.append(17)
     @assertEq(c.buildGenericCacheKey("Pair", args2), "Pair(5;17)")

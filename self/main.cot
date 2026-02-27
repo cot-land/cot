@@ -126,19 +126,8 @@ fn cmdCheck(path: string, content: string) void {
 
 /// Multi-file check: recursively parse and check all imports.
 fn cmdCheckMultiFile(path: string) void {
-    var seen: Map(string, int) = undefined
-    seen.keys = 0
-    seen.values = 0
-    seen.states = 0
-    seen.count = 0
-    seen.capacity = 0
-
-    var in_progress: Map(string, int) = undefined
-    in_progress.keys = 0
-    in_progress.values = 0
-    in_progress.states = 0
-    in_progress.count = 0
-    in_progress.capacity = 0
+    var seen: Map(string, int) = .{}
+    var in_progress: Map(string, int) = .{}
 
     var types = TypeRegistry.init()
     var shared = SharedCheckerState.init()
@@ -170,9 +159,10 @@ fn checkFileRecursive(file_path: string, shared: *SharedCheckerState, types: *Ty
         exit(1)
     }
 
-    // Parse
+    // Parse — heap-allocate Ast so pointer survives after function returns
+    // (GenericInfo stores ast_ptr for cross-file generic resolution)
     var s = Scanner.init(content)
-    var ast = Ast.init(file_path)
+    var ast = Ast.initHeap(file_path)
     var errs = ErrorReporter.init()
     var p = Parser.init(s, ast, errs)
     if (project_safe) { p.safe_mode = true }
@@ -199,9 +189,9 @@ fn checkFileRecursive(file_path: string, shared: *SharedCheckerState, types: *Ty
     // Type check with shared state (all dependencies already checked)
     var check_errs = ErrorReporter.init()
     var checker = Checker.initShared(ast, types, check_errs, shared.global_map)
-    checker.loadSharedState(@ptrToInt(shared))
+    checker.loadSharedState(shared)
     checker.checkFile()
-    checker.syncToShared(@ptrToInt(shared))
+    checker.syncToShared(shared)
 
     if (check_errs.hasErrors()) {
         const diag = Diagnostic { offset: check_errs.first_offset, code: check_errs.first_code, msg: check_errs.first_msg }

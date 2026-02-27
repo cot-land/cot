@@ -1511,6 +1511,8 @@ fn isGcRefType(type_idx: @import("../../ssa/value.zig").TypeIndex, type_reg: ?*c
     return switch (t) {
         .struct_type => |st| map.contains(st.name),
         .pointer => |ptr| blk: {
+            // Raw pointers (@intToPtr) are i64 linear memory addresses, not GC refs.
+            if (!ptr.managed) break :blk false;
             const elem = reg.get(ptr.elem);
             break :blk switch (elem) {
                 .struct_type => |st| map.contains(st.name),
