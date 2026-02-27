@@ -126,6 +126,60 @@ test "arc: @arcRetain no-op on non-ARC type" {
     @assertEq(x, 42)
 }
 
+// -- ARC Phase 4: Ownership correctness --
+// Must come before weak/unowned tests (native func index ordering issue)
+
+// --- Return ownership ---
+
+struct ReturnNode { value: i64 }
+impl ReturnNode { fn deinit(self: *ReturnNode) {} }
+
+fn returnParam(n: *ReturnNode) *ReturnNode {
+    return n
+}
+
+test "arc: function returning parameter retains" {
+    var n = new ReturnNode { value: 42 }
+    var r = returnParam(n)
+    @assertEq(r.value, 42)
+}
+
+// --- Field init with existing local ---
+
+struct Owner { child: *ReturnNode }
+impl Owner { fn deinit(self: *Owner) {} }
+
+test "arc: new expr field init retains borrowed value" {
+    var child = new ReturnNode { value: 99 }
+    var owner = new Owner { child: child }
+    @assertEq(owner.child.value, 99)
+}
+
+// --- Method field assignment ---
+
+impl Owner {
+    fn setChild(self: *Owner, c: *ReturnNode) void {
+        self.child = c
+    }
+}
+
+test "arc: method field assignment retains" {
+    var owner = new Owner { child: new ReturnNode { value: 1 } }
+    var newChild = new ReturnNode { value: 2 }
+    owner.setChild(newChild)
+    @assertEq(owner.child.value, 2)
+}
+
+// --- Auto-generated deinit ---
+
+struct AutoOwner { child: *ReturnNode }
+
+test "arc: auto-generated deinit releases fields" {
+    var child = new ReturnNode { value: 55 }
+    var owner = new AutoOwner { child: child }
+    @assertEq(owner.child.value, 55)
+}
+
 // -- Weak references (break cycles) --
 
 test "arc: weak var no retain" {

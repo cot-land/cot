@@ -295,6 +295,8 @@ pub const Driver = struct {
         if (self.test_mode) lowerer.setTestMode(true);
         if (self.fail_fast) lowerer.setFailFast(true);
         try lowerer.lowerToBuilder();
+        // ARC Phase 4: Generate synthetic deinit functions for structs with ARC fields
+        try lowerer.emitPendingAutoDeinits();
         if (err_reporter.hasErrors()) return error.LowerError;
 
         // Generate test runner if in test mode
@@ -393,6 +395,12 @@ pub const Driver = struct {
             if (self.bench_mode) lowerer.setBenchMode(true);
 
             lowerer.lowerToBuilder() catch |e| {
+                shared_lowered_generics = lowerer.lowered_generics;
+                lowerer.deinitWithoutBuilder();
+                return e;
+            };
+            // ARC Phase 4: Generate synthetic deinit functions for structs with ARC fields
+            lowerer.emitPendingAutoDeinits() catch |e| {
                 shared_lowered_generics = lowerer.lowered_generics;
                 lowerer.deinitWithoutBuilder();
                 return e;

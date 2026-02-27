@@ -76,6 +76,10 @@ pub const Lowerer = struct {
     /// Track which locals are weak vars — stored value is side_table_ptr, loads go through weak_load_strong.
     /// Reference: Swift WeakReference.h — weak vars store side table pointers, not object pointers.
     weak_locals: std.AutoHashMapUnmanaged(ir.LocalIdx, void) = .{},
+    /// ARC Phase 4: Track types that need auto-generated deinit functions.
+    /// Structs with ARC fields but no user-defined deinit get a synthetic destructor
+    /// that releases all ARC fields. Reference: Swift value witness table destroy function.
+    pending_auto_deinits: std.ArrayListUnmanaged([]const u8) = .{},
 
     pub const Error = error{OutOfMemory};
 
@@ -298,6 +302,7 @@ pub const Lowerer = struct {
         self.comptime_value_vars.deinit();
         self.global_comptime_values.deinit();
         self.weak_locals.deinit(self.allocator);
+        self.pending_auto_deinits.deinit(self.allocator);
         self.builder.deinit();
     }
 
@@ -315,6 +320,7 @@ pub const Lowerer = struct {
         self.comptime_value_vars.deinit();
         self.global_comptime_values.deinit();
         self.weak_locals.deinit(self.allocator);
+        self.pending_auto_deinits.deinit(self.allocator);
     }
 
     pub fn lower(self: *Lowerer) !ir.IR {
@@ -487,6 +493,12 @@ pub const Lowerer = struct {
             }
             if (fn_decl.body != null_node) {
                 _ = try self.lowerBlockNode(fn_decl.body);
+
+                // ARC Phase 4: Auto-release ARC fields for free-function-style destructors.
+                if (fb.is_destructor) {
+                    try self.emitFieldReleases(fb, fn_decl.name, fn_decl.span);
+                }
+
                 if (return_type == TypeRegistry.VOID and fb.needsTerminator()) {
                     try self.emitCleanups(0);
                     _ = try fb.emitRet(null, fn_decl.span);
@@ -967,6 +979,13 @@ pub const Lowerer = struct {
             }
             if (fn_decl.body != null_node) {
                 _ = try self.lowerBlockNode(fn_decl.body);
+
+                // ARC Phase 4: Auto-release ARC fields after user's deinit body.
+                // Swift pattern: destructor auto-releases stored properties.
+                if (is_destructor) {
+                    try self.emitFieldReleases(fb, synth_name, fn_decl.span);
+                }
+
                 if (return_type == TypeRegistry.VOID and fb.needsTerminator()) {
                     try self.emitCleanups(0);
                     _ = try fb.emitRet(null, fn_decl.span);
@@ -1489,12 +1508,30 @@ pub const Lowerer = struct {
             // Forward ownership: if returning a local with ARC cleanup, disable it.
             // The caller receives ownership - we don't release here.
             // Reference: Swift's ManagedValue::forward() pattern
+            var forwarded = false;
             if (ret_node) |node| {
                 if (node.asExpr()) |expr| {
                     if (expr == .ident) {
                         if (fb.lookupLocal(expr.ident.name)) |local_idx| {
-                            _ = self.cleanup_stack.disableForLocal(local_idx);
+                            forwarded = self.cleanup_stack.disableForLocal(local_idx);
                         }
+                    }
+                }
+            }
+
+            // ARC Phase 4: Ensure +1 return for ARC types.
+            // Swift pattern: callee always produces +1 for @owned return convention.
+            // If the return value is already +1 (new_expr, call, or forwarded from cleanup),
+            // skip. Otherwise retain to produce +1. This fixes returning field accesses,
+            // parameters, or other borrowed (+0) values.
+            if (!self.target.isWasmGC() and value_node != null) {
+                const fn_ret_type = fb.return_type;
+                if (self.type_reg.couldBeARC(fn_ret_type)) {
+                    const is_plus_one = forwarded or
+                        (if (ret_node) |n| if (n.asExpr()) |e| (e == .new_expr or e == .call) else false else false);
+                    if (!is_plus_one) {
+                        var retain_args = [_]ir.NodeIndex{value_node.?};
+                        value_node = try fb.emitCall("retain", &retain_args, false, fn_ret_type, ret.span);
                     }
                 }
             }
@@ -1553,6 +1590,82 @@ pub const Lowerer = struct {
             }
             const cleanup = arc.Cleanup.initScopeDestroy(local_idx, type_idx, method_info.func_name);
             _ = try self.cleanup_stack.push(cleanup);
+        } else {
+            // ARC Phase 4: Check if this struct has a pending auto-generated deinit.
+            // Structs with ARC fields but no user deinit get a synthetic destructor.
+            for (self.pending_auto_deinits.items) |auto_name| {
+                if (std.mem.eql(u8, auto_name, struct_name)) {
+                    const deinit_name = try std.fmt.allocPrint(self.allocator, "{s}_deinit", .{struct_name});
+                    const cleanup = arc.Cleanup.initScopeDestroy(local_idx, type_idx, deinit_name);
+                    _ = try self.cleanup_stack.push(cleanup);
+                    break;
+                }
+            }
+        }
+    }
+
+    /// ARC Phase 4: Emit release calls for all ARC fields of a struct in a deinit function.
+    /// Called after lowering the user's deinit body. Releases each ARC field so that
+    /// owned references are dropped when the object is freed.
+    /// Reference: Swift value witness table destroy — auto-release stored properties.
+    fn emitFieldReleases(self: *Lowerer, fb: *ir.FuncBuilder, deinit_name: []const u8, span: Span) !void {
+        const suffix = "_deinit";
+        if (!std.mem.endsWith(u8, deinit_name, suffix)) return;
+        const type_name = deinit_name[0 .. deinit_name.len - suffix.len];
+        const struct_type_idx = self.type_reg.lookupByName(type_name) orelse return;
+        const type_info = self.type_reg.get(struct_type_idx);
+        if (type_info != .struct_type) return;
+        const struct_type = type_info.struct_type;
+
+        for (struct_type.fields, 0..) |field, i| {
+            if (self.type_reg.couldBeARC(field.type_idx)) {
+                const self_local = fb.lookupLocal("self") orelse continue;
+                const self_type_idx = fb.locals.items[self_local].type_idx;
+                const self_ptr = try fb.emitLoadLocal(self_local, self_type_idx, span);
+                const field_offset: i64 = @intCast(field.offset);
+                const field_val = try fb.emitFieldValue(self_ptr, @intCast(i), field_offset, field.type_idx, span);
+                var release_args = [_]ir.NodeIndex{field_val};
+                _ = try fb.emitCall("release", &release_args, false, TypeRegistry.VOID, span);
+            }
+        }
+    }
+
+    /// ARC Phase 4: Emit synthetic deinit functions for structs that have ARC fields
+    /// but no user-defined deinit. Called after lowerToBuilder.
+    /// Reference: Swift auto-generated memberwise destroy.
+    pub fn emitPendingAutoDeinits(self: *Lowerer) !void {
+        for (self.pending_auto_deinits.items) |type_name| {
+            const struct_type_idx = self.type_reg.lookupByName(type_name) orelse continue;
+            const type_info = self.type_reg.get(struct_type_idx);
+            if (type_info != .struct_type) continue;
+            const struct_type = type_info.struct_type;
+            const ptr_type = try self.type_reg.makePointer(struct_type_idx);
+
+            const deinit_name = try std.fmt.allocPrint(self.allocator, "{s}_deinit", .{type_name});
+            // Skip if already emitted (multi-file dedup — same struct imported in multiple files)
+            if (self.builder.hasFunc(deinit_name)) continue;
+            self.builder.startFunc(deinit_name, TypeRegistry.VOID, TypeRegistry.VOID, Span.zero);
+            if (self.builder.func()) |fb| {
+                self.current_func = fb;
+                fb.is_destructor = true;
+                _ = try fb.addParam("self", ptr_type, 8);
+
+                // Release each ARC field
+                for (struct_type.fields, 0..) |field, i| {
+                    if (self.type_reg.couldBeARC(field.type_idx)) {
+                        const self_local: ir.LocalIdx = 0; // first param
+                        const self_ptr = try fb.emitLoadLocal(self_local, ptr_type, Span.zero);
+                        const field_offset: i64 = @intCast(field.offset);
+                        const field_val = try fb.emitFieldValue(self_ptr, @intCast(i), field_offset, field.type_idx, Span.zero);
+                        var release_args = [_]ir.NodeIndex{field_val};
+                        _ = try fb.emitCall("release", &release_args, false, TypeRegistry.VOID, Span.zero);
+                    }
+                }
+
+                _ = try fb.emitRet(null, Span.zero);
+                self.current_func = null;
+            }
+            try self.builder.endFunc();
         }
     }
 
@@ -2450,12 +2563,15 @@ pub const Lowerer = struct {
                     const ptr_type_info = self.type_reg.get(ptr_type_idx);
                     if (ptr_type_info == .pointer) {
                         const pointee_type = ptr_type_info.pointer.elem;
-                        if (self.type_reg.couldBeARC(pointee_type) and self.baseHasCleanup(d.operand)) {
+                        // ARC Phase 4: Type-based guard — always retain/release for ARC pointees.
+                        // Old guard used baseHasCleanup which fails for method params.
+                        // Swift SILGen pattern: copy_value %new; store %new; destroy_value %old
+                        // Retain-before-release prevents use-after-free when old == new.
+                        if (self.type_reg.couldBeARC(pointee_type)) {
+                            // Load old value BEFORE store (needed for release after)
                             const old_val = try fb.emitPtrLoadValue(ptr_node, pointee_type, assign.span);
-                            var release_args = [_]ir.NodeIndex{old_val};
-                            _ = try fb.emitCall("release", &release_args, false, TypeRegistry.VOID, assign.span);
 
-                            // Retain new value if borrowed (+0)
+                            // Retain new value if borrowed (+0), then store
                             const rhs_node = self.tree.getNode(assign.value);
                             const rhs_expr = if (rhs_node) |n| n.asExpr() else null;
                             const is_owned = if (rhs_expr) |e| (e == .new_expr or e == .call) else false;
@@ -2463,8 +2579,14 @@ pub const Lowerer = struct {
                                 var retain_args = [_]ir.NodeIndex{value_node};
                                 const retained = try fb.emitCall("retain", &retain_args, false, pointee_type, assign.span);
                                 _ = try fb.emitPtrStoreValue(ptr_node, retained, assign.span);
-                                return;
+                            } else {
+                                _ = try fb.emitPtrStoreValue(ptr_node, value_node, assign.span);
                             }
+
+                            // Release old value AFTER store (safe even if old == new)
+                            var release_args = [_]ir.NodeIndex{old_val};
+                            _ = try fb.emitCall("release", &release_args, false, TypeRegistry.VOID, assign.span);
+                            return;
                         }
                     }
                 }
@@ -2525,13 +2647,16 @@ pub const Lowerer = struct {
                 if (base_type == .pointer) {
                     const ptr_val = try self.lowerExprNode(fa.base);
 
-                    // ARC: release old field value before storing new
-                    if (self.type_reg.couldBeARC(field.type_idx) and self.baseHasCleanup(fa.base)) {
+                    // ARC Phase 4: Type-based guard — always retain/release for ARC fields.
+                    // Old guard used baseHasCleanup(fa.base) which fails for method params
+                    // (parameters have no cleanup). Swift: field assignments always do retain/release.
+                    // Swift SILGen pattern: copy_value %new; store %new; destroy_value %old
+                    // Retain-before-release prevents use-after-free when old == new.
+                    if (self.type_reg.couldBeARC(field.type_idx) and !self.target.isWasmGC()) {
+                        // Load old value BEFORE store (needed for release after)
                         const old_val = try fb.emitFieldValue(ptr_val, field_idx, field_offset, field.type_idx, span);
-                        var release_args = [_]ir.NodeIndex{old_val};
-                        _ = try fb.emitCall("release", &release_args, false, TypeRegistry.VOID, span);
 
-                        // Retain new value if borrowed (+0)
+                        // Retain new value if borrowed (+0), then store
                         const rhs_node = self.tree.getNode(rhs_ast);
                         const rhs_expr = if (rhs_node) |n| n.asExpr() else null;
                         const is_owned = if (rhs_expr) |e| (e == .new_expr or e == .call) else false;
@@ -2542,6 +2667,10 @@ pub const Lowerer = struct {
                         } else {
                             _ = try fb.emitStoreFieldValue(ptr_val, field_idx, field_offset, value_node, span);
                         }
+
+                        // Release old value AFTER store (safe even if old == new)
+                        var release_args = [_]ir.NodeIndex{old_val};
+                        _ = try fb.emitCall("release", &release_args, false, TypeRegistry.VOID, span);
                     } else {
                         const fld_info = self.type_reg.get(field.type_idx);
                         if (fld_info == .optional and !self.isPtrLikeOptional(field.type_idx)) {
@@ -4755,6 +4884,31 @@ pub const Lowerer = struct {
         // Pass type metadata - resolved to actual address during Wasm codegen
         // For generic types, use the concrete type name from the struct type
         const metadata_name = if (ne.type_args.len > 0) struct_type.name else ne.type_name;
+
+        // ARC Phase 4: Queue synthetic deinit for structs with ARC fields but no user deinit.
+        // This ensures owned references in fields are released when the object is freed.
+        if (!self.target.isWasmGC()) {
+            var has_arc_fields = false;
+            for (struct_type.fields) |field| {
+                if (self.type_reg.couldBeARC(field.type_idx)) {
+                    has_arc_fields = true;
+                    break;
+                }
+            }
+            if (has_arc_fields and self.chk.lookupMethod(metadata_name, "deinit") == null) {
+                var already_queued = false;
+                for (self.pending_auto_deinits.items) |name| {
+                    if (std.mem.eql(u8, name, metadata_name)) {
+                        already_queued = true;
+                        break;
+                    }
+                }
+                if (!already_queued) {
+                    try self.pending_auto_deinits.append(self.allocator, metadata_name);
+                }
+            }
+        }
+
         const metadata_node = try fb.emitTypeMetadata(metadata_name, ne.span);
         const size_node = try fb.emitConstInt(@intCast(total_size), TypeRegistry.I64, ne.span);
         var alloc_args = [_]ir.NodeIndex{ metadata_node, size_node };
@@ -4788,8 +4942,25 @@ pub const Lowerer = struct {
                         _ = try fb.emitPtrStoreValue(len_addr, len_ir, ne.span);
                     } else {
                         // Simple field: store value at offset
-                        const field_addr = try fb.emitAddrOffset(ptr_node, field_offset, ptr_type, ne.span);
-                        _ = try fb.emitPtrStoreValue(field_addr, value_node, ne.span);
+                        // ARC Phase 4: Retain +0 ARC values stored in struct fields during init.
+                        // Swift pattern: storing a borrowed value into a struct field retains it.
+                        // new_expr and call already produce +1, so skip retain for those.
+                        if (!self.target.isWasmGC() and self.type_reg.couldBeARC(struct_field.type_idx)) {
+                            const fi_node = self.tree.getNode(field_init.value);
+                            const fi_expr = if (fi_node) |n| n.asExpr() else null;
+                            const fi_owned = if (fi_expr) |e| (e == .new_expr or e == .call) else false;
+                            const field_addr = try fb.emitAddrOffset(ptr_node, field_offset, ptr_type, ne.span);
+                            if (!fi_owned) {
+                                var retain_args = [_]ir.NodeIndex{value_node};
+                                const retained = try fb.emitCall("retain", &retain_args, false, struct_field.type_idx, ne.span);
+                                _ = try fb.emitPtrStoreValue(field_addr, retained, ne.span);
+                            } else {
+                                _ = try fb.emitPtrStoreValue(field_addr, value_node, ne.span);
+                            }
+                        } else {
+                            const field_addr = try fb.emitAddrOffset(ptr_node, field_offset, ptr_type, ne.span);
+                            _ = try fb.emitPtrStoreValue(field_addr, value_node, ne.span);
+                        }
                     }
                     _ = i;
                     break;
@@ -4817,8 +4988,23 @@ pub const Lowerer = struct {
                 const len_addr = try fb.emitAddrOffset(ptr_node, field_offset + 8, ptr_type, ne.span);
                 _ = try fb.emitPtrStoreValue(len_addr, len_ir, ne.span);
             } else {
-                const field_addr = try fb.emitAddrOffset(ptr_node, field_offset, ptr_type, ne.span);
-                _ = try fb.emitPtrStoreValue(field_addr, value_node, ne.span);
+                // ARC Phase 4: Retain +0 ARC default values stored in struct fields.
+                if (!self.target.isWasmGC() and self.type_reg.couldBeARC(struct_field.type_idx)) {
+                    const def_node = self.tree.getNode(struct_field.default_value);
+                    const def_expr = if (def_node) |n| n.asExpr() else null;
+                    const def_owned = if (def_expr) |e| (e == .new_expr or e == .call) else false;
+                    const field_addr = try fb.emitAddrOffset(ptr_node, field_offset, ptr_type, ne.span);
+                    if (!def_owned) {
+                        var retain_args = [_]ir.NodeIndex{value_node};
+                        const retained = try fb.emitCall("retain", &retain_args, false, struct_field.type_idx, ne.span);
+                        _ = try fb.emitPtrStoreValue(field_addr, retained, ne.span);
+                    } else {
+                        _ = try fb.emitPtrStoreValue(field_addr, value_node, ne.span);
+                    }
+                } else {
+                    const field_addr = try fb.emitAddrOffset(ptr_node, field_offset, ptr_type, ne.span);
+                    _ = try fb.emitPtrStoreValue(field_addr, value_node, ne.span);
+                }
             }
         }
 
