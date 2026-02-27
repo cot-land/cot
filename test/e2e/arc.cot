@@ -144,3 +144,26 @@ test "arc: weak var cycle breaking" {
     child.next = @ptrToInt(parent_ref)
     @assertEq(child.next, @ptrToInt(parent))
 }
+
+// -- Raw pointer (unmanaged) tests --
+// Swift: UnsafePointer has no ownership — @intToPtr produces unmanaged *T
+
+test "arc: intToPtr creates raw pointer (no ARC)" {
+    // Allocate manually, cast to raw pointer, use, then dealloc
+    // Raw pointer must NOT be ARC'd (no release on scope exit)
+    var n = new ArcNode { value: 42, next: 0 }
+    var addr = @ptrToInt(n)
+    var raw = @intToPtr(*ArcNode, addr)
+    @assertEq(raw.value, 42)
+    // raw is unmanaged — scope exit does NOT release it
+    // n is still managed — scope exit releases n normally
+}
+
+test "arc: raw pointer alias stays unmanaged" {
+    var n = new ArcNode { value: 99, next: 0 }
+    var addr = @ptrToInt(n)
+    var raw = @intToPtr(*ArcNode, addr)
+    var alias = raw
+    @assertEq(alias.value, 99)
+    // alias inherits unmanaged type from raw — no double-free
+}

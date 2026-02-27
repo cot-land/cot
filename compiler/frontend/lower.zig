@@ -6640,7 +6640,13 @@ pub const Lowerer = struct {
                 return try fb.emitPtrCast(value, target_type, bc.span);
             },
             .int_to_ptr => {
-                const target_type = self.resolveTypeNode(bc.type_arg);
+                const resolved = self.resolveTypeNode(bc.type_arg);
+                // Force raw (unmanaged) pointer — @intToPtr never creates ARC references.
+                // Swift: UnsafeRawPointer.init(bitPattern:) — no ownership.
+                const target_type = if (self.type_reg.get(resolved) == .pointer)
+                    self.type_reg.makeRawPointer(self.type_reg.get(resolved).pointer.elem) catch resolved
+                else
+                    resolved;
                 const value = try self.lowerExprNode(bc.args[0]);
                 return try fb.emitIntToPtr(value, target_type, bc.span);
             },

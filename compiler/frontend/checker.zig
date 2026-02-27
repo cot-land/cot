@@ -1908,7 +1908,10 @@ pub const Checker = struct {
                 const target_type = try self.resolveTypeExpr(bc.type_arg);
                 if (self.types.get(target_type) != .pointer) { self.err.errorWithCode(bc.span.start, .e300, "@intToPtr target must be pointer"); return invalid_type; }
                 _ = try self.checkExpr(bc.args[0]);
-                return target_type;
+                // @intToPtr creates raw (unmanaged) pointers — no ARC.
+                // Swift: UnsafePointer vs class reference distinction.
+                const elem = self.types.get(target_type).pointer.elem;
+                return self.types.makeRawPointer(elem) catch invalid_type;
             },
             .assert => {
                 _ = try self.checkExpr(bc.args[0]);

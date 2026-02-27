@@ -63,7 +63,7 @@ pub const BasicKind = enum(u8) {
 };
 
 // Composite types
-pub const PointerType = struct { elem: TypeIndex };
+pub const PointerType = struct { elem: TypeIndex, managed: bool = false };
 pub const OptionalType = struct { elem: TypeIndex };
 pub const ErrorSetType = struct { name: []const u8, variants: []const []const u8 };
 pub const ErrorUnionType = struct { elem: TypeIndex, error_set: TypeIndex = std.math.maxInt(TypeIndex) };
@@ -253,7 +253,14 @@ pub const TypeRegistry = struct {
 
     pub fn registerNamed(self: *TypeRegistry, n: []const u8, idx: TypeIndex) !void { try self.name_map.put(n, idx); }
 
-    pub fn makePointer(self: *TypeRegistry, elem: TypeIndex) !TypeIndex { return self.add(.{ .pointer = .{ .elem = elem } }); }
+    pub fn makePointer(self: *TypeRegistry, elem: TypeIndex) !TypeIndex {
+        const pointee = self.get(elem);
+        const is_managed = pointee == .struct_type or pointee == .enum_type or pointee == .union_type;
+        return self.add(.{ .pointer = .{ .elem = elem, .managed = is_managed } });
+    }
+    pub fn makeRawPointer(self: *TypeRegistry, elem: TypeIndex) !TypeIndex {
+        return self.add(.{ .pointer = .{ .elem = elem, .managed = false } });
+    }
     pub fn makeOptional(self: *TypeRegistry, elem: TypeIndex) !TypeIndex { return self.add(.{ .optional = .{ .elem = elem } }); }
     pub fn makeErrorUnion(self: *TypeRegistry, elem: TypeIndex) !TypeIndex { return self.add(.{ .error_union = .{ .elem = elem } }); }
     pub fn makeErrorUnionWithSet(self: *TypeRegistry, elem: TypeIndex, error_set: TypeIndex) !TypeIndex { return self.add(.{ .error_union = .{ .elem = elem, .error_set = error_set } }); }
@@ -392,14 +399,8 @@ pub const TypeRegistry = struct {
     /// Reference: Swift TypeLowering — class types (heap) are non-trivial.
     pub fn couldBeARC(self: *const TypeRegistry, idx: TypeIndex) bool {
         const t = self.get(idx);
-        if (t == .pointer) {
-            const pointee = self.get(t.pointer.elem);
-            return pointee == .struct_type or pointee == .enum_type or pointee == .union_type;
-        }
-        // Optional wrapping an ARC pointer: ?*T
-        if (t == .optional) {
-            return self.couldBeARC(t.optional.elem);
-        }
+        if (t == .pointer) return t.pointer.managed;
+        if (t == .optional) return self.couldBeARC(t.optional.elem);
         return false;
     }
 
@@ -642,6 +643,38 @@ test "TypeRegistry sizeOf" {
 
 test "invalid_type" {
     try std.testing.expectEqual(std.math.maxInt(u32), invalid_type);
+}
+
+test "managed pointer flag" {
+    var reg = try TypeRegistry.init(std.testing.allocator);
+    defer reg.deinit();
+
+    // makePointer to basic type → unmanaged (like Swift UnsafePointer)
+    const ptr_i32 = try reg.makePointer(TypeRegistry.I32);
+    try std.testing.expect(!reg.get(ptr_i32).pointer.managed);
+    try std.testing.expect(!reg.couldBeARC(ptr_i32));
+
+    // makePointer to struct → managed (like Swift class reference)
+    const my_struct = try reg.add(.{ .struct_type = .{ .name = "TestStruct", .fields = &.{}, .size = 8, .alignment = 8 } });
+    const ptr_struct = try reg.makePointer(my_struct);
+    try std.testing.expect(reg.get(ptr_struct).pointer.managed);
+    try std.testing.expect(reg.couldBeARC(ptr_struct));
+
+    // makeRawPointer to struct → unmanaged (like Swift UnsafePointer to class)
+    const raw_struct = try reg.makeRawPointer(my_struct);
+    try std.testing.expect(!reg.get(raw_struct).pointer.managed);
+    try std.testing.expect(!reg.couldBeARC(raw_struct));
+
+    // Optional wrapping managed pointer → couldBeARC true
+    const opt_ptr = try reg.makeOptional(ptr_struct);
+    try std.testing.expect(reg.couldBeARC(opt_ptr));
+
+    // Optional wrapping raw pointer → couldBeARC false
+    const opt_raw = try reg.makeOptional(raw_struct);
+    try std.testing.expect(!reg.couldBeARC(opt_raw));
+
+    // equal() ignores managed flag (it's an ARC annotation, not a type distinction)
+    try std.testing.expect(reg.equal(ptr_struct, raw_struct));
 }
 
 test "isTrivial for ARC" {
