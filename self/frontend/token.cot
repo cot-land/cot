@@ -40,6 +40,7 @@ const Token = enum(u8) {
     kw_unreachable,
     kw_packed,
     kw_weak,
+    kw_unowned,
     kw_static,
     kw_and, kw_or, kw_not,
     kw_int, kw_float, kw_bool, kw_string, kw_byte, kw_void, kw_noreturn,
@@ -157,6 +158,7 @@ const token_strings = comptime {
     s[@intFromEnum(Token.kw_unreachable)] = "unreachable"
     s[@intFromEnum(Token.kw_packed)] = "packed"
     s[@intFromEnum(Token.kw_weak)] = "weak"
+    s[@intFromEnum(Token.kw_unowned)] = "unowned"
     s[@intFromEnum(Token.kw_and)] = "and"
     s[@intFromEnum(Token.kw_or)] = "or"
     s[@intFromEnum(Token.kw_not)] = "not"
@@ -279,6 +281,7 @@ fn lookup(name: string) Token {
         "unreachable" => Token.kw_unreachable,
         "packed" => Token.kw_packed,
         "weak" => Token.kw_weak,
+        "unowned" => Token.kw_unowned,
         "static" => Token.kw_static,
         "and" => Token.kw_and,
         "or" => Token.kw_or,

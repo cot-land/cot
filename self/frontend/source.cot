@@ -1,6 +1,7 @@
 /// Source text handling and position tracking.
 /// Ported from compiler/frontend/source.zig
 
+import "std/list"
 import "std/string"
 
 /// Byte offset into source text.
@@ -13,6 +14,14 @@ impl Pos {
     fn advance(n: int) Pos {
         return Pos { offset: self.offset + n }
     }
+}
+
+/// Human-readable source position for error messages (1-based line/column).
+struct Position {
+    filename: string,
+    offset: int,
+    line: int,
+    column: int,
 }
 
 /// Half-open byte range [start_offset, end_offset) in source text.
@@ -32,19 +41,44 @@ impl Span {
         return Span { start_offset: offset, end_offset: offset }
     }
 
+    /// Merge two spans into the smallest span containing both.
+    fn merge(other: Span) Span {
+        var s = self.start_offset
+        if (other.start_offset < s) {
+            s = other.start_offset
+        }
+        var e = self.end_offset
+        if (other.end_offset > e) {
+            e = other.end_offset
+        }
+        return Span { start_offset: s, end_offset: e }
+    }
+
     /// Number of bytes in this span.
     fn len() int {
         return self.end_offset - self.start_offset
     }
 }
 
-/// A source file: filename + content.
+/// A source file: filename + content + lazy line offset tracking.
 struct Source {
     filename: string,
     content: string,
+    line_offsets: List(int),
+    line_offsets_computed: bool,
 }
 
 impl Source {
+    /// Create a source with filename and content.
+    static fn init(filename: string, content: string) Source {
+        return Source {
+            filename: filename,
+            content: content,
+            line_offsets: .{},
+            line_offsets_computed: false,
+        }
+    }
+
     /// Return the byte at offset, or null if past end.
     fn at(offset: int) ?int {
         if (offset >= @lenOf(self.content)) {
@@ -57,6 +91,75 @@ impl Source {
     fn slice(start: int, end: int) string {
         return substring(self.content, start, end)
     }
+
+    /// Return the source text covered by a span.
+    fn spanText(s: Span) string {
+        return substring(self.content, s.start_offset, s.end_offset)
+    }
+
+    /// Compute line offset array (lazy, computed once on first call).
+    fn ensureLineOffsets() void {
+        if (self.line_offsets_computed) {
+            return
+        }
+        // Line 1 starts at offset 0
+        self.line_offsets.append(0)
+        var i = 0
+        const clen = @lenOf(self.content)
+        while (i < clen) {
+            if (charAt(self.content, i) == '\n') {
+                self.line_offsets.append(i + 1)
+            }
+            i += 1
+        }
+        self.line_offsets_computed = true
+    }
+
+    /// Return human-readable position (1-based line/column) for an offset.
+    fn position(offset: int) Position {
+        self.ensureLineOffsets()
+        // Binary search for line containing offset
+        var line = 0
+        var lo = 0
+        var hi = self.line_offsets.count
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2
+            if (self.line_offsets.get(mid) <= offset) {
+                line = mid
+                lo = mid + 1
+            } else {
+                hi = mid
+            }
+        }
+        return Position {
+            filename: self.filename,
+            offset: offset,
+            line: line + 1,
+            column: offset - self.line_offsets.get(line) + 1,
+        }
+    }
+
+    /// Return the full source line containing the given offset.
+    fn getLine(offset: int) string {
+        self.ensureLineOffsets()
+        const pos = self.position(offset)
+        const start = self.line_offsets.get(pos.line - 1)
+        var end = start
+        const clen = @lenOf(self.content)
+        while (end < clen) {
+            if (charAt(self.content, end) == '\n') {
+                break
+            }
+            end += 1
+        }
+        return substring(self.content, start, end)
+    }
+
+    /// Return the number of lines in the source.
+    fn lineCount() int {
+        self.ensureLineOffsets()
+        return self.line_offsets.count
+    }
 }
 
 // ============================================================================
@@ -67,6 +170,13 @@ test "pos advance" {
     var p = Pos { offset: 5 }
     const p2 = p.advance(3)
     @assertEq(p2.offset, 8)
+}
+
+test "position struct" {
+    const pos = Position { filename: "test.cot", offset: 10, line: 2, column: 5 }
+    @assertEq(pos.line, 2)
+    @assertEq(pos.column, 5)
+    @assertEq(pos.filename, "test.cot")
 }
 
 test "span init" {
@@ -86,8 +196,24 @@ test "span len" {
     @assertEq(s.len(), 5)
 }
 
+test "span merge" {
+    var a = Span.init(5, 10)
+    const b = Span.init(8, 15)
+    const merged = a.merge(b)
+    @assertEq(merged.start_offset, 5)
+    @assertEq(merged.end_offset, 15)
+}
+
+test "span merge reversed" {
+    var a = Span.init(8, 15)
+    const b = Span.init(5, 10)
+    const merged = a.merge(b)
+    @assertEq(merged.start_offset, 5)
+    @assertEq(merged.end_offset, 15)
+}
+
 test "source at" {
-    var src = Source { filename: "test.cot", content: "abc" }
+    var src = Source.init("test.cot", "abc")
     const a = src.at(0)
     @assertEq(a.?, 97)
     const b = src.at(1)
@@ -97,15 +223,46 @@ test "source at" {
 }
 
 test "source at past end" {
-    var src = Source { filename: "test.cot", content: "abc" }
+    var src = Source.init("test.cot", "abc")
     const result = src.at(3)
     @assert(result == null)
 }
 
 test "source slice" {
-    var src = Source { filename: "test.cot", content: "hello world" }
+    var src = Source.init("test.cot", "hello world")
     const s = src.slice(0, 5)
     @assertEq(s, "hello")
     const s2 = src.slice(6, 11)
     @assertEq(s2, "world")
+}
+
+test "source spanText" {
+    var src = Source.init("test.cot", "hello world")
+    const text = src.spanText(Span.init(0, 5))
+    @assertEq(text, "hello")
+}
+
+test "source position first char" {
+    var src = Source.init("test.cot", "fn main() {\n    return 0\n}")
+    const pos = src.position(0)
+    @assertEq(pos.line, 1)
+    @assertEq(pos.column, 1)
+}
+
+test "source position second line" {
+    var src = Source.init("test.cot", "fn main() {\n    return 0\n}")
+    const pos = src.position(16)
+    @assertEq(pos.line, 2)
+    @assertEq(pos.column, 5)
+}
+
+test "source getLine" {
+    var src = Source.init("test.cot", "line one\nline two\nline three")
+    @assertEq(src.getLine(0), "line one")
+    @assertEq(src.getLine(10), "line two")
+}
+
+test "source lineCount" {
+    var src = Source.init("test.cot", "line 1\nline 2\nline 3")
+    @assertEq(src.lineCount(), 3)
 }

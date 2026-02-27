@@ -138,7 +138,7 @@ impl BasicKind {
 // Composite type structs
 // ============================================================================
 
-struct PointerType { elem: int }
+struct PointerType { elem: int, managed: bool }
 struct OptionalType { elem: int }
 struct SliceType { elem: int }
 struct ArrayType { elem: int, length: int }
@@ -222,6 +222,7 @@ struct MethodInfo {
     func_name: string,
     func_type: int,
     receiver_is_ptr: bool,
+    is_static: bool,
 }
 
 // ============================================================================
@@ -513,7 +514,11 @@ impl TypeRegistry {
     // ---- Factory methods ----
 
     fn makePointer(elem: int) int {
-        return self.add(Type.pointer(PointerType { elem: elem }))
+        return self.add(Type.pointer(PointerType { elem: elem, managed: true }))
+    }
+
+    fn makeRawPointer(elem: int) int {
+        return self.add(Type.pointer(PointerType { elem: elem, managed: false }))
     }
 
     fn makeOptional(elem: int) int {
@@ -542,6 +547,27 @@ impl TypeRegistry {
 
     fn makeList(elem: int) int {
         return self.add(Type.list_type(CotListType { elem: elem }))
+    }
+
+    fn makeTuple(elems: List(int)) int {
+        const count = elems.count
+        const ptr = alloc(0, count * 8)
+        for i in 0..count {
+            @intToPtr(*int, ptr + i * 8).* = elems.get(i)
+        }
+        return self.add(Type.tuple(TupleType { elem_count: count, elem_types: ptr }))
+    }
+
+    fn makeFunc(params: List(FuncParam), return_type: int) int {
+        const count = params.count
+        const ptr = alloc(0, count * @sizeOf(FuncParam))
+        for i in 0..count {
+            const p = params.get(i)
+            const fp = @intToPtr(*FuncParam, ptr + i * @sizeOf(FuncParam))
+            fp.name = p.name
+            fp.type_idx = p.type_idx
+        }
+        return self.add(Type.func(FuncType { param_count: count, params: ptr, return_type: return_type }))
     }
 
     fn makeFuture(result_type: int) int {
@@ -1284,4 +1310,58 @@ test "TypeRegistry isAssignable noreturn" {
     @assert(reg.isAssignable(NORETURN, I64))
     @assert(reg.isAssignable(NORETURN, BOOL))
     @assert(reg.isAssignable(NORETURN, STRING))
+}
+
+test "TypeRegistry makeRawPointer" {
+    var reg = TypeRegistry.init()
+    const raw = reg.makeRawPointer(I32)
+    @assert(reg.isPointer(raw))
+    @assertEq(reg.pointerElem(raw), I32)
+    const t = reg.get(raw)
+    const managed = switch (t) { Type.pointer |p| => p.managed, else => true }
+    @assertEq(managed, false)
+
+    const mgd = reg.makePointer(I32)
+    const t2 = reg.get(mgd)
+    const managed2 = switch (t2) { Type.pointer |p| => p.managed, else => false }
+    @assert(managed2)
+}
+
+test "TypeRegistry makeTuple" {
+    var reg = TypeRegistry.init()
+    var elems: List(int) = .{}
+    elems.append(I32)
+    elems.append(I64)
+    elems.append(BOOL)
+    const tup = reg.makeTuple(elems)
+    const t = reg.get(tup)
+    @assertEq(t.tag, TAG_TUPLE)
+    const tt = switch (t) { Type.tuple |tu| => tu, else => TupleType { elem_count: 0, elem_types: 0 } }
+    @assertEq(tt.elem_count, 3)
+    @assertEq(tt.getElemType(0), I32)
+    @assertEq(tt.getElemType(1), I64)
+    @assertEq(tt.getElemType(2), BOOL)
+}
+
+test "TypeRegistry makeFunc" {
+    var reg = TypeRegistry.init()
+    var params: List(FuncParam) = .{}
+    params.append(FuncParam { name: "a", type_idx: I32 })
+    params.append(FuncParam { name: "b", type_idx: I64 })
+    const ft = reg.makeFunc(params, BOOL)
+    const t = reg.get(ft)
+    @assertEq(t.tag, TAG_FUNC)
+    const ff = switch (t) { Type.func |f| => f, else => FuncType { param_count: 0, params: 0, return_type: INVALID } }
+    @assertEq(ff.param_count, 2)
+    @assertEq(ff.return_type, BOOL)
+    @assertEq(ff.getParam(0).name, "a")
+    @assertEq(ff.getParam(0).type_idx, I32)
+    @assertEq(ff.getParam(1).name, "b")
+    @assertEq(ff.getParam(1).type_idx, I64)
+}
+
+test "MethodInfo is_static" {
+    const mi = MethodInfo { name: "create", func_name: "Foo_create", func_type: 0, receiver_is_ptr: false, is_static: true }
+    @assert(mi.is_static)
+    @assertEq(mi.receiver_is_ptr, false)
 }

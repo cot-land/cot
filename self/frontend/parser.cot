@@ -1,7 +1,7 @@
 /// Recursive descent parser for the self-hosted Cot compiler.
 /// Ported from compiler/frontend/parser.zig
 ///
-/// Produces a flat-encoded AST (see ast.cot) from a token stream.
+/// Produces a tagged union AST (see ast.cot) from a token stream.
 /// Uses precedence climbing for binary expressions.
 
 import "std/list"
@@ -182,7 +182,7 @@ impl Parser {
         if (self.tok == @intFromEnum(Token.kw_export)) {
             self.advance()
             if (self.tok == @intFromEnum(Token.kw_fn)) {
-                return self.parseFnDecl(0, 0, 0)
+                return self.parseFnDecl(0, 0, 0, 1)
             }
             self.errors.report(self.tok_start, ErrorCode.e200, "expected 'fn' after 'export'")
             return null_node
@@ -192,7 +192,7 @@ impl Parser {
             Token.kw_import => self.parseImportDecl(),
             Token.kw_test => self.parseTestDecl(),
             Token.kw_bench => self.parseBenchDecl(),
-            Token.kw_fn => self.parseFnDecl(0, 0, 0),
+            Token.kw_fn => self.parseFnDecl(0, 0, 0, 0),
             Token.kw_const => self.parseVarDecl(1),
             Token.kw_var => self.parseVarDecl(0),
             Token.kw_let => self.parseVarDecl(0),
@@ -222,7 +222,7 @@ impl Parser {
         }
         const path = self.tok_text
         self.advance()  // consume string
-        return self.ast.addImportDecl(path, self.spanSE(start, self.tok_end))
+        return self.ast.addDecl(Decl.import_decl(ImportDecl { .path = path, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// test "name" { body }
@@ -236,7 +236,7 @@ impl Parser {
         const name = self.tok_text
         self.advance()  // consume name
         const body = self.parseBlock()
-        return self.ast.addTestDecl(name, body, self.spanSE(start, self.tok_end))
+        return self.ast.addDecl(Decl.test_decl(TestDecl { .name = name, .body = body, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// bench "name" { body }
@@ -250,11 +250,11 @@ impl Parser {
         const name = self.tok_text
         self.advance()  // consume name
         const body = self.parseBlock()
-        return self.ast.addBenchDecl(name, body, self.spanSE(start, self.tok_end))
+        return self.ast.addDecl(Decl.bench_decl(BenchDecl { .name = name, .body = body, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// fn name(T)(params) return_type { body }
-    fn parseFnDecl(is_extern: int, is_async: int, is_static: int) int {
+    fn parseFnDecl(is_extern: int, is_async: int, is_static: int, is_export: int) int {
         const start = self.tok_start
         const doc = self.consumeDocComment()
         self.advance()  // consume 'fn'
@@ -315,18 +315,15 @@ impl Parser {
             // Check if first param is already named "self"
             var needs_self = true
             if (params.count > 0) {
-                const first_tag = self.ast.getTag(params.get(0))
-                if (first_tag == @intFromEnum(NodeTag.field_def)) {
-                    const first_name = self.ast.getStr(self.ast.getData(params.get(0), 0))
-                    if (first_name == "self") {
-                        needs_self = false
-                    }
+                const first_name = nodeFieldDefName(self.ast, params.get(0))
+                if (first_name == "self") {
+                    needs_self = false
                 }
             }
             if (needs_self) {
                 // Create self param with type = current_impl_type
-                const self_type = self.ast.addIdent(self.current_impl_type, self.spanSE(start, start))
-                const self_param = self.ast.addFieldDef("self", self_type, null_node, "", self.spanSE(start, start))
+                const self_type = self.ast.addExpr(Expr.ident(Ident { .name = self.current_impl_type, .span = self.spanSE(start, start) }))
+                const self_param = self.ast.addExpr(Expr.field_def(FieldDef { .name = "self", .type_expr = self_type, .default_value = null_node, .doc_comment = "", .span = self.spanSE(start, start) }))
                 // Prepend self to params
                 var new_params: List(int) = .{}
                 new_params.append(self_param)
@@ -384,7 +381,20 @@ impl Parser {
             body = self.parseBlock()
         }
 
-        return self.ast.addFnDecl(name, ret_type, body, is_extern, is_async, doc, params, type_params, type_param_bounds, self.spanSE(start, self.tok_end))
+        return self.ast.addDecl(Decl.fn_decl(FnDecl {
+            .name = name,
+            .type_params = type_params,
+            .type_param_bounds = type_param_bounds,
+            .params = params,
+            .return_type = ret_type,
+            .body = body,
+            .is_extern = is_extern == 1,
+            .is_export = is_export == 1,
+            .is_async = is_async == 1,
+            .is_static = is_static == 1,
+            .doc_comment = doc,
+            .span = self.spanSE(start, self.tok_end),
+        }))
     }
 
     /// const/var name: Type = value
@@ -456,11 +466,11 @@ impl Parser {
                     if (self.match(@intFromEnum(Token.assign))) {
                         vval = self.parseExpr()
                     }
-                    variants.append(self.ast.addEnumVariant(vname, vval, self.spanSE(vstart, self.tok_end)))
+                    variants.append(self.ast.addExpr(Expr.enum_variant_node(EnumVariantNode { .name = vname, .value = vval, .span = self.spanSE(vstart, self.tok_end) })))
                     self.match(@intFromEnum(Token.comma))
                 }
                 self.expect(@intFromEnum(Token.rbrace))
-                return self.ast.addEnumDecl(name, backing, doc, variants, self.spanSE(start, self.tok_end))
+                return self.ast.addDecl(Decl.enum_decl(EnumDecl { .name = name, .backing_type = backing, .variants = variants, .doc_comment = doc, .span = self.spanSE(start, self.tok_end) }))
             }
 
             if (self.tok == @intFromEnum(Token.kw_error)) {
@@ -479,7 +489,7 @@ impl Parser {
                         }
                     }
                     self.expect(@intFromEnum(Token.rbrace))
-                    return self.ast.addErrorSetDecl(name, doc, variants, self.spanSE(start, self.tok_end))
+                    return self.ast.addDecl(Decl.error_set_decl(ErrorSetDecl { .name = name, .variants = variants, .doc_comment = doc, .span = self.spanSE(start, self.tok_end) }))
                 }
                 // error.Name expression — not an error set, restore state
             }
@@ -502,11 +512,11 @@ impl Parser {
                     if (self.match(@intFromEnum(Token.colon))) {
                         vtype = self.parseType()
                     }
-                    variants.append(self.ast.addUnionVariant(vname, vtype, self.spanSE(vstart, self.tok_end)))
+                    variants.append(self.ast.addExpr(Expr.union_variant_node(UnionVariantNode { .name = vname, .type_expr = vtype, .span = self.spanSE(vstart, self.tok_end) })))
                     self.match(@intFromEnum(Token.comma))
                 }
                 self.expect(@intFromEnum(Token.rbrace))
-                return self.ast.addUnionDecl(name, doc, variants, self.spanSE(start, self.tok_end))
+                return self.ast.addDecl(Decl.union_decl(UnionDecl { .name = name, .variants = variants, .doc_comment = doc, .span = self.spanSE(start, self.tok_end) }))
             }
 
             if (self.tok == @intFromEnum(Token.kw_struct)) {
@@ -526,7 +536,7 @@ impl Parser {
                     self.match(@intFromEnum(Token.comma))
                 }
                 self.expect(@intFromEnum(Token.rbrace))
-                return self.ast.addStructDecl(name, 0, doc, sfields, type_params, nested, self.spanSE(start, self.tok_end))
+                return self.ast.addDecl(Decl.struct_decl(StructDecl { .name = name, .type_params = type_params, .fields = sfields, .layout = 0, .nested_decls = nested, .doc_comment = doc, .span = self.spanSE(start, self.tok_end) }))
             }
 
             // Not a type declaration — restore parser + scanner state
@@ -549,7 +559,7 @@ impl Parser {
             value = self.parseExpr()
         }
 
-        return self.ast.addVarDecl(name, type_expr, value, is_const, doc, self.spanSE(start, self.tok_end))
+        return self.ast.addDecl(Decl.var_decl(VarDecl { .name = name, .type_expr = type_expr, .value = value, .is_const = is_const == 1, .doc_comment = doc, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// Destructure top-level: const a, b = expr (no ident found, multiple bindings)
@@ -563,7 +573,7 @@ impl Parser {
     /// Destructure from first binding: const a, b = expr
     fn parseDestructureDeclFrom(first_name: string, first_type: int, first_start: int, start: int, is_const: int, doc: string) int {
         var bindings: List(int) = .{}
-        bindings.append(self.ast.addDestructureBind(first_name, first_type, self.spanSE(first_start, self.tok_end)))
+        bindings.append(self.ast.addExpr(Expr.destructure_bind(DestructureBindNode { .name = first_name, .type_expr = first_type, .span = self.spanSE(first_start, self.tok_end) })))
         while (self.match(@intFromEnum(Token.comma))) {
             if (self.tok != @intFromEnum(Token.ident)) {
                 self.errors.report(self.tok_start, ErrorCode.e203, "expected variable name")
@@ -576,13 +586,13 @@ impl Parser {
             if (self.match(@intFromEnum(Token.colon))) {
                 btype = self.parseType()
             }
-            bindings.append(self.ast.addDestructureBind(bname, btype, self.spanSE(bstart, self.tok_end)))
+            bindings.append(self.ast.addExpr(Expr.destructure_bind(DestructureBindNode { .name = bname, .type_expr = btype, .span = self.spanSE(bstart, self.tok_end) })))
         }
         if (!self.expect(@intFromEnum(Token.assign))) {
             return null_node
         }
         const value = self.parseExpr()
-        return self.ast.addDestructureStmt(value, is_const, bindings, self.spanSE(start, self.tok_end))
+        return self.ast.addStmt(Stmt.destructure_stmt(DestructureStmt { .bindings = bindings, .value = value, .is_const = is_const == 1, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// struct Name { fields }
@@ -649,7 +659,7 @@ impl Parser {
         }
         self.expect(@intFromEnum(Token.rbrace))
 
-        return self.ast.addStructDecl(name, layout, doc, fields, type_params, nested, self.spanSE(start, self.tok_end))
+        return self.ast.addDecl(Decl.struct_decl(StructDecl { .name = name, .type_params = type_params, .fields = fields, .layout = layout, .nested_decls = nested, .doc_comment = doc, .span = self.spanSE(start, self.tok_end) }))
     }
 
     fn parsePackedStructDecl() int {
@@ -662,7 +672,7 @@ impl Parser {
         const start = self.tok_start
         self.advance()  // consume 'extern'
         if (self.tok == @intFromEnum(Token.kw_fn)) {
-            return self.parseFnDecl(1, 0, 0)
+            return self.parseFnDecl(1, 0, 0, 0)
         }
         if (self.tok == @intFromEnum(Token.kw_struct)) {
             return self.parseStructDecl(2)  // extern layout
@@ -712,11 +722,11 @@ impl Parser {
             if (self.match(@intFromEnum(Token.assign))) {
                 vval = self.parseExpr()
             }
-            variants.append(self.ast.addEnumVariant(vname, vval, self.spanSE(vstart, self.tok_end)))
+            variants.append(self.ast.addExpr(Expr.enum_variant_node(EnumVariantNode { .name = vname, .value = vval, .span = self.spanSE(vstart, self.tok_end) })))
             self.match(@intFromEnum(Token.comma))
         }
         self.expect(@intFromEnum(Token.rbrace))
-        return self.ast.addEnumDecl(name, backing, doc, variants, self.spanSE(start, self.tok_end))
+        return self.ast.addDecl(Decl.enum_decl(EnumDecl { .name = name, .backing_type = backing, .variants = variants, .doc_comment = doc, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// union { variants }
@@ -746,11 +756,11 @@ impl Parser {
             if (self.match(@intFromEnum(Token.colon))) {
                 vtype = self.parseType()
             }
-            variants.append(self.ast.addUnionVariant(vname, vtype, self.spanSE(vstart, self.tok_end)))
+            variants.append(self.ast.addExpr(Expr.union_variant_node(UnionVariantNode { .name = vname, .type_expr = vtype, .span = self.spanSE(vstart, self.tok_end) })))
             self.match(@intFromEnum(Token.comma))
         }
         self.expect(@intFromEnum(Token.rbrace))
-        return self.ast.addUnionDecl(name, doc, variants, self.spanSE(start, self.tok_end))
+        return self.ast.addDecl(Decl.union_decl(UnionDecl { .name = name, .variants = variants, .doc_comment = doc, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// impl Type { methods }  or  impl Type(T) { methods }  or  impl Trait for Type { methods }
@@ -803,6 +813,7 @@ impl Parser {
         self.current_impl_is_generic = type_params.len() > 0
 
         var methods: List(int) = .{}
+        var consts: List(int) = .{}
 
         while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
             self.collectDocComment()
@@ -812,13 +823,13 @@ impl Parser {
                     self.errors.report(self.tok_start, ErrorCode.e200, "expected 'fn' after 'static'")
                     self.advance()
                 } else {
-                    const m = self.parseFnDecl(0, 0, 1)
+                    const m = self.parseFnDecl(0, 0, 1, 0)
                     if (m != null_node) {
                         methods.append(m)
                     }
                 }
             } else if (self.tok == @intFromEnum(Token.kw_fn)) {
-                const m = self.parseFnDecl(0, 0, 0)
+                const m = self.parseFnDecl(0, 0, 0, 0)
                 if (m != null_node) {
                     methods.append(m)
                 }
@@ -830,7 +841,7 @@ impl Parser {
             } else if (self.tok == @intFromEnum(Token.kw_const)) {
                 const c = self.parseVarDecl(1)
                 if (c != null_node) {
-                    methods.append(c)
+                    consts.append(c)
                 }
             } else {
                 self.errors.report(self.tok_start, ErrorCode.e200, "expected 'fn', 'static fn', or 'const' in impl block")
@@ -841,7 +852,7 @@ impl Parser {
         self.current_impl_type = saved_impl
         self.current_impl_is_generic = saved_generic
 
-        return self.ast.addImplBlock(type_name, doc, methods, type_params, self.spanSE(start, self.tok_end))
+        return self.ast.addDecl(Decl.impl_block(ImplBlock { .type_name = type_name, .type_params = type_params, .methods = methods, .consts = consts, .doc_comment = doc, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// impl Trait for Type { methods }
@@ -876,13 +887,13 @@ impl Parser {
                     self.errors.report(self.tok_start, ErrorCode.e200, "expected 'fn' after 'static'")
                     self.advance()
                 } else {
-                    const m = self.parseFnDecl(0, 0, 1)
+                    const m = self.parseFnDecl(0, 0, 1, 0)
                     if (m != null_node) {
                         methods.append(m)
                     }
                 }
             } else if (self.tok == @intFromEnum(Token.kw_fn)) {
-                const m = self.parseFnDecl(0, 0, 0)
+                const m = self.parseFnDecl(0, 0, 0, 0)
                 if (m != null_node) {
                     methods.append(m)
                 }
@@ -895,7 +906,7 @@ impl Parser {
         self.current_impl_type = saved_impl
         self.current_impl_is_generic = saved_generic
 
-        return self.ast.addImplTrait(trait_name, target, doc, methods, type_params, self.spanSE(start, self.tok_end))
+        return self.ast.addDecl(Decl.impl_trait(ImplTraitBlock { .trait_name = trait_name, .target_type = target, .type_params = type_params, .methods = methods, .doc_comment = doc, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// trait Name { method signatures }
@@ -916,7 +927,7 @@ impl Parser {
         while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
             self.collectDocComment()
             if (self.tok == @intFromEnum(Token.kw_fn)) {
-                const m = self.parseFnDecl(0, 0, 0)
+                const m = self.parseFnDecl(0, 0, 0, 0)
                 if (m != null_node) {
                     methods.append(m)
                 }
@@ -926,7 +937,7 @@ impl Parser {
             }
         }
         self.expect(@intFromEnum(Token.rbrace))
-        return self.ast.addTraitDecl(name, doc, methods, self.spanSE(start, self.tok_end))
+        return self.ast.addDecl(Decl.trait_decl(TraitDecl { .name = name, .methods = methods, .doc_comment = doc, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// type Name = Type
@@ -944,7 +955,7 @@ impl Parser {
             return null_node
         }
         const target = self.parseType()
-        return self.ast.addTypeAliasDecl(name, target, doc, self.spanSE(start, self.tok_end))
+        return self.ast.addDecl(Decl.type_alias(TypeAlias { .name = name, .target = target, .doc_comment = doc, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// async fn name(...) { ... }
@@ -954,7 +965,7 @@ impl Parser {
             self.errors.report(self.tok_start, ErrorCode.e200, "expected fn after async")
             return null_node
         }
-        return self.parseFnDecl(0, 1, 0)
+        return self.parseFnDecl(0, 1, 0, 0)
     }
 
     /// Parse a field definition: name: Type or name: Type = default
@@ -975,7 +986,7 @@ impl Parser {
             default_val = self.parseExpr()
         }
         const doc = self.consumeDocComment()
-        return self.ast.addFieldDef(name, type_expr, default_val, doc, self.spanSE(start, self.tok_end))
+        return self.ast.addExpr(Expr.field_def(FieldDef { .name = name, .type_expr = type_expr, .default_value = default_val, .doc_comment = doc, .span = self.spanSE(start, self.tok_end) }))
     }
 
     // ================================================================
@@ -1020,7 +1031,7 @@ impl Parser {
                     self.expect(@intFromEnum(Token.@"or"))  // consume |
                 }
                 const right = self.parseBinaryExpr(2)
-                left = self.ast.addCatchExpr(left, capture, right, self.spanSE(op_start, self.tok_end))
+                left = self.ast.addExpr(Expr.catch_expr(CatchExpr { .operand = left, .capture = capture, .fallback = right, .span = self.spanSE(op_start, self.tok_end) }))
                 continue
             }
 
@@ -1031,7 +1042,7 @@ impl Parser {
             const op = self.tok
             self.advance()
             const right = self.parseBinaryExpr(@as(int, prec) + 1)
-            left = self.ast.addBinary(op, left, right, self.spanSE(self.tok_start, self.tok_end))
+            left = self.ast.addExpr(Expr.binary(Binary { .op = op, .left = left, .right = right, .span = self.spanSE(self.tok_start, self.tok_end) }))
         }
         self.nest_level -= 1
         return left
@@ -1045,26 +1056,26 @@ impl Parser {
             const start = self.tok_start
             self.advance()
             const operand = self.parseUnaryExpr()
-            return self.ast.addAddrOf(operand, self.spanSE(start, self.tok_end))
+            return self.ast.addExpr(Expr.addr_of(AddrOf { .operand = operand, .span = self.spanSE(start, self.tok_end) }))
         }
         if (tok == Token.kw_try) {
             const start = self.tok_start
             self.advance()
             const operand = self.parseUnaryExpr()
-            return self.ast.addTryExpr(operand, self.spanSE(start, self.tok_end))
+            return self.ast.addExpr(Expr.try_expr(TryExpr { .operand = operand, .span = self.spanSE(start, self.tok_end) }))
         }
         if (tok == Token.kw_await) {
             const start = self.tok_start
             self.advance()
             const operand = self.parseUnaryExpr()
-            return self.ast.addAwaitExpr(operand, self.spanSE(start, self.tok_end))
+            return self.ast.addExpr(Expr.await_expr(AwaitExpr { .operand = operand, .span = self.spanSE(start, self.tok_end) }))
         }
         if (tok == Token.sub or tok == Token.lnot or tok == Token.@"not" or tok == Token.kw_not) {
             const start = self.tok_start
             const op = self.tok
             self.advance()
             const operand = self.parseUnaryExpr()
-            return self.ast.addUnary(op, operand, self.spanSE(start, self.tok_end))
+            return self.ast.addExpr(Expr.unary(Unary { .op = op, .operand = operand, .span = self.spanSE(start, self.tok_end) }))
         }
         return self.parsePrimaryExpr()
     }
@@ -1081,26 +1092,26 @@ impl Parser {
             if (tok == Token.period_star) {
                 // .* dereference (single token)
                 self.advance()
-                node = self.ast.addDeref(node, self.spanSE(self.tok_start, self.tok_end))
+                node = self.ast.addExpr(Expr.deref(Deref { .operand = node, .span = self.spanSE(self.tok_start, self.tok_end) }))
             } else if (tok == Token.period_question) {
                 // .? optional unwrap (single token)
                 self.advance()
-                node = self.ast.addUnary(@intFromEnum(Token.question), node, self.spanSE(self.tok_start, self.tok_end))
+                node = self.ast.addExpr(Expr.unary(Unary { .op = @intFromEnum(Token.question), .operand = node, .span = self.spanSE(self.tok_start, self.tok_end) }))
             } else if (tok == Token.period) {
                 self.advance()
                 if (self.tok == @intFromEnum(Token.mul)) {
                     // .*  dereference (two tokens)
                     self.advance()
-                    node = self.ast.addDeref(node, self.spanSE(self.tok_start, self.tok_end))
+                    node = self.ast.addExpr(Expr.deref(Deref { .operand = node, .span = self.spanSE(self.tok_start, self.tok_end) }))
                 } else if (self.tok == @intFromEnum(Token.question)) {
                     // .?  optional unwrap (two tokens)
                     self.advance()
-                    node = self.ast.addUnary(@intFromEnum(Token.question), node, self.spanSE(self.tok_start, self.tok_end))
+                    node = self.ast.addExpr(Expr.unary(Unary { .op = @intFromEnum(Token.question), .operand = node, .span = self.spanSE(self.tok_start, self.tok_end) }))
                 } else if (self.tok == @intFromEnum(Token.ident) or self.tok == @intFromEnum(Token.int_lit)) {
                     // .field or .0 (tuple index)
                     const field_name = self.tok_text
                     self.advance()
-                    node = self.ast.addFieldAccess(node, field_name, self.spanSE(self.tok_start, self.tok_end))
+                    node = self.ast.addExpr(Expr.field_access(FieldAccessExpr { .base = node, .field = field_name, .span = self.spanSE(self.tok_start, self.tok_end) }))
                 } else {
                     break
                 }
@@ -1112,10 +1123,10 @@ impl Parser {
                     self.advance()
                     const end_expr = self.parseExpr()
                     self.expect(@intFromEnum(Token.rbrack))
-                    node = self.ast.addSliceExpr(node, idx, end_expr, self.spanSE(self.tok_start, self.tok_end))
+                    node = self.ast.addExpr(Expr.slice_expr(SliceExpr { .base = node, .start = idx, .end = end_expr, .span = self.spanSE(self.tok_start, self.tok_end) }))
                 } else {
                     self.expect(@intFromEnum(Token.rbrack))
-                    node = self.ast.addIndexExpr(node, idx, self.spanSE(self.tok_start, self.tok_end))
+                    node = self.ast.addExpr(Expr.index_expr(IndexExpr { .base = node, .idx = idx, .span = self.spanSE(self.tok_start, self.tok_end) }))
                 }
             } else if (tok == Token.lparen) {
                 // Function call
@@ -1131,7 +1142,7 @@ impl Parser {
                     }
                 }
                 self.expect(@intFromEnum(Token.rparen))
-                node = self.ast.addCallNode(node, args, self.spanSE(self.tok_start, self.tok_end))
+                node = self.ast.addExpr(Expr.call(Call { .callee = node, .args = args, .span = self.spanSE(self.tok_start, self.tok_end) }))
             } else if (self.peekNextIsPeriod() or self.peekNextIsIdentColon()) {
                 // Struct init: Type { .x = 1 } or Type { x: 1 }
                 node = self.parseStructInitFrom(node)
@@ -1143,6 +1154,8 @@ impl Parser {
     }
 
     /// Parse an atomic operand expression.
+    /// Split into parseOperandLiteral/parseOperandComplex to avoid
+    /// large stack frames that cause SIGBUS with many union temporaries.
     fn parseOperand() int {
         const tok = @as(Token, @enumFromInt(self.tok))
         const start = self.tok_start
@@ -1151,28 +1164,40 @@ impl Parser {
         if (tok == Token.ident) {
             const name = self.tok_text
             self.advance()
-            return self.ast.addIdent(name, self.spanSE(start, self.tok_end))
+            return self.ast.addExpr(Expr.ident(Ident { .name = name, .span = self.spanSE(start, self.tok_end) }))
         }
+
+        // Delegate to split functions to avoid large stack frames
+        if (tok == Token.int_lit or tok == Token.float_lit or tok == Token.string_lit
+            or tok == Token.string_interp_start or tok == Token.char_lit
+            or tok == Token.kw_true or tok == Token.kw_false or tok == Token.kw_null
+            or tok == Token.kw_undefined or tok == Token.kw_unreachable) {
+            return self.parseOperandLiteral(tok, start)
+        }
+        return self.parseOperandComplex(tok, start)
+    }
+
+    fn parseOperandLiteral(tok: Token, start: int) int {
 
         // Integer literal
         if (tok == Token.int_lit) {
             const text = self.tok_text
             self.advance()
-            return self.ast.addLiteral(@intFromEnum(LiteralKind.@"int"), text, self.spanSE(start, self.tok_end))
+            return self.ast.addExpr(Expr.literal(Literal { .kind = @intFromEnum(LiteralKind.@"int"), .value = text, .span = self.spanSE(start, self.tok_end) }))
         }
 
         // Float literal
         if (tok == Token.float_lit) {
             const text = self.tok_text
             self.advance()
-            return self.ast.addLiteral(@intFromEnum(LiteralKind.@"float"), text, self.spanSE(start, self.tok_end))
+            return self.ast.addExpr(Expr.literal(Literal { .kind = @intFromEnum(LiteralKind.@"float"), .value = text, .span = self.spanSE(start, self.tok_end) }))
         }
 
         // String literal
         if (tok == Token.string_lit) {
             const text = self.tok_text
             self.advance()
-            return self.ast.addLiteral(@intFromEnum(LiteralKind.@"string"), text, self.spanSE(start, self.tok_end))
+            return self.ast.addExpr(Expr.literal(Literal { .kind = @intFromEnum(LiteralKind.@"string"), .value = text, .span = self.spanSE(start, self.tok_end) }))
         }
 
         // String interpolation: "text${expr}..."
@@ -1184,36 +1209,39 @@ impl Parser {
         if (tok == Token.char_lit) {
             const text = self.tok_text
             self.advance()
-            return self.ast.addLiteral(@intFromEnum(LiteralKind.char), text, self.spanSE(start, self.tok_end))
+            return self.ast.addExpr(Expr.literal(Literal { .kind = @intFromEnum(LiteralKind.char), .value = text, .span = self.spanSE(start, self.tok_end) }))
         }
 
         // Keywords as literals
         if (tok == Token.kw_true) {
             self.advance()
-            return self.ast.addLiteral(@intFromEnum(LiteralKind.true_lit), "true", self.spanSE(start, self.tok_end))
+            return self.ast.addExpr(Expr.literal(Literal { .kind = @intFromEnum(LiteralKind.true_lit), .value = "true", .span = self.spanSE(start, self.tok_end) }))
         }
         if (tok == Token.kw_false) {
             self.advance()
-            return self.ast.addLiteral(@intFromEnum(LiteralKind.false_lit), "false", self.spanSE(start, self.tok_end))
+            return self.ast.addExpr(Expr.literal(Literal { .kind = @intFromEnum(LiteralKind.false_lit), .value = "false", .span = self.spanSE(start, self.tok_end) }))
         }
         if (tok == Token.kw_null) {
             self.advance()
-            return self.ast.addLiteral(@intFromEnum(LiteralKind.null_lit), "null", self.spanSE(start, self.tok_end))
+            return self.ast.addExpr(Expr.literal(Literal { .kind = @intFromEnum(LiteralKind.null_lit), .value = "null", .span = self.spanSE(start, self.tok_end) }))
         }
         if (tok == Token.kw_undefined) {
             self.advance()
-            return self.ast.addLiteral(@intFromEnum(LiteralKind.undefined_lit), "undefined", self.spanSE(start, self.tok_end))
+            return self.ast.addExpr(Expr.literal(Literal { .kind = @intFromEnum(LiteralKind.undefined_lit), .value = "undefined", .span = self.spanSE(start, self.tok_end) }))
         }
         if (tok == Token.kw_unreachable) {
             self.advance()
-            return self.ast.addLiteral(@intFromEnum(LiteralKind.unreachable_lit), "unreachable", self.spanSE(start, self.tok_end))
+            return self.ast.addExpr(Expr.literal(Literal { .kind = @intFromEnum(LiteralKind.unreachable_lit), .value = "unreachable", .span = self.spanSE(start, self.tok_end) }))
         }
+        return null_node
+    }
 
+    fn parseOperandComplex(tok: Token, start: int) int {
         // Type keywords as identifiers
         if (tok.isTypeKeyword()) {
             const name = self.tok_text
             self.advance()
-            return self.ast.addIdent(name, self.spanSE(start, self.tok_end))
+            return self.ast.addExpr(Expr.ident(Ident { .name = name, .span = self.spanSE(start, self.tok_end) }))
         }
 
         // Parenthesized expression or tuple
@@ -1231,10 +1259,10 @@ impl Parser {
                     elems.append(self.parseExpr())
                 }
                 self.expect(@intFromEnum(Token.rparen))
-                return self.ast.addTupleLit(elems, self.spanSE(start, self.tok_end))
+                return self.ast.addExpr(Expr.tuple_literal(TupleLiteral { .elements = elems, .span = self.spanSE(start, self.tok_end) }))
             }
             self.expect(@intFromEnum(Token.rparen))
-            return self.ast.addParen(inner, self.spanSE(start, self.tok_end))
+            return self.ast.addExpr(Expr.paren(Paren { .inner = inner, .span = self.spanSE(start, self.tok_end) }))
         }
 
         // Array literal: [1, 2, 3]
@@ -1248,7 +1276,7 @@ impl Parser {
                 }
             }
             self.expect(@intFromEnum(Token.rbrack))
-            return self.ast.addArrayLit(elems, self.spanSE(start, self.tok_end))
+            return self.ast.addExpr(Expr.array_literal(ArrayLiteral { .elements = elems, .span = self.spanSE(start, self.tok_end) }))
         }
 
         // Block expression: { stmts; result }
@@ -1288,7 +1316,7 @@ impl Parser {
                 if (self.tok == @intFromEnum(Token.ident)) {
                     const name = self.tok_text
                     self.advance()
-                    return self.ast.addErrorLit(name, self.spanSE(start, self.tok_end))
+                    return self.ast.addExpr(Expr.error_literal(ErrorLiteralExpr { .error_name = name, .span = self.spanSE(start, self.tok_end) }))
                 }
             }
             self.errors.report(start, ErrorCode.e200, "expected error variant name")
@@ -1299,7 +1327,7 @@ impl Parser {
         if (tok == Token.kw_comptime) {
             self.advance()
             const body = self.parseBlock()
-            return self.ast.addComptimeBlock(body, self.spanSE(start, self.tok_end))
+            return self.ast.addExpr(Expr.comptime_block(ComptimeBlock { .body = body, .span = self.spanSE(start, self.tok_end) }))
         }
 
         // Period prefix: .variant, .{ .x = 1 } anonymous struct, or .{ } zero-init
@@ -1309,14 +1337,14 @@ impl Parser {
                 // .{ } — check if struct init or zero-init
                 if (self.peekToken() == @intFromEnum(Token.period) or self.peekToken() == @intFromEnum(Token.ident)) {
                     // .{ .x = 1 } or .{ x: 1 } — anonymous struct init
-                    const anon = self.ast.addIdent("", self.spanSE(start, start))
+                    const anon = self.ast.addExpr(Expr.ident(Ident { .name = "", .span = self.spanSE(start, start) }))
                     return self.parseStructInitFrom(anon)
                 }
                 if (self.peekToken() == @intFromEnum(Token.rbrace)) {
                     // .{ } — zero-init
                     self.advance()  // consume {
                     self.advance()  // consume }
-                    return self.ast.addZeroInit(self.spanSE(start, self.tok_end))
+                    return self.ast.addExpr(Expr.zero_init(ZeroInit { .span = self.spanSE(start, self.tok_end) }))
                 }
                 // .{ expr, expr } — could be tuple or array init
                 return self.parseBlockExpr()
@@ -1324,9 +1352,9 @@ impl Parser {
             if (self.tok == @intFromEnum(Token.ident)) {
                 const name = self.tok_text
                 self.advance()
-                return self.ast.addIdent(name, self.spanSE(start, self.tok_end))
+                return self.ast.addExpr(Expr.ident(Ident { .name = name, .span = self.spanSE(start, self.tok_end) }))
             }
-            return self.ast.addZeroInit(self.spanSE(start, self.tok_end))
+            return self.ast.addExpr(Expr.zero_init(ZeroInit { .span = self.spanSE(start, self.tok_end) }))
         }
 
         self.errors.report(start, ErrorCode.e201, "expected expression")
@@ -1386,9 +1414,9 @@ impl Parser {
         // Start segment text (between " and ${)
         const start_text = self.tok_text
         if (@lenOf(start_text) > 0) {
-            segments.append(self.ast.addLiteral(
-                @intFromEnum(LiteralKind.@"string"), start_text,
-                self.spanSE(start, self.tok_end)))
+            segments.append(self.ast.addExpr(Expr.literal(Literal {
+                .kind = @intFromEnum(LiteralKind.@"string"), .value = start_text,
+                .span = self.spanSE(start, self.tok_end) })))
         }
         self.advance()  // consume string_interp_start
         // Expression inside ${ }
@@ -1398,18 +1426,18 @@ impl Parser {
             if (self.tok == @intFromEnum(Token.string_interp_mid)) {
                 const mid_text = self.tok_text
                 if (@lenOf(mid_text) > 0) {
-                    segments.append(self.ast.addLiteral(
-                        @intFromEnum(LiteralKind.@"string"), mid_text,
-                        self.spanSE(self.tok_start, self.tok_end)))
+                    segments.append(self.ast.addExpr(Expr.literal(Literal {
+                        .kind = @intFromEnum(LiteralKind.@"string"), .value = mid_text,
+                        .span = self.spanSE(self.tok_start, self.tok_end) })))
                 }
                 self.advance()  // consume mid
                 segments.append(self.parseExpr())
             } else if (self.tok == @intFromEnum(Token.string_interp_end)) {
                 const end_text = self.tok_text
                 if (@lenOf(end_text) > 0) {
-                    segments.append(self.ast.addLiteral(
-                        @intFromEnum(LiteralKind.@"string"), end_text,
-                        self.spanSE(self.tok_start, self.tok_end)))
+                    segments.append(self.ast.addExpr(Expr.literal(Literal {
+                        .kind = @intFromEnum(LiteralKind.@"string"), .value = end_text,
+                        .span = self.spanSE(self.tok_start, self.tok_end) })))
                 }
                 self.advance()  // consume end
                 break
@@ -1418,7 +1446,7 @@ impl Parser {
                 break
             }
         }
-        return self.ast.addStringInterp(segments, self.spanSE(start, self.tok_end))
+        return self.ast.addExpr(Expr.string_interp(StringInterpExpr { .segments = segments, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// Parse anonymous function (closure): fn(params) rettype { body }
@@ -1446,7 +1474,7 @@ impl Parser {
             ret_type = self.parseType()
         }
         const body = self.parseBlock()
-        return self.ast.addClosureExpr(ret_type, body, params, self.spanSE(start, self.tok_end))
+        return self.ast.addExpr(Expr.closure_expr(ClosureExpr { .params = params, .return_type = ret_type, .body = body, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// Parse struct init fields after detecting { in postfix position.
@@ -1456,10 +1484,7 @@ impl Parser {
         // Determine type name from preceding node
         var type_name = ""
         var type_args: List(int) = .{}
-        const tag = self.ast.getTag(preceding)
-        if (tag == @intFromEnum(NodeTag.ident)) {
-            type_name = self.ast.getStr(self.ast.getData(preceding, 0))
-        }
+        type_name = nodeIdentName(self.ast, preceding)
         // Determine syntax: period vs colon
         const use_colon = self.peekNextIsIdentColon()
         self.advance()  // consume {
@@ -1490,14 +1515,14 @@ impl Parser {
                 self.advance()
                 self.expect(@intFromEnum(Token.assign))
                 const val = self.parseExpr()
-                fields.append(self.ast.addFieldInitNode(fname, val, self.spanSE(fstart, self.tok_end)))
+                fields.append(self.ast.addExpr(Expr.field_init_node(FieldInitNode { .name = fname, .value = val, .span = self.spanSE(fstart, self.tok_end) })))
                 if (!self.match(@intFromEnum(Token.comma))) {
                     break
                 }
             }
         }
         self.expect(@intFromEnum(Token.rbrace))
-        return self.ast.addStructInit(type_name, fields, type_args, self.spanSE(start, self.tok_end))
+        return self.ast.addExpr(Expr.struct_init(StructInitExpr { .type_name = type_name, .type_args = type_args, .fields = fields, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// if (cond) |capture| { then } else { else }
@@ -1526,7 +1551,7 @@ impl Parser {
         if (self.match(@intFromEnum(Token.kw_else))) {
             else_br = self.parseExpr()
         }
-        return self.ast.addIfExpr(cond, then_br, else_br, capture, self.spanSE(start, self.tok_end))
+        return self.ast.addExpr(Expr.if_expr(IfExpr { .condition = cond, .then_branch = then_br, .else_branch = else_br, .capture = capture, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// switch (subject) { cases } or switch subject { cases }
@@ -1570,7 +1595,7 @@ impl Parser {
             }
         }
         self.expect(@intFromEnum(Token.rbrace))
-        return self.ast.addSwitchExpr(subject, else_body, cases, self.spanSE(start, self.tok_end))
+        return self.ast.addExpr(Expr.switch_expr(SwitchExpr { .subject = subject, .cases = cases, .else_body = else_body, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// Ported from parser.zig:1510-1546
@@ -1620,7 +1645,7 @@ impl Parser {
         self.expect(@intFromEnum(Token.fat_arrow))
         const body = self.parseExpr()
         self.match(@intFromEnum(Token.comma))
-        return self.ast.addSwitchCase(capture, guard, is_range, body, patterns, self.spanSE(start, self.tok_end))
+        return self.ast.addExpr(Expr.switch_case_node(SwitchCaseNode { .capture = capture, .guard = guard, .is_range = is_range == 1, .body = body, .patterns = patterns, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// Block expression: { stmts; result_expr }
@@ -1641,14 +1666,14 @@ impl Parser {
         }
         // If last stmt is expr_stmt, extract as result
         if (stmts.count > 0) {
-            const last_tag = self.ast.getTag(stmts.get(stmts.count - 1))
-            if (last_tag == @intFromEnum(NodeTag.expr_stmt)) {
-                result_expr = self.ast.getData(stmts.get(stmts.count - 1), 0)
+            const last_inner = nodeExprStmtExpr(self.ast, stmts.get(stmts.count - 1))
+            if (last_inner != null_node) {
+                result_expr = last_inner
                 stmts.count -= 1
             }
         }
         self.expect(@intFromEnum(Token.rbrace))
-        return self.ast.addBlockExpr(result_expr, stmts, self.spanSE(start, self.tok_end))
+        return self.ast.addExpr(Expr.block_expr(BlockExpr { .stmts = stmts, .result_expr = result_expr, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// @builtin(args) — dispatches per-builtin to parse type vs expr args.
@@ -1672,7 +1697,7 @@ impl Parser {
         const bk = @as(BuiltinKind, @enumFromInt(kind_val))
         switch (bk) {
             // 0 args
-            .trap, .target, .targetOs, .targetArch => {},
+            .trap, .target, .target_os, .target_arch => {},
             // 1 type arg only: @sizeOf(T), @alignOf(T), @enumLen(T), @typeName(T), @typeInfo(T), @enumName(T)
             .size_of, .align_of, .enum_len, .type_name, .enum_name, .type_info => {
                 type_arg = self.parseType()
@@ -1719,18 +1744,18 @@ impl Parser {
             .embed_file, .type_of,
             .int_from_enum, .tag_name, .error_name, .int_from_bool,
             .const_cast, .int_from_float,
-            .arcRetain, .arcRelease, .panic, .ctz, .clz, .pop_count => {
+            .arc_retain, .arc_release, .panic, .ctz, .clz, .pop_count => {
                 args.append(self.parseExpr())
             },
             // 2 value args
-            .@"string", .assertEq, .fmin, .fmax, .field, .min, .max => {
+            .@"string", .assert_eq, .fmin, .fmax, .field, .min, .max => {
                 args.append(self.parseExpr())
                 self.expect(@intFromEnum(Token.comma))
                 args.append(self.parseExpr())
             },
         }
         self.expect(@intFromEnum(Token.rparen))
-        return self.ast.addBuiltinCall(kind_val, type_arg, args, self.spanSE(start, self.tok_end))
+        return self.ast.addExpr(Expr.builtin_call(BuiltinCallExpr { .kind = kind_val, .type_arg = type_arg, .args = args, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// new Type { fields } or new Type(args) { fields }
@@ -1775,7 +1800,7 @@ impl Parser {
             self.expect(@intFromEnum(Token.rbrace))
         }
 
-        return self.ast.addNewExpr(type_name, is_ctor, fields, type_args, ctor_args, self.spanSE(start, self.tok_end))
+        return self.ast.addExpr(Expr.new_expr(NewExpr { .type_name = type_name, .type_args = type_args, .fields = fields, .constructor_args = ctor_args, .is_constructor = is_ctor == 1, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// Parse field init: .name = expr or name: expr (@safe)
@@ -1791,7 +1816,7 @@ impl Parser {
             self.advance()
             self.expect(@intFromEnum(Token.assign))
             const value = self.parseExpr()
-            return self.ast.addFieldInitNode(name, value, self.spanSE(start, self.tok_end))
+            return self.ast.addExpr(Expr.field_init_node(FieldInitNode { .name = name, .value = value, .span = self.spanSE(start, self.tok_end) }))
         }
         if (self.tok == @intFromEnum(Token.ident)) {
             // @safe colon syntax: name: expr
@@ -1799,11 +1824,11 @@ impl Parser {
             self.advance()
             if (self.match(@intFromEnum(Token.colon))) {
                 const value = self.parseExpr()
-                return self.ast.addFieldInitNode(name, value, self.spanSE(start, self.tok_end))
+                return self.ast.addExpr(Expr.field_init_node(FieldInitNode { .name = name, .value = value, .span = self.spanSE(start, self.tok_end) }))
             }
             // Field shorthand: just `name` means `name: name`
-            const name_node = self.ast.addIdent(name, self.spanSE(start, self.tok_end))
-            return self.ast.addFieldInitNode(name, name_node, self.spanSE(start, self.tok_end))
+            const name_node = self.ast.addExpr(Expr.ident(Ident { .name = name, .span = self.spanSE(start, self.tok_end) }))
+            return self.ast.addExpr(Expr.field_init_node(FieldInitNode { .name = name, .value = name_node, .span = self.spanSE(start, self.tok_end) }))
         }
         self.errors.report(start, ErrorCode.e200, "expected field initializer")
         return null_node
@@ -1832,11 +1857,31 @@ impl Parser {
                 return null_node
             }
         }
+        // Block-scoped type declarations (struct/union/enum inside functions/tests)
+        if (tok == Token.kw_struct) {
+            const decl_idx = self.parseStructDecl(0)
+            return self.ast.addStmt(Stmt.expr_stmt(ExprStmt { .expr = decl_idx, .span = self.ast.nodeSpan(decl_idx) }))
+        }
+        if (tok == Token.kw_union) {
+            const decl_idx = self.parseUnionDecl()
+            return self.ast.addStmt(Stmt.expr_stmt(ExprStmt { .expr = decl_idx, .span = self.ast.nodeSpan(decl_idx) }))
+        }
+        if (tok == Token.kw_enum) {
+            const decl_idx = self.parseEnumDecl()
+            return self.ast.addStmt(Stmt.expr_stmt(ExprStmt { .expr = decl_idx, .span = self.ast.nodeSpan(decl_idx) }))
+        }
+        if (tok == Token.kw_packed) {
+            if (@as(Token, @enumFromInt(self.peekToken())) == Token.kw_struct) {
+                const decl_idx = self.parseStructDecl(1)
+                return self.ast.addStmt(Stmt.expr_stmt(ExprStmt { .expr = decl_idx, .span = self.ast.nodeSpan(decl_idx) }))
+            }
+        }
         return switch (tok) {
             .kw_return => self.parseReturnStmt(),
             .kw_var, .kw_let => self.parseVarStmt(0),
             .kw_const => self.parseVarStmt(1),
             .kw_weak => self.parseWeakVarStmt(),
+            .kw_unowned => self.parseUnownedVarStmt(),
             .kw_if => self.parseIfStmt(),
             .kw_while => self.parseWhileStmt(""),
             .kw_for => self.parseForStmt("", 0),
@@ -1858,7 +1903,7 @@ impl Parser {
             value = self.parseExpr()
         }
         self.match(@intFromEnum(Token.semicolon))
-        return self.ast.addReturnStmt(value, self.spanSE(start, self.tok_end))
+        return self.ast.addStmt(Stmt.return_stmt(ReturnStmt { .value = value, .span = self.spanSE(start, self.tok_end) }))
     }
 
     fn parseVarStmt(is_const: int) int {
@@ -1884,7 +1929,7 @@ impl Parser {
             value = self.parseExpr()
         }
         self.match(@intFromEnum(Token.semicolon))
-        return self.ast.addVarStmt(name, type_expr, value, is_const, 0, self.spanSE(start, self.tok_end))
+        return self.ast.addStmt(Stmt.var_stmt(VarStmt { .name = name, .type_expr = type_expr, .value = value, .is_const = is_const == 1, .is_weak = false, .is_unowned = false, .span = self.spanSE(start, self.tok_end) }))
     }
 
     fn parseWeakVarStmt() int {
@@ -1907,7 +1952,30 @@ impl Parser {
             value = self.parseExpr()
         }
         self.match(@intFromEnum(Token.semicolon))
-        return self.ast.addVarStmt(name, type_expr, value, is_const, 1, self.spanSE(start, self.tok_end))
+        return self.ast.addStmt(Stmt.var_stmt(VarStmt { .name = name, .type_expr = type_expr, .value = value, .is_const = is_const == 1, .is_weak = true, .is_unowned = false, .span = self.spanSE(start, self.tok_end) }))
+    }
+
+    fn parseUnownedVarStmt() int {
+        self.advance()  // consume 'unowned'
+        const start = self.tok_start
+        const is_const = if (self.tok == @intFromEnum(Token.kw_const)) { 1 } else { 0 }
+        self.advance()  // consume var/const
+        if (self.tok != @intFromEnum(Token.ident)) {
+            self.errors.report(self.tok_start, ErrorCode.e203, "expected variable name")
+            return null_node
+        }
+        const name = self.tok_text
+        self.advance()
+        var type_expr = null_node
+        if (self.match(@intFromEnum(Token.colon))) {
+            type_expr = self.parseType()
+        }
+        var value = null_node
+        if (self.match(@intFromEnum(Token.assign))) {
+            value = self.parseExpr()
+        }
+        self.match(@intFromEnum(Token.semicolon))
+        return self.ast.addStmt(Stmt.var_stmt(VarStmt { .name = name, .type_expr = type_expr, .value = value, .is_const = is_const == 1, .is_weak = false, .is_unowned = true, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// if (cond) |cap| { then } else { else }
@@ -1939,7 +2007,7 @@ impl Parser {
                 else_br = self.parseBlock()
             }
         }
-        return self.ast.addIfStmt(cond, then_br, else_br, capture, self.spanSE(start, self.tok_end))
+        return self.ast.addStmt(Stmt.if_stmt(IfStmt { .condition = cond, .then_branch = then_br, .else_branch = else_br, .capture = capture, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// while (cond) |cap| : (continue_expr) { body }
@@ -1970,7 +2038,7 @@ impl Parser {
             }
         }
         const body = self.parseBlock()
-        return self.ast.addWhileStmt(cond, body, capture, cont, label, self.spanSE(start, self.tok_end))
+        return self.ast.addStmt(Stmt.while_stmt(WhileStmt { .condition = cond, .body = body, .capture = capture, .continue_expr = cont, .label = label, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// for item in iterable { body } or for i in 0..10 { body }
@@ -2007,7 +2075,7 @@ impl Parser {
             iterable = range_or_iter
         }
         const body = self.parseBlock()
-        return self.ast.addForStmt(binding, index_binding, iterable, range_start, range_end, body, is_inline, label, self.spanSE(start, self.tok_end))
+        return self.ast.addStmt(Stmt.for_stmt(ForStmt { .binding = binding, .index_binding = index_binding, .iterable = iterable, .range_start = range_start, .range_end = range_end, .body = body, .is_inline = is_inline == 1, .label = label, .span = self.spanSE(start, self.tok_end) }))
     }
 
     fn parseInlineFor() int {
@@ -2030,7 +2098,7 @@ impl Parser {
             }
         }
         self.match(@intFromEnum(Token.semicolon))
-        return self.ast.addBreakStmt(label, self.spanSE(start, self.tok_end))
+        return self.ast.addStmt(Stmt.break_stmt(BreakStmt { .label = label, .span = self.spanSE(start, self.tok_end) }))
     }
 
     fn parseContinueStmt() int {
@@ -2042,7 +2110,7 @@ impl Parser {
             self.advance()
         }
         self.match(@intFromEnum(Token.semicolon))
-        return self.ast.addContinueStmt(label, self.spanSE(start, self.tok_end))
+        return self.ast.addStmt(Stmt.continue_stmt(ContinueStmt { .label = label, .span = self.spanSE(start, self.tok_end) }))
     }
 
     fn parseDeferStmt(is_errdefer: int) int {
@@ -2055,13 +2123,13 @@ impl Parser {
             expr = self.parseExpr()
         }
         self.match(@intFromEnum(Token.semicolon))
-        return self.ast.addDeferStmt(expr, is_errdefer, self.spanSE(start, self.tok_end))
+        return self.ast.addStmt(Stmt.defer_stmt(DeferStmt { .expr = expr, .is_errdefer = is_errdefer == 1, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// Destructure statement: const a, b = expr (called after first binding parsed)
     fn parseDestructureStmtFrom(first_name: string, first_type: int, first_start: int, start: int, is_const: int) int {
         var bindings: List(int) = .{}
-        bindings.append(self.ast.addDestructureBind(first_name, first_type, self.spanSE(first_start, self.tok_end)))
+        bindings.append(self.ast.addExpr(Expr.destructure_bind(DestructureBindNode { .name = first_name, .type_expr = first_type, .span = self.spanSE(first_start, self.tok_end) })))
         while (self.match(@intFromEnum(Token.comma))) {
             if (self.tok != @intFromEnum(Token.ident)) {
                 self.errors.report(self.tok_start, ErrorCode.e203, "expected variable name")
@@ -2074,14 +2142,14 @@ impl Parser {
             if (self.match(@intFromEnum(Token.colon))) {
                 btype = self.parseType()
             }
-            bindings.append(self.ast.addDestructureBind(bname, btype, self.spanSE(bstart, self.tok_end)))
+            bindings.append(self.ast.addExpr(Expr.destructure_bind(DestructureBindNode { .name = bname, .type_expr = btype, .span = self.spanSE(bstart, self.tok_end) })))
         }
         if (!self.expect(@intFromEnum(Token.assign))) {
             return null_node
         }
         const value = self.parseExpr()
         self.match(@intFromEnum(Token.semicolon))
-        return self.ast.addDestructureStmt(value, is_const, bindings, self.spanSE(start, self.tok_end))
+        return self.ast.addStmt(Stmt.destructure_stmt(DestructureStmt { .bindings = bindings, .value = value, .is_const = is_const == 1, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// Expression statement or assignment: expr = value
@@ -2097,10 +2165,10 @@ impl Parser {
             self.advance()
             const value = self.parseExpr()
             self.match(@intFromEnum(Token.semicolon))
-            return self.ast.addAssignStmt(expr, op, value, self.spanSE(start, self.tok_end))
+            return self.ast.addStmt(Stmt.assign_stmt(AssignStmt { .target = expr, .op = op, .value = value, .span = self.spanSE(start, self.tok_end) }))
         }
         self.match(@intFromEnum(Token.semicolon))
-        return self.ast.addExprStmt(expr, self.spanSE(start, self.tok_end))
+        return self.ast.addStmt(Stmt.expr_stmt(ExprStmt { .expr = expr, .span = self.spanSE(start, self.tok_end) }))
     }
 
     // ================================================================
@@ -2125,7 +2193,7 @@ impl Parser {
             }
         }
         self.expect(@intFromEnum(Token.rbrace))
-        return self.ast.addBlockStmt(stmts, self.spanSE(start, self.tok_end))
+        return self.ast.addStmt(Stmt.block_stmt(BlockStmt { .stmts = stmts, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// Parse a type expression.
@@ -2135,17 +2203,17 @@ impl Parser {
         if (self.tok == @intFromEnum(Token.question)) {
             self.advance()
             const inner = self.parseType()
-            return self.ast.addTypeExpr(2, inner, null_node, self.spanSE(start, self.tok_end))  // kind=2 optional
+            return self.ast.addExpr(Expr.type_expr(TypeExprNode { .kind = TYPE_OPTIONAL, .data1 = inner, .data2 = null_node, .span = self.spanSE(start, self.tok_end) }))
         }
         if (self.tok == @intFromEnum(Token.mul)) {
             self.advance()
             const inner = self.parseType()
-            return self.ast.addTypeExpr(1, inner, null_node, self.spanSE(start, self.tok_end))  // kind=1 pointer
+            return self.ast.addExpr(Expr.type_expr(TypeExprNode { .kind = TYPE_POINTER, .data1 = inner, .data2 = null_node, .span = self.spanSE(start, self.tok_end) }))
         }
         if (self.tok == @intFromEnum(Token.lnot)) {
             self.advance()
             const inner = self.parseType()
-            return self.ast.addTypeExpr(3, inner, null_node, self.spanSE(start, self.tok_end))  // kind=3 error union
+            return self.ast.addExpr(Expr.type_expr(TypeExprNode { .kind = TYPE_ERROR_UNION, .data1 = inner, .data2 = null_node, .span = self.spanSE(start, self.tok_end) }))
         }
         // Slice: []T
         if (self.tok == @intFromEnum(Token.lbrack)) {
@@ -2153,13 +2221,13 @@ impl Parser {
             if (self.tok == @intFromEnum(Token.rbrack)) {
                 self.advance()
                 const elem = self.parseType()
-                return self.ast.addTypeExpr(4, elem, null_node, self.spanSE(start, self.tok_end))  // kind=4 slice
+                return self.ast.addExpr(Expr.type_expr(TypeExprNode { .kind = TYPE_SLICE, .data1 = elem, .data2 = null_node, .span = self.spanSE(start, self.tok_end) }))
             }
             // Array: [N]T
             const size_expr = self.parseExpr()
             self.expect(@intFromEnum(Token.rbrack))
             const elem = self.parseType()
-            return self.ast.addTypeExpr(5, elem, size_expr, self.spanSE(start, self.tok_end))  // kind=5 array
+            return self.ast.addExpr(Expr.type_expr(TypeExprNode { .kind = TYPE_ARRAY, .data1 = elem, .data2 = size_expr, .span = self.spanSE(start, self.tok_end) }))
         }
         // Tuple type: (T1, T2, ...)
         if (self.tok == @intFromEnum(Token.lparen)) {
@@ -2176,7 +2244,7 @@ impl Parser {
                     }
                 }
                 self.expect(@intFromEnum(Token.rparen))
-                return self.ast.addTupleType(elems, self.spanSE(start, self.tok_end))
+                return self.ast.addExpr(Expr.tuple_type(TupleTypeNode { .elements = elems, .span = self.spanSE(start, self.tok_end) }))
             }
             // Single type in parens — just grouping
             self.expect(@intFromEnum(Token.rparen))
@@ -2188,7 +2256,7 @@ impl Parser {
             self.advance()
             // Check for generic: Type(Args)
             if (self.tok == @intFromEnum(Token.lparen)) {
-                const name_node = self.ast.addIdent(name, self.spanSE(start, self.tok_end))
+                const name_node = self.ast.addExpr(Expr.ident(Ident { .name = name, .span = self.spanSE(start, self.tok_end) }))
                 self.advance()  // consume (
                 var type_args: List(int) = .{}
                 while (self.tok != @intFromEnum(Token.rparen) and self.tok != @intFromEnum(Token.eof)) {
@@ -2200,21 +2268,21 @@ impl Parser {
                 self.expect(@intFromEnum(Token.rparen))
                 // Check for GenericType!T (named error union with generic error set)
                 if (self.tok == @intFromEnum(Token.lnot)) {
-                    const error_set = self.ast.addGenericInst(name, type_args, self.spanSE(start, self.tok_end))
+                    const error_set = self.ast.addExpr(Expr.generic_instance(GenericInstanceExpr { .name = name, .type_args = type_args, .span = self.spanSE(start, self.tok_end) }))
                     self.advance()
                     const inner = self.parseType()
-                    return self.ast.addTypeExpr(3, inner, error_set, self.spanSE(start, self.tok_end))
+                    return self.ast.addExpr(Expr.type_expr(TypeExprNode { .kind = TYPE_ERROR_UNION, .data1 = inner, .data2 = error_set, .span = self.spanSE(start, self.tok_end) }))
                 }
-                return self.ast.addGenericInst(name, type_args, self.spanSE(start, self.tok_end))
+                return self.ast.addExpr(Expr.generic_instance(GenericInstanceExpr { .name = name, .type_args = type_args, .span = self.spanSE(start, self.tok_end) }))
             }
             // Check for E!T (named error union)
             if (self.tok == @intFromEnum(Token.lnot)) {
-                const error_set = self.ast.addIdent(name, self.spanSE(start, self.tok_end))
+                const error_set = self.ast.addExpr(Expr.ident(Ident { .name = name, .span = self.spanSE(start, self.tok_end) }))
                 self.advance()
                 const inner = self.parseType()
-                return self.ast.addTypeExpr(3, inner, error_set, self.spanSE(start, self.tok_end))
+                return self.ast.addExpr(Expr.type_expr(TypeExprNode { .kind = TYPE_ERROR_UNION, .data1 = inner, .data2 = error_set, .span = self.spanSE(start, self.tok_end) }))
             }
-            return self.ast.addIdent(name, self.spanSE(start, self.tok_end))
+            return self.ast.addExpr(Expr.ident(Ident { .name = name, .span = self.spanSE(start, self.tok_end) }))
         }
         // fn type
         if (self.tok == @intFromEnum(Token.kw_fn)) {
@@ -2243,7 +2311,7 @@ impl Parser {
         if (self.match(@intFromEnum(Token.arrow))) {
             ret = self.parseType()
         }
-        return self.ast.addTypeExpr(6, ret, param_count, self.spanSE(start, self.tok_end))  // kind=6 function, d2=param_count
+        return self.ast.addExpr(Expr.type_expr(TypeExprNode { .kind = TYPE_FUNCTION, .data1 = ret, .data2 = param_count, .span = self.spanSE(start, self.tok_end) }))
     }
 
     // ================================================================
@@ -2291,7 +2359,7 @@ test "parse import" {
     p.parseFile()
     @assertEq(errors.errorCount(), 0)
     @assertEq(ast.file_decls.count, 1)
-    @assertEq(ast.getTag(ast.file_decls.get(0)), @intFromEnum(NodeTag.import_decl))
+    @assertEq(nodeDeclTag(ast, ast.file_decls.get(0)), "import_decl")
 }
 
 test "parse const decl" {
@@ -2303,7 +2371,7 @@ test "parse const decl" {
     p.parseFile()
     @assertEq(errors.errorCount(), 0)
     @assertEq(ast.file_decls.count, 1)
-    @assertEq(ast.getTag(ast.file_decls.get(0)), @intFromEnum(NodeTag.var_decl))
+    @assertEq(nodeDeclTag(ast, ast.file_decls.get(0)), "var_decl")
 }
 
 test "parse fn decl" {
@@ -2315,7 +2383,7 @@ test "parse fn decl" {
     p.parseFile()
     @assertEq(errors.errorCount(), 0)
     @assertEq(ast.file_decls.count, 1)
-    @assertEq(ast.getTag(ast.file_decls.get(0)), @intFromEnum(NodeTag.fn_decl))
+    @assertEq(nodeDeclTag(ast, ast.file_decls.get(0)), "fn_decl")
 }
 
 test "parse test decl" {
@@ -2327,7 +2395,7 @@ test "parse test decl" {
     p.parseFile()
     @assertEq(errors.hasErrors(), false)
     @assertEq(ast.file_decls.count, 1)
-    @assertEq(ast.getTag(ast.file_decls.get(0)), @intFromEnum(NodeTag.test_decl))
+    @assertEq(nodeDeclTag(ast, ast.file_decls.get(0)), "test_decl")
 }
 
 test "parse struct decl" {
@@ -2339,7 +2407,7 @@ test "parse struct decl" {
     p.parseFile()
     @assertEq(errors.hasErrors(), false)
     @assertEq(ast.file_decls.count, 1)
-    @assertEq(ast.getTag(ast.file_decls.get(0)), @intFromEnum(NodeTag.struct_decl))
+    @assertEq(nodeDeclTag(ast, ast.file_decls.get(0)), "struct_decl")
 }
 
 test "parse multiple decls" {
@@ -2452,7 +2520,7 @@ test "parse enum decl" {
     p.parseFile()
     @assertEq(errors.hasErrors(), false)
     @assertEq(ast.file_decls.count, 1)
-    @assertEq(ast.getTag(ast.file_decls.get(0)), @intFromEnum(NodeTag.enum_decl))
+    @assertEq(nodeDeclTag(ast, ast.file_decls.get(0)), "enum_decl")
 }
 
 test "parse enum with backing type" {
@@ -2464,7 +2532,7 @@ test "parse enum with backing type" {
     p.parseFile()
     @assertEq(errors.hasErrors(), false)
     @assertEq(ast.file_decls.count, 1)
-    @assertEq(ast.getTag(ast.file_decls.get(0)), @intFromEnum(NodeTag.enum_decl))
+    @assertEq(nodeDeclTag(ast, ast.file_decls.get(0)), "enum_decl")
 }
 
 test "parse error set decl" {
@@ -2476,7 +2544,7 @@ test "parse error set decl" {
     p.parseFile()
     @assertEq(errors.hasErrors(), false)
     @assertEq(ast.file_decls.count, 1)
-    @assertEq(ast.getTag(ast.file_decls.get(0)), @intFromEnum(NodeTag.error_set_decl))
+    @assertEq(nodeDeclTag(ast, ast.file_decls.get(0)), "error_set_decl")
 }
 
 test "parse union decl" {
@@ -2488,7 +2556,7 @@ test "parse union decl" {
     p.parseFile()
     @assertEq(errors.hasErrors(), false)
     @assertEq(ast.file_decls.count, 1)
-    @assertEq(ast.getTag(ast.file_decls.get(0)), @intFromEnum(NodeTag.union_decl))
+    @assertEq(nodeDeclTag(ast, ast.file_decls.get(0)), "union_decl")
 }
 
 test "parse inline struct decl" {
@@ -2500,7 +2568,7 @@ test "parse inline struct decl" {
     p.parseFile()
     @assertEq(errors.hasErrors(), false)
     @assertEq(ast.file_decls.count, 1)
-    @assertEq(ast.getTag(ast.file_decls.get(0)), @intFromEnum(NodeTag.struct_decl))
+    @assertEq(nodeDeclTag(ast, ast.file_decls.get(0)), "struct_decl")
 }
 
 test "parse const non-type backtrack" {
@@ -2513,8 +2581,8 @@ test "parse const non-type backtrack" {
     p.parseFile()
     @assertEq(errors.hasErrors(), false)
     @assertEq(ast.file_decls.count, 2)
-    @assertEq(ast.getTag(ast.file_decls.get(0)), @intFromEnum(NodeTag.var_decl))
-    @assertEq(ast.getTag(ast.file_decls.get(1)), @intFromEnum(NodeTag.var_decl))
+    @assertEq(nodeDeclTag(ast, ast.file_decls.get(0)), "var_decl")
+    @assertEq(nodeDeclTag(ast, ast.file_decls.get(1)), "var_decl")
 }
 
 test "parse labeled while" {
@@ -2568,9 +2636,9 @@ test "parse mixed inline types" {
     p.parseFile()
     @assertEq(errors.hasErrors(), false)
     @assertEq(ast.file_decls.count, 3)
-    @assertEq(ast.getTag(ast.file_decls.get(0)), @intFromEnum(NodeTag.enum_decl))
-    @assertEq(ast.getTag(ast.file_decls.get(1)), @intFromEnum(NodeTag.error_set_decl))
-    @assertEq(ast.getTag(ast.file_decls.get(2)), @intFromEnum(NodeTag.var_decl))
+    @assertEq(nodeDeclTag(ast, ast.file_decls.get(0)), "enum_decl")
+    @assertEq(nodeDeclTag(ast, ast.file_decls.get(1)), "error_set_decl")
+    @assertEq(nodeDeclTag(ast, ast.file_decls.get(2)), "var_decl")
 }
 
 test "parse impl block with param" {
@@ -2582,7 +2650,7 @@ test "parse impl block with param" {
     p.parseFile()
     @assertEq(errors.errorCount(), 0)
     @assertEq(ast.file_decls.count, 1)
-    @assertEq(ast.getTag(ast.file_decls.get(0)), @intFromEnum(NodeTag.impl_block))
+    @assertEq(nodeDeclTag(ast, ast.file_decls.get(0)), "impl_block")
 }
 
 test "parse generic fn" {
@@ -2594,7 +2662,7 @@ test "parse generic fn" {
     p.parseFile()
     @assertEq(errors.errorCount(), 0)
     @assertEq(ast.file_decls.count, 1)
-    @assertEq(ast.getTag(ast.file_decls.get(0)), @intFromEnum(NodeTag.fn_decl))
+    @assertEq(nodeDeclTag(ast, ast.file_decls.get(0)), "fn_decl")
 }
 
 test "parse generic impl block" {
@@ -2606,7 +2674,7 @@ test "parse generic impl block" {
     p.parseFile()
     @assertEq(errors.errorCount(), 0)
     @assertEq(ast.file_decls.count, 1)
-    @assertEq(ast.getTag(ast.file_decls.get(0)), @intFromEnum(NodeTag.impl_block))
+    @assertEq(nodeDeclTag(ast, ast.file_decls.get(0)), "impl_block")
 }
 
 test "parse impl trait for type" {
@@ -2618,7 +2686,7 @@ test "parse impl trait for type" {
     p.parseFile()
     @assertEq(errors.errorCount(), 0)
     @assertEq(ast.file_decls.count, 1)
-    @assertEq(ast.getTag(ast.file_decls.get(0)), @intFromEnum(NodeTag.impl_trait))
+    @assertEq(nodeDeclTag(ast, ast.file_decls.get(0)), "impl_trait")
 }
 
 test "parse where clause" {
@@ -2630,7 +2698,7 @@ test "parse where clause" {
     p.parseFile()
     @assertEq(errors.errorCount(), 0)
     @assertEq(ast.file_decls.count, 1)
-    @assertEq(ast.getTag(ast.file_decls.get(0)), @intFromEnum(NodeTag.fn_decl))
+    @assertEq(nodeDeclTag(ast, ast.file_decls.get(0)), "fn_decl")
 }
 
 test "parse where clause multi" {
@@ -2642,7 +2710,7 @@ test "parse where clause multi" {
     p.parseFile()
     @assertEq(errors.errorCount(), 0)
     @assertEq(ast.file_decls.count, 1)
-    @assertEq(ast.getTag(ast.file_decls.get(0)), @intFromEnum(NodeTag.fn_decl))
+    @assertEq(nodeDeclTag(ast, ast.file_decls.get(0)), "fn_decl")
 }
 
 test "parse switch range pattern" {
@@ -2687,5 +2755,5 @@ test "parse generic impl trait" {
     p.parseFile()
     @assertEq(errors.errorCount(), 0)
     @assertEq(ast.file_decls.count, 1)
-    @assertEq(ast.getTag(ast.file_decls.get(0)), @intFromEnum(NodeTag.impl_trait))
+    @assertEq(nodeDeclTag(ast, ast.file_decls.get(0)), "impl_trait")
 }

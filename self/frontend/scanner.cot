@@ -3,6 +3,7 @@
 
 import "std/string"
 import "token"
+import "errors"
 
 /// Result of scanning a single token: token type, span, and text.
 struct TokenInfo {
@@ -19,10 +20,11 @@ struct Scanner {
     ch: ?int,
     in_interp_string: bool,
     interp_brace_depth: int,
+    err: ?*ErrorReporter,
 }
 
 impl Scanner {
-    /// Create a new scanner for the given source content.
+    /// Create a new scanner for the given source content (no error reporting).
     static fn init(content: string) Scanner {
         var s = Scanner {
             content: content,
@@ -30,11 +32,35 @@ impl Scanner {
             ch: null,
             in_interp_string: false,
             interp_brace_depth: 0,
+            err: null,
         }
         if (@lenOf(content) > 0) {
             s.ch = charAt(content, 0)
         }
         return s
+    }
+
+    /// Create a scanner with error reporting.
+    static fn initWithErrors(content: string, err: *ErrorReporter) Scanner {
+        var s = Scanner {
+            content: content,
+            pos: 0,
+            ch: null,
+            in_interp_string: false,
+            interp_brace_depth: 0,
+            err: err,
+        }
+        if (@lenOf(content) > 0) {
+            s.ch = charAt(content, 0)
+        }
+        return s
+    }
+
+    /// Report a scanner error if error reporter is attached.
+    fn errorAt(offset: int, code: ErrorCode, msg: string) void {
+        if (self.err) |e| {
+            e.report(offset, code, msg)
+        }
     }
 
     /// Advance one byte forward.
@@ -308,6 +334,7 @@ impl Scanner {
                 }
             } else if (c == '\n') {
                 // newline — unterminated
+                self.errorAt(start, ErrorCode.e100, "unterminated string literal")
                 break
             } else {
                 self.advance()
@@ -348,6 +375,7 @@ impl Scanner {
                     text: substring(self.content, start, self.pos),
                 }
             } else if (c == '\n') {
+                self.errorAt(start, ErrorCode.e100, "unterminated string literal")
                 break
             } else {
                 self.advance()
@@ -377,7 +405,11 @@ impl Scanner {
         if (self.ch) |c| {
             if (c == '\'') {
                 self.advance()
+            } else {
+                self.errorAt(start, ErrorCode.e101, "unterminated character literal")
             }
+        } else {
+            self.errorAt(start, ErrorCode.e101, "unterminated character literal")
         }
         return TokenInfo {
             tok: @intFromEnum(Token.char_lit),
@@ -438,6 +470,7 @@ impl Scanner {
                             break
                         }
                         if (qc == '\n') {
+                            self.errorAt(start, ErrorCode.e100, "unterminated quoted identifier")
                             break
                         }
                         self.advance()
@@ -446,7 +479,11 @@ impl Scanner {
                     if (self.ch) |ec| {
                         if (ec == '"') {
                             self.advance()  // consume closing "
+                        } else {
+                            self.errorAt(start, ErrorCode.e100, "unterminated quoted identifier")
                         }
+                    } else {
+                        self.errorAt(start, ErrorCode.e100, "unterminated quoted identifier")
                     }
                     return TokenInfo { tok: @intFromEnum(Token.ident), start_offset: start, end_offset: self.pos, text: ident_text }
                 }
@@ -543,6 +580,7 @@ impl Scanner {
             return makeOp(start, self.pos, @intFromEnum(Token.question))
         }
 
+        self.errorAt(start, ErrorCode.e104, "unexpected character")
         return makeOp(start, self.pos, @intFromEnum(Token.illegal))
     }
 }
