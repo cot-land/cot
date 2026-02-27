@@ -1,6 +1,6 @@
 # Bug: environ_count/len/ptr crash in Dylib mode — Uninitialized envp
 
-## Status: ROOT CAUSE IDENTIFIED (Feb 27, 2026)
+## Status: FIXED (Feb 27, 2026)
 
 ## Summary
 

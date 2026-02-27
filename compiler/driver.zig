@@ -1156,7 +1156,7 @@ pub const Driver = struct {
             }
 
             // I/O runtime: fd_write, fd_read, fd_close, exit, fd_seek, memcpy, memset_zero
-            var io_funcs = try io_native.generate(self.allocator, isa, &ctrl_plane, &func_index_map, argc_symbol_idx, argv_symbol_idx, envp_symbol_idx);
+            var io_funcs = try io_native.generate(self.allocator, isa, &ctrl_plane, &func_index_map, argc_symbol_idx, argv_symbol_idx, envp_symbol_idx, self.lib_mode);
             defer io_funcs.deinit(self.allocator);
             for (io_funcs.items) |rf| {
                 try compiled_funcs.append(self.allocator, rf.compiled);
@@ -1311,11 +1311,22 @@ pub const Driver = struct {
             try module.defineData(argv_data_id, argv_data);
             try module.declareExternalName(argv_symbol_idx, argv_sym_name);
 
-            const envp_sym_name = "_cot_envp";
-            const envp_data_id = try module.declareData(envp_sym_name, .Local, true);
-            const envp_data = &[_]u8{ 0, 0, 0, 0, 0, 0, 0, 0 };
-            try module.defineData(envp_data_id, envp_data);
-            try module.declareExternalName(envp_symbol_idx, envp_sym_name);
+            if (self.lib_mode) {
+                // In lib mode, map envp_symbol_idx to _environ (POSIX libc global: extern char **environ).
+                // environ_count/len/ptr CLIF functions use globalValue(envp_symbol_idx) + load to get envp.
+                // For _cot_envp (colocated), ADRP+ADD gives address → load gives envp value.
+                // For _environ (external), linker auto-transforms ADRP+ADD to GOT access → same semantics.
+                // No _main wrapper in lib mode, so _cot_envp would never be initialized.
+                const is_macos = self.target.os == .macos;
+                const environ_sym = if (is_macos) "_environ" else "environ";
+                try module.declareExternalName(envp_symbol_idx, environ_sym);
+            } else {
+                const envp_sym_name = "_cot_envp";
+                const envp_data_id = try module.declareData(envp_sym_name, .Local, true);
+                const envp_data = &[_]u8{ 0, 0, 0, 0, 0, 0, 0, 0 };
+                try module.defineData(envp_data_id, envp_data);
+                try module.declareExternalName(envp_symbol_idx, envp_sym_name);
+            }
         }
 
         // Pass 3c: Add global variable data section entries.
@@ -1922,74 +1933,80 @@ pub const Driver = struct {
                     // ARM64: walk envp array counting until NULL pointer
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx (no user args)
                     // envp at vmctx+0x30010
+                    // Null-check: return 0 if envp is NULL (dylib mode)
                     const arm64_environ_count = [_]u8{
-                        0x08, 0xC0, 0x40, 0x91, // add x8, x0, #0x30, lsl #12  (vmctx + 0x30000)
-                        0x09, 0x09, 0x40, 0xF9, // ldr x9, [x8, #16]           (x9 = envp)
-                        0x00, 0x00, 0x80, 0xD2, // movz x0, #0                 (count = 0)
+                        0x08, 0xC0, 0x40, 0x91, // 0: add x8, x0, #0x30, lsl #12  (vmctx + 0x30000)
+                        0x09, 0x09, 0x40, 0xF9, // 1: ldr x9, [x8, #16]           (x9 = envp)
+                        0x00, 0x00, 0x80, 0xD2, // 2: movz x0, #0                 (count = 0)
+                        0xA9, 0x00, 0x00, 0xB4, // 3: cbz x9, +5 → 8              (NULL envp → ret 0)
                         // .loop:
-                        0x2A, 0x79, 0x60, 0xF8, // ldr x10, [x9, x0, lsl #3]   (x10 = envp[count])
-                        0x6A, 0x00, 0x00, 0xB4, // cbz x10, +3                 (NULL → .done)
-                        0x00, 0x04, 0x00, 0x91, // add x0, x0, #1              (count++)
-                        0xFD, 0xFF, 0xFF, 0x17, // b -3                         (→ .loop)
+                        0x2A, 0x79, 0x60, 0xF8, // 4: ldr x10, [x9, x0, lsl #3]   (x10 = envp[count])
+                        0x6A, 0x00, 0x00, 0xB4, // 5: cbz x10, +3 → 8             (NULL → .done)
+                        0x00, 0x04, 0x00, 0x91, // 6: add x0, x0, #1              (count++)
+                        0xFD, 0xFF, 0xFF, 0x17, // 7: b -3                         (→ .loop)
                         // .done:
-                        0xC0, 0x03, 0x5F, 0xD6, // ret                         (return count in x0)
+                        0xC0, 0x03, 0x5F, 0xD6, // 8: ret                         (return count in x0)
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_environ_count, &.{});
                 } else if (std.mem.eql(u8, name, "environ_len")) {
                     // ARM64: strlen(envp[n])
                     // Cranelift CC: x0=vmctx, x1=caller_vmctx, x2=n
+                    // Null-check: return 0 if envp is NULL (dylib mode)
                     const arm64_environ_len = [_]u8{
-                        0x08, 0xC0, 0x40, 0x91, // add x8, x0, #0x30, lsl #12  (vmctx + 0x30000)
-                        0x09, 0x09, 0x40, 0xF9, // ldr x9, [x8, #16]           (x9 = envp)
-                        0x29, 0x79, 0x62, 0xF8, // ldr x9, [x9, x2, lsl #3]    (x9 = envp[n])
-                        0xE9, 0x00, 0x00, 0xB4, // cbz x9, +7                  (NULL → .null)
-                        0x00, 0x00, 0x80, 0xD2, // movz x0, #0                 (len = 0)
+                        0x08, 0xC0, 0x40, 0x91, //  0: add x8, x0, #0x30, lsl #12  (vmctx + 0x30000)
+                        0x09, 0x09, 0x40, 0xF9, //  1: ldr x9, [x8, #16]           (x9 = envp)
+                        0x29, 0x01, 0x00, 0xB4, //  2: cbz x9, +9 → 11             (NULL envp → .null)
+                        0x29, 0x79, 0x62, 0xF8, //  3: ldr x9, [x9, x2, lsl #3]    (x9 = envp[n])
+                        0xE9, 0x00, 0x00, 0xB4, //  4: cbz x9, +7 → 11             (NULL → .null)
+                        0x00, 0x00, 0x80, 0xD2, //  5: movz x0, #0                 (len = 0)
                         // .loop:
-                        0x2A, 0x69, 0x60, 0x38, // ldrb w10, [x9, x0]          (byte = envp[n][len])
-                        0x6A, 0x00, 0x00, 0x34, // cbz w10, +3                 (NUL → .done, return len)
-                        0x00, 0x04, 0x00, 0x91, // add x0, x0, #1              (len++)
-                        0xFD, 0xFF, 0xFF, 0x17, // b -3                         (→ .loop)
+                        0x2A, 0x69, 0x60, 0x38, //  6: ldrb w10, [x9, x0]          (byte = envp[n][len])
+                        0x6A, 0x00, 0x00, 0x34, //  7: cbz w10, +3 → 10            (NUL → .done)
+                        0x00, 0x04, 0x00, 0x91, //  8: add x0, x0, #1              (len++)
+                        0xFD, 0xFF, 0xFF, 0x17, //  9: b -3                         (→ .loop)
                         // .done:
-                        0xC0, 0x03, 0x5F, 0xD6, // ret                         (return len in x0)
+                        0xC0, 0x03, 0x5F, 0xD6, // 10: ret                         (return len in x0)
                         // .null:
-                        0x00, 0x00, 0x80, 0xD2, // movz x0, #0
-                        0xC0, 0x03, 0x5F, 0xD6, // ret
+                        0x00, 0x00, 0x80, 0xD2, // 11: movz x0, #0
+                        0xC0, 0x03, 0x5F, 0xD6, // 12: ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_environ_len, &.{});
                 } else if (std.mem.eql(u8, name, "environ_ptr")) {
                     // ARM64: copy envp[n] into linmem at 0x7F000 + n*4096, return wasm offset
                     // Reference: arm64_arg_ptr (same pattern, offset 0xAF000→0x7F000, argv→envp)
+                    // Null-check: return 0 if envp is NULL (dylib mode)
                     const arm64_environ_ptr = [_]u8{
-                        0xFD, 0x7B, 0xBF, 0xA9, // stp x29, x30, [sp, #-16]!
-                        0xFD, 0x03, 0x00, 0x91, // mov x29, sp
-                        0x08, 0xC0, 0x40, 0x91, // add x8, x0, #0x30, lsl #12  (vmctx + 0x30000)
-                        0x09, 0x09, 0x40, 0xF9, // ldr x9, [x8, #16]           (x9 = envp)
-                        0x29, 0x79, 0x62, 0xF8, // ldr x9, [x9, x2, lsl #3]    (x9 = envp[n], src)
-                        0x49, 0x02, 0x00, 0xB4, // cbz x9, +18                 (NULL → .null)
-                        0x4C, 0xCC, 0x74, 0xD3, // lsl x12, x2, #12            (x12 = n * 4096)
-                        0x0A, 0x00, 0x41, 0x91, // add x10, x0, #0x40, lsl #12 (linmem base)
-                        0x4A, 0xFD, 0x41, 0x91, // add x10, x10, #0x7F, lsl #12 (+ 0x7F000)
-                        0x4A, 0x01, 0x0C, 0x8B, // add x10, x10, x12           (+ n*4096 = dest)
-                        0xED, 0xFF, 0x81, 0xD2, // movz x13, #4095             (max copy bytes)
+                        0xFD, 0x7B, 0xBF, 0xA9, //  0: stp x29, x30, [sp, #-16]!
+                        0xFD, 0x03, 0x00, 0x91, //  1: mov x29, sp
+                        0x08, 0xC0, 0x40, 0x91, //  2: add x8, x0, #0x30, lsl #12  (vmctx + 0x30000)
+                        0x09, 0x09, 0x40, 0xF9, //  3: ldr x9, [x8, #16]           (x9 = envp)
+                        0x89, 0x02, 0x00, 0xB4, //  4: cbz x9, +20 → 24            (NULL envp → .null)
+                        0x29, 0x79, 0x62, 0xF8, //  5: ldr x9, [x9, x2, lsl #3]    (x9 = envp[n], src)
+                        0x49, 0x02, 0x00, 0xB4, //  6: cbz x9, +18 → 24            (NULL → .null)
+                        0x4C, 0xCC, 0x74, 0xD3, //  7: lsl x12, x2, #12            (x12 = n * 4096)
+                        0x0A, 0x00, 0x41, 0x91, //  8: add x10, x0, #0x40, lsl #12 (linmem base)
+                        0x4A, 0xFD, 0x41, 0x91, //  9: add x10, x10, #0x7F, lsl #12 (+ 0x7F000)
+                        0x4A, 0x01, 0x0C, 0x8B, // 10: add x10, x10, x12           (+ n*4096 = dest)
+                        0xED, 0xFF, 0x81, 0xD2, // 11: movz x13, #4095             (max copy bytes)
                         // .copy_loop:
-                        0xCD, 0x00, 0x00, 0xB4, // cbz x13, +6                 (limit hit → .truncate)
-                        0x2B, 0x15, 0x40, 0x38, // ldrb w11, [x9], #1          (load byte, post-inc)
-                        0x4B, 0x15, 0x00, 0x38, // strb w11, [x10], #1         (store byte, post-inc)
-                        0x8B, 0x00, 0x00, 0x34, // cbz w11, +4                 (NUL found → .done)
-                        0xAD, 0x05, 0x00, 0xD1, // sub x13, x13, #1            (remaining--)
-                        0xFB, 0xFF, 0xFF, 0x17, // b -5                         (→ .copy_loop)
+                        0xCD, 0x00, 0x00, 0xB4, // 12: cbz x13, +6 → 18           (limit → .truncate)
+                        0x2B, 0x15, 0x40, 0x38, // 13: ldrb w11, [x9], #1          (load byte, post-inc)
+                        0x4B, 0x15, 0x00, 0x38, // 14: strb w11, [x10], #1         (store byte, post-inc)
+                        0x8B, 0x00, 0x00, 0x34, // 15: cbz w11, +4 → 19            (NUL found → .done)
+                        0xAD, 0x05, 0x00, 0xD1, // 16: sub x13, x13, #1            (remaining--)
+                        0xFB, 0xFF, 0xFF, 0x17, // 17: b -5                         (→ .copy_loop)
                         // .truncate:
-                        0x5F, 0x01, 0x00, 0x39, // strb wzr, [x10]             (NUL-terminate at limit)
+                        0x5F, 0x01, 0x00, 0x39, // 18: strb wzr, [x10]             (NUL-terminate)
                         // .done: return wasm offset 0x7F000 + n*4096
-                        0x00, 0x00, 0x9E, 0xD2, // movz x0, #0xF000
-                        0xE0, 0x00, 0xA0, 0xF2, // movk x0, #0x7, lsl #16     (x0 = 0x7F000)
-                        0x00, 0x00, 0x0C, 0x8B, // add x0, x0, x12             (+ n*4096)
-                        0xFD, 0x7B, 0xC1, 0xA8, // ldp x29, x30, [sp], #16
-                        0xC0, 0x03, 0x5F, 0xD6, // ret
+                        0x00, 0x00, 0x9E, 0xD2, // 19: movz x0, #0xF000
+                        0xE0, 0x00, 0xA0, 0xF2, // 20: movk x0, #0x7, lsl #16     (x0 = 0x7F000)
+                        0x00, 0x00, 0x0C, 0x8B, // 21: add x0, x0, x12             (+ n*4096)
+                        0xFD, 0x7B, 0xC1, 0xA8, // 22: ldp x29, x30, [sp], #16
+                        0xC0, 0x03, 0x5F, 0xD6, // 23: ret
                         // .null: return 0
-                        0x00, 0x00, 0x80, 0xD2, // movz x0, #0
-                        0xFD, 0x7B, 0xC1, 0xA8, // ldp x29, x30, [sp], #16
-                        0xC0, 0x03, 0x5F, 0xD6, // ret
+                        0x00, 0x00, 0x80, 0xD2, // 24: movz x0, #0
+                        0xFD, 0x7B, 0xC1, 0xA8, // 25: ldp x29, x30, [sp], #16
+                        0xC0, 0x03, 0x5F, 0xD6, // 26: ret
                     };
                     try module.defineFunctionBytes(func_ids[i], &arm64_environ_ptr, &.{});
                 } else if (std.mem.eql(u8, name, "net_socket")) {
@@ -3242,6 +3259,12 @@ pub const Driver = struct {
         const vmctx_name_ref = ExternalName{ .User = .{ .namespace = 0, .index = vmctx_ext_idx } };
         try module.declareExternalName(vmctx_ext_idx, "_vmctx_data");
 
+        // Declare _environ (POSIX libc global: extern char **environ)
+        // On macOS, this is provided by libSystem and resolved by dyld at load time.
+        const environ_ext_idx: u32 = num_funcs + 1;
+        const environ_name_ref = ExternalName{ .User = .{ .namespace = 0, .index = environ_ext_idx } };
+        try module.declareExternalName(environ_ext_idx, "_environ");
+
         // =================================================================
         // Step 2: Generate C-ABI wrapper for each exported function
         // =================================================================
@@ -3250,10 +3273,11 @@ pub const Driver = struct {
         //   - Shifts user args from x0..x(N-1) to x2..x(N+1)
         //   - Loads vmctx via ADRP+ADD into x0
         //   - Initializes heap base ptr (idempotent: stores vmctx+0x40000 → [vmctx+0x20000])
+        //   - Loads envp from POSIX _environ global into vmctx+0x30010
         //   - Sets x1 = x0 (caller_vmctx)
         //   - Calls inner __wasm function via BL
         //   - Restores frame and returns (return value in x0 preserved)
-        var next_ext_idx: u32 = vmctx_ext_idx + 1;
+        var next_ext_idx: u32 = environ_ext_idx + 1;
 
         for (exports) |exp| {
             if (exp.kind != .func) continue;
@@ -3315,6 +3339,24 @@ pub const Driver = struct {
             // str x9, [x8]  (store heap base ptr)
             try appendInst(&code, self.allocator, A64.str_imm(9, 8, 0));
 
+            // Initialize envp from POSIX _environ global (idempotent)
+            // adrp x10, _environ@PAGE
+            const adrp_environ_offset: u32 = @intCast(code.items.len);
+            try appendInst(&code, self.allocator, A64.adrp(10));
+            // add x10, x10, _environ@PAGEOFF
+            const add_environ_offset: u32 = @intCast(code.items.len);
+            try appendInst(&code, self.allocator, A64.add_pageoff(10, 10));
+            // ldr x10, [x10]  (dereference: x10 = *_environ = envp pointer)
+            try appendInst(&code, self.allocator, 0xF940014A);
+            // add x11, x0, #0x30, lsl #12  (x11 = vmctx + 0x30000)
+            try appendInst(&code, self.allocator, A64.add_imm_lsl12(11, 0, 0x30));
+            // str x10, [x11, #16]  (envp at vmctx + 0x30010)
+            try appendInst(&code, self.allocator, A64.str_imm(10, 11, 16));
+            // str xzr, [x11]  (argc = 0, no command-line args in dylib)
+            try appendInst(&code, self.allocator, A64.str_imm(31, 11, 0));
+            // str xzr, [x11, #8]  (argv = NULL)
+            try appendInst(&code, self.allocator, A64.str_imm(31, 11, 8));
+
             // mov x1, x0  (caller_vmctx = vmctx)
             try appendInst(&code, self.allocator, A64.mov(1, 0));
 
@@ -3345,6 +3387,20 @@ pub const Driver = struct {
                     .offset = add_offset,
                     .kind = Reloc.Aarch64AddAbsLo12Nc,
                     .target = FinalizedRelocTarget{ .ExternalName = vmctx_name_ref },
+                    .addend = 0,
+                },
+                // ADRP x10, _environ@PAGE
+                .{
+                    .offset = adrp_environ_offset,
+                    .kind = Reloc.Aarch64AdrPrelPgHi21,
+                    .target = FinalizedRelocTarget{ .ExternalName = environ_name_ref },
+                    .addend = 0,
+                },
+                // ADD x10, x10, _environ@PAGEOFF
+                .{
+                    .offset = add_environ_offset,
+                    .kind = Reloc.Aarch64AddAbsLo12Nc,
+                    .target = FinalizedRelocTarget{ .ExternalName = environ_name_ref },
                     .addend = 0,
                 },
                 // BL inner__wasm
@@ -3798,16 +3854,18 @@ pub const Driver = struct {
                         0x48, 0x89, 0xE5, //  1: mov rbp, rsp
                         0x48, 0x8B, 0x87, 0x10, 0x00, 0x03, 0x00, //  4: mov rax, [rdi + 0x30010]  (envp)
                         0x31, 0xC9, // 11: xor ecx, ecx             (count = 0)
-                        // .loop (offset 13):
-                        0x48, 0x8B, 0x14, 0xC8, // 13: mov rdx, [rax + rcx*8]  (*envp++)
-                        0x48, 0x85, 0xD2, // 17: test rdx, rdx
-                        0x74, 0x05, // 20: jz +5                    (NULL → .done at 27)
-                        0x48, 0xFF, 0xC1, // 22: inc rcx                (count++)
-                        0xEB, 0xF2, // 25: jmp -14                  (→ .loop at 13)
-                        // .done (offset 27):
-                        0x48, 0x89, 0xC8, // 27: mov rax, rcx          (return count)
-                        0x5D, // 30: pop rbp
-                        0xC3, // 31: ret
+                        0x48, 0x85, 0xC0, // 13: test rax, rax
+                        0x74, 0x0E, // 16: jz +14                   (NULL envp → .done at 32)
+                        // .loop (offset 18):
+                        0x48, 0x8B, 0x14, 0xC8, // 18: mov rdx, [rax + rcx*8]  (*envp++)
+                        0x48, 0x85, 0xD2, // 22: test rdx, rdx
+                        0x74, 0x05, // 25: jz +5                    (NULL → .done at 32)
+                        0x48, 0xFF, 0xC1, // 27: inc rcx                (count++)
+                        0xEB, 0xF2, // 30: jmp -14                  (→ .loop at 18)
+                        // .done (offset 32):
+                        0x48, 0x89, 0xC8, // 32: mov rax, rcx          (return count)
+                        0x5D, // 35: pop rbp
+                        0xC3, // 36: ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_environ_count, &.{});
                 } else if (std.mem.eql(u8, name, "environ_len")) {
@@ -3817,23 +3875,25 @@ pub const Driver = struct {
                         0x55, //  0: push rbp
                         0x48, 0x89, 0xE5, //  1: mov rbp, rsp
                         0x48, 0x8B, 0x87, 0x10, 0x00, 0x03, 0x00, //  4: mov rax, [rdi + 0x30010]  (envp)
-                        0x4C, 0x8B, 0x04, 0xD0, // 11: mov r8, [rax + rdx*8]   (r8 = envp[n])
-                        0x4D, 0x85, 0xC0, // 15: test r8, r8
-                        0x75, 0x04, // 18: jnz +4                   (non-NULL → .valid at 24)
-                        0x31, 0xC0, // 20: xor eax, eax             (return 0)
-                        0x5D, // 22: pop rbp
-                        0xC3, // 23: ret
-                        // .valid (offset 24):
-                        0x31, 0xC0, // 24: xor eax, eax             (len = 0)
-                        // .strlen_loop (offset 26):
-                        0x41, 0x0F, 0xB6, 0x0C, 0x00, // 26: movzx ecx, byte [r8 + rax]
-                        0x85, 0xC9, // 31: test ecx, ecx
-                        0x74, 0x05, // 33: jz +5                    (NUL → .done at 40)
-                        0x48, 0xFF, 0xC0, // 35: inc rax                (len++)
-                        0xEB, 0xF2, // 38: jmp -14                  (→ .strlen_loop at 26)
-                        // .done (offset 40):
-                        0x5D, // 40: pop rbp
-                        0xC3, // 41: ret
+                        0x48, 0x85, 0xC0, // 11: test rax, rax
+                        0x74, 0x09, // 14: jz +9                    (NULL envp → return 0 at 25)
+                        0x4C, 0x8B, 0x04, 0xD0, // 16: mov r8, [rax + rdx*8]   (r8 = envp[n])
+                        0x4D, 0x85, 0xC0, // 20: test r8, r8
+                        0x75, 0x04, // 23: jnz +4                   (non-NULL → .valid at 29)
+                        0x31, 0xC0, // 25: xor eax, eax             (return 0)
+                        0x5D, // 27: pop rbp
+                        0xC3, // 28: ret
+                        // .valid (offset 29):
+                        0x31, 0xC0, // 29: xor eax, eax             (len = 0)
+                        // .strlen_loop (offset 31):
+                        0x41, 0x0F, 0xB6, 0x0C, 0x00, // 31: movzx ecx, byte [r8 + rax]
+                        0x85, 0xC9, // 36: test ecx, ecx
+                        0x74, 0x05, // 38: jz +5                    (NUL → .done at 45)
+                        0x48, 0xFF, 0xC0, // 40: inc rax                (len++)
+                        0xEB, 0xF2, // 43: jmp -14                  (→ .strlen_loop at 31)
+                        // .done (offset 45):
+                        0x5D, // 45: pop rbp
+                        0xC3, // 46: ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_environ_len, &.{});
                 } else if (std.mem.eql(u8, name, "environ_ptr")) {
@@ -3845,40 +3905,42 @@ pub const Driver = struct {
                         0x55, //  0: push rbp
                         0x48, 0x89, 0xE5, //  1: mov rbp, rsp
                         0x48, 0x8B, 0x87, 0x10, 0x00, 0x03, 0x00, //  4: mov rax, [rdi + 0x30010]  (envp)
-                        0x4C, 0x8B, 0x04, 0xD0, // 11: mov r8, [rax + rdx*8]   (r8 = envp[n], src)
-                        0x4D, 0x85, 0xC0, // 15: test r8, r8
-                        0x75, 0x04, // 18: jnz +4                   (non-NULL → .valid at 24)
-                        0x31, 0xC0, // 20: xor eax, eax             (return 0)
-                        0x5D, // 22: pop rbp
-                        0xC3, // 23: ret
-                        // .valid (offset 24):
+                        0x48, 0x85, 0xC0, // 11: test rax, rax
+                        0x74, 0x09, // 14: jz +9                    (NULL envp → return 0 at 25)
+                        0x4C, 0x8B, 0x04, 0xD0, // 16: mov r8, [rax + rdx*8]   (r8 = envp[n], src)
+                        0x4D, 0x85, 0xC0, // 20: test r8, r8
+                        0x75, 0x04, // 23: jnz +4                   (non-NULL → .valid at 29)
+                        0x31, 0xC0, // 25: xor eax, eax             (return 0)
+                        0x5D, // 27: pop rbp
+                        0xC3, // 28: ret
+                        // .valid (offset 29):
                         // dest = linmem + 0x7F000 + n*4096
-                        0x48, 0x89, 0xD0, // 24: mov rax, rdx              (n)
-                        0x48, 0xC1, 0xE0, 0x0C, // 27: shl rax, 12             (n * 4096)
-                        0x4C, 0x8D, 0x8F, 0x00, 0x00, 0x04, 0x00, // 31: lea r9, [rdi + 0x40000]  (linmem base)
-                        0x49, 0x81, 0xC1, 0x00, 0xF0, 0x07, 0x00, // 38: add r9, 0x7F000
-                        0x49, 0x01, 0xC1, // 45: add r9, rax               (dest = linmem + 0x7F000 + n*4096)
-                        0x48, 0x89, 0xD1, // 48: mov rcx, rdx              (save n for return value)
-                        0x41, 0xBA, 0xFF, 0x0F, 0x00, 0x00, // 51: mov r10d, 4095          (max copy)
-                        // .copy_loop (offset 57):
-                        0x4D, 0x85, 0xD2, // 57: test r10, r10
-                        0x74, 0x16, // 60: jz +22                  (→ .truncate at 84)
-                        0x41, 0x0F, 0xB6, 0x00, // 62: movzx eax, byte [r8]
-                        0x41, 0x88, 0x01, // 66: mov [r9], al
-                        0x85, 0xC0, // 69: test eax, eax
-                        0x74, 0x0F, // 71: jz +15                  (NUL found → .done at 88)
-                        0x49, 0xFF, 0xC0, // 73: inc r8
-                        0x49, 0xFF, 0xC1, // 76: inc r9
-                        0x49, 0xFF, 0xCA, // 79: dec r10
-                        0xEB, 0xE5, // 82: jmp -27                 (→ .copy_loop at 57)
-                        // .truncate (offset 84):
-                        0x41, 0xC6, 0x01, 0x00, // 84: mov byte [r9], 0  (NUL-terminate)
-                        // .done (offset 88): return wasm offset 0x7F000 + n*4096
-                        0x48, 0xC7, 0xC0, 0x00, 0xF0, 0x07, 0x00, // 88: mov rax, 0x7F000
-                        0x48, 0xC1, 0xE1, 0x0C, // 95: shl rcx, 12  (n * 4096)
-                        0x48, 0x01, 0xC8, // 99: add rax, rcx  (0x7F000 + n*4096)
-                        0x5D, //102: pop rbp
-                        0xC3, //103: ret
+                        0x48, 0x89, 0xD0, // 29: mov rax, rdx              (n)
+                        0x48, 0xC1, 0xE0, 0x0C, // 32: shl rax, 12             (n * 4096)
+                        0x4C, 0x8D, 0x8F, 0x00, 0x00, 0x04, 0x00, // 36: lea r9, [rdi + 0x40000]  (linmem base)
+                        0x49, 0x81, 0xC1, 0x00, 0xF0, 0x07, 0x00, // 43: add r9, 0x7F000
+                        0x49, 0x01, 0xC1, // 50: add r9, rax               (dest = linmem + 0x7F000 + n*4096)
+                        0x48, 0x89, 0xD1, // 53: mov rcx, rdx              (save n for return value)
+                        0x41, 0xBA, 0xFF, 0x0F, 0x00, 0x00, // 56: mov r10d, 4095          (max copy)
+                        // .copy_loop (offset 62):
+                        0x4D, 0x85, 0xD2, // 62: test r10, r10
+                        0x74, 0x16, // 65: jz +22                  (→ .truncate at 89)
+                        0x41, 0x0F, 0xB6, 0x00, // 67: movzx eax, byte [r8]
+                        0x41, 0x88, 0x01, // 71: mov [r9], al
+                        0x85, 0xC0, // 74: test eax, eax
+                        0x74, 0x0F, // 76: jz +15                  (NUL found → .done at 93)
+                        0x49, 0xFF, 0xC0, // 78: inc r8
+                        0x49, 0xFF, 0xC1, // 81: inc r9
+                        0x49, 0xFF, 0xCA, // 84: dec r10
+                        0xEB, 0xE5, // 87: jmp -27                 (→ .copy_loop at 62)
+                        // .truncate (offset 89):
+                        0x41, 0xC6, 0x01, 0x00, // 89: mov byte [r9], 0  (NUL-terminate)
+                        // .done (offset 93): return wasm offset 0x7F000 + n*4096
+                        0x48, 0xC7, 0xC0, 0x00, 0xF0, 0x07, 0x00, // 93: mov rax, 0x7F000
+                        0x48, 0xC1, 0xE1, 0x0C, //100: shl rcx, 12  (n * 4096)
+                        0x48, 0x01, 0xC8, //104: add rax, rcx  (0x7F000 + n*4096)
+                        0x5D, //107: pop rbp
+                        0xC3, //108: ret
                     };
                     try module.defineFunctionBytes(elf_func_ids[i], &x64_environ_ptr, &.{});
                 } else if (std.mem.eql(u8, name, "net_socket")) {

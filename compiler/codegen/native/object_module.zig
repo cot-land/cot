@@ -637,10 +637,12 @@ fn machORelocType(reloc: Reloc, arch: TargetArch) u4 {
     return switch (arch) {
         .aarch64 => switch (reloc) {
             .Arm64Call => macho.ARM64_RELOC_BRANCH26,
-            .Aarch64AdrPrelPgHi21, .Aarch64AdrPrel21, .Arm64AdrGotPage21 => macho.ARM64_RELOC_PAGE21,
+            .Aarch64AdrPrelPgHi21, .Aarch64AdrPrel21 => macho.ARM64_RELOC_PAGE21,
+            .Arm64AdrGotPage21 => macho.ARM64_RELOC_GOT_LOAD_PAGE21,
             .Aarch64AddAbsLo12Nc, .Aarch64Ldst64AbsLo12Nc, .Aarch64Ldst32AbsLo12Nc,
             .Aarch64Ldst16AbsLo12Nc, .Aarch64Ldst8AbsLo12Nc, .Aarch64Ldst128AbsLo12Nc,
             => macho.ARM64_RELOC_PAGEOFF12,
+            .Arm64Ld64GotLo12Nc => macho.ARM64_RELOC_GOT_LOAD_PAGEOFF12,
             .Abs8 => macho.ARM64_RELOC_UNSIGNED,
             else => macho.ARM64_RELOC_UNSIGNED,
         },

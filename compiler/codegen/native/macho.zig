@@ -40,6 +40,8 @@ pub const ARM64_RELOC_UNSIGNED: u4 = 0;
 pub const ARM64_RELOC_BRANCH26: u4 = 2;
 pub const ARM64_RELOC_PAGE21: u4 = 3;
 pub const ARM64_RELOC_PAGEOFF12: u4 = 4;
+pub const ARM64_RELOC_GOT_LOAD_PAGE21: u4 = 5;
+pub const ARM64_RELOC_GOT_LOAD_PAGEOFF12: u4 = 6;
 
 // Header Structures
 
@@ -241,7 +243,7 @@ pub const MachOWriter = struct {
             .target = target,
             .reloc_type = reloc_type,
             .length = 2,
-            .pc_rel = reloc_type == ARM64_RELOC_PAGE21,
+            .pc_rel = reloc_type == ARM64_RELOC_PAGE21 or reloc_type == ARM64_RELOC_GOT_LOAD_PAGE21,
         });
     }
 

@@ -31,6 +31,7 @@ pub fn generate(
     argc_symbol_idx: u32,
     argv_symbol_idx: u32,
     envp_symbol_idx: u32,
+    lib_mode: bool,
 ) !std.ArrayListUnmanaged(RuntimeFunc) {
     var result = std.ArrayListUnmanaged(RuntimeFunc){};
     errdefer {
@@ -127,19 +128,19 @@ pub fn generate(
     // environ_count() → i64  (count non-null entries in envp array)
     try result.append(allocator, .{
         .name = "environ_count",
-        .compiled = try generateEnvironCount(allocator, isa, ctrl_plane, envp_symbol_idx),
+        .compiled = try generateEnvironCount(allocator, isa, ctrl_plane, envp_symbol_idx, lib_mode),
     });
 
     // environ_len(n) → i64  (strlen of envp[n])
     try result.append(allocator, .{
         .name = "environ_len",
-        .compiled = try generateEnvironLen(allocator, isa, ctrl_plane, func_index_map, envp_symbol_idx),
+        .compiled = try generateEnvironLen(allocator, isa, ctrl_plane, func_index_map, envp_symbol_idx, lib_mode),
     });
 
     // environ_ptr(n) → i64  (pointer to envp[n])
     try result.append(allocator, .{
         .name = "environ_ptr",
-        .compiled = try generateEnvironPtr(allocator, isa, ctrl_plane, envp_symbol_idx),
+        .compiled = try generateEnvironPtr(allocator, isa, ctrl_plane, envp_symbol_idx, lib_mode),
     });
 
     // --- Network runtime ---
@@ -1312,6 +1313,7 @@ fn generateEnvironCount(
     isa: native_compile.TargetIsa,
     ctrl_plane: *native_compile.ControlPlane,
     envp_symbol_idx: u32,
+    lib_mode: bool,
 ) !native_compile.CompiledCode {
     var clif_func = clif.Function.init(allocator);
     defer clif_func.deinit();
@@ -1333,12 +1335,14 @@ fn generateEnvironCount(
     try builder.ensureInsertedBlock();
     var ins = builder.ins();
 
-    // Load envp from _cot_envp global
+    // Load envp pointer.
+    // Executable mode: from _cot_envp (colocated local, written by _main wrapper)
+    // Lib mode: from _environ (POSIX libc global, external → GOT access)
     const gv = try clif_func.createGlobalValue(GlobalValueData{
         .symbol = .{
             .name = gv_ExternalName.initUser(0, envp_symbol_idx),
             .offset = 0,
-            .colocated = true,
+            .colocated = !lib_mode,
             .tls = false,
         },
     });
@@ -1390,6 +1394,7 @@ fn generateEnvironLen(
     ctrl_plane: *native_compile.ControlPlane,
     func_index_map: *const std.StringHashMapUnmanaged(u32),
     envp_symbol_idx: u32,
+    lib_mode: bool,
 ) !native_compile.CompiledCode {
     var clif_func = clif.Function.init(allocator);
     defer clif_func.deinit();
@@ -1411,12 +1416,12 @@ fn generateEnvironLen(
     const n = entry_params[0];
     const ins = builder.ins();
 
-    // Load envp from _cot_envp global
+    // Load envp pointer (colocated for executable _cot_envp, GOT for lib mode _environ)
     const gv = try clif_func.createGlobalValue(GlobalValueData{
         .symbol = .{
             .name = gv_ExternalName.initUser(0, envp_symbol_idx),
             .offset = 0,
-            .colocated = true,
+            .colocated = !lib_mode,
             .tls = false,
         },
     });
@@ -1461,6 +1466,7 @@ fn generateEnvironPtr(
     isa: native_compile.TargetIsa,
     ctrl_plane: *native_compile.ControlPlane,
     envp_symbol_idx: u32,
+    lib_mode: bool,
 ) !native_compile.CompiledCode {
     var clif_func = clif.Function.init(allocator);
     defer clif_func.deinit();
@@ -1482,12 +1488,12 @@ fn generateEnvironPtr(
     const n = entry_params[0];
     const ins = builder.ins();
 
-    // Load envp from _cot_envp global
+    // Load envp pointer (colocated for executable _cot_envp, GOT for lib mode _environ)
     const gv = try clif_func.createGlobalValue(GlobalValueData{
         .symbol = .{
             .name = gv_ExternalName.initUser(0, envp_symbol_idx),
             .offset = 0,
-            .colocated = true,
+            .colocated = !lib_mode,
             .tls = false,
         },
     });

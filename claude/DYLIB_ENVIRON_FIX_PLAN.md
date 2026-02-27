@@ -1,6 +1,8 @@
 # Execution Plan: Fix environ access in dylib mode
 
-## Status: READY TO IMPLEMENT
+## Status: IMPLEMENTED (Feb 27, 2026)
+
+**Note**: The plan was for the wasm-based path (`generateLibWrappersMachO`). The actual fix targeted the direct native path (`generateMachODirect`) which is the default. The fix maps `envp_symbol_idx` to `_environ` (POSIX libc global) with `colocated: false` in CLIF IR, generating proper GOT relocations. Also fixed `machORelocType` to correctly emit `ARM64_RELOC_GOT_LOAD_PAGE21` (type 5) and `ARM64_RELOC_GOT_LOAD_PAGEOFF12` (type 6), and fixed `addDataRelocation` to set `pc_rel=true` for GOT page relocations.
 
 ## Problem
 
