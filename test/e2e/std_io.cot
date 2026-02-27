@@ -212,8 +212,8 @@ test "os: arg(0) is non-empty string" {
     @assert(@lenOf(a) > 0)
 }
 
-test "os: environ(0) is non-empty string" {
-    var e = environ(0)
+test "os: env(0) is non-empty string" {
+    var e = env(0)
     @assert(@lenOf(e) > 0)
 }
 
