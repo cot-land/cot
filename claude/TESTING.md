@@ -9,7 +9,7 @@ Cot uses inline test blocks (Zig syntax) with error-union-based test isolation. 
 | Tier | Command | What it runs | Speed |
 |------|---------|-------------|-------|
 | **Zig compiler tests** | `zig build test` | ~163 Zig-level tests with inline Cot snippets | Fast (<10s) |
-| **Cot language tests** | `./test/run_all.sh` | ~1,623 Cot tests across 67 `.cot` files | Slower (~60s) |
+| **Cot language tests** | `./test/run_all.sh` | ~1,623 Cot tests across 68 `.cot` files | Slower (~60s) |
 | **Single file** | `cot test file.cot` | Tests in one file | Fast |
 
 ### `zig build test` — Compiler internals
@@ -118,12 +118,12 @@ Exit code = number of failures (0 = all pass).
 ```
 test/
   run_all.sh            # Run all Cot tests (glob discovery, no hardcoded lists)
-  cases/                # Category unit tests (21 files, ~122 tests)
+  cases/                # Category unit tests (22 files)
     arc.cot, arithmetic.cot, arrays.cot, bitwise.cot, builtins.cot,
-    chars.cot, compound.cot, control_flow.cot, enum.cot, extern.cot,
-    float.cot, functions.cot, loops.cot, memory.cot, methods.cot,
-    optional.cot, strings.cot, structs.cot, switch.cot, types.cot,
-    union.cot
+    chars.cot, compound.cot, control_flow.cot, enum.cot, export.cot,
+    extern.cot, float.cot, functions.cot, loops.cot, memory.cot,
+    methods.cot, optional.cot, strings.cot, structs.cot, switch.cot,
+    types.cot, union.cot
   e2e/                  # Comprehensive feature tests (46 files, ~1,500 tests)
     arc.cot, async.cot, auto_free.cot, bench_test.cot,
     browser_async.cot, cli.cot, control_flow.cot, crypto.cot,

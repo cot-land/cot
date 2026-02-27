@@ -2,7 +2,7 @@
 
 ## Status: DIAGNOSED, NOT YET FIXED
 
-Blocked by: ARC overhaul (claude/ARC_OVERHAUL.md) — fix after that lands.
+ARC overhaul phases 1-5 are COMPLETE. This bug is no longer blocked — it can be fixed now.
 
 ## Summary
 

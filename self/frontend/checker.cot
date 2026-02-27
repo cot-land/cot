@@ -108,6 +108,12 @@ struct GenericImplEntry {
     ast_ptr: int,  // @ptrToInt of declaring file's *Ast
 }
 
+impl GenericImplEntry {
+    fn getAst() *Ast {
+        return @intToPtr(*Ast, self.ast_ptr)
+    }
+}
+
 // GenericInfo — stores generic struct/function definition location.
 // Zig: GenericInfo { type_params, node_idx, tree }.
 // Needed for cross-file generic resolution: node_idx is in declaring file's AST.
@@ -116,10 +122,10 @@ struct GenericInfo {
     ast_ptr: int,  // @ptrToInt of declaring file's *Ast
 }
 
-// Error set variant — stores name for dedup in mergeErrorSets.
-// Same allocation pattern as EnumVariant/UnionVariant.
-struct ErrorVariant {
-    name: string,
+impl GenericInfo {
+    fn getAst() *Ast {
+        return @intToPtr(*Ast, self.ast_ptr)
+    }
 }
 
 // ============================================================================
@@ -319,19 +325,19 @@ impl Checker {
         const idx = self.symbols.count
         self.symbols.append(sym)
         // Register in current scope's map
-        var map = @intToPtr(*Map(string, int), self.scope_maps.get(self.current_scope))
+        var map = self.getScopeMap(self.current_scope)
         map.set(sym.name, idx)
     }
 
     fn isDefined(name: string) bool {
-        var map = @intToPtr(*Map(string, int), self.scope_maps.get(self.current_scope))
+        var map = self.getScopeMap(self.current_scope)
         return map.has(name) != 0
     }
 
     fn lookupSymbol(name: string) int {
         var scope_idx = self.current_scope
         while (scope_idx >= 0) {
-            var map = @intToPtr(*Map(string, int), self.scope_maps.get(scope_idx))
+            var map = self.getScopeMap(scope_idx)
             if (map.has(name) != 0) {
                 return map.get(name)
             }
@@ -342,6 +348,10 @@ impl Checker {
 
     fn getSymbol(idx: int) *Symbol {
         return @intToPtr(*Symbol, self.symbols.items + idx * @sizeOf(Symbol))
+    }
+
+    fn getScopeMap(scope_idx: int) *Map(string, int) {
+        return @intToPtr(*Map(string, int), self.scope_maps.get(scope_idx))
     }
 
     // ---- Main entry point ----
@@ -405,12 +415,10 @@ impl Checker {
         if (tp_count > 0) {
             // Store GenericInfo with AST pointer for cross-file resolution
             // Zig: self.generics.generic_structs.put(name, .{ .node_idx = idx, .tree = self.tree })
-            // Use raw alloc (not new) — avoids ARC release when local goes out of scope
-            var info_ptr = alloc(0, @sizeOf(GenericInfo))
-            var info = @intToPtr(*GenericInfo, info_ptr)
-            info.node_idx = idx
-            info.ast_ptr = @ptrToInt(self.ast)
-            self.generic_structs.set(name, info_ptr)
+            var info = new GenericInfo { node_idx: idx, ast_ptr: @ptrToInt(self.ast) }
+            retain(@ptrToInt(self.ast))   // AST escapes as raw int — ARC can't track
+            retain(@ptrToInt(info))       // Keep GenericInfo alive past local scope
+            self.generic_structs.set(name, @ptrToInt(info))
             self.defineSymbol(makeTypeSymbol(name, invalid_type, idx))
             return
         }
@@ -567,12 +575,10 @@ impl Checker {
         const tp_count = self.ast.getData(idx, 7 + params_count)
         if (tp_count > 0) {
             // Store GenericInfo with AST pointer for cross-file resolution
-            // Use raw alloc (not new) — avoids ARC release when local goes out of scope
-            var info_ptr = alloc(0, @sizeOf(GenericInfo))
-            var info = @intToPtr(*GenericInfo, info_ptr)
-            info.node_idx = idx
-            info.ast_ptr = @ptrToInt(self.ast)
-            self.generic_functions.set(name, info_ptr)
+            var info = new GenericInfo { node_idx: idx, ast_ptr: @ptrToInt(self.ast) }
+            retain(@ptrToInt(self.ast))   // AST escapes as raw int — ARC can't track
+            retain(@ptrToInt(info))       // Keep GenericInfo alive past local scope
+            self.generic_functions.set(name, @ptrToInt(info))
             self.defineSymbol(makeTypeSymbol(name, invalid_type, idx))
             return
         }
@@ -600,6 +606,8 @@ impl Checker {
         // Generic impl blocks: store for deferred instantiation
         const tp_count = self.ast.getData(idx, 3 + methods_count)
         if (tp_count > 0) {
+            // Retain the AST so it survives after checkFileRecursive returns
+            retain(@ptrToInt(self.ast))
             self.generic_impl_entries.append(GenericImplEntry {
                 base_name: type_name,
                 node_idx: idx,
@@ -1170,7 +1178,7 @@ impl Checker {
             const bind_idx = self.ast.getData(idx, 3 + i)
             // destructure_bind: [name_s, type_expr_n, span_s, span_e]
             const bname = self.ast.getStr(self.ast.getData(bind_idx, 0))
-            var elem_type = @intToPtr(*int, tup.elem_types + i * 8).*
+            var elem_type = tup.getElemType(i)
             elem_type = self.materializeType(elem_type)
             self.defineSymbol(makeSymbol(bname, elem_type, idx, is_const != 0))
         }
@@ -1543,7 +1551,7 @@ impl Checker {
             for ai in 0..args_count {
                 // Zig Sema pattern: set expected_type from param type for result location inference
                 const saved_expected = self.expected_type
-                const param = @intToPtr(*FuncParam, func_info.params + (ai + param_offset) * @sizeOf(FuncParam))
+                const param = func_info.getParam(ai + param_offset)
                 self.expected_type = param.type_idx
                 const arg_type = self.checkExpr(self.ast.getData(idx, 2 + ai))
                 self.expected_type = saved_expected
@@ -1652,7 +1660,7 @@ impl Checker {
                 if (enum_info.tag == TAG_ENUM) {
                     const et = switch (enum_info) { Type.enum_type |e| => e, else => EnumType { name: "", variant_count: 0, variants: 0, backing_type: 0 } }
                     for vi in 0..et.variant_count {
-                        const ev = @intToPtr(*EnumVariant, et.variants + vi * @sizeOf(EnumVariant))
+                        const ev = et.getVariant(vi)
                         if (ev.name == field_name) {
                             return self.current_switch_enum_type
                         }
@@ -1702,7 +1710,7 @@ impl Checker {
             const st = switch (base) { Type.struct_type |s| => s, else => StructType { name: "", field_count: 0, fields: 0, size: 0, alignment: 0, layout: 0 } }
             // Search fields
             for fi in 0..st.field_count {
-                const sf = @intToPtr(*StructField, st.fields + fi * @sizeOf(StructField))
+                const sf = st.getField(fi)
                 if (sf.name == field_name) {
                     return sf.type_idx
                 }
@@ -1720,7 +1728,7 @@ impl Checker {
         if (base.tag == TAG_ENUM) {
             const et = switch (base) { Type.enum_type |e| => e, else => EnumType { name: "", variant_count: 0, variants: 0, backing_type: 0 } }
             for vi in 0..et.variant_count {
-                const ev = @intToPtr(*EnumVariant, et.variants + vi * @sizeOf(EnumVariant))
+                const ev = et.getVariant(vi)
                 if (ev.name == field_name) {
                     return base_type
                 }
@@ -1750,7 +1758,7 @@ impl Checker {
                 }
             }
             for vi in 0..ut.variant_count {
-                const uv = @intToPtr(*UnionVariant, ut.variants + vi * @sizeOf(UnionVariant))
+                const uv = ut.getVariant(vi)
                 if (uv.name == field_name) {
                     if (uv.payload_type == invalid_type) { return base_type }
                     if (!is_type_access) {
@@ -1865,7 +1873,7 @@ impl Checker {
 
             var found = false
             for si in 0..st.field_count {
-                const sf = @intToPtr(*StructField, st.fields + si * @sizeOf(StructField))
+                const sf = st.getField(si)
                 if (sf.name == fname) {
                     found = true
                     if (!self.types.isAssignable(val_type, sf.type_idx)) {
@@ -1893,7 +1901,7 @@ impl Checker {
 
         // Check that all required fields (no default) are provided
         for si in 0..st.field_count {
-            const sf = @intToPtr(*StructField, st.fields + si * @sizeOf(StructField))
+            const sf = st.getField(si)
             if (sf.default_value != null_node) { continue }  // has default, ok to omit
             var provided = false
             for fi in 0..fi_count {
@@ -2130,7 +2138,7 @@ impl Checker {
         if (self.ast.getTag(pat_idx) != @intFromEnum(NodeTag.field_access)) { return VOID }
         const field_name = self.ast.getStr(self.ast.getData(pat_idx, 1))
         for vi in 0..ut.variant_count {
-            const uv = @intToPtr(*UnionVariant, ut.variants + vi * @sizeOf(UnionVariant))
+            const uv = ut.getVariant(vi)
             if (uv.name == field_name) {
                 return uv.payload_type
             }
@@ -2410,7 +2418,7 @@ impl Checker {
                             const field_name = self.ast.getStr(self.ast.getData(field_arg, 1))
                             const st = switch (info) { Type.struct_type |s| => s, else => StructType { name: "", field_count: 0, fields: 0, size: 0, alignment: 0, layout: 0 } }
                             for fi in 0..st.field_count {
-                                const sf = @intToPtr(*StructField, st.fields + fi * @sizeOf(StructField))
+                                const sf = st.getField(fi)
                                 if (sf.name == field_name) { return sf.type_idx }
                             }
                             self.reportError(idx, ErrorCode.e300, "struct has no field with this name")
@@ -2551,7 +2559,7 @@ impl Checker {
                             const st = switch (info) { Type.struct_type |s| => s, else => StructType { name: "", field_count: 0, fields: 0, size: 0, alignment: 0, layout: 0 } }
                             var found = false
                             for fi in 0..st.field_count {
-                                const sf = @intToPtr(*StructField, st.fields + fi * @sizeOf(StructField))
+                                const sf = st.getField(fi)
                                 if (sf.name == field_name) { found = true }
                             }
                             if (!found) {
@@ -3029,9 +3037,11 @@ impl Checker {
             resolved_args.append(arg_type)
         }
 
-        // Swap to defining file's AST (Zig: self.tree = gen_info.tree)
+        // Swap to defining file's AST and safe_mode (Zig lines 3328-3335)
         const saved_ast = self.ast
-        self.ast = @intToPtr(*Ast, info.ast_ptr)
+        const saved_safe_mode = self.safe_mode
+        self.ast = info.getAst()
+        self.safe_mode = self.ast.safe_mode
 
         // Read struct definition from DEFINING file's AST
         // struct_decl: [name_s, layout, doc_s, fields_count, ...fields, tp_count, ...]
@@ -3040,6 +3050,7 @@ impl Checker {
 
         if (ta_count != tp_count) {
             self.ast = saved_ast
+            self.safe_mode = saved_safe_mode
             self.reportError(idx, ErrorCode.e300, "wrong number of type arguments")
             return invalid_type
         }
@@ -3048,6 +3059,7 @@ impl Checker {
         const cache_key = self.buildGenericCacheKey(gi_name, resolved_args)
         if (self.instantiation_cache.has(cache_key) != 0) {
             self.ast = saved_ast
+            self.safe_mode = saved_safe_mode
             return self.instantiation_cache.get(cache_key)
         }
 
@@ -3066,8 +3078,9 @@ impl Checker {
         self.type_sub_keys.count = old_sub_count
         self.type_sub_vals.count = old_sub_count
 
-        // Restore caller's AST
+        // Restore caller's AST and safe_mode
         self.ast = saved_ast
+        self.safe_mode = saved_safe_mode
 
         // Register and cache
         self.types.registerNamed(cache_key, concrete_type)
@@ -3097,7 +3110,7 @@ impl Checker {
             // Swap to defining file's AST and safe_mode (Zig lines 3379-3387)
             const saved_ast = self.ast
             const saved_safe_mode = self.safe_mode
-            self.ast = @intToPtr(*Ast, entry.ast_ptr)
+            self.ast = entry.getAst()
             self.safe_mode = self.ast.safe_mode
 
             // Cross-file expr_types isolation (Zig lines 3433-3442):
@@ -3202,9 +3215,11 @@ impl Checker {
             resolved_args.append(arg_type)
         }
 
-        // Swap to defining file's AST
+        // Swap to defining file's AST and safe_mode (Zig lines 3506-3513)
         const saved_ast = self.ast
-        self.ast = @intToPtr(*Ast, info.ast_ptr)
+        const saved_safe_mode = self.safe_mode
+        self.ast = info.getAst()
+        self.safe_mode = self.ast.safe_mode
 
         // fn_decl: [name_s, ret_type_n, body_n, is_extern, is_async, doc_s,
         //           params_count, ...param_nodes, tp_count, ...tp_strings, bounds_count, ...bounds, ...]
@@ -3213,6 +3228,7 @@ impl Checker {
 
         if (call_args_count != tp_count) {
             self.ast = saved_ast
+            self.safe_mode = saved_safe_mode
             self.reportError(idx, ErrorCode.e300, "wrong number of type arguments")
             return invalid_type
         }
@@ -3230,6 +3246,7 @@ impl Checker {
                     const impl_key = "${bound_name}:${type_name}"
                     if (self.trait_impls.has(impl_key) == 0) {
                         self.ast = saved_ast
+                        self.safe_mode = saved_safe_mode
                         self.reportError(idx, ErrorCode.e300, "type does not satisfy trait bound")
                         return invalid_type
                     }
@@ -3244,6 +3261,7 @@ impl Checker {
         const cached_sym = self.lookupSymbol(cache_key)
         if (cached_sym >= 0) {
             self.ast = saved_ast
+            self.safe_mode = saved_safe_mode
             return self.getSymbol(cached_sym).type_idx
         }
 
@@ -3267,14 +3285,25 @@ impl Checker {
         self.current_scope = old_scope
 
         // Check the function body (still using DEFINING file's AST)
+        // Cross-file: save/restore expr_types to avoid NodeIndex collision (Zig lines 3539-3548)
+        const is_cross_file = (info.ast_ptr != @ptrToInt(saved_ast))
+        var saved_expr_types = self.expr_types
+        if (is_cross_file) {
+            var fresh_et: Map(int, int) = .{}
+            self.expr_types = fresh_et
+        }
         self.checkFnDeclBody(fn_node, cache_key)
+        if (is_cross_file) {
+            self.expr_types = saved_expr_types
+        }
 
         // Restore substitution
         self.type_sub_keys.count = old_sub_count
         self.type_sub_vals.count = old_sub_count
 
-        // Restore caller's AST
+        // Restore caller's AST and safe_mode
         self.ast = saved_ast
+        self.safe_mode = saved_safe_mode
 
         return func_type
     }
@@ -3297,15 +3326,18 @@ impl Checker {
             resolved_args.append(arg_type)
         }
 
-        // Swap to defining file's AST
+        // Swap to defining file's AST and safe_mode (Zig pattern)
         const saved_ast = self.ast
-        self.ast = @intToPtr(*Ast, info.ast_ptr)
+        const saved_safe_mode = self.safe_mode
+        self.ast = info.getAst()
+        self.safe_mode = self.ast.safe_mode
 
         const s_fields_count = self.ast.getData(struct_node, 3)
         const tp_count = self.ast.getData(struct_node, 4 + s_fields_count)
 
         if (ta_count != tp_count) {
             self.ast = saved_ast
+            self.safe_mode = saved_safe_mode
             self.reportError(idx, ErrorCode.e300, "wrong number of type arguments")
             return invalid_type
         }
@@ -3313,6 +3345,7 @@ impl Checker {
         const cache_key = self.buildGenericCacheKey(type_name, resolved_args)
         if (self.instantiation_cache.has(cache_key) != 0) {
             self.ast = saved_ast
+            self.safe_mode = saved_safe_mode
             return self.instantiation_cache.get(cache_key)
         }
 
@@ -3328,8 +3361,9 @@ impl Checker {
         self.type_sub_keys.count = old_sub_count
         self.type_sub_vals.count = old_sub_count
 
-        // Restore caller's AST
+        // Restore caller's AST and safe_mode
         self.ast = saved_ast
+        self.safe_mode = saved_safe_mode
 
         self.types.registerNamed(cache_key, concrete_type)
         self.instantiation_cache.set(cache_key, concrete_type)
@@ -3356,15 +3390,18 @@ impl Checker {
             resolved_args.append(arg_type)
         }
 
-        // Swap to defining file's AST
+        // Swap to defining file's AST and safe_mode (Zig pattern)
         const saved_ast = self.ast
-        self.ast = @intToPtr(*Ast, info.ast_ptr)
+        const saved_safe_mode = self.safe_mode
+        self.ast = info.getAst()
+        self.safe_mode = self.ast.safe_mode
 
         const s_fields_count = self.ast.getData(struct_node, 3)
         const tp_count = self.ast.getData(struct_node, 4 + s_fields_count)
 
         if (ta_count != tp_count) {
             self.ast = saved_ast
+            self.safe_mode = saved_safe_mode
             self.reportError(idx, ErrorCode.e300, "wrong number of type arguments")
             return invalid_type
         }
@@ -3372,6 +3409,7 @@ impl Checker {
         const cache_key = self.buildGenericCacheKey(type_name, resolved_args)
         if (self.instantiation_cache.has(cache_key) != 0) {
             self.ast = saved_ast
+            self.safe_mode = saved_safe_mode
             return self.instantiation_cache.get(cache_key)
         }
 
@@ -3387,8 +3425,9 @@ impl Checker {
         self.type_sub_keys.count = old_sub_count
         self.type_sub_vals.count = old_sub_count
 
-        // Restore caller's AST
+        // Restore caller's AST and safe_mode
         self.ast = saved_ast
+        self.safe_mode = saved_safe_mode
 
         self.types.registerNamed(cache_key, concrete_type)
         self.instantiation_cache.set(cache_key, concrete_type)
@@ -3544,7 +3583,7 @@ impl Checker {
                         if (t.tag == TAG_ENUM) {
                             const et = switch (t) { Type.enum_type |e| => e, else => EnumType { name: "", variant_count: 0, variants: 0, backing_type: 0 } }
                             for vi in 0..et.variant_count {
-                                const ev = @intToPtr(*EnumVariant, et.variants + vi * @sizeOf(EnumVariant))
+                                const ev = et.getVariant(vi)
                                 if (ev.name == field_name) {
                                     return (1, ev.value)
                                 }
@@ -3629,13 +3668,13 @@ impl Checker {
 
         // Add all from a
         for ai in 0..a_es.variant_count {
-            const av = @intToPtr(*ErrorVariant, a_es.variant_names + ai * @sizeOf(ErrorVariant))
+            const av = a_es.getVariant(ai)
             merged.append(av.name)
         }
 
         // Add from b, skip duplicates
         for bi in 0..b_es.variant_count {
-            const bv = @intToPtr(*ErrorVariant, b_es.variant_names + bi * @sizeOf(ErrorVariant))
+            const bv = b_es.getVariant(bi)
             var found = false
             for mi in 0..merged.count {
                 if (merged.get(mi) == bv.name) {

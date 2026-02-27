@@ -146,10 +146,14 @@ struct CotMapType { key: int, value: int }
 struct CotListType { elem: int }
 struct FutureType { result_type: int }
 
+struct ErrorVariant {
+    name: string,
+}
+
 struct ErrorSetType {
     name: string,
     variant_count: int,
-    variant_names: int,    // raw pointer to string array
+    variant_names: int,    // raw pointer to ErrorVariant array
 }
 
 struct ErrorUnionType {
@@ -218,6 +222,46 @@ struct MethodInfo {
     func_name: string,
     func_type: int,
     receiver_is_ptr: bool,
+}
+
+// ============================================================================
+// Type accessor methods — centralize raw pointer arithmetic
+// ============================================================================
+
+impl StructType {
+    fn getField(idx: int) *StructField {
+        return @intToPtr(*StructField, self.fields + idx * @sizeOf(StructField))
+    }
+}
+
+impl EnumType {
+    fn getVariant(idx: int) *EnumVariant {
+        return @intToPtr(*EnumVariant, self.variants + idx * @sizeOf(EnumVariant))
+    }
+}
+
+impl UnionType {
+    fn getVariant(idx: int) *UnionVariant {
+        return @intToPtr(*UnionVariant, self.variants + idx * @sizeOf(UnionVariant))
+    }
+}
+
+impl FuncType {
+    fn getParam(idx: int) *FuncParam {
+        return @intToPtr(*FuncParam, self.params + idx * @sizeOf(FuncParam))
+    }
+}
+
+impl ErrorSetType {
+    fn getVariant(idx: int) *ErrorVariant {
+        return @intToPtr(*ErrorVariant, self.variant_names + idx * @sizeOf(ErrorVariant))
+    }
+}
+
+impl TupleType {
+    fn getElemType(idx: int) int {
+        return @intToPtr(*int, self.elem_types + idx * 8).*
+    }
 }
 
 // ============================================================================
@@ -597,7 +641,7 @@ impl TypeRegistry {
             Type.tuple |tup| => {
                 var total: int = 0
                 for i in 0..tup.elem_count {
-                    const et = @intToPtr(*int, tup.elem_types + i * 8).*
+                    const et = tup.getElemType(i)
                     total += ((self.sizeOf(et) + 7) / 8) * 8
                 }
                 return total
@@ -605,7 +649,7 @@ impl TypeRegistry {
             Type.union_type |u| => {
                 var max_payload: int = 0
                 for i in 0..u.variant_count {
-                    const v = @intToPtr(*UnionVariant, u.variants + i * @sizeOf(UnionVariant))
+                    const v = u.getVariant(i)
                     if (v.payload_type != invalid_type) {
                         const ps = self.sizeOf(v.payload_type)
                         if (ps > max_payload) { max_payload = ps }
@@ -666,7 +710,7 @@ impl TypeRegistry {
             Type.future |_| => false,
             Type.tuple |tup| => {
                 for i in 0..tup.elem_count {
-                    const et = @intToPtr(*int, tup.elem_types + i * 8).*
+                    const et = tup.getElemType(i)
                     if (!self.isTrivial(et)) { return false }
                 }
                 return true
@@ -958,8 +1002,8 @@ impl TypeRegistry {
             const tf = switch (to_t) { Type.func |f| => f, else => FuncType { param_count: -1, params: 0, return_type: invalid_type } }
             if (ff.param_count != tf.param_count) { return false }
             for i in 0..ff.param_count {
-                const fp = @intToPtr(*FuncParam, ff.params + i * @sizeOf(FuncParam))
-                const tp = @intToPtr(*FuncParam, tf.params + i * @sizeOf(FuncParam))
+                const fp = ff.getParam(i)
+                const tp = tf.getParam(i)
                 if (!self.equal(fp.type_idx, tp.type_idx)) { return false }
             }
             return self.equal(ff.return_type, tf.return_type)

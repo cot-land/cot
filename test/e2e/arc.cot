@@ -251,6 +251,15 @@ test "arc: unowned and strong coexist" {
     @assertEq(n2.value, 55)
 }
 
+// --- Stack struct init retains managed pointer field ---
+
+test "arc: stack struct init retains managed pointer field" {
+    var w = new ReturnNode { value: 42 }
+    var owner = Owner { .child = w }
+    owner.child = new ReturnNode { value: 99 }
+    @assertEq(w.value, 42)
+}
+
 // -- ARC Phase 5: Collection element ARC --
 // List retains elements on insert, releases on remove/free.
 // Reference: Swift Array — elements retained on insert, released on remove/dealloc.

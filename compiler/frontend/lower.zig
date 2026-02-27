@@ -2240,7 +2240,39 @@ pub const Lowerer = struct {
                                 actual_value = try fb.emitPtrLoadValue(value_node_ir, struct_field.type_idx, span);
                             }
                         }
-                        _ = try fb.emitStoreLocalField(local_idx, field_idx, field_offset, actual_value, span);
+                        // ARC Phase 4: Retain +0 managed values stored in struct fields during init.
+                        // Swift: ManagedValue::hasCleanup() — only retain if source is managed.
+                        // Raw pointers (&x, @intToPtr) have no cleanup and must not be retained.
+                        if (!self.target.isWasmGC() and self.type_reg.couldBeARC(struct_field.type_idx)) {
+                            const fi_node = self.tree.getNode(field_init.value);
+                            const fi_expr = if (fi_node) |n| n.asExpr() else null;
+                            const fi_owned = if (fi_expr) |e| (e == .new_expr or e == .call) else false;
+                            if (!fi_owned) {
+                                // +0 value: only retain if source has active ARC cleanup (managed)
+                                const needs_retain = if (fi_expr) |e| blk: {
+                                    if (e == .ident) {
+                                        if (fb.lookupLocal(e.ident.name)) |src_local_idx| {
+                                            break :blk self.cleanup_stack.hasCleanupForLocal(src_local_idx);
+                                        }
+                                    }
+                                    if (e == .field_access) break :blk self.baseHasCleanup(e.field_access.base);
+                                    if (e == .index) break :blk self.baseHasCleanup(e.index.base);
+                                    if (e == .deref) break :blk self.baseHasCleanup(e.deref.operand);
+                                    break :blk false;
+                                } else false;
+                                if (needs_retain) {
+                                    var retain_args = [_]ir.NodeIndex{actual_value};
+                                    const retained = try fb.emitCall("retain", &retain_args, false, struct_field.type_idx, span);
+                                    _ = try fb.emitStoreLocalField(local_idx, field_idx, field_offset, retained, span);
+                                } else {
+                                    _ = try fb.emitStoreLocalField(local_idx, field_idx, field_offset, actual_value, span);
+                                }
+                            } else {
+                                _ = try fb.emitStoreLocalField(local_idx, field_idx, field_offset, actual_value, span);
+                            }
+                        } else {
+                            _ = try fb.emitStoreLocalField(local_idx, field_idx, field_offset, actual_value, span);
+                        }
                     }
                     break;
                 }
@@ -2268,7 +2300,37 @@ pub const Lowerer = struct {
             } else if (field_type == .optional and !self.isPtrLikeOptional(struct_field.type_idx)) {
                 try self.storeCompoundOptField(fb, local_idx, field_idx, field_offset, value_node_ir, struct_field.default_value, span);
             } else {
-                _ = try fb.emitStoreLocalField(local_idx, field_idx, field_offset, value_node_ir, span);
+                // ARC Phase 4: Retain +0 managed default values stored in struct fields.
+                // Swift: ManagedValue::hasCleanup() — only retain if source is managed.
+                if (!self.target.isWasmGC() and self.type_reg.couldBeARC(struct_field.type_idx)) {
+                    const def_node = self.tree.getNode(struct_field.default_value);
+                    const def_expr = if (def_node) |n| n.asExpr() else null;
+                    const def_owned = if (def_expr) |e| (e == .new_expr or e == .call) else false;
+                    if (!def_owned) {
+                        const needs_retain = if (def_expr) |e| blk: {
+                            if (e == .ident) {
+                                if (fb.lookupLocal(e.ident.name)) |src_local_idx| {
+                                    break :blk self.cleanup_stack.hasCleanupForLocal(src_local_idx);
+                                }
+                            }
+                            if (e == .field_access) break :blk self.baseHasCleanup(e.field_access.base);
+                            if (e == .index) break :blk self.baseHasCleanup(e.index.base);
+                            if (e == .deref) break :blk self.baseHasCleanup(e.deref.operand);
+                            break :blk false;
+                        } else false;
+                        if (needs_retain) {
+                            var retain_args = [_]ir.NodeIndex{value_node_ir};
+                            const retained = try fb.emitCall("retain", &retain_args, false, struct_field.type_idx, span);
+                            _ = try fb.emitStoreLocalField(local_idx, field_idx, field_offset, retained, span);
+                        } else {
+                            _ = try fb.emitStoreLocalField(local_idx, field_idx, field_offset, value_node_ir, span);
+                        }
+                    } else {
+                        _ = try fb.emitStoreLocalField(local_idx, field_idx, field_offset, value_node_ir, span);
+                    }
+                } else {
+                    _ = try fb.emitStoreLocalField(local_idx, field_idx, field_offset, value_node_ir, span);
+                }
             }
         }
     }
@@ -4683,7 +4745,37 @@ pub const Lowerer = struct {
                                 actual_value = try fb.emitPtrLoadValue(value_node, struct_field.type_idx, si.span);
                             }
                         }
-                        _ = try fb.emitStoreLocalField(temp_idx, field_idx, field_offset, actual_value, si.span);
+                        // ARC Phase 4: Retain +0 managed values stored in struct fields during init.
+                        // Swift: ManagedValue::hasCleanup() — only retain if source is managed.
+                        if (!self.target.isWasmGC() and self.type_reg.couldBeARC(struct_field.type_idx)) {
+                            const fi_node = self.tree.getNode(field_init.value);
+                            const fi_expr = if (fi_node) |n| n.asExpr() else null;
+                            const fi_owned = if (fi_expr) |e| (e == .new_expr or e == .call) else false;
+                            if (!fi_owned) {
+                                const needs_retain = if (fi_expr) |e| blk: {
+                                    if (e == .ident) {
+                                        if (fb.lookupLocal(e.ident.name)) |src_local_idx| {
+                                            break :blk self.cleanup_stack.hasCleanupForLocal(src_local_idx);
+                                        }
+                                    }
+                                    if (e == .field_access) break :blk self.baseHasCleanup(e.field_access.base);
+                                    if (e == .index) break :blk self.baseHasCleanup(e.index.base);
+                                    if (e == .deref) break :blk self.baseHasCleanup(e.deref.operand);
+                                    break :blk false;
+                                } else false;
+                                if (needs_retain) {
+                                    var retain_args = [_]ir.NodeIndex{actual_value};
+                                    const retained = try fb.emitCall("retain", &retain_args, false, struct_field.type_idx, si.span);
+                                    _ = try fb.emitStoreLocalField(temp_idx, field_idx, field_offset, retained, si.span);
+                                } else {
+                                    _ = try fb.emitStoreLocalField(temp_idx, field_idx, field_offset, actual_value, si.span);
+                                }
+                            } else {
+                                _ = try fb.emitStoreLocalField(temp_idx, field_idx, field_offset, actual_value, si.span);
+                            }
+                        } else {
+                            _ = try fb.emitStoreLocalField(temp_idx, field_idx, field_offset, actual_value, si.span);
+                        }
                     }
                     break;
                 }
@@ -4709,7 +4801,37 @@ pub const Lowerer = struct {
                 _ = try fb.emitStoreLocalField(temp_idx, field_idx, field_offset, ptr_ir, si.span);
                 _ = try fb.emitStoreLocalField(temp_idx, field_idx + 1, field_offset + 8, len_ir, si.span);
             } else {
-                _ = try fb.emitStoreLocalField(temp_idx, field_idx, field_offset, value_node, si.span);
+                // ARC Phase 4: Retain +0 managed default values stored in struct fields.
+                // Swift: ManagedValue::hasCleanup() — only retain if source is managed.
+                if (!self.target.isWasmGC() and self.type_reg.couldBeARC(struct_field.type_idx)) {
+                    const def_node = self.tree.getNode(struct_field.default_value);
+                    const def_expr = if (def_node) |n| n.asExpr() else null;
+                    const def_owned = if (def_expr) |e| (e == .new_expr or e == .call) else false;
+                    if (!def_owned) {
+                        const needs_retain = if (def_expr) |e| blk: {
+                            if (e == .ident) {
+                                if (fb.lookupLocal(e.ident.name)) |src_local_idx| {
+                                    break :blk self.cleanup_stack.hasCleanupForLocal(src_local_idx);
+                                }
+                            }
+                            if (e == .field_access) break :blk self.baseHasCleanup(e.field_access.base);
+                            if (e == .index) break :blk self.baseHasCleanup(e.index.base);
+                            if (e == .deref) break :blk self.baseHasCleanup(e.deref.operand);
+                            break :blk false;
+                        } else false;
+                        if (needs_retain) {
+                            var retain_args = [_]ir.NodeIndex{value_node};
+                            const retained = try fb.emitCall("retain", &retain_args, false, struct_field.type_idx, si.span);
+                            _ = try fb.emitStoreLocalField(temp_idx, field_idx, field_offset, retained, si.span);
+                        } else {
+                            _ = try fb.emitStoreLocalField(temp_idx, field_idx, field_offset, value_node, si.span);
+                        }
+                    } else {
+                        _ = try fb.emitStoreLocalField(temp_idx, field_idx, field_offset, value_node, si.span);
+                    }
+                } else {
+                    _ = try fb.emitStoreLocalField(temp_idx, field_idx, field_offset, value_node, si.span);
+                }
             }
         }
         return try fb.emitLoadLocal(temp_idx, struct_type_idx, si.span);
@@ -4960,18 +5082,32 @@ pub const Lowerer = struct {
                         _ = try fb.emitPtrStoreValue(len_addr, len_ir, ne.span);
                     } else {
                         // Simple field: store value at offset
-                        // ARC Phase 4: Retain +0 ARC values stored in struct fields during init.
-                        // Swift pattern: storing a borrowed value into a struct field retains it.
-                        // new_expr and call already produce +1, so skip retain for those.
+                        // ARC Phase 4: Retain +0 managed values stored in struct fields during init.
+                        // Swift: ManagedValue::hasCleanup() — only retain if source is managed.
                         if (!self.target.isWasmGC() and self.type_reg.couldBeARC(struct_field.type_idx)) {
                             const fi_node = self.tree.getNode(field_init.value);
                             const fi_expr = if (fi_node) |n| n.asExpr() else null;
                             const fi_owned = if (fi_expr) |e| (e == .new_expr or e == .call) else false;
                             const field_addr = try fb.emitAddrOffset(ptr_node, field_offset, ptr_type, ne.span);
                             if (!fi_owned) {
-                                var retain_args = [_]ir.NodeIndex{value_node};
-                                const retained = try fb.emitCall("retain", &retain_args, false, struct_field.type_idx, ne.span);
-                                _ = try fb.emitPtrStoreValue(field_addr, retained, ne.span);
+                                const needs_retain = if (fi_expr) |e| blk: {
+                                    if (e == .ident) {
+                                        if (fb.lookupLocal(e.ident.name)) |src_local_idx| {
+                                            break :blk self.cleanup_stack.hasCleanupForLocal(src_local_idx);
+                                        }
+                                    }
+                                    if (e == .field_access) break :blk self.baseHasCleanup(e.field_access.base);
+                                    if (e == .index) break :blk self.baseHasCleanup(e.index.base);
+                                    if (e == .deref) break :blk self.baseHasCleanup(e.deref.operand);
+                                    break :blk false;
+                                } else false;
+                                if (needs_retain) {
+                                    var retain_args = [_]ir.NodeIndex{value_node};
+                                    const retained = try fb.emitCall("retain", &retain_args, false, struct_field.type_idx, ne.span);
+                                    _ = try fb.emitPtrStoreValue(field_addr, retained, ne.span);
+                                } else {
+                                    _ = try fb.emitPtrStoreValue(field_addr, value_node, ne.span);
+                                }
                             } else {
                                 _ = try fb.emitPtrStoreValue(field_addr, value_node, ne.span);
                             }
@@ -5007,15 +5143,33 @@ pub const Lowerer = struct {
                 _ = try fb.emitPtrStoreValue(len_addr, len_ir, ne.span);
             } else {
                 // ARC Phase 4: Retain +0 ARC default values stored in struct fields.
+                // Swift: ManagedValue::hasCleanup() — only retain if source is managed.
+                // Raw pointers (&x, @intToPtr) have no cleanup and must not be retained.
                 if (!self.target.isWasmGC() and self.type_reg.couldBeARC(struct_field.type_idx)) {
                     const def_node = self.tree.getNode(struct_field.default_value);
                     const def_expr = if (def_node) |n| n.asExpr() else null;
                     const def_owned = if (def_expr) |e| (e == .new_expr or e == .call) else false;
                     const field_addr = try fb.emitAddrOffset(ptr_node, field_offset, ptr_type, ne.span);
                     if (!def_owned) {
-                        var retain_args = [_]ir.NodeIndex{value_node};
-                        const retained = try fb.emitCall("retain", &retain_args, false, struct_field.type_idx, ne.span);
-                        _ = try fb.emitPtrStoreValue(field_addr, retained, ne.span);
+                        // +0 value: only retain if source has active ARC cleanup (managed)
+                        const needs_retain = if (def_expr) |e| blk: {
+                            if (e == .ident) {
+                                if (fb.lookupLocal(e.ident.name)) |src_local_idx| {
+                                    break :blk self.cleanup_stack.hasCleanupForLocal(src_local_idx);
+                                }
+                            }
+                            if (e == .field_access) break :blk self.baseHasCleanup(e.field_access.base);
+                            if (e == .index) break :blk self.baseHasCleanup(e.index.base);
+                            if (e == .deref) break :blk self.baseHasCleanup(e.deref.operand);
+                            break :blk false;
+                        } else false;
+                        if (needs_retain) {
+                            var retain_args = [_]ir.NodeIndex{value_node};
+                            const retained = try fb.emitCall("retain", &retain_args, false, struct_field.type_idx, ne.span);
+                            _ = try fb.emitPtrStoreValue(field_addr, retained, ne.span);
+                        } else {
+                            _ = try fb.emitPtrStoreValue(field_addr, value_node, ne.span);
+                        }
                     } else {
                         _ = try fb.emitPtrStoreValue(field_addr, value_node, ne.span);
                     }

@@ -6,49 +6,50 @@
 
 ---
 
-## Architecture Decision: Split Memory Models
+## Completed Phases Summary
 
-| Target | Memory Model | Rationale |
-|--------|-------------|-----------|
-| **Native** (default) | **Swift ARC** — full port with all bells and whistles | Deterministic, predictable, no GC pauses, production-proven |
-| **Wasm** (`--target=wasm32`) | **WasmGC** — browser runtime manages memory | Shipped in Chrome 119+, Firefox 120+, Safari 18.2+. Smaller binaries, no ARC runtime overhead |
+| Phase | Description | Status |
+|-------|-------------|--------|
+| Phase 0 | WasmGC replaces Wasm ARC | **DONE** |
+| Phase 1 | Managed pointer flag on `*T` | **DONE** (commit `73f4c0b`) |
+| Phase 2 | Swift InlineRefCounts bit layout | **DONE** (commit `ee9f763`) |
+| Phase 3 | Weak references via side tables | **DONE** (commit `d99b7bc`) |
+| Phase 4 | Ownership correctness + destructor auto-release | **DONE** (commit `33a98a4`) |
+| Phase 5 | Collection element ARC (List/Map retain/release) | **DONE** (commit `07332b7`) |
 
-This means the ARC system only needs to serve the native backend. The Wasm backend gets a completely different memory model using `struct.new`, `struct.get`, `struct.set`, `array.new`, etc. — all managed by the browser's garbage collector.
+See `ARC_AUDIT.md` for detailed verification of all completed phases.
 
 ---
 
-## Current State Summary
+## Architecture: Split Memory Models
 
-### What Cot Has (native ARC)
+| Target | Memory Model | Rationale |
+|--------|-------------|-----------|
+| **Native** (default) | **Swift ARC** — Phases 0-5 complete | Deterministic, predictable, no GC pauses |
+| **Wasm** (`--target=wasm32`) | **WasmGC** — browser GC manages structs | Smaller binaries, no ARC runtime overhead |
+
+---
+
+## What's Implemented (native ARC, after all phases)
 - 24-byte heap header: `[alloc_size:i64][metadata:i64][refcount:i64][user_data...]`
-- `alloc(metadata, size)`, `retain(obj)`, `release(obj)`, `dealloc(obj)` — via CLIF IR in `arc_native.zig`
-- Cleanup stack with LIFO ordering (faithful Swift CleanupManager port)
-- ManagedValue with forward/trivial patterns
-- Immortal refcount sentinel (`0x7FFFFFFFFFFFFFFF`)
-- Destructor dispatch via metadata function pointer
-- `weak var` keyword (skips retain, but NO zeroing — dangling pointer risk)
-- `@arcRetain`/`@arcRelease` builtins
+- `alloc`, `retain`, `release`, `dealloc`, `realloc` via CLIF IR in `arc_native.zig`
+- Swift InlineRefCounts bit layout (strong + unowned + weak)
+- Side tables for weak references with zeroing semantics
+- `managed` flag on pointer types — `couldBeARC()` is precise
+- Ownership correctness — auto-generated destructor field releases
+- Collection element ARC — `@arcRetain`/`@arcRelease` in List and Map methods
+- Swift-faithful `set()` ordering: load old → retain new → store → release old
+- Cleanup stack LIFO ordering (faithful Swift CleanupManager port)
+- ManagedValue/forward pattern, immortal refcount, null-safe retain/release
+- Type deduplication for compound type constructors
 
-### What Cot Is Missing (vs Swift)
-1. **No type-level ARC distinction** — `*T` can be ARC-managed or raw, compiler guesses
-2. **No ownership conventions** — no `@owned`/`@guaranteed` on function signatures
-3. **Single refcount** — Swift has strong + unowned + weak (three independent counters)
-4. **No side tables** — weak references are just raw pointers, no zeroing on dealloc
-5. **No object lifecycle states** — Swift has 8 states (LIVE→DEINITING→DEINITED→FREED→DEAD)
-6. **No unowned references** — Swift's `unowned` (traps on access after dealloc) doesn't exist
-7. **No collection element ARC** — `List(*Foo).free()` doesn't release elements
-8. **No ARC through generics** — monomorphized collections lose ARC type info in i64 fields
-9. **Non-atomic refcount** — no thread safety (blocks concurrency roadmap)
-10. **No ARC optimization** — no retain/release elision, no copy elimination
-11. **Wasm ARC removed** — replaced by WasmGC (done: `--target=wasm32` produces WasmGC output)
+## What's Still Missing (vs Swift)
 
-### What Cot Has That's Good (keep these)
-- Cleanup stack LIFO ordering — correct, matches Swift
-- ManagedValue/forward pattern — faithful port
-- Error path handling — errdefer + cleanup on error paths
-- Destructor dispatch via metadata pointer
-- Immortal refcount for string constants
-- Null-safe retain/release
+| Gap | Priority | Blocked by |
+|-----|----------|------------|
+| Non-atomic refcount (no thread safety) | Medium | Concurrency roadmap (0.6) |
+| ARC optimization pass (retain/release elision) | Low | Correctness-first |
+| `unowned` keyword (traps on access after dealloc) | Low | — |
 
 ---
 
