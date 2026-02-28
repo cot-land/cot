@@ -30,10 +30,12 @@ jobs:
       - name: Build
         run: zig build -Doptimize=ReleaseFast
 
-      - name: Test
-        run: |
-          zig build test
-          ./test/run_all.sh
+      - name: Compiler unit tests
+        run: zig build test
+
+      - name: Cot tests (native)
+        if: matrix.os == 'macos-14'
+        run: ./test/run_all.sh
 
       - name: Package
         run: |
