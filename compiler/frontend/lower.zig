@@ -172,7 +172,20 @@ pub const Lowerer = struct {
                 // Plain T → wrap as tag=1, payload=value
                 const tag_one = try fb.emitConstInt(1, TypeRegistry.I64, span);
                 _ = try fb.emitStoreLocalField(result_local, 0, 0, tag_one, span);
-                _ = try fb.emitStoreLocalField(result_local, 1, 8, val, span);
+                const arm_size = self.type_reg.sizeOf(arm_type);
+                if (arm_size > 8) {
+                    // Large T (struct/union > 8 bytes) — copy word by word into payload area
+                    const val_tmp = try fb.addLocalWithSize("__opt_arm_tmp", arm_type, false, arm_size);
+                    _ = try fb.emitStoreLocal(val_tmp, val, span);
+                    const num_words: u32 = @intCast((arm_size + 7) / 8);
+                    for (0..num_words) |i| {
+                        const off: i64 = @intCast(i * 8);
+                        const word = try fb.emitFieldLocal(val_tmp, @intCast(i), off, TypeRegistry.I64, span);
+                        _ = try fb.emitStoreLocalField(result_local, @as(u32, @intCast(1 + i)), @as(i64, 8) + off, word, span);
+                    }
+                } else {
+                    _ = try fb.emitStoreLocalField(result_local, 1, 8, val, span);
+                }
             }
         }
     }
@@ -201,7 +214,19 @@ pub const Lowerer = struct {
             } else {
                 const tag_one = try fb.emitConstInt(1, TypeRegistry.I64, span);
                 _ = try fb.emitStoreFieldValue(ptr, field_idx, field_offset, tag_one, span);
-                _ = try fb.emitStoreFieldValue(ptr, field_idx + 1, field_offset + 8, val, span);
+                const arm_size = self.type_reg.sizeOf(arm_type);
+                if (arm_size > 8) {
+                    const val_tmp = try fb.addLocalWithSize("__opt_fap_val", arm_type, false, arm_size);
+                    _ = try fb.emitStoreLocal(val_tmp, val, span);
+                    const num_words: u32 = @intCast((arm_size + 7) / 8);
+                    for (0..num_words) |i| {
+                        const off: i64 = @intCast(i * 8);
+                        const word = try fb.emitFieldLocal(val_tmp, @intCast(i), off, TypeRegistry.I64, span);
+                        _ = try fb.emitStoreFieldValue(ptr, field_idx + @as(u32, @intCast(1 + i)), field_offset + @as(i64, 8) + off, word, span);
+                    }
+                } else {
+                    _ = try fb.emitStoreFieldValue(ptr, field_idx + 1, field_offset + 8, val, span);
+                }
             }
         }
     }
@@ -233,7 +258,19 @@ pub const Lowerer = struct {
                 // Plain T → wrap as tag=1, payload=value
                 const tag_one = try fb.emitConstInt(1, TypeRegistry.I64, span);
                 _ = try fb.emitStoreLocalField(local_idx, field_idx, field_offset, tag_one, span);
-                _ = try fb.emitStoreLocalField(local_idx, field_idx + 1, field_offset + 8, val, span);
+                const arm_size = self.type_reg.sizeOf(arm_type);
+                if (arm_size > 8) {
+                    const val_tmp = try fb.addLocalWithSize("__opt_fld_val", arm_type, false, arm_size);
+                    _ = try fb.emitStoreLocal(val_tmp, val, span);
+                    const num_words: u32 = @intCast((arm_size + 7) / 8);
+                    for (0..num_words) |i| {
+                        const off: i64 = @intCast(i * 8);
+                        const word = try fb.emitFieldLocal(val_tmp, @intCast(i), off, TypeRegistry.I64, span);
+                        _ = try fb.emitStoreLocalField(local_idx, field_idx + @as(u32, @intCast(1 + i)), field_offset + @as(i64, 8) + off, word, span);
+                    }
+                } else {
+                    _ = try fb.emitStoreLocalField(local_idx, field_idx + 1, field_offset + 8, val, span);
+                }
             }
         }
     }
@@ -5720,6 +5757,8 @@ pub const Lowerer = struct {
     fn lowerUnionSwitch(self: *Lowerer, se: ast.SwitchExpr, subject_type: TypeIndex, ut: types.UnionType, result_type: TypeIndex) Error!ir.NodeIndex {
         const fb = self.current_func orelse return ir.null_node;
         const is_expr = result_type != TypeRegistry.VOID;
+        const result_info = self.type_reg.get(result_type);
+        const is_compound_opt = result_info == .optional and !self.isPtrLikeOptional(result_type);
 
         // Allocate result local for expression form (same pattern as lowerSwitchValueBlocks)
         var result_local: ir.LocalIdx = 0;
@@ -5848,7 +5887,13 @@ pub const Lowerer = struct {
                     // Arms like @panic() return void but don't diverge from the user's
                     // perspective — they abort. Don't try to local.set a void result.
                     const arm_type = self.inferExprType(case.body);
-                    if (case_val != ir.null_node and arm_type != TypeRegistry.VOID) _ = try fb.emitStoreLocal(result_local, case_val, se.span);
+                    if (case_val != ir.null_node and arm_type != TypeRegistry.VOID) {
+                        if (is_compound_opt) {
+                            try self.storeCompoundOptArm(fb, result_local, case_val, case.body, se.span);
+                        } else {
+                            _ = try fb.emitStoreLocal(result_local, case_val, se.span);
+                        }
+                    }
                     if (fb.needsTerminator()) _ = try fb.emitJump(merge_block, se.span);
                 } else {
                     if (!try self.lowerBlockNode(case.body)) _ = try fb.emitJump(merge_block, se.span);
@@ -5858,7 +5903,13 @@ pub const Lowerer = struct {
                 if (is_expr) {
                     const case_val = try self.lowerExprNode(case.body);
                     const arm_type = self.inferExprType(case.body);
-                    if (case_val != ir.null_node and arm_type != TypeRegistry.VOID) _ = try fb.emitStoreLocal(result_local, case_val, se.span);
+                    if (case_val != ir.null_node and arm_type != TypeRegistry.VOID) {
+                        if (is_compound_opt) {
+                            try self.storeCompoundOptArm(fb, result_local, case_val, case.body, se.span);
+                        } else {
+                            _ = try fb.emitStoreLocal(result_local, case_val, se.span);
+                        }
+                    }
                     if (fb.needsTerminator()) _ = try fb.emitJump(merge_block, se.span);
                 } else {
                     if (!try self.lowerBlockNode(case.body)) _ = try fb.emitJump(merge_block, se.span);
@@ -5872,7 +5923,13 @@ pub const Lowerer = struct {
             if (is_expr) {
                 const else_val = try self.lowerExprNode(se.else_body);
                 const else_type = self.inferExprType(se.else_body);
-                if (else_val != ir.null_node and else_type != TypeRegistry.VOID) _ = try fb.emitStoreLocal(result_local, else_val, se.span);
+                if (else_val != ir.null_node and else_type != TypeRegistry.VOID) {
+                    if (is_compound_opt) {
+                        try self.storeCompoundOptArm(fb, result_local, else_val, se.else_body, se.span);
+                    } else {
+                        _ = try fb.emitStoreLocal(result_local, else_val, se.span);
+                    }
+                }
                 if (fb.needsTerminator()) _ = try fb.emitJump(merge_block, se.span);
             } else {
                 if (!try self.lowerBlockNode(se.else_body)) _ = try fb.emitJump(merge_block, se.span);
@@ -6241,7 +6298,7 @@ pub const Lowerer = struct {
                         if (arg_i < params.len) {
                             const pt = self.type_reg.get(params[arg_i].type_idx);
                             const ps = self.type_reg.sizeOf(params[arg_i].type_idx);
-                            is_large_compound = !self.target.isWasmGC() and (pt == .struct_type or pt == .union_type or pt == .tuple) and ps > 8;
+                            is_large_compound = !self.target.isWasmGC() and (pt == .struct_type or pt == .union_type or pt == .tuple or pt == .optional) and ps > 8;
                         }
                     }
                     if (is_large_compound) {
@@ -6376,6 +6433,40 @@ pub const Lowerer = struct {
                 }
             }
 
+            // T → ?T wrapping: when arg type is T but param type is ?T (compound optional),
+            // wrap the value with tag=1 + payload before passing.
+            if (param_types) |params| {
+                if (arg_i < params.len) {
+                    const param_type = self.type_reg.get(params[arg_i].type_idx);
+                    if (param_type == .optional and !self.isPtrLikeOptional(params[arg_i].type_idx)) {
+                        const arg_type = self.inferExprType(arg_idx);
+                        const arg_info = self.type_reg.get(arg_type);
+                        // Only wrap if arg is NOT already optional (T → ?T, not ?T → ?T)
+                        if (arg_info != .optional) {
+                            const opt_size = self.type_reg.sizeOf(params[arg_i].type_idx);
+                            const tmp = try fb.addLocalWithSize("__opt_arg", params[arg_i].type_idx, false, opt_size);
+                            const tag_one = try fb.emitConstInt(1, TypeRegistry.I64, call.span);
+                            _ = try fb.emitStoreLocalField(tmp, 0, 0, tag_one, call.span);
+                            // For large T (struct/union > 8 bytes), copy word by word into payload area
+                            const arg_size = self.type_reg.sizeOf(arg_type);
+                            if (arg_size > 8) {
+                                const val_tmp = try fb.addLocalWithSize("__opt_val", arg_type, false, arg_size);
+                                _ = try fb.emitStoreLocal(val_tmp, arg_node, call.span);
+                                const num_words: u32 = @intCast((arg_size + 7) / 8);
+                                for (0..num_words) |i| {
+                                    const off: i64 = @intCast(i * 8);
+                                    const word = try fb.emitFieldLocal(val_tmp, @intCast(i), off, TypeRegistry.I64, call.span);
+                                    _ = try fb.emitStoreLocalField(tmp, @as(u32, @intCast(1 + i)), @as(i64, 8) + off, word, call.span);
+                                }
+                            } else {
+                                _ = try fb.emitStoreLocalField(tmp, 1, 8, arg_node, call.span);
+                            }
+                            arg_node = try fb.emitLoadLocal(tmp, params[arg_i].type_idx, call.span);
+                        }
+                    }
+                }
+            }
+
             // Go pattern: decompose compound types (slice/string) into (ptr, len)
             // at call sites. The callee SSA builder reconstructs via slice_make.
             // Reference: Go's OSPTR()/OLEN() in walk/builtin.go
@@ -6391,7 +6482,7 @@ pub const Lowerer = struct {
                     if (arg_i < params.len) {
                         const pt = self.type_reg.get(params[arg_i].type_idx);
                         const ps = self.type_reg.sizeOf(params[arg_i].type_idx);
-                        is_large_compound = !self.target.isWasmGC() and (pt == .struct_type or pt == .union_type or pt == .tuple) and ps > 8;
+                        is_large_compound = !self.target.isWasmGC() and (pt == .struct_type or pt == .union_type or pt == .tuple or pt == .optional) and ps > 8;
                     }
                 }
                 if (is_large_compound) {
@@ -6769,7 +6860,7 @@ pub const Lowerer = struct {
                     if (param_idx < params.len) {
                         const pt = self.type_reg.get(params[param_idx].type_idx);
                         const ps = self.type_reg.sizeOf(params[param_idx].type_idx);
-                        is_large_compound = !self.target.isWasmGC() and (pt == .struct_type or pt == .union_type or pt == .tuple) and ps > 8;
+                        is_large_compound = !self.target.isWasmGC() and (pt == .struct_type or pt == .union_type or pt == .tuple or pt == .optional) and ps > 8;
                     }
                 }
                 if (is_large_compound) {

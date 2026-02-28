@@ -1392,8 +1392,7 @@ test "asExpr returns expr" {
     const s = Span { .start = 0, .end = 5 }
     const idx = ast.addExpr(Expr.ident(Ident { .name = "x", .span = s }))
     const node = ast.getNode(idx)
-    // Test via isExpr since ?Expr comparison has codegen issues for large unions
-    @assert(ast.isExpr(idx))
+    @assert(asExpr(node) != null)
     @assert(asDecl(node) == null)
     @assert(asStmt(node) == null)
 }
