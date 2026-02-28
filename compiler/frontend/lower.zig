@@ -6298,7 +6298,8 @@ pub const Lowerer = struct {
                         if (arg_i < params.len) {
                             const pt = self.type_reg.get(params[arg_i].type_idx);
                             const ps = self.type_reg.sizeOf(params[arg_i].type_idx);
-                            is_large_compound = !self.target.isWasmGC() and (pt == .struct_type or pt == .union_type or pt == .tuple or pt == .optional) and ps > 8;
+                            const is_compound_opt = pt == .optional and !self.isPtrLikeOptional(params[arg_i].type_idx);
+                            is_large_compound = !self.target.isWasmGC() and (pt == .struct_type or pt == .union_type or pt == .tuple or is_compound_opt) and ps > 8;
                         }
                     }
                     if (is_large_compound) {
@@ -6482,7 +6483,8 @@ pub const Lowerer = struct {
                     if (arg_i < params.len) {
                         const pt = self.type_reg.get(params[arg_i].type_idx);
                         const ps = self.type_reg.sizeOf(params[arg_i].type_idx);
-                        is_large_compound = !self.target.isWasmGC() and (pt == .struct_type or pt == .union_type or pt == .tuple or pt == .optional) and ps > 8;
+                        const is_compound_opt = pt == .optional and !self.isPtrLikeOptional(params[arg_i].type_idx);
+                        is_large_compound = !self.target.isWasmGC() and (pt == .struct_type or pt == .union_type or pt == .tuple or is_compound_opt) and ps > 8;
                     }
                 }
                 if (is_large_compound) {
@@ -6860,7 +6862,8 @@ pub const Lowerer = struct {
                     if (param_idx < params.len) {
                         const pt = self.type_reg.get(params[param_idx].type_idx);
                         const ps = self.type_reg.sizeOf(params[param_idx].type_idx);
-                        is_large_compound = !self.target.isWasmGC() and (pt == .struct_type or pt == .union_type or pt == .tuple or pt == .optional) and ps > 8;
+                        const is_compound_opt = pt == .optional and !self.isPtrLikeOptional(params[param_idx].type_idx);
+                        is_large_compound = !self.target.isWasmGC() and (pt == .struct_type or pt == .union_type or pt == .tuple or is_compound_opt) and ps > 8;
                     }
                 }
                 if (is_large_compound) {

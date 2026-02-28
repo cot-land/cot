@@ -317,7 +317,8 @@ const SsaToClifTranslator = struct {
             const ptype = self.type_reg.get(param.type_idx);
             const is_string_or_slice = param.type_idx == TypeRegistry.STRING or ptype == .slice;
             const type_size = self.type_reg.sizeOf(param.type_idx);
-            const is_large_struct = (ptype == .struct_type or ptype == .union_type or ptype == .tuple) and type_size > 8;
+            const is_compound_opt = ptype == .optional and self.type_reg.get(ptype.optional.elem) != .pointer;
+            const is_large_struct = (ptype == .struct_type or ptype == .union_type or ptype == .tuple or is_compound_opt) and type_size > 8;
 
             if (is_string_or_slice) {
                 // Decomposed to (ptr, len) — 2 x I64
@@ -1484,7 +1485,8 @@ const SsaToClifTranslator = struct {
                 const ptype = self.type_reg.get(param.type_idx);
                 const is_string_or_slice = param.type_idx == TypeRegistry.STRING or ptype == .slice;
                 const type_size = self.type_reg.sizeOf(param.type_idx);
-                const is_large_struct = (ptype == .struct_type or ptype == .union_type or ptype == .tuple) and type_size > 8;
+                const is_compound_opt = ptype == .optional and self.type_reg.get(ptype.optional.elem) != .pointer;
+                const is_large_struct = (ptype == .struct_type or ptype == .union_type or ptype == .tuple or is_compound_opt) and type_size > 8;
 
                 if (is_string_or_slice) {
                     try sig.addParam(self.allocator, clif.AbiParam.init(clif.Type.I64));

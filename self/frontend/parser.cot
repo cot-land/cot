@@ -135,11 +135,14 @@ impl Parser {
             self.pending_doc = ""
             return
         }
-        self.pending_doc = self.tok_text
+        // Zig parser.zig:139-157: concatenate consecutive /// lines with newlines
+        var doc = self.tok_text
         self.advance()
         while (self.tok == @intFromEnum(Token.doc_comment)) {
+            doc = doc ++ "\n" ++ self.tok_text
             self.advance()
         }
+        self.pending_doc = doc
     }
 
     fn consumeDocComment() string {
@@ -154,12 +157,10 @@ impl Parser {
 
     /// Parse an entire file. Populates ast.file_decls.
     fn parseFile() void {
-        // Check for @safe annotation
+        // Check for @safe annotation (Zig parser.zig:175-182)
         if (self.tok == @intFromEnum(Token.at)) {
             const pk = self.peekToken()
-            if (pk == @intFromEnum(Token.ident)) {
-                // Note: can't check peek_text == "safe" easily here
-                // For now, any @ident at file start sets safe mode
+            if (pk == @intFromEnum(Token.ident) and self.peek_text == "safe") {
                 self.advance()  // consume @
                 self.advance()  // consume safe
                 self.safe_mode = true
@@ -1125,16 +1126,31 @@ impl Parser {
                 }
             } else if (tok == Token.lbrack) {
                 self.advance()  // consume [
-                const idx = self.parseExpr()
+                // Zig parser.zig:938-955: half-open slice syntax
                 if (self.tok == @intFromEnum(Token.colon)) {
-                    // Slice: expr[start:end]
+                    // [:end] — start is null_node
                     self.advance()
-                    const end_expr = self.parseExpr()
+                    var end_expr = null_node
+                    if (self.tok != @intFromEnum(Token.rbrack)) {
+                        end_expr = self.parseExpr()
+                    }
                     self.expect(@intFromEnum(Token.rbrack))
-                    node = self.ast.addExpr(Expr.slice_expr(SliceExpr { .base = node, .start = idx, .end = end_expr, .span = self.spanSE(self.tok_start, self.tok_end) }))
+                    node = self.ast.addExpr(Expr.slice_expr(SliceExpr { .base = node, .start = null_node, .end = end_expr, .span = self.spanSE(self.tok_start, self.tok_end) }))
                 } else {
-                    self.expect(@intFromEnum(Token.rbrack))
-                    node = self.ast.addExpr(Expr.index_expr(IndexExpr { .base = node, .idx = idx, .span = self.spanSE(self.tok_start, self.tok_end) }))
+                    const idx = self.parseExpr()
+                    if (self.tok == @intFromEnum(Token.colon)) {
+                        // [start:end] or [start:] — end may be null_node
+                        self.advance()
+                        var end_expr = null_node
+                        if (self.tok != @intFromEnum(Token.rbrack)) {
+                            end_expr = self.parseExpr()
+                        }
+                        self.expect(@intFromEnum(Token.rbrack))
+                        node = self.ast.addExpr(Expr.slice_expr(SliceExpr { .base = node, .start = idx, .end = end_expr, .span = self.spanSE(self.tok_start, self.tok_end) }))
+                    } else {
+                        self.expect(@intFromEnum(Token.rbrack))
+                        node = self.ast.addExpr(Expr.index_expr(IndexExpr { .base = node, .idx = idx, .span = self.spanSE(self.tok_start, self.tok_end) }))
+                    }
                 }
             } else if (tok == Token.lparen) {
                 // Function call
@@ -2112,13 +2128,16 @@ impl Parser {
             self.errors.report(self.tok_start, ErrorCode.e203, "expected loop variable name")
             return null_node
         }
-        const binding = self.tok_text
+        const first_binding = self.tok_text
         self.advance()
-        // Optional index binding: for item, i in ...
+        // Check for indexed iteration: for i, item in collection
+        // Zig parser.zig:1864-1876: first=index, second=value
+        var binding = first_binding
         var index_binding = ""
         if (self.match(@intFromEnum(Token.comma))) {
             if (self.tok == @intFromEnum(Token.ident)) {
-                index_binding = self.tok_text
+                index_binding = first_binding
+                binding = self.tok_text
                 self.advance()
             }
         }

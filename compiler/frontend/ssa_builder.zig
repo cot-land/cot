@@ -79,7 +79,8 @@ pub const SSABuilder = struct {
             const local_type = type_registry.get(param.type_idx);
             const is_string_or_slice = param.type_idx == TypeRegistry.STRING or local_type == .slice;
             const type_size = type_registry.sizeOf(param.type_idx);
-            const is_large_struct = !is_wasm_gc and (local_type == .struct_type or local_type == .union_type or local_type == .tuple) and type_size > 8;
+            const is_compound_opt = local_type == .optional and type_registry.get(local_type.optional.elem) != .pointer;
+            const is_large_struct = !is_wasm_gc and (local_type == .struct_type or local_type == .union_type or local_type == .tuple or is_compound_opt) and type_size > 8;
 
             if (is_string_or_slice) {
                 // String/slice: two registers (ptr, len)
@@ -957,8 +958,9 @@ pub const SSABuilder = struct {
             return;
         }
 
-        // Large struct decomposition: structs >8 bytes passed as N i64 values
-        const is_large_struct = (arg_type == .struct_type or arg_type == .union_type or arg_type == .tuple) and type_size > 8;
+        // Large struct decomposition: structs/unions/compound optionals >8 bytes passed as N i64 values
+        const is_compound_opt_arg = arg_type == .optional and self.type_registry.get(arg_type.optional.elem) != .pointer;
+        const is_large_struct = (arg_type == .struct_type or arg_type == .union_type or arg_type == .tuple or is_compound_opt_arg) and type_size > 8;
         if (is_large_struct) {
             const addr = try self.getStructAddr(arg_val, cur);
             const num_slots: u32 = @intCast((type_size + 7) / 8);

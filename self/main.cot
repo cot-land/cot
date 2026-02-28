@@ -16,6 +16,7 @@ import "std/map"
 import "std/debug"
 import "frontend/token"
 import "frontend/scanner"
+import "frontend/source"
 import "frontend/ast"
 import "frontend/errors"
 import "frontend/parser"
@@ -66,18 +67,14 @@ fn main() void {
 
 /// Parse a file and report syntax errors.
 fn cmdParse(path: string, content: string) void {
-    var s = Scanner.init(content)
+    var errs = ErrorReporter.initWithSource(path, content)
+    var s = Scanner.initWithErrors(content, &errs)
     var ast = Ast.init(path)
-    var errs = ErrorReporter.init()
     var p = Parser.init(s, ast, errs)
     p.parseFile()
 
     if (errs.hasErrors()) {
-        const diag = Diagnostic { offset: errs.first_offset, code: errs.first_code, msg: errs.first_msg }
-        writeErr("${formatDiagnostic(path, content, diag)}\n")
-        if (errs.errorCount() > 1) {
-            writeErr("... and ${errs.errorCount() - 1} more error(s)\n")
-        }
+        // Errors already printed by ErrorReporter.printErr during parsing
         exit(1)
     }
 
@@ -88,15 +85,13 @@ fn cmdParse(path: string, content: string) void {
 /// Port of driver.zig compileFile phases 1+2: recursive parse, shared check.
 fn cmdCheck(path: string, content: string) void {
     // Single-file fast path: parse and check directly (no import resolution)
-    var s = Scanner.init(content)
+    var errs = ErrorReporter.initWithSource(path, content)
+    var s = Scanner.initWithErrors(content, &errs)
     var ast = Ast.init(path)
-    var errs = ErrorReporter.init()
     var p = Parser.init(s, ast, errs)
     p.parseFile()
 
     if (errs.hasErrors()) {
-        const diag = Diagnostic { offset: errs.first_offset, code: errs.first_code, msg: errs.first_msg }
-        writeErr("${formatDiagnostic(path, content, diag)}\n")
         exit(1)
     }
 
@@ -113,11 +108,6 @@ fn cmdCheck(path: string, content: string) void {
     checker.checkFile()
 
     if (errs.hasErrors()) {
-        const diag = Diagnostic { offset: errs.first_offset, code: errs.first_code, msg: errs.first_msg }
-        writeErr("${formatDiagnostic(path, content, diag)}\n")
-        if (errs.errorCount() > 1) {
-            writeErr("... and ${errs.errorCount() - 1} more error(s)\n")
-        }
         exit(1)
     }
 
@@ -161,17 +151,15 @@ fn checkFileRecursive(file_path: string, shared: *SharedCheckerState, types: *Ty
 
     // Parse — heap-allocate Ast so pointer survives after function returns
     // (GenericInfo stores ast_ptr for cross-file generic resolution)
-    var s = Scanner.init(content)
+    var errs = ErrorReporter.initWithSource(file_path, content)
+    var s = Scanner.initWithErrors(content, &errs)
     var ast = Ast.initHeap(file_path)
-    var errs = ErrorReporter.init()
     var p = Parser.init(s, ast, errs)
     if (project_safe) { p.safe_mode = true }
     p.parseFile()
     ast.safe_mode = p.safe_mode
 
     if (errs.hasErrors()) {
-        const diag = Diagnostic { offset: errs.first_offset, code: errs.first_code, msg: errs.first_msg }
-        println(formatDiagnostic(file_path, content, diag))
         exit(1)
     }
 
@@ -187,18 +175,13 @@ fn checkFileRecursive(file_path: string, shared: *SharedCheckerState, types: *Ty
     in_progress.set(file_path, 0)
 
     // Type check with shared state (all dependencies already checked)
-    var check_errs = ErrorReporter.init()
+    var check_errs = ErrorReporter.initWithSource(file_path, content)
     var checker = Checker.initShared(ast, types, check_errs, shared.global_map)
     checker.loadSharedState(shared)
     checker.checkFile()
     checker.syncToShared(shared)
 
     if (check_errs.hasErrors()) {
-        const diag = Diagnostic { offset: check_errs.first_offset, code: check_errs.first_code, msg: check_errs.first_msg }
-        println(formatDiagnostic(file_path, content, diag))
-        if (check_errs.errorCount() > 1) {
-            println("... and ${check_errs.errorCount() - 1} more error(s)")
-        }
         exit(1)
     }
 }

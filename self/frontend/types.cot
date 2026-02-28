@@ -515,17 +515,17 @@ impl TypeRegistry {
     // ---- Factory methods ----
 
     fn makePointer(elem: int) int {
+        // Managed based on pointee type (Zig types.zig:260)
+        const pointee = self.get(elem)
+        const is_managed = pointee.tag == TAG_STRUCT or pointee.tag == TAG_ENUM or pointee.tag == TAG_UNION
         // Dedup: check for existing matching pointer type (Zig types.zig:258-265)
         for i in FIRST_USER_TYPE..self.types.count {
             const t = self.get(i)
             if (t.tag == TAG_POINTER) {
                 const p = switch (t) { Type.pointer |p| => p, else => PointerType { elem: 0, managed: false } }
-                if (p.elem == elem and p.managed) { return i }
+                if (p.elem == elem and p.managed == is_managed) { return i }
             }
         }
-        // Managed based on pointee type (Zig types.zig:260)
-        const pointee = self.get(elem)
-        const is_managed = pointee.tag == TAG_STRUCT or pointee.tag == TAG_ENUM or pointee.tag == TAG_UNION
         return self.add(Type.pointer(PointerType { elem: elem, managed: is_managed }))
     }
 
@@ -846,15 +846,12 @@ impl TypeRegistry {
     }
 
     /// Returns true if type could be an ARC-managed heap pointer.
+    /// Zig types.zig: checks pointer.managed flag, not pointee type.
     fn couldBeARC(idx: int) bool {
         const t = self.get(idx)
         if (t.tag == TAG_POINTER) {
-            const elem_idx = switch (t) {
-                Type.pointer |p| => p.elem,
-                else => invalid_type,
-            }
-            const pointee = self.get(elem_idx)
-            return pointee.tag == TAG_STRUCT or pointee.tag == TAG_ENUM or pointee.tag == TAG_UNION
+            const p = switch (t) { Type.pointer |p| => p, else => PointerType { elem: 0, managed: false } }
+            return p.managed
         }
         if (t.tag == TAG_OPTIONAL) {
             const elem_idx = switch (t) {

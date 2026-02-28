@@ -1208,8 +1208,16 @@ impl Checker {
                 }, else => {} }, else => {} }
             }
 
-            if (!self.types.isAssignable(value_type, target_type)) {
-                self.reportError(idx, ErrorCode.e300, "type mismatch")
+            // Compound assignment (+=, -=, *=, /=, etc.): both operands must be numeric
+            if (asgn.op != @intFromEnum(Token.assign)) {
+                if (!self.isNumericType(target_type) or !self.isNumericType(value_type)) {
+                    self.reportError(idx, ErrorCode.e300, "compound assignment requires numeric operands")
+                    return
+                }
+            } else {
+                if (!self.types.isAssignable(value_type, target_type)) {
+                    self.reportError(idx, ErrorCode.e300, "type mismatch")
+                }
             }
         }, else => {} }, else => {} }
     }
@@ -2353,7 +2361,11 @@ impl Checker {
         }
         const first_type = self.checkExpr(al_elements.get(0))
         for i in 1..count {
-            self.checkExpr(al_elements.get(i))
+            const elem_type = self.checkExpr(al_elements.get(i))
+            // Zig checker: validate all elements match first element type
+            if (!self.types.isAssignable(first_type, elem_type)) {
+                self.reportError(al_elements.get(i), ErrorCode.e300, "array element type mismatch")
+            }
         }
         return self.types.makeArray(first_type, count)
     }
@@ -2408,7 +2420,9 @@ impl Checker {
 
         const then_type = self.checkExpr(then_n)
         if (else_n != null_node) {
-            self.checkExpr(else_n)
+            const else_type = self.checkExpr(else_n)
+            // Zig checker: reconcile then/else branch types
+            return TypeRegistry.commonType(then_type, else_type)
         }
         return then_type
     }
@@ -2452,7 +2466,10 @@ impl Checker {
 
             // Check guard expression (must be boolean)
             if (guard_n != null_node) {
-                self.checkExpr(guard_n)
+                const guard_type = self.checkExpr(guard_n)
+                if (!self.isBoolType(guard_type)) {
+                    self.reportError(guard_n, ErrorCode.e300, "switch guard must be boolean")
+                }
             }
 
             // If union switch with capture, define capture variable in a new scope
