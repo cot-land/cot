@@ -612,7 +612,7 @@ pub const Driver = struct {
 
         // Wasm target: use Wasm codegen pipeline
         if (self.target.isWasm()) {
-            return self.generateWasmCode(funcs, type_reg);
+            return self.generateWasmCode(funcs, globals, type_reg);
         }
 
         // Store source info for DWARF debug generation in generateMachO/generateElf
@@ -639,7 +639,7 @@ pub const Driver = struct {
 
         // Step 1: Generate Wasm bytecode first
         pipeline_debug.log(.codegen, "driver: generating Wasm for native AOT compilation", .{});
-        const wasm_bytes = try self.generateWasmCode(funcs, type_reg);
+        const wasm_bytes = try self.generateWasmCode(funcs, globals, type_reg);
         defer self.allocator.free(wasm_bytes);
 
         // Step 2: Call native code generation
@@ -1073,7 +1073,7 @@ pub const Driver = struct {
             try func_names.append(self.allocator, ir_func.name);
 
             // Build SSA from IR
-            var ssa_builder = try ssa_builder_mod.SSABuilder.init(self.allocator, ir_func, type_reg, self.target);
+            var ssa_builder = try ssa_builder_mod.SSABuilder.init(self.allocator, ir_func, globals, type_reg, self.target);
             errdefer ssa_builder.deinit();
 
             const ssa_func = try ssa_builder.build();
@@ -4846,7 +4846,7 @@ pub const Driver = struct {
 
     /// Generate WebAssembly binary.
     /// Uses Go-style Linker for module structure with proper SP globals.
-    fn generateWasmCode(self: *Driver, funcs: []const ir_mod.Func, type_reg: *types_mod.TypeRegistry) ![]u8 {
+    fn generateWasmCode(self: *Driver, funcs: []const ir_mod.Func, globals: []const ir_mod.Global, type_reg: *types_mod.TypeRegistry) ![]u8 {
         pipeline_debug.log(.codegen, "driver: generating Wasm for {d} functions", .{funcs.len});
 
         var linker = wasm.Linker.init(self.allocator);
@@ -5193,7 +5193,7 @@ pub const Driver = struct {
         // ====================================================================
         for (funcs) |*ir_func| {
             // Build SSA
-            var ssa_builder = try ssa_builder_mod.SSABuilder.init(self.allocator, ir_func, type_reg, self.target);
+            var ssa_builder = try ssa_builder_mod.SSABuilder.init(self.allocator, ir_func, globals, type_reg, self.target);
             errdefer ssa_builder.deinit();
 
             const ssa_func = try ssa_builder.build();

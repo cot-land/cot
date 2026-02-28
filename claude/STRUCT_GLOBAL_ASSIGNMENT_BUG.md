@@ -1,6 +1,6 @@
 # Bug: `convertGlobalStore` Uses `.store` (8 bytes) for Struct-Type Globals — Must Use `.move` (N bytes)
 
-**Status**: FIXED — `convertGlobalStore` now uses size-aware `.move` for structs > 8 bytes
+**Status**: FIXED — `convertGlobalStore` now uses size-aware `.move` for structs > 8 bytes, including VOID-typed `off_ptr` values from pointer field dereferences
 **Priority**: High — all 16 basic colors render as black/garbage
 
 ---

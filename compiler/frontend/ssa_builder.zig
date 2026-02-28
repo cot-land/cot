@@ -33,6 +33,7 @@ pub const SSABuilder = struct {
     allocator: Allocator,
     func: *Func,
     ir_func: *const ir.Func,
+    ir_globals: []const ir.Global,
     type_registry: *TypeRegistry,
     target: Target,
     vars: std.AutoHashMap(ir.LocalIdx, *Value),
@@ -49,7 +50,7 @@ pub const SSABuilder = struct {
 
     const LoopContext = struct { continue_block: *Block, break_block: *Block };
 
-    pub fn init(allocator: Allocator, ir_func: *const ir.Func, type_registry: *TypeRegistry, target: Target) !SSABuilder {
+    pub fn init(allocator: Allocator, ir_func: *const ir.Func, ir_globals: []const ir.Global, type_registry: *TypeRegistry, target: Target) !SSABuilder {
         const func = try allocator.create(Func);
         func.* = Func.init(allocator, ir_func.name);
         func.is_export = ir_func.is_export;
@@ -172,6 +173,7 @@ pub const SSABuilder = struct {
             .allocator = allocator,
             .func = func,
             .ir_func = ir_func,
+            .ir_globals = ir_globals,
             .type_registry = type_registry,
             .target = target,
             .vars = vars,
@@ -308,7 +310,7 @@ pub const SSABuilder = struct {
             .addr_local => |l| try self.emitLocalAddr(l.local_idx, node.type_idx, cur),
 
             .global_ref => |g| try self.convertGlobalRef(g.name, node.type_idx, cur),
-            .global_store => |g| try self.convertGlobalStore(g.name, g.value, cur),
+            .global_store => |g| try self.convertGlobalStore(g.name, g.global_idx, g.value, cur),
             .addr_global => |g| blk: {
                 const val = try self.func.newValue(.global_addr, node.type_idx, cur, self.cur_pos);
                 val.aux = .{ .string = g.name };
@@ -742,7 +744,7 @@ pub const SSABuilder = struct {
         return load_val;
     }
 
-    fn convertGlobalStore(self: *SSABuilder, name: []const u8, value_idx: ir.NodeIndex, cur: *Block) !*Value {
+    fn convertGlobalStore(self: *SSABuilder, name: []const u8, global_idx: ir.GlobalIdx, value_idx: ir.NodeIndex, cur: *Block) !*Value {
         const value = try self.convertNode(value_idx) orelse return error.MissingValue;
         const addr_val = try self.func.newValue(.global_addr, TypeRegistry.VOID, cur, self.cur_pos);
         addr_val.aux = .{ .string = name };
@@ -804,13 +806,38 @@ pub const SSABuilder = struct {
         };
 
         // Large struct/tuple/union: bulk .move copy (same as convertStoreLocal)
-        const is_large_struct = ((value_type == .struct_type or value_type == .tuple or value_type == .union_type) and type_size > 8) or is_compound_opt;
+        var is_large_struct = ((value_type == .struct_type or value_type == .tuple or value_type == .union_type) and type_size > 8) or is_compound_opt;
+
+        // When the value is a VOID-typed address (from convertFieldValue for compound struct
+        // fields), check the TARGET global's type to determine if bulk copy is needed.
+        // convertFieldValue returns off_ptr with VOID type for struct/array fields — the
+        // address is valid but untyped. The global knows the expected compound type.
+        // (Same pattern as convertStoreLocal lines 663-674, but using ir_globals instead of ir_func.locals)
+        if (!is_large_struct and value.op == .off_ptr and value.type_idx == TypeRegistry.VOID) {
+            const g_idx: usize = @intCast(global_idx);
+            if (g_idx < self.ir_globals.len) {
+                const global_type_idx = self.ir_globals[g_idx].type_idx;
+                const global_type = self.type_registry.get(global_type_idx);
+                const global_size = self.ir_globals[g_idx].size;
+                const global_is_compound_opt = global_type == .optional and blk: {
+                    const elem_info = self.type_registry.get(global_type.optional.elem);
+                    break :blk elem_info != .pointer;
+                };
+                if (((global_type == .struct_type or global_type == .tuple or global_type == .union_type) and global_size > 8) or global_is_compound_opt) {
+                    is_large_struct = true;
+                }
+            }
+        }
 
         if (is_large_struct) {
             const src_addr = value;
             const move_val = try self.func.newValue(.move, TypeRegistry.VOID, cur, self.cur_pos);
             move_val.addArg2(addr_val, src_addr);
-            move_val.aux_int = @intCast(type_size);
+            // Use value's type_size when available, fall back to global's size for
+            // VOID-typed addresses (from convertFieldValue for struct fields).
+            const g_idx: usize = @intCast(global_idx);
+            const move_size = if (type_size > 0) type_size else if (g_idx < self.ir_globals.len) self.ir_globals[g_idx].size else 8;
+            move_val.aux_int = @intCast(move_size);
             try cur.addValue(self.allocator, move_val);
             return value;
         }
@@ -2010,7 +2037,7 @@ test "SSABuilder basic init" {
 
     var ir_func = ir.Func{ .name = "test", .type_idx = 0, .return_type = TypeRegistry.VOID, .params = &.{}, .locals = &.{}, .blocks = &.{}, .entry = 0, .nodes = &.{}, .span = source.Span.zero };
 
-    var builder = try SSABuilder.init(allocator, &ir_func, &type_reg, Target.native());
+    var builder = try SSABuilder.init(allocator, &ir_func, &.{}, &type_reg, Target.native());
     defer {
         const func = builder.func;
         builder.deinit();
@@ -2029,7 +2056,7 @@ test "SSABuilder block transitions" {
 
     var ir_func = ir.Func{ .name = "test", .type_idx = 0, .return_type = TypeRegistry.VOID, .params = &.{}, .locals = &.{}, .blocks = &.{}, .entry = 0, .nodes = &.{}, .span = source.Span.zero };
 
-    var builder = try SSABuilder.init(allocator, &ir_func, &type_reg, Target.native());
+    var builder = try SSABuilder.init(allocator, &ir_func, &.{}, &type_reg, Target.native());
     defer {
         const func = builder.func;
         builder.deinit();
@@ -2061,7 +2088,7 @@ test "SSABuilder variable tracking" {
 
     var ir_func = ir.Func{ .name = "test", .type_idx = 0, .return_type = TypeRegistry.VOID, .params = &.{}, .locals = &.{}, .blocks = &.{}, .entry = 0, .nodes = &.{}, .span = source.Span.zero };
 
-    var builder = try SSABuilder.init(allocator, &ir_func, &type_reg, Target.native());
+    var builder = try SSABuilder.init(allocator, &ir_func, &.{}, &type_reg, Target.native());
     defer {
         const func = builder.func;
         builder.deinit();
