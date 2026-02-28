@@ -1,13 +1,176 @@
-# Cot Compiler
+# Cot
 
 [![CI](https://github.com/cotlang/cot/actions/workflows/test.yml/badge.svg)](https://github.com/cotlang/cot/actions/workflows/test.yml)
 [![Release](https://github.com/cotlang/cot/actions/workflows/release.yml/badge.svg)](https://github.com/cotlang/cot/actions/workflows/release.yml)
 
-A compiled language for full-stack web development with native and Wasm targets.
+**Write like TypeScript. Run like Rust. Deploy anywhere. Never think about memory.**
 
-**The pitch:** Write like TypeScript, run like Rust, deploy anywhere, never think about memory.
+Cot is a compiled language that gives you TypeScript's developer experience with Rust's performance. One binary compiles to native ARM64/x64 executables or WebAssembly — same source, both targets. Memory is managed automatically via ARC (no garbage collector, no borrow checker). Everything is built in: formatter, linter, test runner, benchmarks, LSP, and package init.
 
-See **[VISION.md](VISION.md)** for the complete language vision and strategy.
+## What Cot Looks Like
+
+Cot has a `@safe` mode that makes it feel like TypeScript — structs are passed by reference automatically, no `&` or `*` needed, field shorthand works, and methods get implicit `self`:
+
+```cot
+@safe
+
+import "std/list"
+import "std/json"
+import "std/fs"
+
+// --- Types ---
+
+const Priority = enum { Low, Medium, High, Critical }
+
+const TaskError = error { NotFound, InvalidInput }
+
+struct Task {
+    title: string,
+    priority: Priority,
+    done: bool,
+}
+
+impl Task {
+    static fn create(title: string, priority: Priority) Task {
+        return Task { title, priority, done: false }     // field shorthand
+    }
+
+    fn complete() void {
+        self.done = true                                  // implicit self
+    }
+
+    fn display() string {
+        const status = if (self.done) "done" else "todo"
+        return "[${status}] ${self.title}"                // string interpolation
+    }
+}
+
+// --- App ---
+
+struct TaskApp {
+    tasks: List(Task),                                    // generic collections
+    name: string,
+}
+
+impl TaskApp {
+    static fn init(name: string) TaskApp {
+        var tasks: List(Task) = .{}
+        return TaskApp { tasks, name }
+    }
+
+    fn add(title: string, priority: Priority) void {
+        self.tasks.append(Task.create(title, priority))   // static method
+    }
+
+    fn findByTitle(title: string) TaskError!*Task {       // error union return
+        var i = 0
+        while (i < self.tasks.len()) {
+            var task = self.tasks.getPtr(i)
+            if (task.title == title) { return task }
+            i += 1
+        }
+        return error.NotFound
+    }
+
+    fn completedCount() i64 {
+        var count: i64 = 0
+        var i = 0
+        while (i < self.tasks.len()) {
+            if (self.tasks.get(i).done) { count += 1 }
+            i += 1
+        }
+        return count
+    }
+}
+
+// --- Inline tests ---
+
+test "task lifecycle" {
+    var app = TaskApp.init("work")
+    app.add("Ship v1", .Critical)
+    app.add("Write docs", .Medium)
+
+    var task = try app.findByTitle("Ship v1")      // try propagates errors
+    task.complete()
+
+    @assertEq(app.completedCount(), 1)
+    @assertEq(task.display(), "[done] Ship v1")
+}
+
+test "error handling" {
+    var app = TaskApp.init("work")
+    var result = app.findByTitle("nope") catch |err| {
+        @assertEq(err, error.NotFound)
+        return
+    }
+}
+```
+
+## Real Projects in Cot
+
+### Cotty — A GPU-accelerated terminal emulator (6,500 lines)
+
+[Cotty](https://github.com/cot-land/cotty) is a terminal emulator written in Cot with a native macOS frontend — VT100 parser, gap buffer, terminal grid, JSON config, FFI to Metal/CoreText:
+
+```cot
+@safe
+
+struct VtParser {
+    state: i64,
+    params: List(i64),
+    current_param: i64,
+}
+
+impl VtParser {
+    static fn init() VtParser { ... }
+
+    fn feed(terminal: Terminal, byte: i64) void {
+        if (self.state == VT_GROUND) {
+            if (byte == 0x1B) { self.state = VT_ESCAPE; return }
+            if (byte >= 0x20) { terminal.putChar(byte) }
+        } else if (self.state == VT_CSI_PARAM) {
+            self.handleCSI(terminal, byte)
+        }
+    }
+}
+```
+
+```cot
+static fn loadFromFile(path: string) Config {
+    var cfg = Config.init()
+    const content = readFile(path) catch { return cfg }  // graceful fallback
+    const root = parse(content)                          // JSON parsing
+
+    const font_val = jsonObjectGet(root, "font-family")
+    if (font_val != 0 and jsonTag(font_val) == JSON_STRING) {
+        cfg.font_name = jsonGetString(font_val)
+    }
+    // ...
+    return cfg
+}
+```
+
+### Self-hosted compiler (15,000 lines)
+
+The Cot compiler is being rewritten in Cot itself. The `self/` directory contains a working compiler frontend — scanner, parser, type checker, and IR builder — all in `@safe` mode:
+
+```cot
+fn main() void {
+    const cmd = arg(1)
+    const path = arg(2)
+    const content = readFile(path) catch {
+        writeErr("error: cannot read file: ${path}\n")
+        exit(1)
+    }
+
+    switch (cmd) {
+        "parse" => cmdParse(path, content),
+        "check" => cmdCheck(path, content),
+        "lex"   => cmdLex(path, content),
+        else    => { writeErr("unknown command: ${cmd}\n"); exit(1) },
+    }
+}
+```
 
 ## Installation
 
@@ -19,221 +182,301 @@ curl -fsSL https://raw.githubusercontent.com/cotlang/cot/main/install.sh | sh
 
 ### From GitHub Releases
 
-Download the latest binary from [GitHub Releases](https://github.com/cotlang/cot/releases).
+Download the latest binary from [GitHub Releases](https://github.com/cotlang/cot/releases):
+- `cot-aarch64-macos.tar.gz` — Apple Silicon
+- `cot-x86_64-linux.tar.gz` — Linux x64
 
 ### Build from Source
 
 Requires [Zig 0.15+](https://ziglang.org/download/).
 
 ```sh
-git clone https://github.com/cotlang/cot.git
-cd cot
+git clone https://github.com/cotlang/cot.git && cd cot
 git submodule update --init stdlib
 zig build
-./zig-out/bin/cot version
+./zig-out/bin/cot version    # → cot 0.3.4 (arm64-macos)
 ```
 
 ## Quick Start
 
-```bash
-# Compile and run
-cot run hello.cot
-
-# Build to native executable
-cot build hello.cot              # → hello
-cot build hello.cot -o myapp     # → myapp
-
-# Build to WebAssembly
-cot build --target=wasm32 hello.cot   # → hello.wasm
-
-# Version
-cot version                      # → cot 0.3.2 (arm64-macos)
-
-# Run tests
-cot test myfile.cot
+```sh
+cot init myapp && cd myapp   # scaffold project with cot.json + src/main.cot
+cot run                      # compile and run (reads main from cot.json)
+cot test                     # run inline tests
+cot build -o myapp           # native binary
+cot build --target=wasm32    # WebAssembly
+cot check                    # type-check without compiling
+cot lint                     # warnings
+cot fmt                      # format in-place
+cot bench                    # benchmarks
+cot lsp                      # language server (VS Code/Cursor extension available)
 ```
 
-## Example
+## Language at a Glance
+
+### Types and Variables
 
 ```cot
-import "std/list"
+const name = "cot"                   // immutable
+var count: i64 = 0                   // mutable, explicit type
+var ratio = 3.14                     // f64 inferred
 
+// Integer types: i8, i16, i32, i64, u8, u16, u32, u64
+// Float types: f32, f64
+// Other: bool, string, void, noreturn
+```
+
+### Structs, Enums, Unions
+
+```cot
 struct Point { x: i64, y: i64 }
 
-fn distance_sq(a: *Point, b: *Point) i64 {
-    var dx = b.x - a.x
-    var dy = b.y - a.y
-    return dx * dx + dy * dy
+const Color = enum { Red, Green, Blue }
+const Status = enum { Ok = 0, Warning = 50, Error = 100 }
+
+union Shape {
+    Circle: i64,          // payload = radius
+    Rect: Point,          // payload = dimensions
+    None,                 // no payload
+}
+```
+
+### Generics
+
+```cot
+fn max(T)(a: T, b: T) T {
+    if (a > b) { return a }
+    return b
 }
 
-fn main() i64 {
-    var a = Point { .x = 0, .y = 0 }
-    var b = Point { .x = 3, .y = 4 }
-    println(distance_sq(&a, &b))  // Prints 25
+struct Pair(T, U) { first: T, second: U }
 
-    var scores: List(i64) = .{}
-    scores.append(100)
-    scores.append(200)
-    return scores.get(0) + scores.get(1)  // Returns 300
+var p = Pair(i64, string) { .first = 42, .second = "hello" }
+```
+
+### Error Handling
+
+```cot
+const FileError = error { NotFound, PermissionDenied }
+
+fn readConfig(path: string) FileError!string {
+    const content = readFile(path) catch { return error.NotFound }
+    return content
 }
+
+fn loadApp() FileError!void {
+    const cfg = try readConfig("app.json")   // propagate with try
+    println(cfg)
+}
+
+// catch with error matching
+var result = readConfig("x") catch |err| switch err {
+    error.NotFound => "default",
+    error.PermissionDenied => { eprintln("denied"); "fallback" },
+}
+```
+
+### Closures
+
+```cot
+var multiplier: i64 = 3
+var triple = fn(x: i64) i64 { return x * multiplier }   // captures multiplier
+println(triple(7))   // 21
+```
+
+### Traits
+
+```cot
+trait Printable {
+    fn display(self: *Self) string
+}
+
+impl Printable for Point {
+    fn display(self: *Point) string {
+        return "(${self.x}, ${self.y})"
+    }
+}
+```
+
+### Optionals and Pattern Matching
+
+```cot
+var name: ?string = "cot"
+
+if (name) |val| {                    // unwrap with capture
+    println("name is ${val}")
+}
+
+if (name) |*val| {                   // pointer capture — mutate in place
+    val.* = "COT"
+}
+
+var x: ?i64 = 42
+var y = x ?? 0                       // nullish coalesce
+var z = x.?                          // force unwrap (traps if null)
+```
+
+### Switch
+
+```cot
+switch color {
+    .Red => handleRed(),
+    .Green, .Blue => handleCool(),
+}
+
+// Switch on unions with payload capture
+switch shape {
+    .Circle => |radius| area = 3 * radius * radius,
+    .Rect => |dims| area = dims.x * dims.y,
+    .None => area = 0,
+}
+```
+
+### Defer and Errdefer
+
+```cot
+fn processFile(path: string) !void {
+    var file = try openFile(path)
+    defer closeFile(file)              // runs on ALL exits
+    errdefer logError("failed: ${path}")  // runs ONLY on error
+
+    try writeToFile(file, "data")
+}
+```
+
+### Async/Await
+
+```cot
+async fn fetchData(url: string) !string {
+    var response = await httpGet(url)
+    return response.body
+}
+
+var data = try await fetchData("https://api.example.com")
+```
+
+### `@safe` Mode
+
+Enable with `"safe": true` in `cot.json` or `@safe` at the top of a file. Gives you TypeScript/C# semantics:
+
+| Feature | Normal mode | `@safe` mode |
+|---------|------------|-------------|
+| Struct params | `fn f(p: *Point)` + `f(&point)` | `fn f(p: Point)` + `f(point)` — auto-ref |
+| Struct init | `Point { .x = 1, .y = 2 }` | `Point { x: 1, y: 2 }` — colon syntax |
+| Field shorthand | — | `Point { x, y }` → `Point { x: x, y: y }` |
+| Methods | `fn getX(self: *Point) i64` | `fn getX() i64` — implicit self |
+| Constructors | `new Foo { x: val }` | `new Foo(val)` — calls init() |
+| String concat | `a ++ b` | `a + b` — auto-desugars to `++` |
+
+### Testing
+
+```cot
+test "math works" {
+    @assertEq(2 + 2, 4)
+    @assert(10 > 5)
+}
+
+test "error handling" {
+    var result = mayFail(-1) catch 99
+    @assertEq(result, 99)
+}
+```
+
+```
+$ cot test myfile.cot
+test "math works" ... ok
+test "error handling" ... ok
+
+2 passed
 ```
 
 ## Architecture
 
-Native and Wasm targets use separate backend paths. Native compilation translates SSA directly to CLIF IR (Cranelift's intermediate representation) without any Wasm intermediate step.
-
 ```
 Cot Source → Scanner → Parser → Checker → IR → SSA
-  ├── --target=wasm32 → lower_wasm → wasm/ → .wasm file
+  ├── --target=wasm32 → lower_wasm → wasm/ → .wasm
   └── --target=native (default)
-      → ssa_to_clif → CLIF IR → machinst/lower → regalloc
+      → ssa_to_clif → CLIF IR → machinst → regalloc
       → isa/{aarch64,x64}/ → emit → .o → linker → executable
 ```
 
-## Language Features
+Native and Wasm targets have independent backend paths from SSA onwards. The native path is a port of Cranelift — CLIF IR, MachInst lowering, register allocation, ARM64/x64 emission. No LLVM dependency, no runtime, no VM.
 
-- Types: `i8`–`u64`, `f32`, `f64`, `bool`, `[]u8` (strings)
-- Control flow: `if`/`else`, `while`, `for`-range, `break`, `continue`
-- Data: structs, arrays, slices, enums, unions (with payloads), tuples
-- Functions: closures, function pointers, generics (monomorphized)
-- Error handling: error unions (`E!T`), `try`, `catch`, `errdefer`
-- Memory: ARC (automatic reference counting), `defer`, `new`/`@alloc`/`@dealloc`
-- Async: `async fn` / `await` / `try await` with dual backend (Wasm state machine + native eager eval)
-- Traits: `trait`/`impl Trait for Type` (monomorphized, no vtables)
-- I/O: `print`, `println`, `eprint`, `eprintln` (native syscalls)
-- Imports: `import "std/list"` with cross-file generic instantiation
-- Stdlib: `List(T)`, `Map(K,V)`, `Set(T)`, `std/string` (~25 functions + StringBuilder), `std/math`, `std/json` (parser + encoder), `std/sort`, `std/fs`, `std/os`, `std/time`, `std/random`, `std/io` (buffered I/O), `std/encoding` (base64 + hex), `std/url` (URL parser), `std/http` (TCP sockets + HTTP), `std/async` (event loop + async I/O)
-- Comptime: `comptime {}` blocks, `@compileError`, const-fold if-expressions, dead branch elimination
-- CLI: `cot build`, `cot run`, `cot test`, `cot init`, `cot lsp`, `cot version`
-- Targets: Wasm32, WASI (`--target=wasm32-wasi`), ARM64 (macOS), x64 (Linux)
+## Standard Library
+
+32 modules, all pure Cot:
+
+| Module | Description |
+|--------|-------------|
+| `std/list` | `List(T)` — dynamic array with 35+ methods |
+| `std/map` | `Map(K,V)` — hash map (splitmix64) |
+| `std/set` | `Set(T)` — hash set |
+| `std/string` | 25+ string functions, `StringBuilder` |
+| `std/string_map` | String-keyed hash map (FNV-1a) |
+| `std/json` | JSON parser + encoder |
+| `std/fs` | File I/O (`openFile`, `readFile`, `writeFile`) |
+| `std/os` | Process args, env vars, exit |
+| `std/process` | Spawn processes, pipes, PTY |
+| `std/time` | Timestamps, `Timer` |
+| `std/http` | TCP sockets, HTTP response builder |
+| `std/async` | Event loop (kqueue/epoll), async I/O |
+| `std/crypto` | SHA-256, HMAC |
+| `std/regex` | Regular expressions |
+| `std/io` | Buffered reader/writer, `trait Writer` |
+| `std/encoding` | Base64, hex encode/decode |
+| `std/url` | URL parser |
+| `std/path` | Path manipulation |
+| `std/math` | Integer/float math |
+| `std/sort` | Sorting for `List(T)` |
+| `std/random` | Random bytes, ints, ranges |
+| `std/fmt` | Number formatting (hex, binary, pad) |
+| `std/cli` | CLI argument parser |
+| `std/log` | Structured logging |
+| `std/semver` | Semantic versioning |
+| `std/uuid` | UUID generation |
+| `std/dotenv` | `.env` file loading |
+| `std/mem` | Memory utilities |
+| `std/debug` | Debug assertions with messages |
+| `std/testing` | Test utilities |
+| `std/thread` | OS threads, mutex, channels, atomics |
+| `std/sys` | Runtime extern fn declarations |
 
 ## Project Status
 
-**Compiler written in Zig. Both Wasm and native AOT targets working.**
+**v0.3.4** — Compiler written in Zig. Both Wasm and native AOT targets working.
 
-~1,623 tests passing across 67 files (native E2E, Wasm E2E, and unit tests).
+~1,658 tests passing across 70 files. Self-hosted compiler at 65% frontend parity (15,012 lines of Cot).
 
 | Component | Status |
 |-----------|--------|
 | Frontend (scanner, parser, checker, lowerer) | Complete |
-| SSA infrastructure + passes | Complete |
+| SSA infrastructure + optimization passes | Complete |
 | Wasm backend (bytecode gen + linking) | Complete |
-| Native AOT (Cranelift-port: CLIF IR → regalloc2 → ARM64/x64) | Complete |
-| ARC runtime (retain/release, heap, destructors) | Complete |
-| Self-hosted compiler (`self/`) | 81% — 10,896 lines (scanner, parser, types, checker done) |
+| Native backend (CLIF IR → regalloc2 → ARM64/x64) | Complete |
+| ARC runtime (retain/release, destructor chains) | Complete |
+| 32-module standard library | Complete |
+| LSP server (7 features) | Complete |
+| VS Code/Cursor extension | Complete |
+| Self-hosted compiler (`self/`) | 65% — 15,012 lines, 217 tests |
 
-**Self-hosting:** The `self/` directory contains a Cot compiler written in Cot (10,896 lines across 9 files). The scanner, parser, type registry, and checker are complete. The self-hosted binary can parse all its own source files. Next: multi-file import resolution, then IR/SSA lowerer port. See [claude/VERSION_TRAJECTORY.md](claude/VERSION_TRAJECTORY.md).
+## Why Cot
 
-**Next:** Distribution polish (Homebrew, VS Code marketplace), package manager. See [claude/ROADMAP.md](claude/ROADMAP.md).
-
-## Design Decisions
-
-### Dual Backend Architecture
-Native and Wasm targets have independent backend paths from SSA onwards:
-1. **Native (default):** SSA → CLIF IR → MachInst → register allocation → ARM64/x64 machine code. Runtime functions (ARC, I/O, print) are generated as CLIF IR and call libc directly.
-2. **Wasm:** SSA → Wasm bytecode. Runtime functions are generated as Wasm module functions. Same binary runs in browser, server, and edge runtimes.
-
-### Why ARC
-- Predictable performance (no GC pauses)
-- Simpler than borrow checking
-- Same semantics for Wasm and native targets
+| vs | What Cot does differently |
+|----|--------------------------|
+| **TypeScript** | Compiles to native binary — no V8, no cold starts, no `node_modules` |
+| **Go** | Wasm is a first-class target — same source runs server + browser |
+| **Rust** | No borrow checker — ARC gives memory safety without the learning curve |
+| **Zig** | Closures, `@safe` mode, full-stack story — not just systems programming |
 
 ## Documents
 
 | Document | Purpose |
 |----------|---------|
-| [VISION.md](VISION.md) | Language vision, design principles |
-| [CLAUDE.md](CLAUDE.md) | AI session instructions |
-| [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Debugging methodology |
 | [docs/syntax.md](docs/syntax.md) | Complete language syntax reference |
-| [claude/ROADMAP.md](claude/ROADMAP.md) | Roadmap: 0.4→1.0, competitive positioning |
-| [claude/VERSION_TRAJECTORY.md](claude/VERSION_TRAJECTORY.md) | Self-hosting trajectory, benchmarked against Zig |
-| [claude/PIPELINE_ARCHITECTURE.md](claude/PIPELINE_ARCHITECTURE.md) | Full pipeline reference map |
-| [claude/BR_TABLE_ARCHITECTURE.md](claude/BR_TABLE_ARCHITECTURE.md) | br_table dispatch pattern |
-| [claude/specs/WASM_3_0_REFERENCE.md](claude/specs/WASM_3_0_REFERENCE.md) | Wasm 3.0 features |
-| [claude/archive/](claude/archive/) | Historical milestones and postmortems |
+| [VISION.md](VISION.md) | Language vision and design principles |
+| [claude/ROADMAP.md](claude/ROADMAP.md) | Roadmap: 0.4 → 1.0 |
+| [claude/VERSION_TRAJECTORY.md](claude/VERSION_TRAJECTORY.md) | Self-hosting trajectory |
 
-## Repository Structure
+## License
 
-```
-cot/
-├── compiler/
-│   ├── cli.zig            # CLI subcommands (build, run, test, version)
-│   ├── main.zig           # Entry point, compile+link core
-│   ├── driver.zig         # Pipeline orchestrator
-│   ├── core/              # Types, errors, target config
-│   ├── frontend/          # Scanner, parser, checker, IR, lowerer
-│   ├── ssa/               # SSA infrastructure + passes
-│   ├── lsp/               # Language server (LSP over stdio)
-│   └── codegen/
-│       ├── wasm/          # Wasm backend (gen, link, preprocess)
-│       ├── print_runtime.zig  # Print/println runtime functions (Wasm)
-│       └── native/        # Native backend (Cranelift-style)
-│           ├── ssa_to_clif.zig  # SSA → CLIF IR translation
-│           ├── arc_native.zig   # ARC runtime as CLIF IR
-│           ├── io_native.zig    # I/O runtime as CLIF IR
-│           ├── print_native.zig # Print runtime as CLIF IR
-│           ├── test_native.zig  # Test runner as CLIF IR
-│           ├── machinst/        # CLIF → MachInst lowering
-│           ├── isa/aarch64/     # ARM64 backend
-│           ├── isa/x64/         # x64 backend
-│           └── regalloc/        # Register allocator (regalloc2 port)
-├── self/                  # Self-hosted compiler in Cot (10,896 lines)
-│   ├── main.cot           # CLI entry point (parse, check, lex commands)
-│   └── frontend/
-│       ├── token.cot      # Token enum + keyword lookup
-│       ├── scanner.cot    # Full lexer
-│       ├── source.cot     # Source positions + spans
-│       ├── errors.cot     # Error reporter
-│       ├── ast.cot        # AST nodes + 54 builtins
-│       ├── parser.cot     # Recursive descent parser (2,769 lines)
-│       ├── types.cot      # TypeRegistry + type structs
-│       └── checker.cot    # Type checker (3,966 lines)
-├── stdlib/                # Standard library (31 modules, git submodule → cotlang/std)
-│   ├── list.cot           # List(T) — dynamic array
-│   ├── map.cot            # Map(K,V) — hash map with splitmix64
-│   ├── set.cot            # Set(T) — thin wrapper over Map
-│   ├── string.cot         # ~25 string functions + StringBuilder
-│   ├── string_map.cot     # String-keyed hash map
-│   ├── math.cot           # Integer/float math utilities
-│   ├── json.cot           # JSON parser + encoder
-│   ├── sort.cot           # Insertion sort for List(T)
-│   ├── fs.cot             # File I/O (File struct, openFile, readFile, etc.)
-│   ├── os.cot             # Process args, env, exit
-│   ├── process.cot        # Process spawning, pipes
-│   ├── time.cot           # Timestamps, Timer struct
-│   ├── random.cot         # Random bytes, ints, ranges
-│   ├── io.cot             # Buffered reader/writer
-│   ├── encoding.cot       # Base64 + hex encode/decode
-│   ├── url.cot            # URL parsing
-│   ├── http.cot           # TCP sockets + HTTP response builder
-│   ├── async.cot          # Event loop (kqueue/epoll) + async I/O wrappers
-│   ├── crypto.cot         # SHA-256, HMAC
-│   ├── regex.cot          # Regular expressions
-│   ├── path.cot           # Path manipulation
-│   ├── fmt.cot            # Number formatting (hex, binary, octal, pad)
-│   ├── cli.cot            # CLI argument parser
-│   ├── log.cot            # Structured logging
-│   ├── semver.cot         # Semantic versioning
-│   ├── uuid.cot           # UUID generation
-│   ├── dotenv.cot         # .env file loading
-│   ├── mem.cot            # Memory utilities
-│   ├── debug.cot          # Debug assertions
-│   ├── testing.cot        # Test utilities
-│   └── sys.cot            # Runtime extern fn declarations
-├── editors/vscode/        # VS Code/Cursor extension (syntax + LSP client)
-├── runtime/               # Native runtime (.o files)
-├── test/
-│   ├── e2e/               # End-to-end tests (46 files, ~1500 tests)
-│   ├── cases/             # Category unit tests (21 files, ~120 tests)
-│   └── run_all.sh         # Run all Cot tests (glob discovery)
-├── VERSION                # Semantic version (single source of truth)
-├── docs/                  # Developer documentation (→ cot.dev)
-│   └── syntax.md          # Language syntax reference
-├── claude/                # Internal: AI session docs, architecture, specs
-└── ...
-```
-
-## For AI Sessions
-
-See [CLAUDE.md](CLAUDE.md) for compiler instructions and reference implementation locations.
+See [LICENSE](LICENSE) for details.
