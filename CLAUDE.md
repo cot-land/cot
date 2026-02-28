@@ -136,7 +136,7 @@ The native path translates SSA directly to CLIF IR (Cranelift's intermediate rep
 Two categories:
 | Category | Examples | Implementation |
 |----------|----------|----------------|
-| **Compiler intrinsics (~35)** | `@intCast`, `@sizeOf`, `@intToPtr`, `@ptrOf`, `@lenOf`, `@string`, `@assert`, `@panic` | Inline Wasm ops in `lower.zig` |
+| **Compiler intrinsics (59)** | `@intCast`, `@sizeOf`, `@intToPtr`, `@ptrOf`, `@lenOf`, `@string`, `@assert`, `@panic` | Inline Wasm ops in `lower.zig` |
 | **Runtime functions (~50)** | `alloc`, `dealloc`, `fd_write`, `exit`, `time`, `net_socket`, etc. | Wasm module functions in `arc.zig`/`wasi_runtime.zig` → `func_indices` in `driver.zig` |
 
 **Runtime functions are NOT builtins.** They are regular functions exposed via `extern fn` declarations in `stdlib/sys.cot`. User code imports `std/sys` to access them. The compiler links them by name through `func_indices`.
@@ -159,11 +159,11 @@ Two categories:
 `zig build test` validates the Zig compiler internals. Run it once after changes to confirm the compiler builds correctly. After that, **use `cot test` as the primary verification tool** — it exercises the full pipeline (parse → check → SSA → native/Wasm → execute) and catches real-world regressions that unit tests miss.
 
 ```bash
-zig build test                                    # Compiler internals (~163 tests, run once)
-cot test test/e2e/features.cot                    # Primary: 345 feature tests, native
+zig build test                                    # Compiler internals (run once)
+cot test test/e2e/features.cot                    # Primary: 350 feature tests, native
 cot test test/e2e/features.cot --target=wasm32    # Primary: same tests, wasm via wasmtime
 cot test test/cases/<category>.cot                # Targeted: specific category
-./test/run_all.sh                                 # Full suite (~1,658 tests across 69 files)
+./test/run_all.sh                                 # Full suite (~1,670 tests across 70 files)
 ```
 
 **`cot test --target=wasm32`** runs Wasm binaries via `wasmtime` (must be installed). Use this to verify Wasm codegen — bugs often manifest on one target but not the other.
@@ -219,11 +219,9 @@ try list.append(allocator, 42);
 - After changing either: do BOTH — `zig build` AND reinstall extension
 - Check `claude/specs/WASM_3_0_REFERENCE.md` when touching Wasm codegen
 - Check `claude/PIPELINE_ARCHITECTURE.md` for full pipeline reference map
-- Reference `bootstrap-0.2/` for working code examples
 - Make incremental changes, verify each one
 
 **DO NOT:**
-- Modify bootstrap-0.2 (frozen)
 - Skip testing
 - Invent approaches — copy reference implementations
 - Comment out failing tests, leave TODOs, or create "known issues"
@@ -271,11 +269,10 @@ cursor --uninstall-extension cot-lang.cot-lang 2>/dev/null; cursor --install-ext
 | `claude/ROADMAP.md` | Forward-looking roadmap: 0.4→1.0, competitive positioning |
 | `claude/VERSION_TRAJECTORY.md` | **Self-hosting trajectory** — benchmarked against Zig, inspirational |
 | `claude/SELF_HOSTING_FEATURES.md` | Feature gap analysis for self-hosting (Zig→Cot patterns) |
-| `claude/ARC_AUDIT.md` | ARC memory management audit — 4 critical gaps fixed |
 | `docs/syntax.md` | Complete language syntax reference with examples |
 | `VISION.md` | Language vision, design principles, execution roadmap |
 | `claude/CONCURRENCY_DESIGN.md` | Concurrency roadmap: spawn, channels, work-stealing, atomic ARC |
 | `claude/BUSINESS_MODEL.md` | Licensing, trademark, revenue model, funding strategy |
 | `claude/RELEASE_PLAN.md` | 0.4 release plan: branding, distribution, polish, criteria |
-| `claude/TESTING.md` | Test system: 69 files, ~1,658 tests, error-union isolation |
+| `claude/TESTING.md` | Test system: 70 files, ~1,670 tests, error-union isolation |
 | `claude/archive/` | Historical: archived docs (completed milestones, past plans) |

@@ -614,6 +614,16 @@ dealloc(addr)
 | `@clz(value)` | Count leading zeros |
 | `@popCount(value)` | Count set bits |
 
+### Atomic
+
+| Builtin | Purpose |
+|---------|---------|
+| `@atomicLoad(ptr)` | Atomic load from pointer |
+| `@atomicStore(ptr, value)` | Atomic store to pointer |
+| `@atomicAdd(ptr, value)` | Atomic add, returns previous value |
+| `@atomicCAS(ptr, expected, desired)` | Compare-and-swap, returns previous value |
+| `@atomicExchange(ptr, value)` | Atomic exchange, returns previous value |
+
 ### ARC
 
 | Builtin | Purpose |
@@ -757,7 +767,7 @@ var green = @as(Color, @enumFromInt(1))           // 1-arg form (Zig parity)
 
 | Builtin | Purpose |
 |---------|---------|
-| `@targetOs()` | Target OS as string ("darwin", "linux") |
+| `@targetOs()` | Target OS as string ("macos", "linux") |
 | `@targetArch()` | Target arch as string ("arm64", "x86_64") |
 | `@target()` | Full target description |
 | `@compileError("msg")` | Trigger compile-time error with message |
@@ -790,7 +800,7 @@ const color_names = comptime {
 Dead branch elimination: if an `if` condition is comptime-known, only the taken branch is checked. This enables `@compileError` in unreachable branches:
 
 ```cot
-if @targetOs() == "darwin" {
+if @targetOs() == "macos" {
     // macOS code
 } else {
     @compileError("unsupported OS")
