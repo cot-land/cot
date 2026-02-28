@@ -86,60 +86,219 @@ impl ErrorCode {
     }
 }
 
-/// A single diagnostic error.
-struct Diagnostic {
-    offset: int,
-    code: ErrorCode,
+/// A note attached to an error (secondary location).
+struct Note {
+    span: Span,
     msg: string,
 }
 
-/// A note attached to an error (secondary location).
-struct Note {
-    offset: int,
+/// A unified diagnostic error (Zig: Error struct in errors.zig).
+struct Error {
+    span: Span,
     msg: string,
+    err_code: int,
+    severity: int,
+    warning_code: int,
+    note_span: Span,
+    note_msg: string,
+    has_note: bool,
+}
+
+/// Maximum errors before suppression.
+const MAX_ERRORS: int = 10
+
+/// Factory functions for Error construction.
+fn errorAt(offset: int, msg: string) Error {
+    return Error {
+        span: Span.fromPos(offset),
+        msg: msg,
+        err_code: -1,
+        severity: 0,
+        warning_code: -1,
+        note_span: Span.zero(),
+        note_msg: "",
+        has_note: false,
+    }
+}
+
+fn errorWithCode(offset: int, code: ErrorCode, msg: string) Error {
+    return Error {
+        span: Span.fromPos(offset),
+        msg: msg,
+        err_code: @intFromEnum(code),
+        severity: 0,
+        warning_code: -1,
+        note_span: Span.zero(),
+        note_msg: "",
+        has_note: false,
+    }
+}
+
+fn errorWithCodeAndNote(offset: int, code: ErrorCode, msg: string, note_offset: int, note_msg: string) Error {
+    return Error {
+        span: Span.fromPos(offset),
+        msg: msg,
+        err_code: @intFromEnum(code),
+        severity: 0,
+        warning_code: -1,
+        note_span: Span.fromPos(note_offset),
+        note_msg: note_msg,
+        has_note: true,
+    }
+}
+
+fn warnError(offset: int, wc: WarningCode, msg: string) Error {
+    return Error {
+        span: Span.fromPos(offset),
+        msg: msg,
+        err_code: -1,
+        severity: 1,
+        warning_code: @intFromEnum(wc),
+        note_span: Span.zero(),
+        note_msg: "",
+        has_note: false,
+    }
 }
 
 /// Collects compilation errors with source location info.
+/// Zig reference: ErrorReporter in errors.zig
 struct ErrorReporter {
     count: int,
     warning_count: int,
+    suppressed: bool,
+    has_first: bool,
     first_msg: string,
     first_code: ErrorCode,
     first_offset: int,
-    suppressed: bool,
+    has_source: bool,
+    src_filename: string,
+    src_content: string,
 }
 
 impl ErrorReporter {
-    /// Create a fresh reporter with no errors.
+    /// Create a fresh reporter with no errors (no source — for tests).
     static fn init() ErrorReporter {
         return ErrorReporter {
             count: 0,
             warning_count: 0,
+            suppressed: false,
+            has_first: false,
             first_msg: "",
             first_code: ErrorCode.e100,
             first_offset: 0,
-            suppressed: false,
+            has_source: false,
+            src_filename: "",
+            src_content: "",
         }
     }
 
-    /// Record an error.
-    fn report(offset: int, code: ErrorCode, msg: string) void {
-        if (self.count == 0) {
-            self.first_msg = msg
-            self.first_code = code
-            self.first_offset = offset
+    /// Create a reporter with source context (for rendering errors).
+    static fn initWithSource(filename: string, content: string) ErrorReporter {
+        return ErrorReporter {
+            count: 0,
+            warning_count: 0,
+            suppressed: false,
+            has_first: false,
+            first_msg: "",
+            first_code: ErrorCode.e100,
+            first_offset: 0,
+            has_source: true,
+            src_filename: filename,
+            src_content: content,
         }
-        self.count += 1
+    }
+
+    /// Record an error (3-arg convenience wrapper — keeps ~100+ call sites unchanged).
+    fn report(offset: int, code: ErrorCode, msg: string) void {
+        self.reportError(errorWithCode(offset, code, msg))
     }
 
     /// Record an error with a note (secondary location).
     fn reportWithNote(offset: int, code: ErrorCode, msg: string, note_offset: int, note_msg: string) void {
-        self.report(offset, code, msg)
+        self.reportError(errorWithCodeAndNote(offset, code, msg, note_offset, note_msg))
     }
 
-    /// Record a warning.
+    /// Record a warning. Zig: warningWithCode renders to stderr.
     fn warningWithCode(offset: int, wc: WarningCode, msg: string) void {
         self.warning_count += 1
+        if (self.has_source) {
+            self.printErr(warnError(offset, wc, msg))
+        }
+    }
+
+    /// Core report method (Zig: report(self, err)).
+    fn reportError(err: Error) void {
+        if (!self.has_first) {
+            self.has_first = true
+            self.first_msg = err.msg
+            self.first_offset = err.span.start_offset
+            if (err.err_code >= 0) {
+                self.first_code = @enumFromInt(ErrorCode, err.err_code)
+            }
+        }
+        self.count += 1
+
+        if (self.count > MAX_ERRORS) {
+            if (!self.suppressed) {
+                self.suppressed = true
+                const too_many = "error: too many errors, stopping\n"
+                fd_write(2, @ptrOf(too_many), @lenOf(too_many))
+            }
+            return
+        }
+
+        if (self.has_source) {
+            self.printErr(err)
+        }
+    }
+
+    /// Render a diagnostic to stderr with source context.
+    /// Zig reference: printError in errors.zig
+    fn printErr(err: Error) void {
+        const line, col = offsetToLineCol(self.src_content, err.span.start_offset)
+
+        // Severity label + code
+        if (err.severity == 1) {
+            // Warning
+            if (err.warning_code >= 0) {
+                const output = "${self.src_filename}:${line}:${col}: warning[W${err.warning_code}]: ${err.msg}\n"
+                fd_write(2, @ptrOf(output), @lenOf(output))
+            } else {
+                const output = "${self.src_filename}:${line}:${col}: warning: ${err.msg}\n"
+                fd_write(2, @ptrOf(output), @lenOf(output))
+            }
+        } else {
+            // Error
+            if (err.err_code >= 0) {
+                const output = "${self.src_filename}:${line}:${col}: error[E${err.err_code}]: ${err.msg}\n"
+                fd_write(2, @ptrOf(output), @lenOf(output))
+            } else {
+                const output = "${self.src_filename}:${line}:${col}: error: ${err.msg}\n"
+                fd_write(2, @ptrOf(output), @lenOf(output))
+            }
+        }
+
+        // Source line
+        const source_line = getSourceLine(self.src_content, err.span.start_offset)
+        const line_output = "    ${source_line}\n"
+        fd_write(2, @ptrOf(line_output), @lenOf(line_output))
+
+        // Underline caret
+        var spaces = ""
+        var i = 1
+        while (i < col) {
+            spaces = "${spaces} "
+            i += 1
+        }
+        const caret_output = "    ${spaces}^\n"
+        fd_write(2, @ptrOf(caret_output), @lenOf(caret_output))
+
+        // Note (if present)
+        if (err.has_note) {
+            const note_line, note_col = offsetToLineCol(self.src_content, err.note_span.start_offset)
+            const note_output = "${self.src_filename}:${note_line}:${note_col}: note: ${err.note_msg}\n"
+            fd_write(2, @ptrOf(note_output), @lenOf(note_output))
+        }
     }
 
     /// Whether any errors have been recorded.
@@ -171,24 +330,33 @@ fn offsetToLineCol(content: string, offset: int) (int, int) {
     return (line, col)
 }
 
+/// Extract the source line containing the given offset.
+fn getSourceLine(content: string, offset: int) string {
+    const len = @lenOf(content)
+    // Find line start
+    var start = offset
+    while (start > 0 and charAt(content, start - 1) != '\n') {
+        start -= 1
+    }
+    // Find line end
+    var end = offset
+    while (end < len and charAt(content, end) != '\n') {
+        end += 1
+    }
+    return substring(content, start, end)
+}
+
 /// Format a diagnostic as "filename:line:col: error[E###]: message"
 fn formatDiagnostic(filename: string, content: string, diag: Diagnostic) string {
     const line, col = offsetToLineCol(content, diag.offset)
     return "${filename}:${line}:${col}: error[E${diag.code.code()}]: ${diag.msg}"
 }
 
-/// Write a formatted error to stderr.
-fn printError(filename: string, content: string, offset: int, code: ErrorCode, msg: string) void {
-    const line, col = offsetToLineCol(content, offset)
-    const output = "${filename}:${line}:${col}: error[E${code.code()}]: ${msg}\n"
-    fd_write(2, @ptrOf(output), @lenOf(output))
-}
-
-/// Write a formatted warning to stderr.
-fn printWarning(filename: string, content: string, offset: int, wc: WarningCode, msg: string) void {
-    const line, col = offsetToLineCol(content, offset)
-    const output = "${filename}:${line}:${col}: warning[W${wc.code()}]: ${msg}\n"
-    fd_write(2, @ptrOf(output), @lenOf(output))
+/// A single diagnostic error (legacy — kept for formatDiagnostic test compat).
+struct Diagnostic {
+    offset: int,
+    code: ErrorCode,
+    msg: string,
 }
 
 // ============================================================================
@@ -227,9 +395,43 @@ test "error code descriptions" {
 }
 
 test "note struct" {
-    const n = Note { offset: 42, msg: "defined here" }
-    @assertEq(n.offset, 42)
+    const n = Note { span: Span.fromPos(42), msg: "defined here" }
+    @assertEq(n.span.start_offset, 42)
     @assertEq(n.msg, "defined here")
+}
+
+test "error struct factory at" {
+    const err = errorAt(10, "test error")
+    @assertEq(err.span.start_offset, 10)
+    @assertEq(err.msg, "test error")
+    @assertEq(err.err_code, -1)
+    @assertEq(err.severity, 0)
+    @assertEq(err.has_note, false)
+}
+
+test "error struct factory withCode" {
+    const err = errorWithCode(20, ErrorCode.e200, "bad token")
+    @assertEq(err.span.start_offset, 20)
+    @assertEq(err.msg, "bad token")
+    @assertEq(err.err_code, 200)
+    @assertEq(err.severity, 0)
+}
+
+test "error struct factory withCodeAndNote" {
+    const err = errorWithCodeAndNote(30, ErrorCode.e302, "redefined", 5, "defined here")
+    @assertEq(err.span.start_offset, 30)
+    @assertEq(err.msg, "redefined")
+    @assertEq(err.err_code, 302)
+    @assertEq(err.has_note, true)
+    @assertEq(err.note_span.start_offset, 5)
+    @assertEq(err.note_msg, "defined here")
+}
+
+test "error struct factory warn" {
+    const err = warnError(15, WarningCode.w001, "unused x")
+    @assertEq(err.span.start_offset, 15)
+    @assertEq(err.severity, 1)
+    @assertEq(err.warning_code, 1)
 }
 
 test "reporter init" {
@@ -267,6 +469,17 @@ test "warning tracking" {
     @assertEq(r.hasErrors(), false)
 }
 
+test "max errors suppression" {
+    var r = ErrorReporter.init()
+    var i = 0
+    while (i < 15) {
+        r.report(i, ErrorCode.e200, "error")
+        i += 1
+    }
+    @assertEq(r.errorCount(), 15)
+    @assertEq(r.suppressed, true)
+}
+
 test "offsetToLineCol first char" {
     const line, col = offsetToLineCol("hello\nworld", 0)
     @assertEq(line, 1)
@@ -291,8 +504,33 @@ test "offsetToLineCol third line" {
     @assertEq(col, 2)
 }
 
+test "getSourceLine first line" {
+    @assertEq(getSourceLine("hello\nworld", 0), "hello")
+    @assertEq(getSourceLine("hello\nworld", 3), "hello")
+}
+
+test "getSourceLine second line" {
+    @assertEq(getSourceLine("hello\nworld", 6), "world")
+}
+
 test "formatDiagnostic output" {
     const diag = Diagnostic { offset: 6, code: ErrorCode.e203, msg: "expected identifier" }
     const result = formatDiagnostic("test.cot", "hello\nworld", diag)
     @assertEq(result, "test.cot:2:1: error[E203]: expected identifier")
+}
+
+test "reportWithNote stores first error" {
+    var r = ErrorReporter.init()
+    r.reportWithNote(30, ErrorCode.e302, "redefined", 5, "defined here")
+    @assertEq(r.hasErrors(), true)
+    @assertEq(r.errorCount(), 1)
+    @assertEq(r.first_offset, 30)
+    @assertEq(r.first_msg, "redefined")
+}
+
+test "initWithSource has source" {
+    var r = ErrorReporter.initWithSource("test.cot", "fn main() {}\n")
+    @assertEq(r.has_source, true)
+    @assertEq(r.src_filename, "test.cot")
+    @assertEq(r.hasErrors(), false)
 }
