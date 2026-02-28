@@ -2052,6 +2052,51 @@ test "if optional unwrap expr null" {
 }
 
 // =============================================================================
+// Pointer capture: |*val| — Zig optional_payload_ptr pattern
+// =============================================================================
+
+test "if optional pointer capture" {
+    var x: ?i64 = 42
+    if (x) |*val| {
+        @assertEq(val.*, 42)
+        val.* = 99
+    }
+    @assertEq(x.?, 99)
+}
+
+test "if optional pointer capture null" {
+    var x: ?i64 = null
+    var reached = false
+    if (x) |*val| {
+        reached = true
+        val.* = 0
+    }
+    @assertEq(reached, false)
+}
+
+test "if optional pointer capture modify" {
+    var x: ?i64 = 10
+    if (x) |*val| {
+        val.* = val.* + 5
+    }
+    @assertEq(x.?, 15)
+}
+
+test "while optional pointer capture" {
+    var x: ?i64 = 3
+    var sum: i64 = 0
+    while (x) |*val| {
+        sum = sum + val.*
+        if (val.* <= 1) {
+            x = null
+        } else {
+            val.* = val.* - 1
+        }
+    }
+    @assert(sum > 0)
+}
+
+// =============================================================================
 // Named error set switch matching — catch |err| switch err { error.X => ... }
 // =============================================================================
 

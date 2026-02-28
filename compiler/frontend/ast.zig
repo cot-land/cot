@@ -126,7 +126,7 @@ pub const SliceExpr = struct { base: NodeIndex, start: NodeIndex, end: NodeIndex
 pub const FieldAccess = struct { base: NodeIndex, field: []const u8, span: Span };
 pub const ArrayLiteral = struct { elements: []const NodeIndex, span: Span };
 pub const Paren = struct { inner: NodeIndex, span: Span };
-pub const IfExpr = struct { condition: NodeIndex, then_branch: NodeIndex, else_branch: NodeIndex, capture: []const u8 = "", span: Span };
+pub const IfExpr = struct { condition: NodeIndex, then_branch: NodeIndex, else_branch: NodeIndex, capture: []const u8 = "", capture_is_ptr: bool = false, span: Span };
 pub const SwitchExpr = struct { subject: NodeIndex, cases: []const SwitchCase, else_body: NodeIndex, span: Span };
 // Zig: switch supports ranges (1...10), captures, inline else.
 // Rust: match supports nested patterns, guards (if expr), ranges (1..=10).
@@ -134,6 +134,7 @@ pub const SwitchExpr = struct { subject: NodeIndex, cases: []const SwitchCase, e
 pub const SwitchCase = struct {
     patterns: []const NodeIndex,
     capture: []const u8,
+    capture_is_ptr: bool = false,
     guard: NodeIndex = null_node, // Rust: `pattern if guard_expr =>`
     is_range: bool = false, // patterns[0] = start, patterns[1] = end (inclusive)
     body: NodeIndex,
@@ -387,7 +388,7 @@ pub const TypeKind = union(enum) {
 };
 pub const TryExpr = struct { operand: NodeIndex, span: Span };
 pub const AwaitExpr = struct { operand: NodeIndex, span: Span };
-pub const CatchExpr = struct { operand: NodeIndex, capture: []const u8, fallback: NodeIndex, span: Span };
+pub const CatchExpr = struct { operand: NodeIndex, capture: []const u8, capture_is_ptr: bool = false, fallback: NodeIndex, span: Span };
 pub const ErrorLiteral = struct { error_name: []const u8, span: Span };
 pub const ClosureExpr = struct { params: []const Field, return_type: NodeIndex, body: NodeIndex, span: Span };
 pub const TupleLiteral = struct { elements: []const NodeIndex, span: Span };
@@ -425,8 +426,8 @@ pub const VarStmt = struct { name: []const u8, type_expr: NodeIndex, value: Node
 pub const DestructureBinding = struct { name: []const u8, type_expr: NodeIndex, span: Span };
 pub const DestructureStmt = struct { bindings: []const DestructureBinding, value: NodeIndex, is_const: bool, span: Span };
 pub const AssignStmt = struct { target: NodeIndex, op: Token, value: NodeIndex, span: Span };
-pub const IfStmt = struct { condition: NodeIndex, then_branch: NodeIndex, else_branch: NodeIndex, capture: []const u8 = "", span: Span };
-pub const WhileStmt = struct { condition: NodeIndex, body: NodeIndex, label: ?[]const u8 = null, capture: []const u8 = "", continue_expr: NodeIndex = null_node, span: Span };
+pub const IfStmt = struct { condition: NodeIndex, then_branch: NodeIndex, else_branch: NodeIndex, capture: []const u8 = "", capture_is_ptr: bool = false, span: Span };
+pub const WhileStmt = struct { condition: NodeIndex, body: NodeIndex, label: ?[]const u8 = null, capture: []const u8 = "", capture_is_ptr: bool = false, continue_expr: NodeIndex = null_node, span: Span };
 /// For loop statement supporting:
 /// - `for item in collection { }` (value only)
 /// - `for i, item in collection { }` (index and value)

@@ -2703,12 +2703,16 @@ pub const Checker = struct {
                 return TypeRegistry.VOID;
             }
             const elem_type = cond_info.optional.elem;
+            const capture_type = if (ie.capture_is_ptr)
+                self.types.makePointer(elem_type) catch elem_type
+            else
+                elem_type;
             // Check then-branch with capture variable in scope
             var capture_scope = Scope.init(self.allocator, self.scope);
             defer capture_scope.deinit();
             const old_scope = self.scope;
             self.scope = &capture_scope;
-            try capture_scope.define(Symbol.init(ie.capture, .variable, elem_type, ast.null_node, false));
+            try capture_scope.define(Symbol.init(ie.capture, .variable, capture_type, ast.null_node, false));
             const then_type = try self.checkExpr(ie.then_branch);
             self.scope = old_scope;
             if (ie.else_branch != null_node) {
@@ -2758,11 +2762,15 @@ pub const Checker = struct {
             // If union switch with capture, define capture variable in a new scope
             if (is_union and case.capture.len > 0) {
                 const payload_type = self.resolveUnionCaptureType(subject_info.union_type, case.patterns);
+                const capture_type = if (case.capture_is_ptr)
+                    self.types.makePointer(payload_type) catch payload_type
+                else
+                    payload_type;
                 var capture_scope = Scope.init(self.allocator, self.scope);
                 defer capture_scope.deinit();
                 const old_scope = self.scope;
                 self.scope = &capture_scope;
-                try capture_scope.define(Symbol.init(case.capture, .variable, payload_type, ast.null_node, false));
+                try capture_scope.define(Symbol.init(case.capture, .variable, capture_type, ast.null_node, false));
                 const body_type = try self.checkExpr(case.body);
                 self.scope = old_scope;
                 if (!first) { result_type = self.materializeType(body_type); first = true; }
@@ -2902,11 +2910,15 @@ pub const Checker = struct {
         // Catch capture: catch |err| { ... } — bind err to error set type
         if (ce.capture.len > 0) {
             const err_type = if (operand_info.error_union.error_set != types.invalid_type) operand_info.error_union.error_set else TypeRegistry.I64;
+            const capture_type = if (ce.capture_is_ptr)
+                self.types.makePointer(err_type) catch err_type
+            else
+                err_type;
             var capture_scope = Scope.init(self.allocator, self.scope);
             defer capture_scope.deinit();
             const old_scope = self.scope;
             self.scope = &capture_scope;
-            try capture_scope.define(Symbol.init(ce.capture, .variable, err_type, ast.null_node, false));
+            try capture_scope.define(Symbol.init(ce.capture, .variable, capture_type, ast.null_node, false));
             _ = try self.checkExpr(ce.fallback);
             self.scope = old_scope;
         } else {
@@ -3107,12 +3119,16 @@ pub const Checker = struct {
                 return;
             }
             const elem_type = cond_info.optional.elem;
+            const capture_type = if (is.capture_is_ptr)
+                self.types.makePointer(elem_type) catch elem_type
+            else
+                elem_type;
             // Check then-branch with capture variable in scope
             var capture_scope = Scope.init(self.allocator, self.scope);
             defer capture_scope.deinit();
             const old_scope = self.scope;
             self.scope = &capture_scope;
-            try capture_scope.define(Symbol.init(is.capture, .variable, elem_type, ast.null_node, false));
+            try capture_scope.define(Symbol.init(is.capture, .variable, capture_type, ast.null_node, false));
             try self.checkStmt(is.then_branch);
             self.scope = old_scope;
             if (is.else_branch != null_node) try self.checkStmt(is.else_branch);
@@ -3149,11 +3165,15 @@ pub const Checker = struct {
                 return;
             }
             const elem_type = cond_info.optional.elem;
+            const capture_type = if (ws.capture_is_ptr)
+                self.types.makePointer(elem_type) catch elem_type
+            else
+                elem_type;
             var capture_scope = Scope.init(self.allocator, self.scope);
             defer capture_scope.deinit();
             const old_scope = self.scope;
             self.scope = &capture_scope;
-            try capture_scope.define(Symbol.init(ws.capture, .variable, elem_type, ast.null_node, false));
+            try capture_scope.define(Symbol.init(ws.capture, .variable, capture_type, ast.null_node, false));
             const old_in_loop = self.in_loop;
             self.in_loop = true;
             if (ws.continue_expr != ast.null_node) try self.checkContinueExpr(ws.continue_expr);

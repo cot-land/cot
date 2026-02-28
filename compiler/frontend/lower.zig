@@ -3041,14 +3041,59 @@ pub const Lowerer = struct {
     fn lowerIfOptional(self: *Lowerer, if_stmt: ast.IfStmt) !bool {
         const fb = self.current_func orelse return false;
 
-        // Evaluate the optional expression
-        const opt_val = try self.lowerExprNode(if_stmt.condition);
-        if (opt_val == ir.null_node) return false;
-
         const opt_type_idx = self.inferExprType(if_stmt.condition);
         const opt_info = self.type_reg.get(opt_type_idx);
         const elem_type = if (opt_info == .optional) opt_info.optional.elem else opt_type_idx;
         const is_compound_opt = opt_info == .optional and !self.isPtrLikeOptional(opt_type_idx);
+
+        if (if_stmt.capture_is_ptr) {
+            // Pointer capture: resolve address of condition, bind capture to payload address
+            const opt_addr = try self.resolveConditionAddr(if_stmt.condition, opt_type_idx, if_stmt.span);
+            if (opt_addr == ir.null_node) return false;
+
+            // Check non-null from address
+            const is_non_null = if (is_compound_opt) blk: {
+                // Compound optional: tag is at [addr + 0]
+                const tag = try fb.emitPtrLoadValue(opt_addr, TypeRegistry.I64, if_stmt.span);
+                const zero = try fb.emitConstInt(0, TypeRegistry.I64, if_stmt.span);
+                break :blk try fb.emitBinary(.ne, tag, zero, TypeRegistry.BOOL, if_stmt.span);
+            } else blk: {
+                // Pointer-like: load value, compare to null
+                const val = try fb.emitPtrLoadValue(opt_addr, elem_type, if_stmt.span);
+                const null_val = try fb.emit(ir.Node.init(.const_null, TypeRegistry.UNTYPED_NULL, if_stmt.span));
+                break :blk try fb.emitBinary(.ne, val, null_val, TypeRegistry.BOOL, if_stmt.span);
+            };
+
+            const then_block = try fb.newBlock("if.opt.then");
+            const else_block = if (if_stmt.else_branch != null_node) try fb.newBlock("if.opt.else") else null;
+            const merge_block = try fb.newBlock("if.opt.end");
+            _ = try fb.emitBranch(is_non_null, then_block, else_block orelse merge_block, if_stmt.span);
+
+            // Then block: bind capture to payload address
+            fb.setBlock(then_block);
+            const scope_depth = fb.markScopeEntry();
+            const ptr_type = self.type_reg.makePointer(elem_type) catch TypeRegistry.VOID;
+            const payload_addr = if (is_compound_opt)
+                try fb.emitAddrOffset(opt_addr, 8, ptr_type, if_stmt.span)
+            else
+                opt_addr;
+            const capture_local = try fb.addLocalWithSize(if_stmt.capture, ptr_type, false, 8);
+            _ = try fb.emitStoreLocal(capture_local, payload_addr, if_stmt.span);
+            if (!try self.lowerBlockNode(if_stmt.then_branch)) _ = try fb.emitJump(merge_block, if_stmt.span);
+            fb.restoreScope(scope_depth);
+
+            if (else_block) |eb| {
+                fb.setBlock(eb);
+                if (!try self.lowerBlockNode(if_stmt.else_branch)) _ = try fb.emitJump(merge_block, if_stmt.span);
+            }
+
+            fb.setBlock(merge_block);
+            return false;
+        }
+
+        // Value capture (existing path)
+        const opt_val = try self.lowerExprNode(if_stmt.condition);
+        if (opt_val == ir.null_node) return false;
 
         const is_non_null = if (is_compound_opt) blk: {
             // Compound optional: store to temp, read tag at field 0
@@ -3131,11 +3176,60 @@ pub const Lowerer = struct {
         const exit_block = try fb.newBlock("while.opt.end");
         const cont_block = if (while_stmt.continue_expr != null_node) try fb.newBlock("while.opt.cont") else cond_block;
 
-        // Allocate a local to hold the optional result across blocks
         const opt_type_idx = self.inferExprType(while_stmt.condition);
         const opt_info = self.type_reg.get(opt_type_idx);
         const elem_type = if (opt_info == .optional) opt_info.optional.elem else opt_type_idx;
         const is_compound_opt = opt_info == .optional and !self.isPtrLikeOptional(opt_type_idx);
+
+        if (while_stmt.capture_is_ptr) {
+            // Pointer capture: resolve address of condition (stable for lvalues).
+            // For lvalue conditions like `while (x) |*val|`, the address points to x's storage.
+            // Mutations through val.* modify x directly, visible on next iteration.
+            const opt_addr = try self.resolveConditionAddr(while_stmt.condition, opt_type_idx, while_stmt.span);
+            if (opt_addr == ir.null_node) return;
+
+            _ = try fb.emitJump(cond_block, while_stmt.span);
+            fb.setBlock(cond_block);
+
+            // Check non-null from address each iteration
+            const is_non_null = if (is_compound_opt) blk: {
+                const tag = try fb.emitPtrLoadValue(opt_addr, TypeRegistry.I64, while_stmt.span);
+                const zero = try fb.emitConstInt(0, TypeRegistry.I64, while_stmt.span);
+                break :blk try fb.emitBinary(.ne, tag, zero, TypeRegistry.BOOL, while_stmt.span);
+            } else blk: {
+                const val = try fb.emitPtrLoadValue(opt_addr, elem_type, while_stmt.span);
+                const null_val = try fb.emit(ir.Node.init(.const_null, TypeRegistry.UNTYPED_NULL, while_stmt.span));
+                break :blk try fb.emitBinary(.ne, val, null_val, TypeRegistry.BOOL, while_stmt.span);
+            };
+            _ = try fb.emitBranch(is_non_null, body_block, exit_block, while_stmt.span);
+
+            // Body block: bind capture to payload address
+            try self.loop_stack.append(self.allocator, .{ .cond_block = cont_block, .exit_block = exit_block, .cleanup_depth = self.cleanup_stack.getScopeDepth(), .label = while_stmt.label });
+            fb.setBlock(body_block);
+            const scope_depth = fb.markScopeEntry();
+            const ptr_type = self.type_reg.makePointer(elem_type) catch TypeRegistry.VOID;
+            const payload_addr = if (is_compound_opt)
+                try fb.emitAddrOffset(opt_addr, 8, ptr_type, while_stmt.span)
+            else
+                opt_addr;
+            const capture_local = try fb.addLocalWithSize(while_stmt.capture, ptr_type, false, 8);
+            _ = try fb.emitStoreLocal(capture_local, payload_addr, while_stmt.span);
+            if (!try self.lowerBlockNode(while_stmt.body)) _ = try fb.emitJump(cont_block, while_stmt.span);
+            fb.restoreScope(scope_depth);
+
+            if (while_stmt.continue_expr != null_node) {
+                fb.setBlock(cont_block);
+                try self.lowerContinueExpr(while_stmt.continue_expr);
+                _ = try fb.emitJump(cond_block, while_stmt.span);
+            }
+
+            _ = self.loop_stack.pop();
+            fb.setBlock(exit_block);
+            return;
+        }
+
+        // Value capture (existing path)
+        // Allocate a local to hold the optional result across blocks
         const opt_local = try fb.addLocalWithSize("__while_opt", opt_type_idx, true, self.type_reg.sizeOf(opt_type_idx));
 
         _ = try fb.emitJump(cond_block, while_stmt.span);
@@ -4019,6 +4113,70 @@ pub const Lowerer = struct {
             fb.setBlock(ok_block);
         }
         return try fb.emitUnary(tokenToUnaryOp(un.op), operand, result_type, un.span);
+    }
+
+    /// Get the memory address of a condition expression for pointer capture (|*val|).
+    /// For lvalues (variables, fields): returns address of original storage.
+    /// For rvalues (function calls, literals): stores to temp, returns temp address.
+    fn resolveConditionAddr(self: *Lowerer, expr_idx: NodeIndex, type_idx: TypeIndex, span: Span) Error!ir.NodeIndex {
+        const fb = self.current_func orelse return ir.null_node;
+        const node = self.tree.getNode(expr_idx) orelse return ir.null_node;
+        const expr = node.asExpr() orelse return ir.null_node;
+
+        // Identifier → local or global address
+        if (expr == .ident) {
+            if (fb.lookupLocal(expr.ident.name)) |local_idx| {
+                return try fb.emitAddrLocal(local_idx,
+                    self.type_reg.makePointer(type_idx) catch TypeRegistry.VOID, span);
+            }
+            if (self.builder.lookupGlobal(expr.ident.name)) |g| {
+                return try fb.emitAddrGlobal(g.idx, expr.ident.name,
+                    self.type_reg.makePointer(type_idx) catch TypeRegistry.VOID, span);
+            }
+        }
+
+        // Field access → base addr + field offset
+        if (expr == .field_access) {
+            const fa = expr.field_access;
+            const base_type_idx = self.inferExprType(fa.base);
+            const base_info = self.type_reg.get(base_type_idx);
+            if (base_info == .struct_type) {
+                for (base_info.struct_type.fields) |field| {
+                    if (std.mem.eql(u8, field.name, fa.field)) {
+                        const base_addr = try self.resolveConditionAddr(fa.base, base_type_idx, span);
+                        if (base_addr == ir.null_node) break;
+                        return try fb.emitAddrOffset(base_addr, @intCast(field.offset),
+                            self.type_reg.makePointer(field.type_idx) catch TypeRegistry.VOID, span);
+                    }
+                }
+            }
+            // Through pointer (e.g. self.field in @safe mode)
+            if (base_info == .pointer) {
+                const elem_info = self.type_reg.get(base_info.pointer.elem);
+                if (elem_info == .struct_type) {
+                    for (elem_info.struct_type.fields) |field| {
+                        if (std.mem.eql(u8, field.name, fa.field)) {
+                            const ptr_val = try self.lowerExprNode(fa.base);
+                            return try fb.emitAddrOffset(ptr_val, @intCast(field.offset),
+                                self.type_reg.makePointer(field.type_idx) catch TypeRegistry.VOID, span);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Deref → the pointer value IS the address
+        if (expr == .deref) {
+            return try self.lowerExprNode(expr.deref.operand);
+        }
+
+        // Fallback: rvalue → store to temp, return temp address
+        const val = try self.lowerExprNode(expr_idx);
+        const size = self.type_reg.sizeOf(type_idx);
+        const tmp = try fb.addLocalWithSize("__ptr_cap_tmp", type_idx, true, size);
+        _ = try fb.emitStoreLocal(tmp, val, span);
+        return try fb.emitAddrLocal(tmp,
+            self.type_reg.makePointer(type_idx) catch TypeRegistry.VOID, span);
     }
 
     fn lowerAddrOf(self: *Lowerer, addr: ast.AddrOf) Error!ir.NodeIndex {
@@ -5542,14 +5700,63 @@ pub const Lowerer = struct {
     fn lowerIfOptionalExpr(self: *Lowerer, if_expr: ast.IfExpr) Error!ir.NodeIndex {
         const fb = self.current_func orelse return ir.null_node;
 
-        // Evaluate the optional expression
-        const opt_val = try self.lowerExprNode(if_expr.condition);
-        if (opt_val == ir.null_node) return ir.null_node;
-
         const opt_type_idx = self.inferExprType(if_expr.condition);
         const opt_info = self.type_reg.get(opt_type_idx);
         const elem_type = if (opt_info == .optional) opt_info.optional.elem else opt_type_idx;
         const is_compound_opt = opt_info == .optional and !self.isPtrLikeOptional(opt_type_idx);
+
+        if (if_expr.capture_is_ptr) {
+            // Pointer capture: resolve address of condition, bind capture to payload address
+            const opt_addr = try self.resolveConditionAddr(if_expr.condition, opt_type_idx, if_expr.span);
+            if (opt_addr == ir.null_node) return ir.null_node;
+
+            const is_non_null = if (is_compound_opt) blk: {
+                const tag = try fb.emitPtrLoadValue(opt_addr, TypeRegistry.I64, if_expr.span);
+                const zero = try fb.emitConstInt(0, TypeRegistry.I64, if_expr.span);
+                break :blk try fb.emitBinary(.ne, tag, zero, TypeRegistry.BOOL, if_expr.span);
+            } else blk: {
+                const val = try fb.emitPtrLoadValue(opt_addr, elem_type, if_expr.span);
+                const null_val = try fb.emit(ir.Node.init(.const_null, TypeRegistry.UNTYPED_NULL, if_expr.span));
+                break :blk try fb.emitBinary(.ne, val, null_val, TypeRegistry.BOOL, if_expr.span);
+            };
+
+            const result_type = self.inferExprType(if_expr.then_branch);
+            const result_size = self.type_reg.sizeOf(result_type);
+            const result_local = try fb.addLocalWithSize("__if_opt_result", result_type, false, result_size);
+
+            const then_block = try fb.newBlock("if.opt.then");
+            const else_block = try fb.newBlock("if.opt.else");
+            const merge_block = try fb.newBlock("if.opt.end");
+            _ = try fb.emitBranch(is_non_null, then_block, else_block, if_expr.span);
+
+            fb.setBlock(then_block);
+            const scope_depth = fb.markScopeEntry();
+            const ptr_type = self.type_reg.makePointer(elem_type) catch TypeRegistry.VOID;
+            const payload_addr = if (is_compound_opt)
+                try fb.emitAddrOffset(opt_addr, 8, ptr_type, if_expr.span)
+            else
+                opt_addr;
+            const capture_local = try fb.addLocalWithSize(if_expr.capture, ptr_type, false, 8);
+            _ = try fb.emitStoreLocal(capture_local, payload_addr, if_expr.span);
+            const then_val = try self.lowerExprNode(if_expr.then_branch);
+            _ = try fb.emitStoreLocal(result_local, then_val, if_expr.span);
+            fb.restoreScope(scope_depth);
+            _ = try fb.emitJump(merge_block, if_expr.span);
+
+            fb.setBlock(else_block);
+            if (if_expr.else_branch != null_node) {
+                const else_val = try self.lowerExprNode(if_expr.else_branch);
+                _ = try fb.emitStoreLocal(result_local, else_val, if_expr.span);
+            }
+            _ = try fb.emitJump(merge_block, if_expr.span);
+
+            fb.setBlock(merge_block);
+            return try fb.emitLoadLocal(result_local, result_type, if_expr.span);
+        }
+
+        // Value capture (existing path)
+        const opt_val = try self.lowerExprNode(if_expr.condition);
+        if (opt_val == ir.null_node) return ir.null_node;
 
         // Check if non-null
         const is_non_null = if (is_compound_opt) blk: {
@@ -5850,7 +6057,33 @@ pub const Lowerer = struct {
             fb.setBlock(case_block);
 
             // If capture, create a scoped local for the payload
-            if (case.capture.len > 0) {
+            if (case.capture.len > 0 and case.capture_is_ptr) {
+                // Pointer capture: bind capture to address of payload within union
+                const scope_depth = fb.markScopeEntry();
+                const payload_type = self.resolveUnionPayloadType(case.patterns, ut);
+                const ptr_type = self.type_reg.makePointer(payload_type) catch TypeRegistry.VOID;
+                const subj_ptr_type = self.type_reg.makePointer(subject_type) catch TypeRegistry.VOID;
+                const subj_addr = try fb.emitAddrLocal(subject_local, subj_ptr_type, se.span);
+                const payload_addr = try fb.emitAddrOffset(subj_addr, 8, ptr_type, se.span);
+                const capture_local = try fb.addLocalWithSize(case.capture, ptr_type, false, 8);
+                _ = try fb.emitStoreLocal(capture_local, payload_addr, se.span);
+
+                if (is_expr) {
+                    const case_val = try self.lowerExprNode(case.body);
+                    const arm_type = self.inferExprType(case.body);
+                    if (case_val != ir.null_node and arm_type != TypeRegistry.VOID) {
+                        if (is_compound_opt) {
+                            try self.storeCompoundOptArm(fb, result_local, case_val, case.body, se.span);
+                        } else {
+                            _ = try fb.emitStoreLocal(result_local, case_val, se.span);
+                        }
+                    }
+                    if (fb.needsTerminator()) _ = try fb.emitJump(merge_block, se.span);
+                } else {
+                    if (!try self.lowerBlockNode(case.body)) _ = try fb.emitJump(merge_block, se.span);
+                }
+                fb.restoreScope(scope_depth);
+            } else if (case.capture.len > 0) {
                 const scope_depth = fb.markScopeEntry();
                 const payload_type = self.resolveUnionPayloadType(case.patterns, ut);
                 const payload_size = self.type_reg.sizeOf(payload_type);
@@ -8494,7 +8727,24 @@ pub const Lowerer = struct {
         // Error block: evaluate fallback
         fb.setBlock(err_block);
         var fallback_is_noreturn = false;
-        if (ce.capture.len > 0) {
+        if (ce.capture.len > 0 and ce.capture_is_ptr) {
+            // Pointer capture: bind capture to address of error payload
+            const scope_depth = fb.markScopeEntry();
+            const err_ptr_type = self.type_reg.makePointer(TypeRegistry.I64) catch TypeRegistry.VOID;
+            const err_payload_addr = try fb.emitAddrOffset(eu_ptr, 8, err_ptr_type, ce.span);
+            const capture_local = try fb.addLocalWithSize(ce.capture, err_ptr_type, false, 8);
+            _ = try fb.emitStoreLocal(capture_local, err_payload_addr, ce.span);
+            const fallback_val = try self.lowerExprNode(ce.fallback);
+            const fallback_type = self.inferExprType(ce.fallback);
+            if (fallback_val == ir.null_node or fallback_type == TypeRegistry.VOID) {
+                fallback_is_noreturn = true;
+            } else if (is_compound) {
+                try self.storeCatchCompound(result_local, fallback_val, ce.span);
+            } else {
+                _ = try fb.emitStoreLocal(result_local, fallback_val, ce.span);
+            }
+            fb.restoreScope(scope_depth);
+        } else if (ce.capture.len > 0) {
             const scope_depth = fb.markScopeEntry();
             const err_payload_addr = try fb.emitAddrOffset(eu_ptr, 8, TypeRegistry.I64, ce.span);
             const err_val = try fb.emitPtrLoadValue(err_payload_addr, TypeRegistry.I64, ce.span);

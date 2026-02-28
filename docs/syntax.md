@@ -251,6 +251,9 @@ var y = mayFail(-1) catch 99
 
 // Catch with capture
 var z = mayFail(-1) catch |err| { 0 }
+
+// Catch with pointer capture
+var w = mayFail(-1) catch |*err| { err.* }
 ```
 
 ### Error Set Merge
@@ -359,12 +362,19 @@ if (x > 0) { ... } else if (x == 0) { ... } else { ... }
 // If optional unwrap (Zig pattern)
 if (optional_val) |val| { ... } else { ... }
 
+// Pointer capture — mutable unwrap (Zig |*val| pattern)
+if (optional_val) |*val| { val.* = 42 }   // mutate payload in-place
+
 // While (parens required)
 while (x < 10) { x = x + 1 }
 
 // While with continue expression (C-style step)
 var i: i64 = 0
 while (i < 10) : (i = i + 1) { sum = sum + i }
+
+// While optional capture (Zig pattern)
+while (iterator.next()) |item| { process(item) }
+while (optional_val) |*val| { val.* = val.* - 1 }  // pointer capture
 
 // For-in (collection)
 for item in collection { ... }
@@ -406,6 +416,7 @@ switch value {
 // With capture:
 switch result {
     Result.Ok |val| => val,
+    Result.Ok |*val| => { val.* = val.* + 1; val.* },  // pointer capture
     Result.Err => 0,
 }
 
@@ -872,6 +883,7 @@ import "std/list"          // stdlib modules
 | `process` | `import "std/process"` | run, output — high-level process spawning (native only, uses fork/exec) |
 | `regex` | `import "std/regex"` | Regex struct — match, matchAll, replace, split, test (Thompson NFA) |
 | `testing` | `import "std/testing"` | assertContains, assertStartsWith, assertGt, assertTrue, assertLen |
+| `thread` | `import "std/thread"` | Thread, Mutex, Cond, Atomic(T), Channel(T) — native threading primitives |
 
 ## @safe Mode
 

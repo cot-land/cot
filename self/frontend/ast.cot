@@ -222,6 +222,7 @@ struct IfExpr {
     then_branch: int,
     else_branch: int,
     capture: string,
+    capture_is_ptr: bool,
     span: Span,
 }
 
@@ -422,6 +423,7 @@ struct IfStmt {
     then_branch: int,
     else_branch: int,
     capture: string,
+    capture_is_ptr: bool,
     span: Span,
 }
 
@@ -429,6 +431,7 @@ struct WhileStmt {
     condition: int,
     body: int,
     capture: string,
+    capture_is_ptr: bool,
     continue_expr: int,
     label: string,
     span: Span,

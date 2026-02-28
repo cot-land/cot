@@ -859,14 +859,16 @@ pub const Parser = struct {
             if (self.check(.kw_catch) and min_prec <= 1) {
                 const left_span = self.tree.getNode(left).?.span();
                 self.advance();
-                // Optional capture: catch |err| { ... }
+                // Optional capture: catch |err| or catch |*err| { ... }
                 var capture: []const u8 = "";
+                var capture_is_ptr = false;
                 if (self.match(.@"or")) {
+                    if (self.check(.mul)) { capture_is_ptr = true; self.advance(); }
                     if (self.check(.ident)) { capture = self.tok.text; self.advance(); } else { self.syntaxError("expected identifier for error capture"); return null; }
                     if (!self.expect(.@"or")) return null;
                 }
                 const fallback = try self.parseBinaryExpr(2) orelse { self.err.errorWithCode(self.pos(), .e201, "expected expression after 'catch'"); return null; };
-                left = try self.tree.addExpr(.{ .catch_expr = .{ .operand = left, .capture = capture, .fallback = fallback, .span = Span.init(left_span.start, self.pos()) } });
+                left = try self.tree.addExpr(.{ .catch_expr = .{ .operand = left, .capture = capture, .capture_is_ptr = capture_is_ptr, .fallback = fallback, .span = Span.init(left_span.start, self.pos()) } });
                 continue;
             }
             const op = self.tok.tok;
@@ -1505,9 +1507,11 @@ pub const Parser = struct {
         if (!self.expect(.lparen)) return null;
         const cond = try self.parseExpr() orelse return null;
         if (!self.expect(.rparen)) return null;
-        // Optional capture: |val| (Zig PtrPayload)
+        // Optional capture: |val| or |*val| (Zig PtrPayload)
         var capture: []const u8 = "";
+        var capture_is_ptr = false;
         if (self.match(.@"or")) {
+            if (self.check(.mul)) { capture_is_ptr = true; self.advance(); }
             if (self.check(.ident)) { capture = self.tok.text; self.advance(); } else { self.syntaxError("expected identifier for optional capture"); return null; }
             if (!self.expect(.@"or")) return null;
         }
@@ -1519,7 +1523,7 @@ pub const Parser = struct {
             else if (self.check(.lbrace)) else_br = try self.parseBlockExpr() orelse return null
             else { self.syntaxError("expected '{' or 'if' after 'else'"); return null; }
         }
-        return try self.tree.addExpr(.{ .if_expr = .{ .condition = cond, .then_branch = then_br, .else_branch = else_br, .capture = capture, .span = Span.init(start, self.pos()) } });
+        return try self.tree.addExpr(.{ .if_expr = .{ .condition = cond, .then_branch = then_br, .else_branch = else_br, .capture = capture, .capture_is_ptr = capture_is_ptr, .span = Span.init(start, self.pos()) } });
     }
 
     fn parseSwitchExpr(self: *Parser) ParseError!?NodeIndex {
@@ -1572,7 +1576,9 @@ pub const Parser = struct {
             }
 
             var capture: []const u8 = "";
+            var capture_is_ptr = false;
             if (self.match(.@"or")) {
+                if (self.check(.mul)) { capture_is_ptr = true; self.advance(); }
                 if (self.check(.ident)) { capture = self.tok.text; self.advance(); } else { self.syntaxError("expected identifier for payload capture"); return null; }
                 if (!self.expect(.@"or")) return null;
             }
@@ -1586,7 +1592,7 @@ pub const Parser = struct {
 
             if (!self.expect(.fat_arrow)) return null;
             const body = try self.parseExpr() orelse return null;
-            try cases.append(self.allocator, .{ .patterns = try self.allocator.dupe(NodeIndex, patterns.items), .capture = capture, .guard = guard, .is_range = is_range, .body = body, .span = Span.init(case_start, self.pos()) });
+            try cases.append(self.allocator, .{ .patterns = try self.allocator.dupe(NodeIndex, patterns.items), .capture = capture, .capture_is_ptr = capture_is_ptr, .guard = guard, .is_range = is_range, .body = body, .span = Span.init(case_start, self.pos()) });
             _ = self.match(.comma);
         }
         if (!self.expect(.rbrace)) return null;
@@ -1821,9 +1827,11 @@ pub const Parser = struct {
         if (!self.expect(.lparen)) return null;
         const cond = try self.parseExpr() orelse return null;
         if (!self.expect(.rparen)) return null;
-        // Optional capture: |val| (Zig PtrPayload)
+        // Optional capture: |val| or |*val| (Zig PtrPayload)
         var capture: []const u8 = "";
+        var capture_is_ptr = false;
         if (self.match(.@"or")) {
+            if (self.check(.mul)) { capture_is_ptr = true; self.advance(); }
             if (self.check(.ident)) { capture = self.tok.text; self.advance(); } else { self.syntaxError("expected identifier for optional capture"); return null; }
             if (!self.expect(.@"or")) return null;
         }
@@ -1834,7 +1842,7 @@ pub const Parser = struct {
             else if (self.check(.lbrace)) else_br = try self.parseBlock() orelse return null
             else else_br = try self.parseStmt() orelse return null;
         }
-        return try self.tree.addStmt(.{ .if_stmt = .{ .condition = cond, .then_branch = then_br, .else_branch = else_br, .capture = capture, .span = Span.init(start, self.pos()) } });
+        return try self.tree.addStmt(.{ .if_stmt = .{ .condition = cond, .then_branch = then_br, .else_branch = else_br, .capture = capture, .capture_is_ptr = capture_is_ptr, .span = Span.init(start, self.pos()) } });
     }
 
     fn parseWhileStmt(self: *Parser, label: ?[]const u8) ParseError!?NodeIndex {
@@ -1844,9 +1852,11 @@ pub const Parser = struct {
         if (!self.expect(.lparen)) return null;
         const cond = try self.parseExpr() orelse return null;
         if (!self.expect(.rparen)) return null;
-        // Optional capture: |val| (Zig PtrPayload)
+        // Optional capture: |val| or |*val| (Zig PtrPayload)
         var capture: []const u8 = "";
+        var capture_is_ptr = false;
         if (self.match(.@"or")) {
+            if (self.check(.mul)) { capture_is_ptr = true; self.advance(); }
             if (self.check(.ident)) { capture = self.tok.text; self.advance(); } else { self.syntaxError("expected identifier for optional capture"); return null; }
             if (!self.expect(.@"or")) return null;
         }
@@ -1860,7 +1870,7 @@ pub const Parser = struct {
         }
         if (!self.check(.lbrace)) { self.err.errorWithCode(self.pos(), .e204, "expected '{' after while condition"); return null; }
         const body = try self.parseBlock() orelse return null;
-        return try self.tree.addStmt(.{ .while_stmt = .{ .condition = cond, .body = body, .label = label, .capture = capture, .continue_expr = continue_expr, .span = Span.init(start, self.pos()) } });
+        return try self.tree.addStmt(.{ .while_stmt = .{ .condition = cond, .body = body, .label = label, .capture = capture, .capture_is_ptr = capture_is_ptr, .continue_expr = continue_expr, .span = Span.init(start, self.pos()) } });
     }
 
     fn parseForStmt(self: *Parser, label: ?[]const u8, is_inline: bool) ParseError!?NodeIndex {

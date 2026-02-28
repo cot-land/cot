@@ -17,7 +17,7 @@ These Zig features have direct Cot equivalents:
 |---|---|---|
 | Structs + methods (`self: *T`) | Same | 1000+ |
 | Tagged unions (`union(enum)`) + switch captures | `union` + switch | 3750+ |
-| Optionals `?T` + `if (opt) \|val\|` | Same (compound tag+payload) | 400+ |
+| Optionals `?T` + `if (opt) \|val\|` + `\|*val\|` ptr capture | Same (compound tag+payload, pointer capture) | 400+ |
 | Error unions `!T` + `try`/`catch` | Same | 2000+ |
 | `defer` / `errdefer` | Same | 500+ |
 | Generics (monomorphization) | Same | Heavy |
@@ -890,7 +890,7 @@ compare result against type min/max, trap if out of range). Release mode: emit
 
 ---
 
-## Audit Status (Feb 18, 2026)
+## Audit Status (Feb 28, 2026)
 
 Full re-audit against actual codebase. Every status verified by checking code + tests.
 

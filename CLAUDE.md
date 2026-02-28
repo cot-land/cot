@@ -60,7 +60,7 @@ cot lint <file.cot>             # Check for warnings
 cot fmt <file.cot>              # Format source code in-place (--check for CI, --stdout for pipe)
 cot init [name]                 # Create new project (cot.json, src/main.cot, .gitignore)
 cot lsp                         # Start language server (LSP over stdio)
-cot version                     # Print version: cot 0.3.2 (arm64-macos)
+cot version                     # Print version: cot 0.3.4 (arm64-macos)
 cot help [command]              # Print help (per-subcommand help available)
 ```
 
@@ -74,7 +74,7 @@ cot help [command]              # Print help (per-subcommand help available)
 
 ## Versioning
 
-**Single source of truth:** `VERSION` file at repo root (plain text, e.g. `0.3.2`).
+**Single source of truth:** `VERSION` file at repo root (plain text, e.g. `0.3.4`).
 
 **Flow:** `VERSION` → `build.zig` reads via `@embedFile` → injected as `build_options` → `compiler/cli.zig` imports `@import("build_options").version`.
 
@@ -84,7 +84,7 @@ cot help [command]              # Print help (per-subcommand help available)
 - Rust pattern: plain text VERSION file (simplest, CI-friendly)
 - Zig pattern: `@import("build_options")` comptime injection
 - SemVer `0.X.Y` (standard for pre-1.0)
-- Help banner shows major.minor only (`Cot 0.3`), `cot version` shows full (`cot 0.3.2 (arm64-macos)`)
+- Help banner shows major.minor only (`Cot 0.3`), `cot version` shows full (`cot 0.3.4 (arm64-macos)`)
 
 ---
 
@@ -160,10 +160,10 @@ Two categories:
 
 ```bash
 zig build test                                    # Compiler internals (~163 tests, run once)
-cot test test/e2e/features.cot                    # Primary: 341 feature tests, native
+cot test test/e2e/features.cot                    # Primary: 345 feature tests, native
 cot test test/e2e/features.cot --target=wasm32    # Primary: same tests, wasm via wasmtime
 cot test test/cases/<category>.cot                # Targeted: specific category
-./test/run_all.sh                                 # Full suite (~1,623 tests across 67 files)
+./test/run_all.sh                                 # Full suite (~1,658 tests across 69 files)
 ```
 
 **`cot test --target=wasm32`** runs Wasm binaries via `wasmtime` (must be installed). Use this to verify Wasm codegen — bugs often manifest on one target but not the other.
@@ -175,8 +175,8 @@ cot test test/cases/<category>.cot                # Targeted: specific category
 **Never embed `.cot` test files in Zig code.** Use `cot test` for that.
 
 **Test directories:**
-- `test/cases/` — Category unit tests (21 files, ~122 tests)
-- `test/e2e/` — Comprehensive feature tests (46 files, ~1,500 tests)
+- `test/cases/` — Category unit tests (22 files, ~122 tests)
+- `test/e2e/` — Comprehensive feature tests (48 files, ~1,536 tests)
 - All tests use inline `test "name" { @assertEq(...) }` format
 - See `claude/TESTING.md` for full details
 
@@ -277,5 +277,5 @@ cursor --uninstall-extension cot-lang.cot-lang 2>/dev/null; cursor --install-ext
 | `claude/CONCURRENCY_DESIGN.md` | Concurrency roadmap: spawn, channels, work-stealing, atomic ARC |
 | `claude/BUSINESS_MODEL.md` | Licensing, trademark, revenue model, funding strategy |
 | `claude/RELEASE_PLAN.md` | 0.4 release plan: branding, distribution, polish, criteria |
-| `claude/TESTING.md` | Test system: 67 files, ~1,623 tests, error-union isolation |
+| `claude/TESTING.md` | Test system: 69 files, ~1,658 tests, error-union isolation |
 | `claude/archive/` | Historical: archived docs (completed milestones, past plans) |

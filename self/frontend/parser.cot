@@ -1560,10 +1560,15 @@ impl Parser {
         if (!self.expect(@intFromEnum(Token.rparen))) {
             return null_node
         }
-        // Optional capture: |val|
+        // Optional capture: |val| or |*val|
         var capture = ""
+        var capture_is_ptr = false
         if (self.tok == @intFromEnum(Token.@"or")) {
             self.advance()
+            if (self.tok == @intFromEnum(Token.mul)) {
+                capture_is_ptr = true
+                self.advance()
+            }
             if (self.tok == @intFromEnum(Token.ident)) {
                 capture = self.tok_text
                 self.advance()
@@ -1575,7 +1580,7 @@ impl Parser {
         if (self.match(@intFromEnum(Token.kw_else))) {
             else_br = self.parseExpr()
         }
-        return self.ast.addExpr(Expr.if_expr(IfExpr { .condition = cond, .then_branch = then_br, .else_branch = else_br, .capture = capture, .span = self.spanSE(start, self.tok_end) }))
+        return self.ast.addExpr(Expr.if_expr(IfExpr { .condition = cond, .then_branch = then_br, .else_branch = else_br, .capture = capture, .capture_is_ptr = capture_is_ptr, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// switch (subject) { cases } or switch subject { cases }
@@ -2062,8 +2067,13 @@ impl Parser {
             return null_node
         }
         var capture = ""
+        var capture_is_ptr = false
         if (self.tok == @intFromEnum(Token.@"or")) {
             self.advance()
+            if (self.tok == @intFromEnum(Token.mul)) {
+                capture_is_ptr = true
+                self.advance()
+            }
             if (self.tok == @intFromEnum(Token.ident)) {
                 capture = self.tok_text
                 self.advance()
@@ -2087,7 +2097,7 @@ impl Parser {
                 else_br = self.parseStmt()
             }
         }
-        return self.ast.addStmt(Stmt.if_stmt(IfStmt { .condition = cond, .then_branch = then_br, .else_branch = else_br, .capture = capture, .span = self.spanSE(start, self.tok_end) }))
+        return self.ast.addStmt(Stmt.if_stmt(IfStmt { .condition = cond, .then_branch = then_br, .else_branch = else_br, .capture = capture, .capture_is_ptr = capture_is_ptr, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// while (cond) |cap| : (continue_expr) { body }
@@ -2102,8 +2112,13 @@ impl Parser {
             return null_node
         }
         var capture = ""
+        var capture_is_ptr = false
         if (self.tok == @intFromEnum(Token.@"or")) {
             self.advance()
+            if (self.tok == @intFromEnum(Token.mul)) {
+                capture_is_ptr = true
+                self.advance()
+            }
             if (self.tok == @intFromEnum(Token.ident)) {
                 capture = self.tok_text
                 self.advance()
@@ -2126,7 +2141,7 @@ impl Parser {
             }
         }
         const body = self.parseBlock()
-        return self.ast.addStmt(Stmt.while_stmt(WhileStmt { .condition = cond, .body = body, .capture = capture, .continue_expr = cont, .label = label, .span = self.spanSE(start, self.tok_end) }))
+        return self.ast.addStmt(Stmt.while_stmt(WhileStmt { .condition = cond, .body = body, .capture = capture, .capture_is_ptr = capture_is_ptr, .continue_expr = cont, .label = label, .span = self.spanSE(start, self.tok_end) }))
     }
 
     /// for item in iterable { body } or for i in 0..10 { body }

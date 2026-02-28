@@ -38,7 +38,7 @@ Zig is the closest parallel — a systems language that bootstrapped from C++ to
 
 ---
 
-## Where Cot Is Now (0.3.2)
+## Where Cot Is Now (0.3.4)
 
 ### Self-Hosting Infrastructure: Ready
 
@@ -59,9 +59,9 @@ Cot already has everything a compiler needs:
 | Comptime | `@typeInfo`, `inline for`, `comptime {}` | Compile-time tables |
 | Closures | First-class with capture | Visitor callbacks |
 
-### Self-Hosted Code: ~47% of `compiler/frontend/` Ported
+### Self-Hosted Code: ~65% of `compiler/frontend/` Ported
 
-The `self/` directory contains a partial compiler frontend in Cot — parsing and type-checking work, but IR lowering and code generation are not started.
+The `self/` directory contains a partial compiler frontend in Cot — parsing, type-checking, and backend IR work. IR lowering and code generation are next.
 
 ```
 self/
@@ -76,25 +76,26 @@ self/
     parser.cot          # Recursive descent parser (2,691 lines) — ~75% of parser.zig
     types.cot           # TypeRegistry + type structs (1,287 lines) — ~85% of types.zig
     checker.cot         # Type checker + SharedCheckerState (4,112 lines) — ~80% of checker.zig
-  total: 11,153 lines (of ~23,121 in compiler/frontend/)
+    ir.cot              # IR data structures + FuncBuilder (1,347 lines) — backend IR COMPLETE
+  total: 15,012 lines (of ~23,121 in compiler/frontend/)
 ```
 
-**What works:** The self-hosted binary can lex, parse, and type-check Cot source files including multi-file import resolution. 142 tests pass on native.
+**What works:** The self-hosted binary can lex, parse, and type-check Cot source files including multi-file import resolution. 217 tests pass on native. Backend IR (ir.cot) is complete with full FuncBuilder.
 
 **Frontend gaps (~80% of parse+check ported):**
 - AST: 26/54 builtins missing from BuiltinKind enum
 - Parser: some constructs simplified (export fn type params, error recovery)
 - Checker: comptime block execution incomplete, closure type inference simplified, error set merging simplified
 
-**Backend gaps (0% ported):**
-- `lower.zig` (8,964 lines) — AST → IR lowering, monomorphization, ARC insertion
-- `ir.zig` (606 lines) — IR node definitions
-- `ssa_builder.zig` (2,017 lines) — SSA construction (defVar/useVar, phi nodes)
-- `arc_insertion.zig` (444 lines) — Reference counting insertion
-- `formatter.zig` (1,173 lines) — Code formatting
-- `comptime.zig` (64 lines) — Comptime value infrastructure
+**Backend gaps (ir.cot DONE, lowerer+SSA 0% ported):**
+- `ir.cot` (1,347 lines) — IR data structures + FuncBuilder **COMPLETE**
+- `lower.zig` (8,964 lines) — AST → IR lowering, monomorphization, ARC insertion — NOT STARTED
+- `ssa_builder.zig` (2,017 lines) — SSA construction (defVar/useVar, phi nodes) — NOT STARTED
+- `arc_insertion.zig` (444 lines) — Reference counting insertion — NOT STARTED
+- `formatter.zig` (1,173 lines) — Code formatting — NOT STARTED
+- `comptime.zig` (64 lines) — Comptime value infrastructure — NOT STARTED
 
-**What's next:** Complete the frontend gaps (builtins, parser edge cases, checker features), then port IR + lowerer + SSA builder.
+**What's next:** Port lower.zig (AST → IR), building on the completed ir.cot foundation.
 
 ---
 
@@ -133,16 +134,16 @@ self/
 
 **Milestone:** Multi-file type checking with import resolution works. 142 tests pass on native.
 
-### Phase 4: IR + Lowerer + SSA — 0% ported
+### Phase 4: IR + Lowerer + SSA — IR COMPLETE, lowerer 0%
 
 | Component | Zig Lines | Cot Lines | Notes |
 |-----------|-----------|-----------|-------|
-| IR node definitions | 606 | 0 | IR opcodes, instructions, blocks |
+| IR node definitions + FuncBuilder | 606 | 1,347 | **COMPLETE** — IR opcodes, instructions, blocks, FuncBuilder |
 | AST → IR lowering | 8,964 | 0 | Monomorphization, ARC insertion, control flow |
 | SSA construction | 2,017 | 0 | defVar/useVar, phi nodes |
 | ARC insertion | 444 | 0 | Reference counting, cleanup stack |
 | Comptime infrastructure | 64 | 0 | Comptime value helpers |
-| **Subtotal** | **12,095** | **0** | |
+| **Subtotal** | **12,095** | **1,347** | |
 
 ### Phase 5: Code Generation — 0% ported
 
@@ -164,11 +165,11 @@ Not blocking for self-hosting, but needed for `cot fmt`.
 | AST + Parser | 2,664 | 3,950 | **~80%** |
 | Types + Checker | 4,777 | 5,399 | **~82%** |
 | CLI (main.cot) | — | 318 | Done |
-| IR + Lowerer + SSA + ARC | 12,095 | 0 | **0%** |
+| IR + Lowerer + SSA + ARC | 12,095 | 1,347 | **~11%** (IR complete) |
 | Formatter | 1,173 | 0 | **0%** |
-| **Total frontend** | **~23,121** | **11,153** | **~47%** |
+| **Total frontend** | **~23,121** | **15,012** | **~65%** |
 
-The self-hosted compiler can currently **parse, lex, and type-check** Cot source. It cannot generate executable code.
+The self-hosted compiler can currently **parse, lex, type-check, and represent IR** for Cot source. Backend IR (ir.cot) is complete with FuncBuilder. It cannot yet lower AST to IR or generate executable code.
 
 ---
 
@@ -180,7 +181,7 @@ The self-hosted compiler can currently **parse, lex, and type-check** Cot source
 | Formatter | Already had at 0.3 | Already done | — |
 | Async/await | +12 months (0.5) | Already done | >12 months ahead |
 | Package manager | +59 months (0.11) | 0.5 (planned) | — |
-| Self-hosting start | +33 months (0.8) | Now (0.3.2) | 33 months ahead |
+| Self-hosting start | +33 months (0.8) | Now (0.3.4) | 33 months ahead |
 | Self-hosting default | +49 months (0.10) | 0.10 (target) | — |
 
 **Cot is starting self-hosting work 33 months earlier in its lifecycle than Zig did.** This is possible because:
@@ -223,8 +224,9 @@ When Stage 1 and Stage 2 produce identical binaries, self-hosting is verified. T
 | Version | Date | Self-Hosting Milestone | Status |
 |---------|------|----------------------|--------|
 | 0.3.3 | Feb 2026 | Frontend ~47% ported (11,153 LOC) — scanner, parser, types, checker ~80% each | **Done** |
-| 0.4 | TBD | Complete frontend gaps (missing builtins, parser/checker parity), IR port begins | Planned |
-| 0.5-0.6 | TBD | IR + lowerer + SSA builder ported (12,095 lines of Zig to port) | Planned |
+| 0.3.4 | Feb 2026 | Frontend ~65% ported (15,012 LOC, 217 tests) — ir.cot COMPLETE, pointer capture `\|*val\|` | **Done** |
+| 0.4 | TBD | Complete frontend gaps (missing builtins, parser/checker parity), lowerer port begins | Planned |
+| 0.5-0.6 | TBD | Lowerer + SSA builder ported (~11,500 lines of Zig remaining) | Planned |
 | 0.7-0.9 | TBD | SSA passes + codegen, self-hosted compiler produces executables | Planned |
 | 0.10 | TBD | **Self-hosted compiler becomes default** | Goal |
 
@@ -240,12 +242,12 @@ For perspective, here's what Cot achieved in its first 8 weeks:
 - 31 stdlib modules (list, map, set, string, json, fs, os, time, crypto, regex, http, ...)
 - LSP server with 7 features
 - VS Code/Cursor extension
-- 67 test files, ~1,623 tests
+- 70 test files, ~1,658 tests
 - CLI with 11 subcommands
 - @safe mode for TypeScript-style DX
 - Comptime infrastructure (@typeInfo, inline for, dead branch elimination)
 - MCP server written in Cot
-- Self-hosted frontend ~47% ported (scanner, parser, types, checker — 11,153 lines of ~23,121 in compiler/frontend/)
+- Self-hosted frontend ~65% ported (scanner, parser, types, checker, IR — 15,012 lines of ~23,121 in compiler/frontend/)
 
 Zig took 3 years and 36 contributors to reach a comparable 0.3. The LLM-assisted development model compresses implementation dramatically. The same velocity advantage applies to the self-hosting work ahead — the full frontend was ported in under 2 weeks.
 

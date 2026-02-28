@@ -9,7 +9,7 @@ Cot uses inline test blocks (Zig syntax) with error-union-based test isolation. 
 | Tier | Command | What it runs | Speed |
 |------|---------|-------------|-------|
 | **Zig compiler tests** | `zig build test` | ~163 Zig-level tests with inline Cot snippets | Fast (<10s) |
-| **Cot language tests** | `./test/run_all.sh` | ~1,623 Cot tests across 68 `.cot` files | Slower (~60s) |
+| **Cot language tests** | `./test/run_all.sh` | ~1,658 Cot tests across 70 `.cot` files (69 active) | Slower (~60s) |
 | **Single file** | `cot test file.cot` | Tests in one file | Fast |
 
 ### `zig build test` — Compiler internals
@@ -32,11 +32,11 @@ Discovers all `.cot` files in `test/e2e/` and `test/cases/`, runs each with `cot
 # test/e2e/auto_free.cot                       ok  5 passed
 # test/e2e/control_flow.cot                    ok  82 passed
 # ...
-# test/e2e/features.cot                        ok  341 passed
+# test/e2e/features.cot                        ok  345 passed
 # ...
 # test/cases/arithmetic.cot                    ok  10 passed
 # ...
-# 67/67 files passed
+# 69/69 files passed
 ```
 
 ## Syntax
@@ -44,7 +44,7 @@ Discovers all `.cot` files in `test/e2e/` and `test/cases/`, runs each with `cot
 ```cot
 test "description" {
     @assert(condition)
-    @assert_eq(actual, expected)
+    @assertEq(actual, expected)
 }
 ```
 
@@ -124,7 +124,7 @@ test/
     extern.cot, float.cot, functions.cot, loops.cot, memory.cot,
     methods.cot, optional.cot, strings.cot, structs.cot, switch.cot,
     types.cot, union.cot
-  e2e/                  # Comprehensive feature tests (46 files, ~1,500 tests)
+  e2e/                  # Comprehensive feature tests (48 files, ~1,536 tests)
     arc.cot, async.cot, auto_free.cot, bench_test.cot,
     browser_async.cot, cli.cot, control_flow.cot, crypto.cot,
     debug.cot, dotenv.cot, encoding.cot, event_loop.cot,
@@ -134,7 +134,8 @@ test/
     regex.cot, safe_mode.cot, semver.cot, set.cot, sort.cot,
     static_methods.cot, std_io.cot, std_math.cot, stdlib.cot,
     string_interp.cot, string_map.cot, string_methods.cot,
-    testing_utils.cot, types.cot, url.cot, uuid.cot,
+    testing_utils.cot, thread_basic.cot, threading.cot,
+    types.cot, url.cot, uuid.cot,
     variables.cot, wasi_io.cot, wasmgc.cot
   test_inline.cot       # Manual smoke test
   browser/              # Pre-compiled Wasm for manual browser testing

@@ -1,8 +1,8 @@
 # Cot Roadmap
 
-## Current: 0.3.2 (Feb 2026)
+## Current: 0.3.4 (Feb 2026)
 
-Compiler is feature-complete for the core language. 31 stdlib modules, 69 test files (~1,700 tests), LSP with 7 features, @safe mode, comptime infrastructure, ARC memory management. All 6 waves of 0.4 feature work are **DONE**. Runtime builtins moved to stdlib via `extern fn`. OS threading primitives (threads, mutex, condition variables, atomics, channels) implemented.
+Compiler is feature-complete for the core language. 32 stdlib modules, 69 test files (~1,658 tests), LSP with 7 features, @safe mode, comptime infrastructure, ARC memory management. All 6 waves of 0.4 feature work are **DONE**. Runtime builtins moved to stdlib via `extern fn`. OS threading primitives (threads, mutex, condition variables, atomics, channels) implemented. Pointer capture `|*val|` across all 5 capture sites. Self-hosted compiler at ~65% frontend parity (15,012 lines, 216 tests), ir.cot backend IR complete.
 
 **What ships:** A developer can `cot init`, write an HTTP server with crypto + regex + path handling, `cot test --watch` during development, `cot lint` + `cot check` for fast feedback, `cot bench` for performance, `cot doc` for API docs, and `cot build` for a native binary. Like Deno, but compiled to native with zero runtime overhead.
 
@@ -25,7 +25,7 @@ All language features and stdlib are done. What remains is distribution polish:
 | 7 | Improved `@assert_eq` failure output (expected vs actual diff) | Not started |
 | 8 | Logo & brand assets | Not started |
 | 9 | cot.dev launch (docs site + playground) | Not started |
-| 10 | Self-hosting progress (frontend in Cot) | ~80% frontend fidelity (13,381 lines, 189 tests). See `SELF_HOSTING_AUDIT.md` |
+| 10 | Self-hosting progress (frontend in Cot) | ~65% frontend (15,012 lines, 216 tests). ir.cot backend IR complete. lower.zig, ssa_builder.zig, arc_insertion.zig remaining. |
 
 **Release criteria:** `brew install cotlang/tap/cot` works, VS Code extension on marketplace, all tests pass on native + Wasm.
 
