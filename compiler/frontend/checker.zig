@@ -3478,7 +3478,15 @@ pub const Checker = struct {
             .function => |f| blk: {
                 var func_params = std.ArrayListUnmanaged(types.FuncParam){};
                 defer func_params.deinit(self.allocator);
-                for (f.params) |pt| try func_params.append(self.allocator, .{ .name = "", .type_idx = try self.resolveTypeExpr(pt) });
+                for (f.params) |pt| {
+                    // Apply safeWrapType to function pointer param types so they match
+                    // actual function definitions (which also get safeWrapType in buildFuncType).
+                    // Without this, fn(T, T) -> i64 with T=Point resolves to fn(Point, Point) -> i64,
+                    // but user comparators become fn(*Point, *Point) -> i64 — type mismatch.
+                    var pt_type = try self.resolveTypeExpr(pt);
+                    pt_type = try self.safeWrapType(pt_type);
+                    try func_params.append(self.allocator, .{ .name = "", .type_idx = pt_type });
+                }
                 const ret_type = if (f.ret != null_node) try self.resolveTypeExpr(f.ret) else TypeRegistry.VOID;
                 break :blk try self.types.makeFunc(func_params.items, ret_type);
             },
