@@ -64,6 +64,11 @@ pub const PIPE_NAME = "pipe";
 pub const DUP2_NAME = "dup2";
 // Terminal
 pub const ISATTY_NAME = "isatty";
+// Directory operations
+pub const MKDIR_NAME = "mkdir";
+pub const DIR_OPEN_NAME = "dir_open";
+pub const DIR_NEXT_NAME = "dir_next";
+pub const DIR_CLOSE_NAME = "dir_close";
 
 // WASI scratch memory addresses in linear memory
 // Used by adapter shims to build iov structs and read WASI output params
@@ -120,6 +125,11 @@ pub const WasiFunctions = struct {
     dup2_idx: u32,
     // Terminal
     isatty_idx: u32,
+    // Directory
+    mkdir_idx: u32,
+    dir_open_idx: u32,
+    dir_next_idx: u32,
+    dir_close_idx: u32,
 };
 
 // =============================================================================
@@ -485,6 +495,17 @@ fn addWasiImports(allocator: std.mem.Allocator, linker: *@import("wasm/link.zig"
     const isatty_body = try generateStubReturnsZero(allocator);
     const isatty_idx = try linker.addFunc(.{ .name = ISATTY_NAME, .type_idx = arg_one_type, .code = isatty_body, .exported = false });
 
+    // Directory stubs for WASI (WASI preview1 has path_create_directory but
+    // no opendir/readdir — stub for now, native override provides real syscalls)
+    const mkdir_body = try generateStubReturnsNegOne(allocator);
+    const mkdir_idx = try linker.addFunc(.{ .name = MKDIR_NAME, .type_idx = net_3arg_type, .code = mkdir_body, .exported = false });
+    const dir_open_body = try generateStubReturnsNegOne(allocator);
+    const dir_open_idx = try linker.addFunc(.{ .name = DIR_OPEN_NAME, .type_idx = net_2arg_type, .code = dir_open_body, .exported = false });
+    const dir_next_body = try generateStubReturnsZero(allocator);
+    const dir_next_idx = try linker.addFunc(.{ .name = DIR_NEXT_NAME, .type_idx = net_3arg_type, .code = dir_next_body, .exported = false });
+    const dir_close_body = try generateStubReturnsZero(allocator);
+    const dir_close_idx = try linker.addFunc(.{ .name = DIR_CLOSE_NAME, .type_idx = arg_one_type, .code = dir_close_body, .exported = false });
+
     // Return indices: addFunc returns 0-based func indices.
     // Actual Wasm function index = import_count + func_local_index.
     return WasiFunctions{
@@ -524,6 +545,10 @@ fn addWasiImports(allocator: std.mem.Allocator, linker: *@import("wasm/link.zig"
         .pipe_idx = pipe_idx + import_count,
         .dup2_idx = dup2_idx + import_count,
         .isatty_idx = isatty_idx + import_count,
+        .mkdir_idx = mkdir_idx + import_count,
+        .dir_open_idx = dir_open_idx + import_count,
+        .dir_next_idx = dir_next_idx + import_count,
+        .dir_close_idx = dir_close_idx + import_count,
     };
 }
 
@@ -733,6 +758,16 @@ fn addNativeStubs(allocator: std.mem.Allocator, linker: *@import("wasm/link.zig"
     const isatty_body = try generateStubReturnsZero(allocator);
     const isatty_idx = try linker.addFunc(.{ .name = ISATTY_NAME, .type_idx = fd_close_type, .code = isatty_body, .exported = true });
 
+    // Directory stubs (native override in driver.zig provides real syscalls)
+    const mkdir_body = try generateStubReturnsNegOne(allocator);
+    const mkdir_idx = try linker.addFunc(.{ .name = MKDIR_NAME, .type_idx = net_3arg_type, .code = mkdir_body, .exported = true });
+    const dir_open_body = try generateStubReturnsNegOne(allocator);
+    const dir_open_idx = try linker.addFunc(.{ .name = DIR_OPEN_NAME, .type_idx = net_2arg_type, .code = dir_open_body, .exported = true });
+    const dir_next_body = try generateStubReturnsZero(allocator);
+    const dir_next_idx = try linker.addFunc(.{ .name = DIR_NEXT_NAME, .type_idx = net_3arg_type, .code = dir_next_body, .exported = true });
+    const dir_close_body = try generateStubReturnsZero(allocator);
+    const dir_close_idx = try linker.addFunc(.{ .name = DIR_CLOSE_NAME, .type_idx = fd_close_type, .code = dir_close_body, .exported = true });
+
     return WasiFunctions{
         .fd_write_idx = fd_write_idx,
         .fd_write_simple_idx = fd_write_simple_idx,
@@ -770,6 +805,10 @@ fn addNativeStubs(allocator: std.mem.Allocator, linker: *@import("wasm/link.zig"
         .pipe_idx = pipe_idx,
         .dup2_idx = dup2_idx,
         .isatty_idx = isatty_idx,
+        .mkdir_idx = mkdir_idx,
+        .dir_open_idx = dir_open_idx,
+        .dir_next_idx = dir_next_idx,
+        .dir_close_idx = dir_close_idx,
     };
 }
 

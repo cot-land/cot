@@ -1088,6 +1088,8 @@ pub const Driver = struct {
             "random",        "growslice",      "nextslicecap",
             "args_count",    "arg_len",        "arg_ptr",
             "environ_count", "environ_len",    "environ_ptr",
+            // Directory runtime (cot_mkdir avoids linker collision with libc _mkdir)
+            "cot_mkdir",     "dir_open",       "dir_next",      "dir_close",
             // Network runtime
             "net_socket",    "net_bind",       "net_listen",
             "net_accept",    "net_connect",    "net_set_reuse_addr",
@@ -1125,6 +1127,7 @@ pub const Driver = struct {
             "fcntl",         "fork",           "c_waitpid",     "c_pipe",
             "dup2",          "execve",        "kill",
             "c_openpty",     "setsid",        "ioctl",
+            "c_mkdir",       "opendir",       "readdir",       "closedir",
             // pthread symbols — external references resolved by linker (-lpthread/-lSystem)
             "pthread_create", "pthread_join",  "pthread_detach",
             "pthread_mutex_init", "pthread_mutex_lock", "pthread_mutex_unlock",
@@ -1154,6 +1157,9 @@ pub const Driver = struct {
         }
         if (func_index_map.get("cot_ioctl_set_ctty")) |idx| {
             try func_index_map.put(self.allocator, "ioctl_set_ctty", idx);
+        }
+        if (func_index_map.get("cot_mkdir")) |idx| {
+            try func_index_map.put(self.allocator, "mkdir", idx);
         }
 
         // String data symbol index — used by ssa_to_clif for globalValue references
@@ -5193,6 +5199,11 @@ pub const Driver = struct {
         try func_indices.put(self.allocator, wasi_runtime.PIPE_NAME, wasi_funcs.pipe_idx);
         try func_indices.put(self.allocator, wasi_runtime.DUP2_NAME, wasi_funcs.dup2_idx);
         try func_indices.put(self.allocator, wasi_runtime.ISATTY_NAME, wasi_funcs.isatty_idx);
+        // Directory
+        try func_indices.put(self.allocator, wasi_runtime.MKDIR_NAME, wasi_funcs.mkdir_idx);
+        try func_indices.put(self.allocator, wasi_runtime.DIR_OPEN_NAME, wasi_funcs.dir_open_idx);
+        try func_indices.put(self.allocator, wasi_runtime.DIR_NEXT_NAME, wasi_funcs.dir_next_idx);
+        try func_indices.put(self.allocator, wasi_runtime.DIR_CLOSE_NAME, wasi_funcs.dir_close_idx);
 
         // Add test function names to index map (Zig)
         try func_indices.put(self.allocator, test_runtime.TEST_BEGIN_NAME, test_funcs.test_begin_idx);
