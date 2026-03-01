@@ -3855,3 +3855,40 @@ test "inferred impl - enum static fn" {
     var d = InlTestColor.defaultColor()
     @assertEq(d.isWarm(), false)
 }
+
+// ===== as cast syntax =====
+
+test "as cast - basic" {
+    var x = 42
+    var y = x as int
+    @assertEq(y, 42)
+}
+
+test "as cast - float" {
+    var f = 3.14
+    var g = f as float
+    @assertEq(g > 3.0, true)
+}
+
+test "as cast - enum to int" {
+    const Color = enum { Red, Green, Blue }
+    var c = Color.Blue
+    var i = @intFromEnum(c) as int
+    @assertEq(i, 2)
+}
+
+// ===== implicit enum-int coercion =====
+
+test "implicit enum-int comparison" {
+    const Color = enum { Red, Green, Blue }
+    var x: int = 0
+    @assertEq(x == Color.Red, true)
+    @assertEq(x != Color.Blue, true)
+    var c = Color.Blue
+    @assertEq(c == 2, true)
+    @assertEq(c != 0, true)
+    @assertEq(c > 1, true)
+    @assertEq(c >= 2, true)
+    @assertEq(c < 3, true)
+    @assertEq(c <= 2, true)
+}

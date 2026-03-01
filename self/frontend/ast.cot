@@ -998,65 +998,65 @@ const BuiltinKind = enum {
 /// Look up a builtin name string and return its BuiltinKind index, or null if unknown.
 fn builtinFromString(name: string) ?int {
     return switch (name) {
-        "sizeOf" => @intFromEnum(BuiltinKind.size_of),
-        "alignOf" => @intFromEnum(BuiltinKind.align_of),
-        "enumLen" => @intFromEnum(BuiltinKind.enum_len),
-        "hasField" => @intFromEnum(BuiltinKind.has_field),
-        "TypeOf" => @intFromEnum(BuiltinKind.type_of),
-        "field" => @intFromEnum(BuiltinKind.field),
-        "offsetOf" => @intFromEnum(BuiltinKind.offset_of),
-        "typeName" => @intFromEnum(BuiltinKind.type_name),
-        "enumName" => @intFromEnum(BuiltinKind.enum_name),
-        "typeInfo" => @intFromEnum(BuiltinKind.type_info),
-        "abs" => @intFromEnum(BuiltinKind.abs),
-        "ceil" => @intFromEnum(BuiltinKind.ceil),
-        "floor" => @intFromEnum(BuiltinKind.floor),
-        "trunc" => @intFromEnum(BuiltinKind.trunc),
-        "round" => @intFromEnum(BuiltinKind.round),
-        "sqrt" => @intFromEnum(BuiltinKind.sqrt),
-        "fmin" => @intFromEnum(BuiltinKind.fmin),
-        "fmax" => @intFromEnum(BuiltinKind.fmax),
-        "min" => @intFromEnum(BuiltinKind.min),
-        "max" => @intFromEnum(BuiltinKind.max),
-        "intCast" => @intFromEnum(BuiltinKind.int_cast),
-        "floatCast" => @intFromEnum(BuiltinKind.float_cast),
-        "floatFromInt" => @intFromEnum(BuiltinKind.float_from_int),
-        "intFromFloat" => @intFromEnum(BuiltinKind.int_from_float),
-        "ptrCast" => @intFromEnum(BuiltinKind.ptr_cast),
-        "intToPtr" => @intFromEnum(BuiltinKind.int_to_ptr),
-        "ptrToInt" => @intFromEnum(BuiltinKind.ptr_to_int),
-        "bitCast" => @intFromEnum(BuiltinKind.bit_cast),
-        "truncate" => @intFromEnum(BuiltinKind.truncate),
-        "as" => @intFromEnum(BuiltinKind.@"as"),
-        "alignCast" => @intFromEnum(BuiltinKind.align_cast),
-        "constCast" => @intFromEnum(BuiltinKind.const_cast),
-        "intFromEnum" => @intFromEnum(BuiltinKind.int_from_enum),
-        "enumFromInt" => @intFromEnum(BuiltinKind.enum_from_int),
-        "tagName" => @intFromEnum(BuiltinKind.tag_name),
-        "errorName" => @intFromEnum(BuiltinKind.error_name),
-        "intFromBool" => @intFromEnum(BuiltinKind.int_from_bool),
-        "string" => @intFromEnum(BuiltinKind.@"string"),
-        "ptrOf" => @intFromEnum(BuiltinKind.ptr_of),
-        "lenOf" => @intFromEnum(BuiltinKind.len_of),
-        "ctz" => @intFromEnum(BuiltinKind.ctz),
-        "clz" => @intFromEnum(BuiltinKind.clz),
-        "popCount" => @intFromEnum(BuiltinKind.pop_count),
-        "assert" => @intFromEnum(BuiltinKind.assert),
-        "assertEq" => @intFromEnum(BuiltinKind.assert_eq),
-        "trap" => @intFromEnum(BuiltinKind.trap),
-        "panic" => @intFromEnum(BuiltinKind.panic),
-        "compileError" => @intFromEnum(BuiltinKind.compile_error),
-        "embedFile" => @intFromEnum(BuiltinKind.embed_file),
-        "target" => @intFromEnum(BuiltinKind.target),
-        "targetOs" => @intFromEnum(BuiltinKind.target_os),
-        "targetArch" => @intFromEnum(BuiltinKind.target_arch),
-        "arcRetain" => @intFromEnum(BuiltinKind.arc_retain),
-        "arcRelease" => @intFromEnum(BuiltinKind.arc_release),
-        "atomicLoad" => @intFromEnum(BuiltinKind.atomic_load),
-        "atomicStore" => @intFromEnum(BuiltinKind.atomic_store),
-        "atomicAdd" => @intFromEnum(BuiltinKind.atomic_add),
-        "atomicCas" => @intFromEnum(BuiltinKind.atomic_cas),
-        "atomicExchange" => @intFromEnum(BuiltinKind.atomic_exchange),
+        "sizeOf" => BuiltinKind.size_of as int,
+        "alignOf" => BuiltinKind.align_of as int,
+        "enumLen" => BuiltinKind.enum_len as int,
+        "hasField" => BuiltinKind.has_field as int,
+        "TypeOf" => BuiltinKind.type_of as int,
+        "field" => BuiltinKind.field as int,
+        "offsetOf" => BuiltinKind.offset_of as int,
+        "typeName" => BuiltinKind.type_name as int,
+        "enumName" => BuiltinKind.enum_name as int,
+        "typeInfo" => BuiltinKind.type_info as int,
+        "abs" => BuiltinKind.abs as int,
+        "ceil" => BuiltinKind.ceil as int,
+        "floor" => BuiltinKind.floor as int,
+        "trunc" => BuiltinKind.trunc as int,
+        "round" => BuiltinKind.round as int,
+        "sqrt" => BuiltinKind.sqrt as int,
+        "fmin" => BuiltinKind.fmin as int,
+        "fmax" => BuiltinKind.fmax as int,
+        "min" => BuiltinKind.min as int,
+        "max" => BuiltinKind.max as int,
+        "intCast" => BuiltinKind.int_cast as int,
+        "floatCast" => BuiltinKind.float_cast as int,
+        "floatFromInt" => BuiltinKind.float_from_int as int,
+        "intFromFloat" => BuiltinKind.int_from_float as int,
+        "ptrCast" => BuiltinKind.ptr_cast as int,
+        "intToPtr" => BuiltinKind.int_to_ptr as int,
+        "ptrToInt" => BuiltinKind.ptr_to_int as int,
+        "bitCast" => BuiltinKind.bit_cast as int,
+        "truncate" => BuiltinKind.truncate as int,
+        "as" => BuiltinKind.@"as" as int,
+        "alignCast" => BuiltinKind.align_cast as int,
+        "constCast" => BuiltinKind.const_cast as int,
+        "intFromEnum" => BuiltinKind.int_from_enum as int,
+        "enumFromInt" => BuiltinKind.enum_from_int as int,
+        "tagName" => BuiltinKind.tag_name as int,
+        "errorName" => BuiltinKind.error_name as int,
+        "intFromBool" => BuiltinKind.int_from_bool as int,
+        "string" => BuiltinKind.@"string" as int,
+        "ptrOf" => BuiltinKind.ptr_of as int,
+        "lenOf" => BuiltinKind.len_of as int,
+        "ctz" => BuiltinKind.ctz as int,
+        "clz" => BuiltinKind.clz as int,
+        "popCount" => BuiltinKind.pop_count as int,
+        "assert" => BuiltinKind.assert as int,
+        "assertEq" => BuiltinKind.assert_eq as int,
+        "trap" => BuiltinKind.trap as int,
+        "panic" => BuiltinKind.panic as int,
+        "compileError" => BuiltinKind.compile_error as int,
+        "embedFile" => BuiltinKind.embed_file as int,
+        "target" => BuiltinKind.target as int,
+        "targetOs" => BuiltinKind.target_os as int,
+        "targetArch" => BuiltinKind.target_arch as int,
+        "arcRetain" => BuiltinKind.arc_retain as int,
+        "arcRelease" => BuiltinKind.arc_release as int,
+        "atomicLoad" => BuiltinKind.atomic_load as int,
+        "atomicStore" => BuiltinKind.atomic_store as int,
+        "atomicAdd" => BuiltinKind.atomic_add as int,
+        "atomicCas" => BuiltinKind.atomic_cas as int,
+        "atomicExchange" => BuiltinKind.atomic_exchange as int,
         else => null,
     }
 }
@@ -1181,19 +1181,19 @@ test "span init" {
 }
 
 test "StructLayout enum" {
-    @assertEq(@intFromEnum(StructLayout.auto), 0)
-    @assertEq(@intFromEnum(StructLayout.@"packed"), 1)
-    @assertEq(@intFromEnum(StructLayout.@"extern"), 2)
+    @assertEq(StructLayout.auto as int, 0)
+    @assertEq(StructLayout.@"packed" as int, 1)
+    @assertEq(StructLayout.@"extern" as int, 2)
 }
 
 test "LiteralKind enum" {
-    @assertEq(@intFromEnum(LiteralKind.@"int"), 0)
-    @assertEq(@intFromEnum(LiteralKind.@"float"), 1)
-    @assertEq(@intFromEnum(LiteralKind.@"string"), 2)
-    @assertEq(@intFromEnum(LiteralKind.char), 3)
-    @assertEq(@intFromEnum(LiteralKind.true_lit), 4)
-    @assertEq(@intFromEnum(LiteralKind.null_lit), 6)
-    @assertEq(@intFromEnum(LiteralKind.unreachable_lit), 8)
+    @assertEq(LiteralKind.@"int" as int, 0)
+    @assertEq(LiteralKind.@"float" as int, 1)
+    @assertEq(LiteralKind.@"string" as int, 2)
+    @assertEq(LiteralKind.char as int, 3)
+    @assertEq(LiteralKind.true_lit as int, 4)
+    @assertEq(LiteralKind.null_lit as int, 6)
+    @assertEq(LiteralKind.unreachable_lit as int, 8)
 }
 
 test "BuiltinKind enum count" {
@@ -1201,14 +1201,14 @@ test "BuiltinKind enum count" {
 }
 
 test "builtinFromString known" {
-    @assertEq(builtinFromString("sizeOf").?, @intFromEnum(BuiltinKind.size_of))
-    @assertEq(builtinFromString("intCast").?, @intFromEnum(BuiltinKind.int_cast))
-    @assertEq(builtinFromString("assertEq").?, @intFromEnum(BuiltinKind.assert_eq))
-    @assertEq(builtinFromString("typeName").?, @intFromEnum(BuiltinKind.type_name))
-    @assertEq(builtinFromString("typeInfo").?, @intFromEnum(BuiltinKind.type_info))
-    @assertEq(builtinFromString("panic").?, @intFromEnum(BuiltinKind.panic))
-    @assertEq(builtinFromString("arcRetain").?, @intFromEnum(BuiltinKind.arc_retain))
-    @assertEq(builtinFromString("arcRelease").?, @intFromEnum(BuiltinKind.arc_release))
+    @assertEq(builtinFromString("sizeOf").?, BuiltinKind.size_of as int)
+    @assertEq(builtinFromString("intCast").?, BuiltinKind.int_cast as int)
+    @assertEq(builtinFromString("assertEq").?, BuiltinKind.assert_eq as int)
+    @assertEq(builtinFromString("typeName").?, BuiltinKind.type_name as int)
+    @assertEq(builtinFromString("typeInfo").?, BuiltinKind.type_info as int)
+    @assertEq(builtinFromString("panic").?, BuiltinKind.panic as int)
+    @assertEq(builtinFromString("arcRetain").?, BuiltinKind.arc_retain as int)
+    @assertEq(builtinFromString("arcRelease").?, BuiltinKind.arc_release as int)
 }
 
 test "builtinFromString unknown" {
@@ -1219,8 +1219,8 @@ test "builtinFromString unknown" {
 }
 
 test "BuiltinKind quoted identifiers" {
-    @assertEq(builtinFromString("string").?, @intFromEnum(BuiltinKind.@"string"))
-    @assertEq(builtinFromString("as").?, @intFromEnum(BuiltinKind.@"as"))
+    @assertEq(builtinFromString("string").?, BuiltinKind.@"string" as int)
+    @assertEq(builtinFromString("as").?, BuiltinKind.@"as" as int)
 }
 
 test "Ast init" {
@@ -1446,13 +1446,13 @@ test "isRange for iterable loop" {
 }
 
 test "builtinToString roundtrip" {
-    @assertEq(builtinToString(@intFromEnum(BuiltinKind.size_of)), "sizeOf")
-    @assertEq(builtinToString(@intFromEnum(BuiltinKind.int_cast)), "intCast")
-    @assertEq(builtinToString(@intFromEnum(BuiltinKind.assert_eq)), "assertEq")
-    @assertEq(builtinToString(@intFromEnum(BuiltinKind.panic)), "panic")
-    @assertEq(builtinToString(@intFromEnum(BuiltinKind.@"string")), "string")
-    @assertEq(builtinToString(@intFromEnum(BuiltinKind.@"as")), "as")
-    @assertEq(builtinToString(@intFromEnum(BuiltinKind.arc_retain)), "arcRetain")
+    @assertEq(builtinToString(BuiltinKind.size_of as int), "sizeOf")
+    @assertEq(builtinToString(BuiltinKind.int_cast as int), "intCast")
+    @assertEq(builtinToString(BuiltinKind.assert_eq as int), "assertEq")
+    @assertEq(builtinToString(BuiltinKind.panic as int), "panic")
+    @assertEq(builtinToString(BuiltinKind.@"string" as int), "string")
+    @assertEq(builtinToString(BuiltinKind.@"as" as int), "as")
+    @assertEq(builtinToString(BuiltinKind.arc_retain as int), "arcRetain")
 }
 
 test "builtinToString/builtinFromString consistency" {

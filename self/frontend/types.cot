@@ -875,7 +875,7 @@ struct TypeRegistry {
         return switch (ta) {
             Type.basic |ka| => {
                 return switch (tb) {
-                    Type.basic |kb| => @intFromEnum(ka) == @intFromEnum(kb),
+                    Type.basic |kb| => ka == kb,
                     else => false,
                 }
             },
@@ -1040,7 +1040,7 @@ struct TypeRegistry {
                 Type.basic |k| => k,
                 else => BasicKind.invalid,
             }
-            if (@intFromEnum(fk) == @intFromEnum(tk)) { return true }
+            if (fk == tk) { return true }
 
             // Integer widening
             if (fk.isInteger() and tk.isInteger()) {
@@ -1257,10 +1257,10 @@ test "TypeRegistry get basic type" {
     const t = reg.get(BOOL)
     @assertEq(t.tag, TAG_BASIC)
     const bk = switch (t) {
-        Type.basic |k| => @intFromEnum(k),
+        Type.basic |k| => k as int,
         else => -1,
     }
-    @assertEq(bk, @intFromEnum(BasicKind.bool_type))
+    @assertEq(bk, BasicKind.bool_type as int)
 }
 
 test "TypeRegistry make pointer" {

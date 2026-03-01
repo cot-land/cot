@@ -113,8 +113,8 @@ struct Parser {
             self.advance()
             return true
         }
-        const expected = @as(Token, @enumFromInt(t)).toString()
-        const got = @as(Token, @enumFromInt(self.tok)).toString()
+        const expected = (@enumFromInt(t) as Token).toString()
+        const got = (@enumFromInt(self.tok) as Token).toString()
         self.errors.report(self.tok_start, ErrorCode.e200, "expected '${expected}', got '${got}'")
         return false
     }
@@ -129,14 +129,14 @@ struct Parser {
     // ================================================================
 
     fn collectDocComment() void {
-        if (self.tok != @intFromEnum(Token.doc_comment)) {
+        if (self.tok != Token.doc_comment) {
             self.pending_doc = ""
             return
         }
         // Zig parser.zig:139-157: concatenate consecutive /// lines with newlines
         var doc = self.tok_text
         self.advance()
-        while (self.tok == @intFromEnum(Token.doc_comment)) {
+        while (self.tok == Token.doc_comment) {
             doc = doc ++ "\n" ++ self.tok_text
             self.advance()
         }
@@ -156,17 +156,17 @@ struct Parser {
     /// Parse an entire file. Populates ast.file_decls.
     fn parseFile() void {
         // Check for @safe annotation (Zig parser.zig:175-182)
-        if (self.tok == @intFromEnum(Token.at)) {
+        if (self.tok == Token.at) {
             const pk = self.peekToken()
-            if (pk == @intFromEnum(Token.ident) and self.peek_text == "safe") {
+            if (pk == Token.ident and self.peek_text == "safe") {
                 self.advance()  // consume @
                 self.advance()  // consume safe
                 self.safe_mode = true
             }
         }
-        while (self.tok != @intFromEnum(Token.eof)) {
+        while (self.tok != Token.eof) {
             self.collectDocComment()
-            if (self.tok == @intFromEnum(Token.eof)) {
+            if (self.tok == Token.eof) {
                 break
             }
             const decl = self.parseDecl()
@@ -181,15 +181,15 @@ struct Parser {
     /// Parse a top-level declaration.
     fn parseDecl() int {
         // Handle 'export' modifier: consume it and parse the declaration
-        if (self.tok == @intFromEnum(Token.kw_export)) {
+        if (self.tok == Token.kw_export) {
             self.advance()
-            if (self.tok == @intFromEnum(Token.kw_fn)) {
+            if (self.tok == Token.kw_fn) {
                 return self.parseFnDecl(0, 0, 0, 1)
             }
             self.errors.report(self.tok_start, ErrorCode.e200, "expected 'fn' after 'export'")
             return null_node
         }
-        const tok = @as(Token, @enumFromInt(self.tok))
+        const tok = @enumFromInt(self.tok) as Token
         return switch (tok) {
             Token.kw_import => self.parseImportDecl(),
             Token.kw_test => self.parseTestDecl(),
@@ -197,7 +197,7 @@ struct Parser {
             Token.kw_fn => self.parseFnDecl(0, 0, 0, 0),
             Token.kw_static => {
                 self.advance()
-                if (self.tok != @intFromEnum(Token.kw_fn)) {
+                if (self.tok != Token.kw_fn) {
                     self.errors.report(self.tok_start, ErrorCode.e200, "expected 'fn' after 'static'")
                     return null_node
                 }
@@ -226,7 +226,7 @@ struct Parser {
     fn parseImportDecl() int {
         const start = self.tok_start
         self.advance()  // consume 'import'
-        if (self.tok != @intFromEnum(Token.string_lit)) {
+        if (self.tok != Token.string_lit) {
             self.errors.report(self.tok_start, ErrorCode.e200, "expected string after import")
             return null_node
         }
@@ -239,7 +239,7 @@ struct Parser {
     fn parseTestDecl() int {
         const start = self.tok_start
         self.advance()  // consume 'test'
-        if (self.tok != @intFromEnum(Token.string_lit)) {
+        if (self.tok != Token.string_lit) {
             self.errors.report(self.tok_start, ErrorCode.e200, "expected test name string")
             return null_node
         }
@@ -253,7 +253,7 @@ struct Parser {
     fn parseBenchDecl() int {
         const start = self.tok_start
         self.advance()  // consume 'bench'
-        if (self.tok != @intFromEnum(Token.string_lit)) {
+        if (self.tok != Token.string_lit) {
             self.errors.report(self.tok_start, ErrorCode.e200, "expected bench name string")
             return null_node
         }
@@ -268,7 +268,7 @@ struct Parser {
         const start = self.tok_start
         const doc = self.consumeDocComment()
         self.advance()  // consume 'fn'
-        if (self.tok != @intFromEnum(Token.ident)) {
+        if (self.tok != Token.ident) {
             self.errors.report(self.tok_start, ErrorCode.e203, "expected function name")
             return null_node
         }
@@ -278,45 +278,45 @@ struct Parser {
         // Ported from parser.zig:250-270: fn max(T)(a: T, b: T) T
         // First '(' is consumed, then we distinguish type params from regular params:
         // bare idents (no ':') = type params; ident followed by ':' = regular params.
-        if (!self.expect(@intFromEnum(Token.lparen))) {
+        if (!self.expect(Token.lparen as int)) {
             return null_node
         }
 
         var type_params: List(string) = .{}
-        if (self.tok == @intFromEnum(Token.ident) and self.peekToken() != @intFromEnum(Token.colon)) {
+        if (self.tok == Token.ident and self.peekToken() != Token.colon) {
             // Type parameters: (T) or (T, U)
-            while (self.tok != @intFromEnum(Token.rparen) and self.tok != @intFromEnum(Token.eof)) {
-                if (self.tok != @intFromEnum(Token.ident)) {
+            while (self.tok != Token.rparen and self.tok != Token.eof) {
+                if (self.tok != Token.ident) {
                     self.errors.report(self.tok_start, ErrorCode.e203, "expected type parameter name")
                     return null_node
                 }
                 type_params.append(self.tok_text)
                 self.advance()
-                if (!self.match(@intFromEnum(Token.comma))) {
+                if (!self.match(Token.comma as int)) {
                     break
                 }
             }
-            if (!self.expect(@intFromEnum(Token.rparen))) {
+            if (!self.expect(Token.rparen as int)) {
                 return null_node
             }
             // Expect second ( for value parameters
-            if (!self.expect(@intFromEnum(Token.lparen))) {
+            if (!self.expect(Token.lparen as int)) {
                 return null_node
             }
         }
 
         // Regular parameters (lparen already consumed above)
         var params: List(int) = .{}
-        while (self.tok != @intFromEnum(Token.rparen) and self.tok != @intFromEnum(Token.eof)) {
+        while (self.tok != Token.rparen and self.tok != Token.eof) {
             const param_node = self.parseFieldDef()
             if (param_node != null_node) {
                 params.append(param_node)
             }
-            if (!self.match(@intFromEnum(Token.comma))) {
+            if (!self.match(Token.comma as int)) {
                 break
             }
         }
-        if (!self.expect(@intFromEnum(Token.rparen))) {
+        if (!self.expect(Token.rparen as int)) {
             return null_node
         }
 
@@ -347,26 +347,26 @@ struct Parser {
         // Return type — skip if at '{', eof, or 'where'
         // Ported from parser.zig:294-295
         var ret_type = null_node
-        if (self.tok != @intFromEnum(Token.lbrace) and self.tok != @intFromEnum(Token.eof) and self.tok != @intFromEnum(Token.kw_where)) {
+        if (self.tok != Token.lbrace and self.tok != Token.eof and self.tok != Token.kw_where) {
             ret_type = self.parseType()
         }
 
         // Where clause: fn sort(T)(list: *List(T)) void where T: Ord
         // Ported from parser.zig:299-321
         var type_param_bounds: List(string) = .{}
-        if (self.tok == @intFromEnum(Token.kw_where) and type_params.len() > 0) {
+        if (self.tok == Token.kw_where and type_params.len() > 0) {
             // Initialize bounds array with "" for each type param
             for bi in 0..type_params.len() {
                 type_param_bounds.append("")
             }
             self.advance()  // consume 'where'
-            while (self.tok == @intFromEnum(Token.ident)) {
+            while (self.tok == Token.ident) {
                 const param_name = self.tok_text
                 self.advance()
-                if (!self.expect(@intFromEnum(Token.colon))) {
+                if (!self.expect(Token.colon as int)) {
                     break
                 }
-                if (self.tok != @intFromEnum(Token.ident)) {
+                if (self.tok != Token.ident) {
                     self.errors.report(self.tok_start, ErrorCode.e203, "expected trait name after ':'")
                     break
                 }
@@ -379,7 +379,7 @@ struct Parser {
                         break
                     }
                 }
-                if (!self.match(@intFromEnum(Token.comma))) {
+                if (!self.match(Token.comma as int)) {
                     break
                 }
             }
@@ -387,7 +387,7 @@ struct Parser {
 
         // Body (optional for extern)
         var body = null_node
-        if (self.tok == @intFromEnum(Token.lbrace)) {
+        if (self.tok == Token.lbrace) {
             body = self.parseBlock()
         }
 
@@ -413,9 +413,9 @@ struct Parser {
         const start = self.tok_start
         const doc = self.consumeDocComment()
         self.advance()  // consume const/var/let
-        if (self.tok != @intFromEnum(Token.ident)) {
+        if (self.tok != Token.ident) {
             // P11: keyword-as-name error (Zig parser.zig:376-383)
-            if (@as(Token, @enumFromInt(self.tok)).isKeyword()) {
+            if ((@enumFromInt(self.tok) as Token).isKeyword()) {
                 self.errors.report(self.tok_start, ErrorCode.e203, "keyword cannot be used as variable name")
                 return null_node
             }
@@ -428,18 +428,18 @@ struct Parser {
 
         // Optional type annotation
         var type_expr = null_node
-        if (self.match(@intFromEnum(Token.colon))) {
+        if (self.match(Token.colon as int)) {
             type_expr = self.parseType()
         }
 
         // Destructuring: const a, b = expr
-        if (self.tok == @intFromEnum(Token.comma)) {
+        if (self.tok == Token.comma) {
             return self.parseDestructureDeclFrom(name, type_expr, name_start, start, is_const, doc)
         }
 
         // Check for inline type declarations: const Name = enum { ... } or const Name = enum(u8) { ... }
         // Ported from parser.zig:1678-1716 — full state save/restore backtracking
-        if (is_const == 1 and self.tok == @intFromEnum(Token.assign)) {
+        if (is_const == 1 and self.tok == Token.assign) {
             // Save parser + scanner state for backtracking
             const saved_tok = self.tok
             const saved_tok_text = self.tok_text
@@ -455,102 +455,102 @@ struct Parser {
 
             self.advance()  // consume '='
 
-            if (self.tok == @intFromEnum(Token.kw_enum)) {
+            if (self.tok == Token.kw_enum) {
                 self.advance()  // consume 'enum'
                 var backing = null_node
-                if (self.match(@intFromEnum(Token.lparen))) {
+                if (self.match(Token.lparen as int)) {
                     backing = self.parseType()
-                    self.expect(@intFromEnum(Token.rparen))
+                    self.expect(Token.rparen as int)
                 }
-                if (!self.expect(@intFromEnum(Token.lbrace))) {
+                if (!self.expect(Token.lbrace as int)) {
                     return null_node
                 }
                 var variants: List(int) = .{}
-                while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
+                while (self.tok != Token.rbrace and self.tok != Token.eof) {
                     const vstart = self.tok_start
-                    if (self.tok == @intFromEnum(Token.at)) {
+                    if (self.tok == Token.at) {
                         self.advance()
                     }
-                    if (self.tok != @intFromEnum(Token.ident) and self.tok != @intFromEnum(Token.string_lit)) {
+                    if (self.tok != Token.ident and self.tok != Token.string_lit) {
                         self.errors.report(self.tok_start, ErrorCode.e203, "expected variant name")
                         break
                     }
                     const vname = self.tok_text
                     self.advance()
                     var vval = null_node
-                    if (self.match(@intFromEnum(Token.assign))) {
+                    if (self.match(Token.assign as int)) {
                         vval = self.parseExpr()
                     }
                     variants.append(self.ast.addExpr(Expr.enum_variant_node(EnumVariantNode { .name = vname, .value = vval, .span = self.spanSE(vstart, self.tok_end) })))
-                    self.match(@intFromEnum(Token.comma))
+                    self.match(Token.comma as int)
                 }
-                self.expect(@intFromEnum(Token.rbrace))
+                self.expect(Token.rbrace as int)
                 return self.ast.addDecl(Decl.enum_decl(EnumDecl { .name = name, .backing_type = backing, .variants = variants, .doc_comment = doc, .span = self.spanSE(start, self.tok_end) }))
             }
 
-            if (self.tok == @intFromEnum(Token.kw_error)) {
-                if (self.peekToken() == @intFromEnum(Token.lbrace)) {
+            if (self.tok == Token.kw_error) {
+                if (self.peekToken() == Token.lbrace) {
                     self.advance()  // consume 'error'
                     self.advance()  // consume '{'
                     var variants: List(string) = .{}
-                    while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
-                        if (self.tok != @intFromEnum(Token.ident)) {
+                    while (self.tok != Token.rbrace and self.tok != Token.eof) {
+                        if (self.tok != Token.ident) {
                             break
                         }
                         variants.append(self.tok_text)
                         self.advance()
-                        if (!self.match(@intFromEnum(Token.comma))) {
+                        if (!self.match(Token.comma as int)) {
                             break
                         }
                     }
-                    self.expect(@intFromEnum(Token.rbrace))
+                    self.expect(Token.rbrace as int)
                     return self.ast.addDecl(Decl.error_set_decl(ErrorSetDecl { .name = name, .variants = variants, .doc_comment = doc, .span = self.spanSE(start, self.tok_end) }))
                 }
                 // error.Name expression — not an error set, restore state
             }
 
-            if (self.tok == @intFromEnum(Token.kw_union)) {
+            if (self.tok == Token.kw_union) {
                 self.advance()  // consume 'union'
-                if (!self.expect(@intFromEnum(Token.lbrace))) {
+                if (!self.expect(Token.lbrace as int)) {
                     return null_node
                 }
                 var variants: List(int) = .{}
-                while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
+                while (self.tok != Token.rbrace and self.tok != Token.eof) {
                     const vstart = self.tok_start
-                    if (self.tok != @intFromEnum(Token.ident)) {
+                    if (self.tok != Token.ident) {
                         self.errors.report(self.tok_start, ErrorCode.e203, "expected variant name")
                         break
                     }
                     const vname = self.tok_text
                     self.advance()
                     var vtype = null_node
-                    if (self.match(@intFromEnum(Token.colon))) {
+                    if (self.match(Token.colon as int)) {
                         vtype = self.parseType()
                     }
                     variants.append(self.ast.addExpr(Expr.union_variant_node(UnionVariantNode { .name = vname, .type_expr = vtype, .span = self.spanSE(vstart, self.tok_end) })))
-                    self.match(@intFromEnum(Token.comma))
+                    self.match(Token.comma as int)
                 }
-                self.expect(@intFromEnum(Token.rbrace))
+                self.expect(Token.rbrace as int)
                 return self.ast.addDecl(Decl.union_decl(UnionDecl { .name = name, .variants = variants, .doc_comment = doc, .span = self.spanSE(start, self.tok_end) }))
             }
 
-            if (self.tok == @intFromEnum(Token.kw_struct)) {
+            if (self.tok == Token.kw_struct) {
                 self.advance()  // consume 'struct'
                 var sfields: List(int) = .{}
                 var nested: List(int) = .{}
                 var type_params: List(string) = .{}
-                if (!self.expect(@intFromEnum(Token.lbrace))) {
+                if (!self.expect(Token.lbrace as int)) {
                     return null_node
                 }
-                while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
+                while (self.tok != Token.rbrace and self.tok != Token.eof) {
                     self.collectDocComment()
                     const fd = self.parseFieldDef()
                     if (fd != null_node) {
                         sfields.append(fd)
                     }
-                    self.match(@intFromEnum(Token.comma))
+                    self.match(Token.comma as int)
                 }
-                self.expect(@intFromEnum(Token.rbrace))
+                self.expect(Token.rbrace as int)
                 return self.ast.addDecl(Decl.struct_decl(StructDecl { .name = name, .type_params = type_params, .fields = sfields, .layout = 0, .nested_decls = nested, .doc_comment = doc, .span = self.spanSE(start, self.tok_end) }))
             }
 
@@ -570,7 +570,7 @@ struct Parser {
 
         // Regular initializer
         var value = null_node
-        if (self.match(@intFromEnum(Token.assign))) {
+        if (self.match(Token.assign as int)) {
             value = self.parseExpr()
         }
 
@@ -589,8 +589,8 @@ struct Parser {
     fn parseDestructureDeclFrom(first_name: string, first_type: int, first_start: int, start: int, is_const: int, doc: string) int {
         var bindings: List(int) = .{}
         bindings.append(self.ast.addExpr(Expr.destructure_bind(DestructureBindNode { .name = first_name, .type_expr = first_type, .span = self.spanSE(first_start, self.tok_end) })))
-        while (self.match(@intFromEnum(Token.comma))) {
-            if (self.tok != @intFromEnum(Token.ident)) {
+        while (self.match(Token.comma as int)) {
+            if (self.tok != Token.ident) {
                 self.errors.report(self.tok_start, ErrorCode.e203, "expected variable name")
                 break
             }
@@ -598,12 +598,12 @@ struct Parser {
             const bstart = self.tok_start
             self.advance()
             var btype = null_node
-            if (self.match(@intFromEnum(Token.colon))) {
+            if (self.match(Token.colon as int)) {
                 btype = self.parseType()
             }
             bindings.append(self.ast.addExpr(Expr.destructure_bind(DestructureBindNode { .name = bname, .type_expr = btype, .span = self.spanSE(bstart, self.tok_end) })))
         }
-        if (!self.expect(@intFromEnum(Token.assign))) {
+        if (!self.expect(Token.assign as int)) {
             return null_node
         }
         const value = self.parseExpr()
@@ -616,7 +616,7 @@ struct Parser {
         const start = self.tok_start
         const doc = self.consumeDocComment()
         self.advance()  // consume 'struct'
-        if (self.tok != @intFromEnum(Token.ident)) {
+        if (self.tok != Token.ident) {
             self.errors.report(self.tok_start, ErrorCode.e203, "expected struct name")
             return null_node
         }
@@ -626,23 +626,23 @@ struct Parser {
         // Parse optional type parameters: struct Pair(T, U) { ... }
         // Ported from parser.zig:440-454
         var type_params: List(string) = .{}
-        if (self.tok == @intFromEnum(Token.lparen)) {
+        if (self.tok == Token.lparen) {
             self.advance()  // consume (
-            while (self.tok != @intFromEnum(Token.rparen) and self.tok != @intFromEnum(Token.eof)) {
-                if (self.tok != @intFromEnum(Token.ident)) {
+            while (self.tok != Token.rparen and self.tok != Token.eof) {
+                if (self.tok != Token.ident) {
                     self.errors.report(self.tok_start, ErrorCode.e203, "expected type parameter name")
                     return null_node
                 }
                 type_params.append(self.tok_text)
                 self.advance()
-                if (!self.match(@intFromEnum(Token.comma))) {
+                if (!self.match(Token.comma as int)) {
                     break
                 }
             }
-            self.expect(@intFromEnum(Token.rparen))
+            self.expect(Token.rparen as int)
         }
 
-        if (!self.expect(@intFromEnum(Token.lbrace))) {
+        if (!self.expect(Token.lbrace as int)) {
             return null_node
         }
 
@@ -654,8 +654,8 @@ struct Parser {
 
         // Parse nested declarations (const, enum, struct, type, fn, static fn) before fields
         var nested: List(int) = .{}
-        while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
-            const tok = @as(Token, @enumFromInt(self.tok))
+        while (self.tok != Token.rbrace and self.tok != Token.eof) {
+            const tok = @enumFromInt(self.tok) as Token
             if (tok == Token.kw_const or tok == Token.kw_enum or tok == Token.kw_type or
                 tok == Token.kw_fn or tok == Token.kw_static) {
                 const nested_decl = self.parseDecl()
@@ -669,9 +669,9 @@ struct Parser {
 
         // Fields
         var fields: List(int) = .{}
-        while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
+        while (self.tok != Token.rbrace and self.tok != Token.eof) {
             // Break on nested-decl keywords (methods after fields)
-            const ftok = @as(Token, @enumFromInt(self.tok))
+            const ftok = @enumFromInt(self.tok) as Token
             if (ftok == Token.kw_fn or ftok == Token.kw_static or ftok == Token.kw_const or
                 ftok == Token.kw_enum or ftok == Token.kw_type or ftok == Token.kw_struct) {
                 break
@@ -681,12 +681,12 @@ struct Parser {
             if (fd != null_node) {
                 fields.append(fd)
             }
-            self.match(@intFromEnum(Token.comma))
+            self.match(Token.comma as int)
         }
 
         // Parse nested declarations after fields (methods, static fn, etc.)
-        while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
-            const tok = @as(Token, @enumFromInt(self.tok))
+        while (self.tok != Token.rbrace and self.tok != Token.eof) {
+            const tok = @enumFromInt(self.tok) as Token
             if (tok == Token.kw_const or tok == Token.kw_enum or tok == Token.kw_type or
                 tok == Token.kw_fn or tok == Token.kw_static) {
                 const nested_decl = self.parseDecl()
@@ -701,7 +701,7 @@ struct Parser {
         self.current_impl_type = saved_impl
         self.current_impl_is_generic = saved_impl_generic
 
-        self.expect(@intFromEnum(Token.rbrace))
+        self.expect(Token.rbrace as int)
 
         return self.ast.addDecl(Decl.struct_decl(StructDecl { .name = name, .type_params = type_params, .fields = fields, .layout = layout, .nested_decls = nested, .doc_comment = doc, .span = self.spanSE(start, self.tok_end) }))
     }
@@ -715,10 +715,10 @@ struct Parser {
     fn parseExternDecl() int {
         const start = self.tok_start
         self.advance()  // consume 'extern'
-        if (self.tok == @intFromEnum(Token.kw_fn)) {
+        if (self.tok == Token.kw_fn) {
             return self.parseFnDecl(1, 0, 0, 0)
         }
-        if (self.tok == @intFromEnum(Token.kw_struct)) {
+        if (self.tok == Token.kw_struct) {
             return self.parseStructDecl(2)  // extern layout
         }
         self.errors.report(start, ErrorCode.e200, "expected fn or struct after extern")
@@ -732,44 +732,44 @@ struct Parser {
         self.advance()  // consume 'enum'
         // Optional name: enum Color { ... }
         var name = ""
-        if (self.tok == @intFromEnum(Token.ident)) {
+        if (self.tok == Token.ident) {
             name = self.tok_text
             self.advance()
         }
         // Optional backing type: enum(u8)
         var backing = null_node
-        if (self.match(@intFromEnum(Token.lparen))) {
+        if (self.match(Token.lparen as int)) {
             backing = self.parseType()
-            self.expect(@intFromEnum(Token.rparen))
+            self.expect(Token.rparen as int)
         }
-        if (!self.expect(@intFromEnum(Token.lbrace))) {
+        if (!self.expect(Token.lbrace as int)) {
             return null_node
         }
         var variants: List(int) = .{}
-        while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
+        while (self.tok != Token.rbrace and self.tok != Token.eof) {
             const vstart = self.tok_start
-            if (self.tok == @intFromEnum(Token.at)) {
+            if (self.tok == Token.at) {
                 // Quoted identifier: @"packed"
                 self.advance()
-                if (self.tok != @intFromEnum(Token.string_lit)) {
+                if (self.tok != Token.string_lit) {
                     self.errors.report(self.tok_start, ErrorCode.e200, "expected string after @")
                     break
                 }
             }
-            if (self.tok != @intFromEnum(Token.ident) and self.tok != @intFromEnum(Token.string_lit)) {
+            if (self.tok != Token.ident and self.tok != Token.string_lit) {
                 self.errors.report(self.tok_start, ErrorCode.e203, "expected variant name")
                 break
             }
             const vname = self.tok_text
             self.advance()
             var vval = null_node
-            if (self.match(@intFromEnum(Token.assign))) {
+            if (self.match(Token.assign as int)) {
                 vval = self.parseExpr()
             }
             variants.append(self.ast.addExpr(Expr.enum_variant_node(EnumVariantNode { .name = vname, .value = vval, .span = self.spanSE(vstart, self.tok_end) })))
-            self.match(@intFromEnum(Token.comma))
+            self.match(Token.comma as int)
         }
-        self.expect(@intFromEnum(Token.rbrace))
+        self.expect(Token.rbrace as int)
         return self.ast.addDecl(Decl.enum_decl(EnumDecl { .name = name, .backing_type = backing, .variants = variants, .doc_comment = doc, .span = self.spanSE(start, self.tok_end) }))
     }
 
@@ -780,30 +780,30 @@ struct Parser {
         self.advance()  // consume 'union'
         // Parse optional name: union Name { ... }
         var name = ""
-        if (self.tok == @intFromEnum(Token.ident)) {
+        if (self.tok == Token.ident) {
             name = self.tok_text
             self.advance()
         }
-        if (!self.expect(@intFromEnum(Token.lbrace))) {
+        if (!self.expect(Token.lbrace as int)) {
             return null_node
         }
         var variants: List(int) = .{}
-        while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
+        while (self.tok != Token.rbrace and self.tok != Token.eof) {
             const vstart = self.tok_start
-            if (self.tok != @intFromEnum(Token.ident)) {
+            if (self.tok != Token.ident) {
                 self.errors.report(self.tok_start, ErrorCode.e203, "expected variant name")
                 break
             }
             const vname = self.tok_text
             self.advance()
             var vtype = null_node
-            if (self.match(@intFromEnum(Token.colon))) {
+            if (self.match(Token.colon as int)) {
                 vtype = self.parseType()
             }
             variants.append(self.ast.addExpr(Expr.union_variant_node(UnionVariantNode { .name = vname, .type_expr = vtype, .span = self.spanSE(vstart, self.tok_end) })))
-            self.match(@intFromEnum(Token.comma))
+            self.match(Token.comma as int)
         }
-        self.expect(@intFromEnum(Token.rbrace))
+        self.expect(Token.rbrace as int)
         return self.ast.addDecl(Decl.union_decl(UnionDecl { .name = name, .variants = variants, .doc_comment = doc, .span = self.spanSE(start, self.tok_end) }))
     }
 
@@ -813,7 +813,7 @@ struct Parser {
         const start = self.tok_start
         const doc = self.consumeDocComment()
         self.advance()  // consume 'impl'
-        if (self.tok != @intFromEnum(Token.ident)) {
+        if (self.tok != Token.ident) {
             self.errors.report(self.tok_start, ErrorCode.e203, "expected type name after impl")
             return null_node
         }
@@ -823,29 +823,29 @@ struct Parser {
         // Parse optional type parameters: impl List(T) { ... }
         // Ported from parser.zig:493-507
         var type_params: List(string) = .{}
-        if (self.tok == @intFromEnum(Token.lparen)) {
+        if (self.tok == Token.lparen) {
             self.advance()
-            while (self.tok != @intFromEnum(Token.rparen) and self.tok != @intFromEnum(Token.eof)) {
-                if (self.tok != @intFromEnum(Token.ident)) {
+            while (self.tok != Token.rparen and self.tok != Token.eof) {
+                if (self.tok != Token.ident) {
                     self.errors.report(self.tok_start, ErrorCode.e203, "expected type parameter name")
                     return null_node
                 }
                 type_params.append(self.tok_text)
                 self.advance()
-                if (!self.match(@intFromEnum(Token.comma))) {
+                if (!self.match(Token.comma as int)) {
                     break
                 }
             }
-            self.expect(@intFromEnum(Token.rparen))
+            self.expect(Token.rparen as int)
         }
 
         // Check for trait impl: impl Trait for Type { ... }
         // Ported from parser.zig:510
-        if (self.tok == @intFromEnum(Token.kw_for)) {
+        if (self.tok == Token.kw_for) {
             return self.parseImplTraitBlock(type_name, type_params, doc, start)
         }
 
-        if (!self.expect(@intFromEnum(Token.lbrace))) {
+        if (!self.expect(Token.lbrace as int)) {
             return null_node
         }
 
@@ -859,11 +859,11 @@ struct Parser {
         var methods: List(int) = .{}
         var consts: List(int) = .{}
 
-        while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
+        while (self.tok != Token.rbrace and self.tok != Token.eof) {
             self.collectDocComment()
-            if (self.tok == @intFromEnum(Token.kw_static)) {
+            if (self.tok == Token.kw_static) {
                 self.advance()  // consume 'static'
-                if (self.tok != @intFromEnum(Token.kw_fn)) {
+                if (self.tok != Token.kw_fn) {
                     self.errors.report(self.tok_start, ErrorCode.e200, "expected 'fn' after 'static'")
                     self.advance()
                 } else {
@@ -872,17 +872,17 @@ struct Parser {
                         methods.append(m)
                     }
                 }
-            } else if (self.tok == @intFromEnum(Token.kw_fn)) {
+            } else if (self.tok == Token.kw_fn) {
                 const m = self.parseFnDecl(0, 0, 0, 0)
                 if (m != null_node) {
                     methods.append(m)
                 }
-            } else if (self.tok == @intFromEnum(Token.kw_async)) {
+            } else if (self.tok == Token.kw_async) {
                 const m = self.parseAsyncFn()
                 if (m != null_node) {
                     methods.append(m)
                 }
-            } else if (self.tok == @intFromEnum(Token.kw_const)) {
+            } else if (self.tok == Token.kw_const) {
                 const c = self.parseVarDecl(1)
                 if (c != null_node) {
                     consts.append(c)
@@ -892,7 +892,7 @@ struct Parser {
                 self.advance()
             }
         }
-        self.expect(@intFromEnum(Token.rbrace))
+        self.expect(Token.rbrace as int)
         self.current_impl_type = saved_impl
         self.current_impl_is_generic = saved_generic
 
@@ -904,14 +904,14 @@ struct Parser {
     /// type_params already parsed by parseImplBlock, trait_name is actually the first ident
     fn parseImplTraitBlock(trait_name: string, type_params: List(string), doc: string, start: int) int {
         self.advance()  // consume 'for'
-        if (self.tok != @intFromEnum(Token.ident) and !@as(Token, @enumFromInt(self.tok)).isTypeKeyword()) {
+        if (self.tok != Token.ident and !(@enumFromInt(self.tok) as Token).isTypeKeyword()) {
             self.errors.report(self.tok_start, ErrorCode.e203, "expected type name after for")
             return null_node
         }
         const target = self.tok_text
         self.advance()
 
-        if (!self.expect(@intFromEnum(Token.lbrace))) {
+        if (!self.expect(Token.lbrace as int)) {
             return null_node
         }
 
@@ -923,11 +923,11 @@ struct Parser {
 
         var methods: List(int) = .{}
 
-        while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
+        while (self.tok != Token.rbrace and self.tok != Token.eof) {
             self.collectDocComment()
-            if (self.tok == @intFromEnum(Token.kw_static)) {
+            if (self.tok == Token.kw_static) {
                 self.advance()
-                if (self.tok != @intFromEnum(Token.kw_fn)) {
+                if (self.tok != Token.kw_fn) {
                     self.errors.report(self.tok_start, ErrorCode.e200, "expected 'fn' after 'static'")
                     self.advance()
                 } else {
@@ -936,7 +936,7 @@ struct Parser {
                         methods.append(m)
                     }
                 }
-            } else if (self.tok == @intFromEnum(Token.kw_fn)) {
+            } else if (self.tok == Token.kw_fn) {
                 const m = self.parseFnDecl(0, 0, 0, 0)
                 if (m != null_node) {
                     methods.append(m)
@@ -946,7 +946,7 @@ struct Parser {
                 self.advance()
             }
         }
-        self.expect(@intFromEnum(Token.rbrace))
+        self.expect(Token.rbrace as int)
         self.current_impl_type = saved_impl
         self.current_impl_is_generic = saved_generic
 
@@ -958,19 +958,19 @@ struct Parser {
         const start = self.tok_start
         const doc = self.consumeDocComment()
         self.advance()  // consume 'trait'
-        if (self.tok != @intFromEnum(Token.ident)) {
+        if (self.tok != Token.ident) {
             self.errors.report(self.tok_start, ErrorCode.e203, "expected trait name")
             return null_node
         }
         const name = self.tok_text
         self.advance()
         var methods: List(int) = .{}
-        if (!self.expect(@intFromEnum(Token.lbrace))) {
+        if (!self.expect(Token.lbrace as int)) {
             return null_node
         }
-        while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
+        while (self.tok != Token.rbrace and self.tok != Token.eof) {
             self.collectDocComment()
-            if (self.tok == @intFromEnum(Token.kw_fn)) {
+            if (self.tok == Token.kw_fn) {
                 const m = self.parseFnDecl(0, 0, 0, 0)
                 if (m != null_node) {
                     methods.append(m)
@@ -980,7 +980,7 @@ struct Parser {
                 self.advance()
             }
         }
-        self.expect(@intFromEnum(Token.rbrace))
+        self.expect(Token.rbrace as int)
         return self.ast.addDecl(Decl.trait_decl(TraitDecl { .name = name, .methods = methods, .doc_comment = doc, .span = self.spanSE(start, self.tok_end) }))
     }
 
@@ -989,13 +989,13 @@ struct Parser {
         const start = self.tok_start
         const doc = self.consumeDocComment()
         self.advance()  // consume 'type'
-        if (self.tok != @intFromEnum(Token.ident)) {
+        if (self.tok != Token.ident) {
             self.errors.report(self.tok_start, ErrorCode.e203, "expected type name")
             return null_node
         }
         const name = self.tok_text
         self.advance()
-        if (!self.expect(@intFromEnum(Token.assign))) {
+        if (!self.expect(Token.assign as int)) {
             return null_node
         }
         const target = self.parseType()
@@ -1005,7 +1005,7 @@ struct Parser {
     /// async fn name(...) { ... }
     fn parseAsyncFn() int {
         self.advance()  // consume 'async'
-        if (self.tok != @intFromEnum(Token.kw_fn)) {
+        if (self.tok != Token.kw_fn) {
             self.errors.report(self.tok_start, ErrorCode.e200, "expected fn after async")
             return null_node
         }
@@ -1015,18 +1015,18 @@ struct Parser {
     /// Parse a field definition: name: Type or name: Type = default
     fn parseFieldDef() int {
         const start = self.tok_start
-        if (self.tok != @intFromEnum(Token.ident)) {
+        if (self.tok != Token.ident) {
             self.errors.report(self.tok_start, ErrorCode.e203, "expected field name")
             return null_node
         }
         const name = self.tok_text
         self.advance()
         var type_expr = null_node
-        if (self.match(@intFromEnum(Token.colon))) {
+        if (self.match(Token.colon as int)) {
             type_expr = self.parseType()
         }
         var default_val = null_node
-        if (self.match(@intFromEnum(Token.assign))) {
+        if (self.match(Token.assign as int)) {
             default_val = self.parseExpr()
         }
         const doc = self.consumeDocComment()
@@ -1056,7 +1056,7 @@ struct Parser {
         }
 
         while (true) {
-            const tok = @as(Token, @enumFromInt(self.tok))
+            const tok = @enumFromInt(self.tok) as Token
             // Handle catch specially (low precedence, right-associative)
             if (tok == Token.kw_catch) {
                 if (min_prec > 1) {
@@ -1066,13 +1066,13 @@ struct Parser {
                 self.advance()  // consume 'catch'
                 // Optional error capture: catch |err| { ... }
                 var capture = ""
-                if (self.tok == @intFromEnum(Token.@"or")) {
+                if (self.tok == Token.@"or") {
                     self.advance()  // consume |
-                    if (self.tok == @intFromEnum(Token.ident)) {
+                    if (self.tok == Token.ident) {
                         capture = self.tok_text
                         self.advance()
                     }
-                    self.expect(@intFromEnum(Token.@"or"))  // consume |
+                    self.expect(Token.@"or" as int)  // consume |
                 }
                 const right = self.parseBinaryExpr(2)
                 left = self.ast.addExpr(Expr.catch_expr(CatchExpr { .operand = left, .capture = capture, .fallback = right, .span = self.spanSE(op_start, self.tok_end) }))
@@ -1080,12 +1080,12 @@ struct Parser {
             }
 
             const prec = tok.precedence()
-            if (prec == 0 or @as(int, prec) < min_prec) {
+            if (prec == 0 or (prec as int) < min_prec) {
                 break
             }
             const op = self.tok
             self.advance()
-            const right = self.parseBinaryExpr(@as(int, prec) + 1)
+            const right = self.parseBinaryExpr(prec as int + 1)
             left = self.ast.addExpr(Expr.binary(Binary { .op = op, .left = left, .right = right, .span = self.spanSE(self.tok_start, self.tok_end) }))
         }
         self.nest_level -= 1
@@ -1094,7 +1094,7 @@ struct Parser {
 
     /// Parse a unary expression: -x, !x, try x, await x, &x
     fn parseUnaryExpr() int {
-        const tok = @as(Token, @enumFromInt(self.tok))
+        const tok = @enumFromInt(self.tok) as Token
         if (tok == Token.@"and") {
             // Address-of: &expr
             const start = self.tok_start
@@ -1132,7 +1132,7 @@ struct Parser {
         }
         // Postfix loop
         while (true) {
-            const tok = @as(Token, @enumFromInt(self.tok))
+            const tok = @enumFromInt(self.tok) as Token
             if (tok == Token.period_star) {
                 // .* dereference (single token)
                 self.advance()
@@ -1140,18 +1140,18 @@ struct Parser {
             } else if (tok == Token.period_question) {
                 // .? optional unwrap (single token)
                 self.advance()
-                node = self.ast.addExpr(Expr.unary(Unary { .op = @intFromEnum(Token.question), .operand = node, .span = self.spanSE(self.tok_start, self.tok_end) }))
+                node = self.ast.addExpr(Expr.unary(Unary { .op = Token.question as int, .operand = node, .span = self.spanSE(self.tok_start, self.tok_end) }))
             } else if (tok == Token.period) {
                 self.advance()
-                if (self.tok == @intFromEnum(Token.mul)) {
+                if (self.tok == Token.mul) {
                     // .*  dereference (two tokens)
                     self.advance()
                     node = self.ast.addExpr(Expr.deref(Deref { .operand = node, .span = self.spanSE(self.tok_start, self.tok_end) }))
-                } else if (self.tok == @intFromEnum(Token.question)) {
+                } else if (self.tok == Token.question) {
                     // .?  optional unwrap (two tokens)
                     self.advance()
-                    node = self.ast.addExpr(Expr.unary(Unary { .op = @intFromEnum(Token.question), .operand = node, .span = self.spanSE(self.tok_start, self.tok_end) }))
-                } else if (self.tok == @intFromEnum(Token.ident) or self.tok == @intFromEnum(Token.int_lit)) {
+                    node = self.ast.addExpr(Expr.unary(Unary { .op = Token.question as int, .operand = node, .span = self.spanSE(self.tok_start, self.tok_end) }))
+                } else if (self.tok == Token.ident or self.tok == Token.int_lit) {
                     // .field or .0 (tuple index)
                     const field_name = self.tok_text
                     self.advance()
@@ -1162,28 +1162,28 @@ struct Parser {
             } else if (tok == Token.lbrack) {
                 self.advance()  // consume [
                 // Zig parser.zig:938-955: half-open slice syntax
-                if (self.tok == @intFromEnum(Token.colon)) {
+                if (self.tok == Token.colon) {
                     // [:end] — start is null_node
                     self.advance()
                     var end_expr = null_node
-                    if (self.tok != @intFromEnum(Token.rbrack)) {
+                    if (self.tok != Token.rbrack) {
                         end_expr = self.parseExpr()
                     }
-                    self.expect(@intFromEnum(Token.rbrack))
+                    self.expect(Token.rbrack as int)
                     node = self.ast.addExpr(Expr.slice_expr(SliceExpr { .base = node, .start = null_node, .end = end_expr, .span = self.spanSE(self.tok_start, self.tok_end) }))
                 } else {
                     const idx = self.parseExpr()
-                    if (self.tok == @intFromEnum(Token.colon)) {
+                    if (self.tok == Token.colon) {
                         // [start:end] or [start:] — end may be null_node
                         self.advance()
                         var end_expr = null_node
-                        if (self.tok != @intFromEnum(Token.rbrack)) {
+                        if (self.tok != Token.rbrack) {
                             end_expr = self.parseExpr()
                         }
-                        self.expect(@intFromEnum(Token.rbrack))
+                        self.expect(Token.rbrack as int)
                         node = self.ast.addExpr(Expr.slice_expr(SliceExpr { .base = node, .start = idx, .end = end_expr, .span = self.spanSE(self.tok_start, self.tok_end) }))
                     } else {
-                        self.expect(@intFromEnum(Token.rbrack))
+                        self.expect(Token.rbrack as int)
                         node = self.ast.addExpr(Expr.index_expr(IndexExpr { .base = node, .idx = idx, .span = self.spanSE(self.tok_start, self.tok_end) }))
                     }
                 }
@@ -1191,17 +1191,27 @@ struct Parser {
                 // Function call
                 self.advance()  // consume (
                 var args: List(int) = .{}
-                while (self.tok != @intFromEnum(Token.rparen) and self.tok != @intFromEnum(Token.eof)) {
+                while (self.tok != Token.rparen and self.tok != Token.eof) {
                     const arg = self.parseExpr()
                     if (arg != null_node) {
                         args.append(arg)
                     }
-                    if (!self.match(@intFromEnum(Token.comma))) {
+                    if (!self.match(Token.comma as int)) {
                         break
                     }
                 }
-                self.expect(@intFromEnum(Token.rparen))
+                self.expect(Token.rparen as int)
                 node = self.ast.addExpr(Expr.call(Call { .callee = node, .args = args, .span = self.spanSE(self.tok_start, self.tok_end) }))
+            } else if (tok == Token.kw_as) {
+                self.advance()
+                const type_node = self.parseType()
+                if (type_node == null_node) {
+                    self.errors.report(self.tok_start, ErrorCode.e200, "expected type after 'as'")
+                    return null_node
+                }
+                var args: List(int) = .{}
+                args.append(node)
+                node = self.ast.addExpr(Expr.builtin_call(BuiltinCallExpr { .kind = BuiltinKind.@"as" as int, .type_arg = type_node, .args = args, .span = self.spanSE(self.tok_start, self.tok_end) }))
             } else if (self.peekNextIsPeriod() or self.peekNextIsIdentColon()) {
                 // Struct init: Type { .x = 1 } or Type { x: 1 }
                 node = self.parseStructInitFrom(node)
@@ -1216,7 +1226,7 @@ struct Parser {
     /// Split into parseOperandLiteral/parseOperandComplex to avoid
     /// large stack frames that cause SIGBUS with many union temporaries.
     fn parseOperand() int {
-        const tok = @as(Token, @enumFromInt(self.tok))
+        const tok = @enumFromInt(self.tok) as Token
         const start = self.tok_start
 
         // Identifiers
@@ -1242,21 +1252,21 @@ struct Parser {
         if (tok == Token.int_lit) {
             const text = self.tok_text
             self.advance()
-            return self.ast.addExpr(Expr.literal(Literal { .kind = @intFromEnum(LiteralKind.@"int"), .value = text, .span = self.spanSE(start, self.tok_end) }))
+            return self.ast.addExpr(Expr.literal(Literal { .kind = LiteralKind.@"int" as int, .value = text, .span = self.spanSE(start, self.tok_end) }))
         }
 
         // Float literal
         if (tok == Token.float_lit) {
             const text = self.tok_text
             self.advance()
-            return self.ast.addExpr(Expr.literal(Literal { .kind = @intFromEnum(LiteralKind.@"float"), .value = text, .span = self.spanSE(start, self.tok_end) }))
+            return self.ast.addExpr(Expr.literal(Literal { .kind = LiteralKind.@"float" as int, .value = text, .span = self.spanSE(start, self.tok_end) }))
         }
 
         // String literal
         if (tok == Token.string_lit) {
             const text = self.tok_text
             self.advance()
-            return self.ast.addExpr(Expr.literal(Literal { .kind = @intFromEnum(LiteralKind.@"string"), .value = text, .span = self.spanSE(start, self.tok_end) }))
+            return self.ast.addExpr(Expr.literal(Literal { .kind = LiteralKind.@"string" as int, .value = text, .span = self.spanSE(start, self.tok_end) }))
         }
 
         // String interpolation: "text${expr}..."
@@ -1268,29 +1278,29 @@ struct Parser {
         if (tok == Token.char_lit) {
             const text = self.tok_text
             self.advance()
-            return self.ast.addExpr(Expr.literal(Literal { .kind = @intFromEnum(LiteralKind.char), .value = text, .span = self.spanSE(start, self.tok_end) }))
+            return self.ast.addExpr(Expr.literal(Literal { .kind = LiteralKind.char as int, .value = text, .span = self.spanSE(start, self.tok_end) }))
         }
 
         // Keywords as literals
         if (tok == Token.kw_true) {
             self.advance()
-            return self.ast.addExpr(Expr.literal(Literal { .kind = @intFromEnum(LiteralKind.true_lit), .value = "true", .span = self.spanSE(start, self.tok_end) }))
+            return self.ast.addExpr(Expr.literal(Literal { .kind = LiteralKind.true_lit as int, .value = "true", .span = self.spanSE(start, self.tok_end) }))
         }
         if (tok == Token.kw_false) {
             self.advance()
-            return self.ast.addExpr(Expr.literal(Literal { .kind = @intFromEnum(LiteralKind.false_lit), .value = "false", .span = self.spanSE(start, self.tok_end) }))
+            return self.ast.addExpr(Expr.literal(Literal { .kind = LiteralKind.false_lit as int, .value = "false", .span = self.spanSE(start, self.tok_end) }))
         }
         if (tok == Token.kw_null) {
             self.advance()
-            return self.ast.addExpr(Expr.literal(Literal { .kind = @intFromEnum(LiteralKind.null_lit), .value = "null", .span = self.spanSE(start, self.tok_end) }))
+            return self.ast.addExpr(Expr.literal(Literal { .kind = LiteralKind.null_lit as int, .value = "null", .span = self.spanSE(start, self.tok_end) }))
         }
         if (tok == Token.kw_undefined) {
             self.advance()
-            return self.ast.addExpr(Expr.literal(Literal { .kind = @intFromEnum(LiteralKind.undefined_lit), .value = "undefined", .span = self.spanSE(start, self.tok_end) }))
+            return self.ast.addExpr(Expr.literal(Literal { .kind = LiteralKind.undefined_lit as int, .value = "undefined", .span = self.spanSE(start, self.tok_end) }))
         }
         if (tok == Token.kw_unreachable) {
             self.advance()
-            return self.ast.addExpr(Expr.literal(Literal { .kind = @intFromEnum(LiteralKind.unreachable_lit), .value = "unreachable", .span = self.spanSE(start, self.tok_end) }))
+            return self.ast.addExpr(Expr.literal(Literal { .kind = LiteralKind.unreachable_lit as int, .value = "unreachable", .span = self.spanSE(start, self.tok_end) }))
         }
         return null_node
     }
@@ -1307,20 +1317,20 @@ struct Parser {
         if (tok == Token.lparen) {
             self.advance()  // consume (
             const inner = self.parseExpr()
-            if (self.tok == @intFromEnum(Token.comma)) {
+            if (self.tok == Token.comma) {
                 // Tuple literal: (a, b, c)
                 var elems: List(int) = .{}
                 elems.append(inner)
-                while (self.match(@intFromEnum(Token.comma))) {
-                    if (self.tok == @intFromEnum(Token.rparen)) {
+                while (self.match(Token.comma as int)) {
+                    if (self.tok == Token.rparen) {
                         break
                     }
                     elems.append(self.parseExpr())
                 }
-                self.expect(@intFromEnum(Token.rparen))
+                self.expect(Token.rparen as int)
                 return self.ast.addExpr(Expr.tuple_literal(TupleLiteral { .elements = elems, .span = self.spanSE(start, self.tok_end) }))
             }
-            self.expect(@intFromEnum(Token.rparen))
+            self.expect(Token.rparen as int)
             return self.ast.addExpr(Expr.paren(Paren { .inner = inner, .span = self.spanSE(start, self.tok_end) }))
         }
 
@@ -1328,13 +1338,13 @@ struct Parser {
         if (tok == Token.lbrack) {
             self.advance()  // consume [
             var elems: List(int) = .{}
-            while (self.tok != @intFromEnum(Token.rbrack) and self.tok != @intFromEnum(Token.eof)) {
+            while (self.tok != Token.rbrack and self.tok != Token.eof) {
                 elems.append(self.parseExpr())
-                if (!self.match(@intFromEnum(Token.comma))) {
+                if (!self.match(Token.comma as int)) {
                     break
                 }
             }
-            self.expect(@intFromEnum(Token.rbrack))
+            self.expect(Token.rbrack as int)
             return self.ast.addExpr(Expr.array_literal(ArrayLiteral { .elements = elems, .span = self.spanSE(start, self.tok_end) }))
         }
 
@@ -1371,8 +1381,8 @@ struct Parser {
         // error literal: error.Name
         if (tok == Token.kw_error) {
             self.advance()
-            if (self.match(@intFromEnum(Token.period))) {
-                if (self.tok == @intFromEnum(Token.ident)) {
+            if (self.match(Token.period as int)) {
+                if (self.tok == Token.ident) {
                     const name = self.tok_text
                     self.advance()
                     return self.ast.addExpr(Expr.error_literal(ErrorLiteralExpr { .error_name = name, .span = self.spanSE(start, self.tok_end) }))
@@ -1392,14 +1402,14 @@ struct Parser {
         // Period prefix: .variant, .{ .x = 1 } anonymous struct, or .{ } zero-init
         if (tok == Token.period) {
             self.advance()
-            if (self.tok == @intFromEnum(Token.lbrace)) {
+            if (self.tok == Token.lbrace) {
                 // .{ } — check if struct init or zero-init
-                if (self.peekToken() == @intFromEnum(Token.period) or self.peekToken() == @intFromEnum(Token.ident)) {
+                if (self.peekToken() == Token.period or self.peekToken() == Token.ident) {
                     // .{ .x = 1 } or .{ x: 1 } — anonymous struct init
                     const anon = self.ast.addExpr(Expr.ident(Ident { .name = "", .span = self.spanSE(start, start) }))
                     return self.parseStructInitFrom(anon)
                 }
-                if (self.peekToken() == @intFromEnum(Token.rbrace)) {
+                if (self.peekToken() == Token.rbrace) {
                     // .{ } — zero-init
                     self.advance()  // consume {
                     self.advance()  // consume }
@@ -1408,7 +1418,7 @@ struct Parser {
                 // .{ expr, expr } — could be tuple or array init
                 return self.parseBlockExpr()
             }
-            if (self.tok == @intFromEnum(Token.ident)) {
+            if (self.tok == Token.ident) {
                 const name = self.tok_text
                 self.advance()
                 return self.ast.addExpr(Expr.ident(Ident { .name = name, .span = self.spanSE(start, self.tok_end) }))
@@ -1426,14 +1436,14 @@ struct Parser {
 
     /// Check if { . follows — indicates struct init with period syntax.
     fn peekNextIsPeriod() bool {
-        if (self.tok != @intFromEnum(Token.lbrace)) { return false }
-        return self.peekToken() == @intFromEnum(Token.period)
+        if (self.tok != Token.lbrace) { return false }
+        return self.peekToken() == Token.period
     }
 
     /// Check if { ident : follows — indicates struct init with colon syntax (@safe).
     /// Uses 2-token lookahead with scanner state save/restore.
     fn peekNextIsIdentColon() bool {
-        if (self.tok != @intFromEnum(Token.lbrace)) { return false }
+        if (self.tok != Token.lbrace) { return false }
         // Save scanner state for restoration after lookahead
         const saved_pos = self.scanner.pos
         const saved_ch = self.scanner.ch
@@ -1444,16 +1454,16 @@ struct Parser {
         } else {
             after_brace = self.scanner.scanNext().tok
         }
-        if (after_brace != @intFromEnum(Token.ident)) {
+        if (after_brace != Token.ident) {
             self.scanner.pos = saved_pos
             self.scanner.ch = saved_ch
             return false
         }
         // Scan third token (after ident)
         const third = self.scanner.scanNext()
-        const result = third.tok == @intFromEnum(Token.colon) or
-                       third.tok == @intFromEnum(Token.comma) or
-                       third.tok == @intFromEnum(Token.rbrace)
+        const result = third.tok == Token.colon or
+                       third.tok == Token.comma or
+                       third.tok == Token.rbrace
         // Restore scanner state
         self.scanner.pos = saved_pos
         self.scanner.ch = saved_ch
@@ -1474,7 +1484,7 @@ struct Parser {
         const start_text = self.tok_text
         if (@lenOf(start_text) > 0) {
             segments.append(self.ast.addExpr(Expr.literal(Literal {
-                .kind = @intFromEnum(LiteralKind.@"string"), .value = start_text,
+                .kind = LiteralKind.@"string" as int, .value = start_text,
                 .span = self.spanSE(start, self.tok_end) })))
         }
         self.advance()  // consume string_interp_start
@@ -1482,20 +1492,20 @@ struct Parser {
         segments.append(self.parseExpr())
         // Mid and end segments
         while (true) {
-            if (self.tok == @intFromEnum(Token.string_interp_mid)) {
+            if (self.tok == Token.string_interp_mid) {
                 const mid_text = self.tok_text
                 if (@lenOf(mid_text) > 0) {
                     segments.append(self.ast.addExpr(Expr.literal(Literal {
-                        .kind = @intFromEnum(LiteralKind.@"string"), .value = mid_text,
+                        .kind = LiteralKind.@"string" as int, .value = mid_text,
                         .span = self.spanSE(self.tok_start, self.tok_end) })))
                 }
                 self.advance()  // consume mid
                 segments.append(self.parseExpr())
-            } else if (self.tok == @intFromEnum(Token.string_interp_end)) {
+            } else if (self.tok == Token.string_interp_end) {
                 const end_text = self.tok_text
                 if (@lenOf(end_text) > 0) {
                     segments.append(self.ast.addExpr(Expr.literal(Literal {
-                        .kind = @intFromEnum(LiteralKind.@"string"), .value = end_text,
+                        .kind = LiteralKind.@"string" as int, .value = end_text,
                         .span = self.spanSE(self.tok_start, self.tok_end) })))
                 }
                 self.advance()  // consume end
@@ -1512,24 +1522,24 @@ struct Parser {
     fn parseClosureExpr() int {
         const start = self.tok_start
         self.advance()  // consume 'fn'
-        if (!self.expect(@intFromEnum(Token.lparen))) {
+        if (!self.expect(Token.lparen as int)) {
             return null_node
         }
         var params: List(int) = .{}
-        while (self.tok != @intFromEnum(Token.rparen) and self.tok != @intFromEnum(Token.eof)) {
+        while (self.tok != Token.rparen and self.tok != Token.eof) {
             const param = self.parseFieldDef()
             if (param != null_node) {
                 params.append(param)
             }
-            if (!self.match(@intFromEnum(Token.comma))) {
+            if (!self.match(Token.comma as int)) {
                 break
             }
         }
-        if (!self.expect(@intFromEnum(Token.rparen))) {
+        if (!self.expect(Token.rparen as int)) {
             return null_node
         }
         var ret_type = null_node
-        if (self.tok != @intFromEnum(Token.lbrace) and self.tok != @intFromEnum(Token.eof)) {
+        if (self.tok != Token.lbrace and self.tok != Token.eof) {
             ret_type = self.parseType()
         }
         const body = self.parseBlock()
@@ -1550,37 +1560,37 @@ struct Parser {
         var fields: List(int) = .{}
         if (use_colon) {
             // Colon syntax (@safe): { name: val, name2: val2 }
-            while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
+            while (self.tok != Token.rbrace and self.tok != Token.eof) {
                 const fi = self.parseFieldInit()
                 if (fi != null_node) {
                     fields.append(fi)
                 }
-                if (!self.match(@intFromEnum(Token.comma))) {
+                if (!self.match(Token.comma as int)) {
                     break
                 }
             }
         } else {
             // Period syntax: { .name = val, .name2 = val2 }
-            while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
-                if (!self.expect(@intFromEnum(Token.period))) {
+            while (self.tok != Token.rbrace and self.tok != Token.eof) {
+                if (!self.expect(Token.period as int)) {
                     break
                 }
-                if (self.tok != @intFromEnum(Token.ident)) {
+                if (self.tok != Token.ident) {
                     self.errors.report(self.tok_start, ErrorCode.e203, "expected field name")
                     break
                 }
                 const fname = self.tok_text
                 const fstart = self.tok_start
                 self.advance()
-                self.expect(@intFromEnum(Token.assign))
+                self.expect(Token.assign as int)
                 const val = self.parseExpr()
                 fields.append(self.ast.addExpr(Expr.field_init_node(FieldInitNode { .name = fname, .value = val, .span = self.spanSE(fstart, self.tok_end) })))
-                if (!self.match(@intFromEnum(Token.comma))) {
+                if (!self.match(Token.comma as int)) {
                     break
                 }
             }
         }
-        self.expect(@intFromEnum(Token.rbrace))
+        self.expect(Token.rbrace as int)
         return self.ast.addExpr(Expr.struct_init(StructInitExpr { .type_name = type_name, .type_args = type_args, .fields = fields, .span = self.spanSE(start, self.tok_end) }))
     }
 
@@ -1588,31 +1598,31 @@ struct Parser {
     fn parseIfExpr() int {
         const start = self.tok_start
         self.advance()  // consume 'if'
-        if (!self.expect(@intFromEnum(Token.lparen))) {
+        if (!self.expect(Token.lparen as int)) {
             return null_node
         }
         const cond = self.parseExpr()
-        if (!self.expect(@intFromEnum(Token.rparen))) {
+        if (!self.expect(Token.rparen as int)) {
             return null_node
         }
         // Optional capture: |val| or |*val|
         var capture = ""
         var capture_is_ptr = false
-        if (self.tok == @intFromEnum(Token.@"or")) {
+        if (self.tok == Token.@"or") {
             self.advance()
-            if (self.tok == @intFromEnum(Token.mul)) {
+            if (self.tok == Token.mul) {
                 capture_is_ptr = true
                 self.advance()
             }
-            if (self.tok == @intFromEnum(Token.ident)) {
+            if (self.tok == Token.ident) {
                 capture = self.tok_text
                 self.advance()
             }
-            self.expect(@intFromEnum(Token.@"or"))
+            self.expect(Token.@"or" as int)
         }
         const then_br = self.parseExpr()
         var else_br = null_node
-        if (self.match(@intFromEnum(Token.kw_else))) {
+        if (self.match(Token.kw_else as int)) {
             else_br = self.parseExpr()
         }
         return self.ast.addExpr(Expr.if_expr(IfExpr { .condition = cond, .then_branch = then_br, .else_branch = else_br, .capture = capture, .capture_is_ptr = capture_is_ptr, .span = self.spanSE(start, self.tok_end) }))
@@ -1623,34 +1633,34 @@ struct Parser {
         const start = self.tok_start
         self.advance()  // consume 'switch'
         var subject = null_node
-        if (self.tok == @intFromEnum(Token.lparen)) {
+        if (self.tok == Token.lparen) {
             self.advance()
             subject = self.parseExpr()
-            if (!self.expect(@intFromEnum(Token.rparen))) {
+            if (!self.expect(Token.rparen as int)) {
                 return null_node
             }
         } else {
             subject = self.parseExpr()
         }
-        if (!self.expect(@intFromEnum(Token.lbrace))) {
+        if (!self.expect(Token.lbrace as int)) {
             return null_node
         }
         var cases: List(int) = .{}
         var else_body = null_node
-        while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
+        while (self.tok != Token.rbrace and self.tok != Token.eof) {
             // else => body
-            if (self.tok == @intFromEnum(Token.kw_else)) {
+            if (self.tok == Token.kw_else) {
                 self.advance()
-                self.expect(@intFromEnum(Token.fat_arrow))
+                self.expect(Token.fat_arrow as int)
                 else_body = self.parseExpr()
-                self.match(@intFromEnum(Token.comma))
-            } else if (self.tok == @intFromEnum(Token.ident) and self.tok_text == "_") {
+                self.match(Token.comma as int)
+            } else if (self.tok == Token.ident and self.tok_text == "_") {
                 // Wildcard _ => treat as else (Rust/Zig convention)
                 // Ported from parser.zig:1502-1508
                 self.advance()
-                self.expect(@intFromEnum(Token.fat_arrow))
+                self.expect(Token.fat_arrow as int)
                 else_body = self.parseExpr()
-                self.match(@intFromEnum(Token.comma))
+                self.match(Token.comma as int)
             } else {
                 const case_node = self.parseSwitchCase()
                 if (case_node != null_node) {
@@ -1658,7 +1668,7 @@ struct Parser {
                 }
             }
         }
-        self.expect(@intFromEnum(Token.rbrace))
+        self.expect(Token.rbrace as int)
         return self.ast.addExpr(Expr.switch_expr(SwitchExpr { .subject = subject, .cases = cases, .else_body = else_body, .span = self.spanSE(start, self.tok_end) }))
     }
 
@@ -1673,15 +1683,15 @@ struct Parser {
         patterns.append(first)
 
         // Range pattern: 1..5 (ported from parser.zig:1517-1521)
-        if (self.tok == @intFromEnum(Token.period_period)) {
+        if (self.tok == Token.period_period) {
             self.advance()
             const range_end = self.parsePrimaryExpr()
             patterns.append(range_end)
             is_range = 1
         } else {
             // Multiple comma-separated patterns
-            while (self.match(@intFromEnum(Token.comma))) {
-                if (self.tok == @intFromEnum(Token.fat_arrow) or self.tok == @intFromEnum(Token.kw_else) or self.tok == @intFromEnum(Token.rbrace)) {
+            while (self.match(Token.comma as int)) {
+                if (self.tok == Token.fat_arrow or self.tok == Token.kw_else or self.tok == Token.rbrace) {
                     break
                 }
                 patterns.append(self.parsePrimaryExpr())
@@ -1690,25 +1700,25 @@ struct Parser {
 
         // Optional capture: |val|
         var capture = ""
-        if (self.tok == @intFromEnum(Token.@"or")) {
+        if (self.tok == Token.@"or") {
             self.advance()
-            if (self.tok == @intFromEnum(Token.ident)) {
+            if (self.tok == Token.ident) {
                 capture = self.tok_text
                 self.advance()
             }
-            self.expect(@intFromEnum(Token.@"or"))
+            self.expect(Token.@"or" as int)
         }
 
         // Guard expression: pattern if expr => (ported from parser.zig:1537-1542)
         var guard = null_node
-        if (self.tok == @intFromEnum(Token.kw_if)) {
+        if (self.tok == Token.kw_if) {
             self.advance()
             guard = self.parseExpr()
         }
 
-        self.expect(@intFromEnum(Token.fat_arrow))
+        self.expect(Token.fat_arrow as int)
         const body = self.parseExpr()
-        self.match(@intFromEnum(Token.comma))
+        self.match(Token.comma as int)
         return self.ast.addExpr(Expr.switch_case_node(SwitchCaseNode { .capture = capture, .guard = guard, .is_range = is_range == 1, .body = body, .patterns = patterns, .span = self.spanSE(start, self.tok_end) }))
     }
 
@@ -1718,7 +1728,7 @@ struct Parser {
         self.advance()  // consume {
         var stmts: List(int) = .{}
         var result_expr = null_node
-        while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
+        while (self.tok != Token.rbrace and self.tok != Token.eof) {
             const prev_pos = self.tok_start
             const s = self.parseStmt()
             if (s != null_node) {
@@ -1736,7 +1746,7 @@ struct Parser {
                 stmts.count -= 1
             }
         }
-        self.expect(@intFromEnum(Token.rbrace))
+        self.expect(Token.rbrace as int)
         return self.ast.addExpr(Expr.block_expr(BlockExpr { .stmts = stmts, .result_expr = result_expr, .span = self.spanSE(start, self.tok_end) }))
     }
 
@@ -1745,20 +1755,20 @@ struct Parser {
     fn parseBuiltinCall() int {
         const start = self.tok_start
         self.advance()  // consume @
-        if (self.tok != @intFromEnum(Token.ident) and self.tok != @intFromEnum(Token.kw_string)) {
+        if (self.tok != Token.ident and self.tok != Token.kw_string and self.tok != Token.kw_as) {
             self.errors.report(start, ErrorCode.e200, "expected builtin name after @")
             return null_node
         }
-        const name = if (self.tok == @intFromEnum(Token.kw_string)) { "string" } else { self.tok_text }
+        const name = if (self.tok == Token.kw_string) { "string" } else if (self.tok == Token.kw_as) { "as" } else { self.tok_text }
         const kind = builtinFromString(name)
         self.advance()
-        if (!self.expect(@intFromEnum(Token.lparen))) {
+        if (!self.expect(Token.lparen as int)) {
             return null_node
         }
         var type_arg = null_node
         var args: List(int) = .{}
         const kind_val = kind orelse 0
-        const bk = @as(BuiltinKind, @enumFromInt(kind_val))
+        const bk = @enumFromInt(kind_val) as BuiltinKind
         switch (bk) {
             // 0 args
             .trap, .target, .target_os, .target_arch => {},
@@ -1770,7 +1780,7 @@ struct Parser {
             .int_cast, .float_cast, .float_from_int, .ptr_cast, .int_to_ptr, .has_field,
             .bit_cast, .truncate, .@"as", .offset_of, .align_cast => {
                 type_arg = self.parseType()
-                self.expect(@intFromEnum(Token.comma))
+                self.expect(Token.comma as int)
                 args.append(self.parseExpr())
             },
             // @enumFromInt: try 2-arg (Type, val) else 1-arg (val)
@@ -1784,7 +1794,7 @@ struct Parser {
                 const saved_end = self.tok_end
                 const saved_peek = self.has_peek
                 type_arg = self.parseType()
-                if (self.tok == @intFromEnum(Token.comma)) {
+                if (self.tok == Token.comma) {
                     // 2-arg form confirmed
                     self.advance()
                     args.append(self.parseExpr())
@@ -1816,19 +1826,19 @@ struct Parser {
             .@"string", .assert_eq, .fmin, .fmax, .field, .min, .max,
             .atomic_store, .atomic_add, .atomic_exchange => {
                 args.append(self.parseExpr())
-                self.expect(@intFromEnum(Token.comma))
+                self.expect(Token.comma as int)
                 args.append(self.parseExpr())
             },
             // 3 value args
             .atomic_cas => {
                 args.append(self.parseExpr())
-                self.expect(@intFromEnum(Token.comma))
+                self.expect(Token.comma as int)
                 args.append(self.parseExpr())
-                self.expect(@intFromEnum(Token.comma))
+                self.expect(Token.comma as int)
                 args.append(self.parseExpr())
             },
         }
-        self.expect(@intFromEnum(Token.rparen))
+        self.expect(Token.rparen as int)
         return self.ast.addExpr(Expr.builtin_call(BuiltinCallExpr { .kind = kind_val, .type_arg = type_arg, .args = args, .span = self.spanSE(start, self.tok_end) }))
     }
 
@@ -1836,7 +1846,7 @@ struct Parser {
     fn parseNewExpr() int {
         const start = self.tok_start
         self.advance()  // consume 'new'
-        if (self.tok != @intFromEnum(Token.ident)) {
+        if (self.tok != Token.ident) {
             self.errors.report(start, ErrorCode.e200, "expected type name after new")
             return null_node
         }
@@ -1851,60 +1861,60 @@ struct Parser {
         // In safe_mode: peek at first token after (. If type-like → type args. Else → ctor args.
         // Non-safe: ( = type args always.
         var is_ctor = 0
-        if (self.tok == @intFromEnum(Token.lparen)) {
+        if (self.tok == Token.lparen) {
             if (self.safe_mode) {
                 // Peek to disambiguate: uppercase ident, *, ?, [, type keyword = type args
                 const pk = self.peekToken()
-                const is_type_like = @as(Token, @enumFromInt(pk)).isTypeKeyword() or
-                    pk == @intFromEnum(Token.mul) or
-                    pk == @intFromEnum(Token.question) or
-                    pk == @intFromEnum(Token.lbrack)
+                const is_type_like = (@enumFromInt(pk) as Token).isTypeKeyword() or
+                    pk == Token.mul or
+                    pk == Token.question or
+                    pk == Token.lbrack
                 if (is_type_like) {
                     // Type args
                     self.advance()  // consume (
-                    while (self.tok != @intFromEnum(Token.rparen) and self.tok != @intFromEnum(Token.eof)) {
+                    while (self.tok != Token.rparen and self.tok != Token.eof) {
                         type_args.append(self.parseType())
-                        if (!self.match(@intFromEnum(Token.comma))) {
+                        if (!self.match(Token.comma as int)) {
                             break
                         }
                     }
-                    self.expect(@intFromEnum(Token.rparen))
+                    self.expect(Token.rparen as int)
                 } else {
                     // Constructor args
                     is_ctor = 1
                     self.advance()
-                    while (self.tok != @intFromEnum(Token.rparen) and self.tok != @intFromEnum(Token.eof)) {
+                    while (self.tok != Token.rparen and self.tok != Token.eof) {
                         ctor_args.append(self.parseExpr())
-                        if (!self.match(@intFromEnum(Token.comma))) {
+                        if (!self.match(Token.comma as int)) {
                             break
                         }
                     }
-                    self.expect(@intFromEnum(Token.rparen))
+                    self.expect(Token.rparen as int)
                 }
             } else {
                 // Non-safe: ( is always type args
                 self.advance()
-                while (self.tok != @intFromEnum(Token.rparen) and self.tok != @intFromEnum(Token.eof)) {
+                while (self.tok != Token.rparen and self.tok != Token.eof) {
                     type_args.append(self.parseType())
-                    if (!self.match(@intFromEnum(Token.comma))) {
+                    if (!self.match(Token.comma as int)) {
                         break
                     }
                 }
-                self.expect(@intFromEnum(Token.rparen))
+                self.expect(Token.rparen as int)
             }
         }
 
         // Field initializers
-        if (self.tok == @intFromEnum(Token.lbrace)) {
+        if (self.tok == Token.lbrace) {
             self.advance()
-            while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
+            while (self.tok != Token.rbrace and self.tok != Token.eof) {
                 const fi = self.parseFieldInit()
                 if (fi != null_node) {
                     fields.append(fi)
                 }
-                self.match(@intFromEnum(Token.comma))
+                self.match(Token.comma as int)
             }
-            self.expect(@intFromEnum(Token.rbrace))
+            self.expect(Token.rbrace as int)
         }
 
         return self.ast.addExpr(Expr.new_expr(NewExpr { .type_name = type_name, .type_args = type_args, .fields = fields, .constructor_args = ctor_args, .is_constructor = is_ctor == 1, .span = self.spanSE(start, self.tok_end) }))
@@ -1913,23 +1923,23 @@ struct Parser {
     /// Parse field init: .name = expr or name: expr (@safe)
     fn parseFieldInit() int {
         const start = self.tok_start
-        if (self.tok == @intFromEnum(Token.period)) {
+        if (self.tok == Token.period) {
             // Standard: .name = expr
             self.advance()
-            if (self.tok != @intFromEnum(Token.ident)) {
+            if (self.tok != Token.ident) {
                 return null_node
             }
             const name = self.tok_text
             self.advance()
-            self.expect(@intFromEnum(Token.assign))
+            self.expect(Token.assign as int)
             const value = self.parseExpr()
             return self.ast.addExpr(Expr.field_init_node(FieldInitNode { .name = name, .value = value, .span = self.spanSE(start, self.tok_end) }))
         }
-        if (self.tok == @intFromEnum(Token.ident)) {
+        if (self.tok == Token.ident) {
             // @safe colon syntax: name: expr
             const name = self.tok_text
             self.advance()
-            if (self.match(@intFromEnum(Token.colon))) {
+            if (self.match(Token.colon as int)) {
                 const value = self.parseExpr()
                 return self.ast.addExpr(Expr.field_init_node(FieldInitNode { .name = name, .value = value, .span = self.spanSE(start, self.tok_end) }))
             }
@@ -1947,17 +1957,17 @@ struct Parser {
 
     /// Parse a statement.
     fn parseStmt() int {
-        const tok = @as(Token, @enumFromInt(self.tok))
+        const tok = @enumFromInt(self.tok) as Token
         // Label detection: `label: while` or `label: for`
         if (tok == Token.ident) {
-            if (self.peekToken() == @intFromEnum(Token.colon)) {
+            if (self.peekToken() == Token.colon) {
                 const label = self.tok_text
                 self.advance()  // consume ident
                 self.advance()  // consume :
-                if (self.tok == @intFromEnum(Token.kw_while)) {
+                if (self.tok == Token.kw_while) {
                     return self.parseWhileStmt(label)
                 }
-                if (self.tok == @intFromEnum(Token.kw_for)) {
+                if (self.tok == Token.kw_for) {
                     return self.parseForStmt(label, 0)
                 }
                 self.errors.report(self.tok_start, ErrorCode.e201, "expected 'while' or 'for' after label")
@@ -1978,7 +1988,7 @@ struct Parser {
             return self.ast.addStmt(Stmt.expr_stmt(ExprStmt { .expr = decl_idx, .span = self.ast.nodeSpan(decl_idx) }))
         }
         if (tok == Token.kw_packed) {
-            if (@as(Token, @enumFromInt(self.peekToken())) == Token.kw_struct) {
+            if ((@enumFromInt(self.peekToken()) as Token) == Token.kw_struct) {
                 const decl_idx = self.parseStructDecl(1)
                 return self.ast.addStmt(Stmt.expr_stmt(ExprStmt { .expr = decl_idx, .span = self.ast.nodeSpan(decl_idx) }))
             }
@@ -2006,19 +2016,19 @@ struct Parser {
         self.advance()  // consume 'return'
         var value = null_node
         // Return has a value if the next token isn't a statement-ending token
-        if (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof) and self.tok != @intFromEnum(Token.semicolon)) {
+        if (self.tok != Token.rbrace and self.tok != Token.eof and self.tok != Token.semicolon) {
             value = self.parseExpr()
         }
-        self.match(@intFromEnum(Token.semicolon))
+        self.match(Token.semicolon as int)
         return self.ast.addStmt(Stmt.return_stmt(ReturnStmt { .value = value, .span = self.spanSE(start, self.tok_end) }))
     }
 
     fn parseVarStmt(is_const: int) int {
         const start = self.tok_start
         self.advance()  // consume const/var/let
-        if (self.tok != @intFromEnum(Token.ident)) {
+        if (self.tok != Token.ident) {
             // P11: keyword-as-name error (Zig parser.zig:1711-1717)
-            if (@as(Token, @enumFromInt(self.tok)).isKeyword()) {
+            if ((@enumFromInt(self.tok) as Token).isKeyword()) {
                 self.errors.report(self.tok_start, ErrorCode.e203, "keyword cannot be used as variable name")
             } else {
                 self.errors.report(self.tok_start, ErrorCode.e203, "expected variable name")
@@ -2029,64 +2039,64 @@ struct Parser {
         const name_start = self.tok_start
         self.advance()
         var type_expr = null_node
-        if (self.match(@intFromEnum(Token.colon))) {
+        if (self.match(Token.colon as int)) {
             type_expr = self.parseType()
         }
         // Destructuring: const a, b = expr
-        if (self.tok == @intFromEnum(Token.comma)) {
+        if (self.tok == Token.comma) {
             return self.parseDestructureStmtFrom(name, type_expr, name_start, start, is_const)
         }
         var value = null_node
-        if (self.match(@intFromEnum(Token.assign))) {
+        if (self.match(Token.assign as int)) {
             value = self.parseExpr()
         }
-        self.match(@intFromEnum(Token.semicolon))
+        self.match(Token.semicolon as int)
         return self.ast.addStmt(Stmt.var_stmt(VarStmt { .name = name, .type_expr = type_expr, .value = value, .is_const = is_const == 1, .is_weak = false, .is_unowned = false, .span = self.spanSE(start, self.tok_end) }))
     }
 
     fn parseWeakVarStmt() int {
         self.advance()  // consume 'weak'
         const start = self.tok_start
-        const is_const = if (self.tok == @intFromEnum(Token.kw_const)) { 1 } else { 0 }
+        const is_const = if (self.tok == Token.kw_const) { 1 } else { 0 }
         self.advance()  // consume var/const
-        if (self.tok != @intFromEnum(Token.ident)) {
+        if (self.tok != Token.ident) {
             self.errors.report(self.tok_start, ErrorCode.e203, "expected variable name")
             return null_node
         }
         const name = self.tok_text
         self.advance()
         var type_expr = null_node
-        if (self.match(@intFromEnum(Token.colon))) {
+        if (self.match(Token.colon as int)) {
             type_expr = self.parseType()
         }
         var value = null_node
-        if (self.match(@intFromEnum(Token.assign))) {
+        if (self.match(Token.assign as int)) {
             value = self.parseExpr()
         }
-        self.match(@intFromEnum(Token.semicolon))
+        self.match(Token.semicolon as int)
         return self.ast.addStmt(Stmt.var_stmt(VarStmt { .name = name, .type_expr = type_expr, .value = value, .is_const = is_const == 1, .is_weak = true, .is_unowned = false, .span = self.spanSE(start, self.tok_end) }))
     }
 
     fn parseUnownedVarStmt() int {
         self.advance()  // consume 'unowned'
         const start = self.tok_start
-        const is_const = if (self.tok == @intFromEnum(Token.kw_const)) { 1 } else { 0 }
+        const is_const = if (self.tok == Token.kw_const) { 1 } else { 0 }
         self.advance()  // consume var/const
-        if (self.tok != @intFromEnum(Token.ident)) {
+        if (self.tok != Token.ident) {
             self.errors.report(self.tok_start, ErrorCode.e203, "expected variable name")
             return null_node
         }
         const name = self.tok_text
         self.advance()
         var type_expr = null_node
-        if (self.match(@intFromEnum(Token.colon))) {
+        if (self.match(Token.colon as int)) {
             type_expr = self.parseType()
         }
         var value = null_node
-        if (self.match(@intFromEnum(Token.assign))) {
+        if (self.match(Token.assign as int)) {
             value = self.parseExpr()
         }
-        self.match(@intFromEnum(Token.semicolon))
+        self.match(Token.semicolon as int)
         return self.ast.addStmt(Stmt.var_stmt(VarStmt { .name = name, .type_expr = type_expr, .value = value, .is_const = is_const == 1, .is_weak = false, .is_unowned = true, .span = self.spanSE(start, self.tok_end) }))
     }
 
@@ -2094,39 +2104,39 @@ struct Parser {
     fn parseIfStmt() int {
         const start = self.tok_start
         self.advance()  // consume 'if'
-        if (!self.expect(@intFromEnum(Token.lparen))) {
+        if (!self.expect(Token.lparen as int)) {
             return null_node
         }
         const cond = self.parseExpr()
-        if (!self.expect(@intFromEnum(Token.rparen))) {
+        if (!self.expect(Token.rparen as int)) {
             return null_node
         }
         var capture = ""
         var capture_is_ptr = false
-        if (self.tok == @intFromEnum(Token.@"or")) {
+        if (self.tok == Token.@"or") {
             self.advance()
-            if (self.tok == @intFromEnum(Token.mul)) {
+            if (self.tok == Token.mul) {
                 capture_is_ptr = true
                 self.advance()
             }
-            if (self.tok == @intFromEnum(Token.ident)) {
+            if (self.tok == Token.ident) {
                 capture = self.tok_text
                 self.advance()
             }
-            self.expect(@intFromEnum(Token.@"or"))
+            self.expect(Token.@"or" as int)
         }
         // P8: braceless then/else support (Zig parser.zig:1818-1826)
         var then_br = null_node
-        if (self.tok == @intFromEnum(Token.lbrace)) {
+        if (self.tok == Token.lbrace) {
             then_br = self.parseBlock()
         } else {
             then_br = self.parseStmt()
         }
         var else_br = null_node
-        if (self.match(@intFromEnum(Token.kw_else))) {
-            if (self.tok == @intFromEnum(Token.kw_if)) {
+        if (self.match(Token.kw_else as int)) {
+            if (self.tok == Token.kw_if) {
                 else_br = self.parseIfStmt()
-            } else if (self.tok == @intFromEnum(Token.lbrace)) {
+            } else if (self.tok == Token.lbrace) {
                 else_br = self.parseBlock()
             } else {
                 else_br = self.parseStmt()
@@ -2139,40 +2149,40 @@ struct Parser {
     fn parseWhileStmt(label: string) int {
         const start = self.tok_start
         self.advance()  // consume 'while'
-        if (!self.expect(@intFromEnum(Token.lparen))) {
+        if (!self.expect(Token.lparen as int)) {
             return null_node
         }
         const cond = self.parseExpr()
-        if (!self.expect(@intFromEnum(Token.rparen))) {
+        if (!self.expect(Token.rparen as int)) {
             return null_node
         }
         var capture = ""
         var capture_is_ptr = false
-        if (self.tok == @intFromEnum(Token.@"or")) {
+        if (self.tok == Token.@"or") {
             self.advance()
-            if (self.tok == @intFromEnum(Token.mul)) {
+            if (self.tok == Token.mul) {
                 capture_is_ptr = true
                 self.advance()
             }
-            if (self.tok == @intFromEnum(Token.ident)) {
+            if (self.tok == Token.ident) {
                 capture = self.tok_text
                 self.advance()
             }
-            self.expect(@intFromEnum(Token.@"or"))
+            self.expect(Token.@"or" as int)
         }
         // P6: continue expression with assignment (Zig parser.zig:1841-1852)
         var cont = null_node
-        if (self.match(@intFromEnum(Token.colon))) {
-            if (self.match(@intFromEnum(Token.lparen))) {
+        if (self.match(Token.colon as int)) {
+            if (self.match(Token.lparen as int)) {
                 cont = self.parseExpr()
                 // Check for assignment in continue expr: : (x = x + 1)
-                if (@as(Token, @enumFromInt(self.tok)).isAssignment()) {
+                if ((@enumFromInt(self.tok) as Token).isAssignment()) {
                     const op = self.tok
                     self.advance()
                     const rhs = self.parseExpr()
                     cont = self.ast.addStmt(Stmt.assign_stmt(AssignStmt { .target = cont, .op = op, .value = rhs, .span = self.spanSE(start, self.tok_end) }))
                 }
-                self.expect(@intFromEnum(Token.rparen))
+                self.expect(Token.rparen as int)
             }
         }
         const body = self.parseBlock()
@@ -2184,7 +2194,7 @@ struct Parser {
         const start = self.tok_start
         self.advance()  // consume 'for'
         // Binding name
-        if (self.tok != @intFromEnum(Token.ident)) {
+        if (self.tok != Token.ident) {
             self.errors.report(self.tok_start, ErrorCode.e203, "expected loop variable name")
             return null_node
         }
@@ -2194,20 +2204,20 @@ struct Parser {
         // Zig parser.zig:1864-1876: first=index, second=value
         var binding = first_binding
         var index_binding = ""
-        if (self.match(@intFromEnum(Token.comma))) {
-            if (self.tok == @intFromEnum(Token.ident)) {
+        if (self.match(Token.comma as int)) {
+            if (self.tok == Token.ident) {
                 index_binding = first_binding
                 binding = self.tok_text
                 self.advance()
             }
         }
-        self.expect(@intFromEnum(Token.kw_in))
+        self.expect(Token.kw_in as int)
         // Range (0..10) or iterable
         const range_or_iter = self.parseExpr()
         var range_start = null_node
         var range_end = null_node
         var iterable = null_node
-        if (self.tok == @intFromEnum(Token.period_period)) {
+        if (self.tok == Token.period_period) {
             // Range: start..end
             self.advance()
             range_start = range_or_iter
@@ -2221,7 +2231,7 @@ struct Parser {
 
     fn parseInlineFor() int {
         self.advance()  // consume 'inline'
-        if (self.tok != @intFromEnum(Token.kw_for)) {
+        if (self.tok != Token.kw_for) {
             self.errors.report(self.tok_start, ErrorCode.e200, "expected for after inline")
             return null_node
         }
@@ -2233,17 +2243,17 @@ struct Parser {
         const start = self.tok_start
         self.advance()  // consume 'break'
         var label = ""
-        if (self.tok == @intFromEnum(Token.colon)) {
+        if (self.tok == Token.colon) {
             self.advance()  // consume ':'
-            if (self.tok == @intFromEnum(Token.ident)) {
+            if (self.tok == Token.ident) {
                 label = self.tok_text
                 self.advance()
             }
-        } else if (self.tok == @intFromEnum(Token.ident)) {
+        } else if (self.tok == Token.ident) {
             label = self.tok_text
             self.advance()
         }
-        self.match(@intFromEnum(Token.semicolon))
+        self.match(Token.semicolon as int)
         return self.ast.addStmt(Stmt.break_stmt(BreakStmt { .label = label, .span = self.spanSE(start, self.tok_end) }))
     }
 
@@ -2251,11 +2261,11 @@ struct Parser {
         const start = self.tok_start
         self.advance()  // consume 'continue'
         var label = ""
-        if (self.tok == @intFromEnum(Token.ident)) {
+        if (self.tok == Token.ident) {
             label = self.tok_text
             self.advance()
         }
-        self.match(@intFromEnum(Token.semicolon))
+        self.match(Token.semicolon as int)
         return self.ast.addStmt(Stmt.continue_stmt(ContinueStmt { .label = label, .span = self.spanSE(start, self.tok_end) }))
     }
 
@@ -2264,19 +2274,19 @@ struct Parser {
         const start = self.tok_start
         self.advance()  // consume 'defer'/'errdefer'
         var expr = null_node
-        if (self.tok == @intFromEnum(Token.lbrace)) {
+        if (self.tok == Token.lbrace) {
             expr = self.parseBlock()
         } else {
             expr = self.parseExpr()
             // Check for assignment after expression (defer x = y)
-            if (@as(Token, @enumFromInt(self.tok)).isAssignment()) {
+            if ((@enumFromInt(self.tok) as Token).isAssignment()) {
                 const op = self.tok
                 self.advance()
                 const rhs = self.parseExpr()
                 expr = self.ast.addStmt(Stmt.assign_stmt(AssignStmt { .target = expr, .op = op, .value = rhs, .span = self.spanSE(start, self.tok_end) }))
             }
         }
-        self.match(@intFromEnum(Token.semicolon))
+        self.match(Token.semicolon as int)
         return self.ast.addStmt(Stmt.defer_stmt(DeferStmt { .expr = expr, .is_errdefer = is_errdefer == 1, .span = self.spanSE(start, self.tok_end) }))
     }
 
@@ -2284,8 +2294,8 @@ struct Parser {
     fn parseDestructureStmtFrom(first_name: string, first_type: int, first_start: int, start: int, is_const: int) int {
         var bindings: List(int) = .{}
         bindings.append(self.ast.addExpr(Expr.destructure_bind(DestructureBindNode { .name = first_name, .type_expr = first_type, .span = self.spanSE(first_start, self.tok_end) })))
-        while (self.match(@intFromEnum(Token.comma))) {
-            if (self.tok != @intFromEnum(Token.ident)) {
+        while (self.match(Token.comma as int)) {
+            if (self.tok != Token.ident) {
                 self.errors.report(self.tok_start, ErrorCode.e203, "expected variable name")
                 break
             }
@@ -2293,16 +2303,16 @@ struct Parser {
             const bstart = self.tok_start
             self.advance()
             var btype = null_node
-            if (self.match(@intFromEnum(Token.colon))) {
+            if (self.match(Token.colon as int)) {
                 btype = self.parseType()
             }
             bindings.append(self.ast.addExpr(Expr.destructure_bind(DestructureBindNode { .name = bname, .type_expr = btype, .span = self.spanSE(bstart, self.tok_end) })))
         }
-        if (!self.expect(@intFromEnum(Token.assign))) {
+        if (!self.expect(Token.assign as int)) {
             return null_node
         }
         const value = self.parseExpr()
-        self.match(@intFromEnum(Token.semicolon))
+        self.match(Token.semicolon as int)
         return self.ast.addStmt(Stmt.destructure_stmt(DestructureStmt { .bindings = bindings, .value = value, .is_const = is_const == 1, .span = self.spanSE(start, self.tok_end) }))
     }
 
@@ -2313,15 +2323,15 @@ struct Parser {
         if (expr == null_node) {
             return null_node
         }
-        const tok = @as(Token, @enumFromInt(self.tok))
+        const tok = @enumFromInt(self.tok) as Token
         if (tok.isAssignment()) {
             const op = self.tok
             self.advance()
             const value = self.parseExpr()
-            self.match(@intFromEnum(Token.semicolon))
+            self.match(Token.semicolon as int)
             return self.ast.addStmt(Stmt.assign_stmt(AssignStmt { .target = expr, .op = op, .value = value, .span = self.spanSE(start, self.tok_end) }))
         }
-        self.match(@intFromEnum(Token.semicolon))
+        self.match(Token.semicolon as int)
         return self.ast.addStmt(Stmt.expr_stmt(ExprStmt { .expr = expr, .span = self.spanSE(start, self.tok_end) }))
     }
 
@@ -2332,11 +2342,11 @@ struct Parser {
     /// Parse a { ... } block.
     fn parseBlock() int {
         const start = self.tok_start
-        if (!self.expect(@intFromEnum(Token.lbrace))) {
+        if (!self.expect(Token.lbrace as int)) {
             return null_node
         }
         var stmts: List(int) = .{}
-        while (self.tok != @intFromEnum(Token.rbrace) and self.tok != @intFromEnum(Token.eof)) {
+        while (self.tok != Token.rbrace and self.tok != Token.eof) {
             const prev_pos = self.tok_start
             const s = self.parseStmt()
             if (s != null_node) {
@@ -2346,7 +2356,7 @@ struct Parser {
                 self.advance()
             }
         }
-        self.expect(@intFromEnum(Token.rbrace))
+        self.expect(Token.rbrace as int)
         return self.ast.addStmt(Stmt.block_stmt(BlockStmt { .stmts = stmts, .span = self.spanSE(start, self.tok_end) }))
     }
 
@@ -2354,66 +2364,66 @@ struct Parser {
     fn parseType() int {
         const start = self.tok_start
         // P3: @TypeOf(expr) in type position (Zig parser.zig:757-759)
-        if (self.tok == @intFromEnum(Token.at)) {
+        if (self.tok == Token.at) {
             return self.parseBuiltinCall()
         }
         // Optional prefix: ?, *, !
-        if (self.tok == @intFromEnum(Token.question)) {
+        if (self.tok == Token.question) {
             self.advance()
             const inner = self.parseType()
             return self.ast.addExpr(Expr.type_expr(TypeExprNode { .kind = TYPE_OPTIONAL, .data1 = inner, .data2 = null_node, .span = self.spanSE(start, self.tok_end) }))
         }
-        if (self.tok == @intFromEnum(Token.mul)) {
+        if (self.tok == Token.mul) {
             self.advance()
             const inner = self.parseType()
             return self.ast.addExpr(Expr.type_expr(TypeExprNode { .kind = TYPE_POINTER, .data1 = inner, .data2 = null_node, .span = self.spanSE(start, self.tok_end) }))
         }
-        if (self.tok == @intFromEnum(Token.lnot)) {
+        if (self.tok == Token.lnot) {
             self.advance()
             const inner = self.parseType()
             return self.ast.addExpr(Expr.type_expr(TypeExprNode { .kind = TYPE_ERROR_UNION, .data1 = inner, .data2 = null_node, .span = self.spanSE(start, self.tok_end) }))
         }
         // Slice: []T
-        if (self.tok == @intFromEnum(Token.lbrack)) {
+        if (self.tok == Token.lbrack) {
             self.advance()
-            if (self.tok == @intFromEnum(Token.rbrack)) {
+            if (self.tok == Token.rbrack) {
                 self.advance()
                 const elem = self.parseType()
                 return self.ast.addExpr(Expr.type_expr(TypeExprNode { .kind = TYPE_SLICE, .data1 = elem, .data2 = null_node, .span = self.spanSE(start, self.tok_end) }))
             }
             // Array: [N]T
             const size_expr = self.parseExpr()
-            self.expect(@intFromEnum(Token.rbrack))
+            self.expect(Token.rbrack as int)
             const elem = self.parseType()
             return self.ast.addExpr(Expr.type_expr(TypeExprNode { .kind = TYPE_ARRAY, .data1 = elem, .data2 = size_expr, .span = self.spanSE(start, self.tok_end) }))
         }
         // Tuple type: (T1, T2, ...)
-        if (self.tok == @intFromEnum(Token.lparen)) {
+        if (self.tok == Token.lparen) {
             self.advance()  // consume (
             const first = self.parseType()
-            if (self.match(@intFromEnum(Token.comma))) {
+            if (self.match(Token.comma as int)) {
                 // It's a tuple type
                 var elems: List(int) = .{}
                 elems.append(first)
-                while (self.tok != @intFromEnum(Token.rparen) and self.tok != @intFromEnum(Token.eof)) {
+                while (self.tok != Token.rparen and self.tok != Token.eof) {
                     elems.append(self.parseType())
-                    if (!self.match(@intFromEnum(Token.comma))) {
+                    if (!self.match(Token.comma as int)) {
                         break
                     }
                 }
-                self.expect(@intFromEnum(Token.rparen))
+                self.expect(Token.rparen as int)
                 return self.ast.addExpr(Expr.tuple_type(TupleTypeNode { .elements = elems, .span = self.spanSE(start, self.tok_end) }))
             }
             // Single type in parens — just grouping
-            self.expect(@intFromEnum(Token.rparen))
+            self.expect(Token.rparen as int)
             return first
         }
         // Named type or keyword type
-        if (self.tok == @intFromEnum(Token.ident) or @as(Token, @enumFromInt(self.tok)).isTypeKeyword()) {
+        if (self.tok == Token.ident or (@enumFromInt(self.tok) as Token).isTypeKeyword()) {
             var name = self.tok_text
             self.advance()
             // P2: Nested type namespace: Outer.Inner (Zig parser.zig:765-771)
-            if (self.tok == @intFromEnum(Token.period) and self.peekToken() == @intFromEnum(Token.ident)) {
+            if (self.tok == Token.period and self.peekToken() == Token.ident) {
                 const outer = name
                 self.advance()  // consume '.'
                 const inner = self.tok_text
@@ -2421,19 +2431,19 @@ struct Parser {
                 name = "${outer}_${inner}"
             }
             // Check for generic: Type(Args)
-            if (self.tok == @intFromEnum(Token.lparen)) {
+            if (self.tok == Token.lparen) {
                 const name_node = self.ast.addExpr(Expr.ident(Ident { .name = name, .span = self.spanSE(start, self.tok_end) }))
                 self.advance()  // consume (
                 var type_args: List(int) = .{}
-                while (self.tok != @intFromEnum(Token.rparen) and self.tok != @intFromEnum(Token.eof)) {
+                while (self.tok != Token.rparen and self.tok != Token.eof) {
                     type_args.append(self.parseType())
-                    if (!self.match(@intFromEnum(Token.comma))) {
+                    if (!self.match(Token.comma as int)) {
                         break
                     }
                 }
-                self.expect(@intFromEnum(Token.rparen))
+                self.expect(Token.rparen as int)
                 // Check for GenericType!T (named error union with generic error set)
-                if (self.tok == @intFromEnum(Token.lnot)) {
+                if (self.tok == Token.lnot) {
                     const error_set = self.ast.addExpr(Expr.generic_instance(GenericInstanceExpr { .name = name, .type_args = type_args, .span = self.spanSE(start, self.tok_end) }))
                     self.advance()
                     const inner = self.parseType()
@@ -2442,7 +2452,7 @@ struct Parser {
                 return self.ast.addExpr(Expr.generic_instance(GenericInstanceExpr { .name = name, .type_args = type_args, .span = self.spanSE(start, self.tok_end) }))
             }
             // Check for E!T (named error union)
-            if (self.tok == @intFromEnum(Token.lnot)) {
+            if (self.tok == Token.lnot) {
                 const error_set = self.ast.addExpr(Expr.ident(Ident { .name = name, .span = self.spanSE(start, self.tok_end) }))
                 self.advance()
                 const inner = self.parseType()
@@ -2451,7 +2461,7 @@ struct Parser {
             return self.ast.addExpr(Expr.ident(Ident { .name = name, .span = self.spanSE(start, self.tok_end) }))
         }
         // fn type
-        if (self.tok == @intFromEnum(Token.kw_fn)) {
+        if (self.tok == Token.kw_fn) {
             return self.parseFnType(start)
         }
         self.errors.report(start, ErrorCode.e202, "expected type")
@@ -2464,20 +2474,20 @@ struct Parser {
     fn parseFnType(start: int) int {
         // Ported from parser.zig:800-812: fn(Type, Type) -> RetType
         self.advance()  // consume 'fn'
-        self.expect(@intFromEnum(Token.lparen))
+        self.expect(Token.lparen as int)
         // Parse function type parameter types and store them as nodes
         var param_types: List(int) = .{}
-        while (self.tok != @intFromEnum(Token.rparen) and self.tok != @intFromEnum(Token.eof)) {
+        while (self.tok != Token.rparen and self.tok != Token.eof) {
             const pt = self.parseType()
             param_types.append(pt)
-            if (!self.match(@intFromEnum(Token.comma))) {
+            if (!self.match(Token.comma as int)) {
                 break
             }
         }
-        self.expect(@intFromEnum(Token.rparen))
+        self.expect(Token.rparen as int)
         // Return type after '->'
         var ret = null_node
-        if (self.match(@intFromEnum(Token.arrow))) {
+        if (self.match(Token.arrow as int)) {
             ret = self.parseType()
         }
         return self.ast.addExpr(Expr.type_expr(TypeExprNode { .kind = TYPE_FUNCTION, .data1 = ret, .data2 = param_types.count, .span = self.spanSE(start, self.tok_end) }))
@@ -2490,8 +2500,8 @@ struct Parser {
     /// Skip tokens until we find a declaration-starting keyword.
     /// Used for error recovery after parse errors.
     fn synchronize() void {
-        while (self.tok != @intFromEnum(Token.eof)) {
-            const tok = @as(Token, @enumFromInt(self.tok))
+        while (self.tok != Token.eof) {
+            const tok = @enumFromInt(self.tok) as Token
             if (tok == Token.kw_fn or tok == Token.kw_const or tok == Token.kw_var or
                 tok == Token.kw_struct or tok == Token.kw_enum or tok == Token.kw_union or
                 tok == Token.kw_impl or tok == Token.kw_trait or tok == Token.kw_import or
@@ -2516,7 +2526,7 @@ test "parser init" {
     var p = Parser.init(s, ast, errors)
     @assertEq(errors.hasErrors(), false)
     // Verify first token was loaded
-    @assertEq(p.tok, @intFromEnum(Token.kw_const))
+    @assertEq(p.tok, Token.kw_const as int)
 }
 
 test "parse import" {

@@ -1148,6 +1148,18 @@ pub const Parser = struct {
                     }
                 }
                 break;
+            } else if (self.match(.kw_as)) {
+                const s = self.tree.getNode(expr).?.span();
+                const type_node = try self.parseType() orelse {
+                    self.syntaxError("expected type after 'as'");
+                    return null;
+                };
+                expr = try self.tree.addExpr(.{ .builtin_call = .{
+                    .kind = .as,
+                    .type_arg = type_node,
+                    .args = .{ expr, null_node, null_node },
+                    .span = Span.init(s.start, self.pos()),
+                } });
             } else break;
         }
         return expr;
@@ -1467,8 +1479,8 @@ pub const Parser = struct {
 
     fn parseBuiltinCall(self: *Parser, start: Pos) ParseError!?NodeIndex {
         self.advance(); // @
-        if (!self.check(.ident) and !self.check(.kw_string)) { self.syntaxError("expected builtin name after '@'"); return null; }
-        const name_str = if (self.check(.kw_string)) "string" else self.tok.text;
+        if (!self.check(.ident) and !self.check(.kw_string) and !self.check(.kw_as)) { self.syntaxError("expected builtin name after '@'"); return null; }
+        const name_str = if (self.check(.kw_string)) "string" else if (self.check(.kw_as)) "as" else self.tok.text;
         self.advance();
         if (!self.expect(.lparen)) return null;
 

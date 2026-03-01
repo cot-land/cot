@@ -17,7 +17,7 @@ const WarningCode = enum(u16) {
     w005 = 5,
 
     fn code() int {
-        return @intFromEnum(self)
+        return self as int
     }
 
     fn description() string {
@@ -46,7 +46,7 @@ const ErrorCode = enum(u16) {
 
     /// Return the numeric error code.
     fn code() int {
-        return @intFromEnum(self)
+        return self as int
     }
 
     /// Return a human-readable description for this error code.
@@ -121,7 +121,7 @@ fn errorWithCode(offset: int, code: ErrorCode, msg: string) Error {
     return Error {
         span: Span.fromPos(offset),
         msg: msg,
-        err_code: @intFromEnum(code),
+        err_code: code as int,
         severity: 0,
         warning_code: -1,
         note_span: Span.zero(),
@@ -134,7 +134,7 @@ fn errorWithCodeAndNote(offset: int, code: ErrorCode, msg: string, note_offset: 
     return Error {
         span: Span.fromPos(offset),
         msg: msg,
-        err_code: @intFromEnum(code),
+        err_code: code as int,
         severity: 0,
         warning_code: -1,
         note_span: Span.fromPos(note_offset),
@@ -149,7 +149,7 @@ fn warnError(offset: int, wc: WarningCode, msg: string) Error {
         msg: msg,
         err_code: -1,
         severity: 1,
-        warning_code: @intFromEnum(wc),
+        warning_code: wc as int,
         note_span: Span.zero(),
         note_msg: "",
         has_note: false,
@@ -396,9 +396,9 @@ struct Diagnostic {
 // ============================================================================
 
 test "severity enum" {
-    @assertEq(@intFromEnum(Severity.err), 0)
-    @assertEq(@intFromEnum(Severity.warning), 1)
-    @assertEq(@intFromEnum(Severity.note), 2)
+    @assertEq(Severity.err as int, 0)
+    @assertEq(Severity.warning as int, 1)
+    @assertEq(Severity.note as int, 2)
 }
 
 test "warning code values" {

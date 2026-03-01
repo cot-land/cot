@@ -89,7 +89,7 @@ struct Scanner {
 
         if (self.ch == null) {
             return TokenInfo {
-                tok: @intFromEnum(Token.eof),
+                tok: Token.eof as int,
                 start_offset: start,
                 end_offset: start,
                 text: "",
@@ -139,7 +139,7 @@ struct Scanner {
             if (c == '\n') { self.advance() }
         }
         return TokenInfo {
-            tok: @intFromEnum(Token.doc_comment),
+            tok: Token.doc_comment as int,
             start_offset: start,
             end_offset: self.pos,
             text: text,
@@ -198,10 +198,10 @@ struct Scanner {
         const text = substring(self.content, start, self.pos)
         const kw = lookup(text)
         if (kw != Token.ident) {
-            return TokenInfo { tok: @intFromEnum(kw), start_offset: start, end_offset: self.pos, text: text }
+            return TokenInfo { tok: kw as int, start_offset: start, end_offset: self.pos, text: text }
         }
         return TokenInfo {
-            tok: @intFromEnum(Token.ident),
+            tok: Token.ident as int,
             start_offset: start,
             end_offset: self.pos,
             text: text,
@@ -296,8 +296,8 @@ struct Scanner {
     }
 
     fn makeNumberToken(start: int, is_float: bool) TokenInfo {
-        var tok = @intFromEnum(Token.int_lit)
-        if (is_float) { tok = @intFromEnum(Token.float_lit) }
+        var tok = Token.int_lit as int
+        if (is_float) { tok = Token.float_lit as int }
         return TokenInfo {
             tok: tok,
             start_offset: start,
@@ -327,7 +327,7 @@ struct Scanner {
                 self.interp_brace_depth = 1
                 const text = substring(self.content, start, self.pos)
                 return TokenInfo {
-                    tok: @intFromEnum(Token.string_interp_start),
+                    tok: Token.string_interp_start as int,
                     start_offset: start,
                     end_offset: self.pos,
                     text: text,
@@ -342,7 +342,7 @@ struct Scanner {
         }
 
         return TokenInfo {
-            tok: @intFromEnum(Token.string_lit),
+            tok: Token.string_lit as int,
             start_offset: start,
             end_offset: self.pos,
             text: substring(self.content, start, self.pos),
@@ -356,7 +356,7 @@ struct Scanner {
                 self.advance()
                 self.in_interp_string = false
                 return TokenInfo {
-                    tok: @intFromEnum(Token.string_interp_end),
+                    tok: Token.string_interp_end as int,
                     start_offset: start,
                     end_offset: self.pos,
                     text: substring(self.content, start, self.pos),
@@ -369,7 +369,7 @@ struct Scanner {
                 self.advance()
                 self.interp_brace_depth = 1
                 return TokenInfo {
-                    tok: @intFromEnum(Token.string_interp_mid),
+                    tok: Token.string_interp_mid as int,
                     start_offset: start,
                     end_offset: self.pos,
                     text: substring(self.content, start, self.pos),
@@ -383,7 +383,7 @@ struct Scanner {
         }
 
         return TokenInfo {
-            tok: @intFromEnum(Token.string_interp_end),
+            tok: Token.string_interp_end as int,
             start_offset: start,
             end_offset: self.pos,
             text: substring(self.content, start, self.pos),
@@ -412,7 +412,7 @@ struct Scanner {
             self.errorAt(start, ErrorCode.e101, "unterminated character literal")
         }
         return TokenInfo {
-            tok: @intFromEnum(Token.char_lit),
+            tok: Token.char_lit as int,
             start_offset: start,
             end_offset: self.pos,
             text: substring(self.content, start, self.pos),
@@ -428,7 +428,7 @@ struct Scanner {
         if (c == '{' and self.in_interp_string) {
             self.interp_brace_depth += 1
             return TokenInfo {
-                tok: @intFromEnum(Token.lbrace),
+                tok: Token.lbrace as int,
                 start_offset: start,
                 end_offset: self.pos,
                 text: "",
@@ -440,7 +440,7 @@ struct Scanner {
                 return self.scanStringContinuation(start)
             }
             return TokenInfo {
-                tok: @intFromEnum(Token.rbrace),
+                tok: Token.rbrace as int,
                 start_offset: start,
                 end_offset: self.pos,
                 text: "",
@@ -448,16 +448,16 @@ struct Scanner {
         }
 
         // Single-char operators (no lookahead needed)
-        if (c == '(') { return makeOp(start, self.pos, @intFromEnum(Token.lparen)) }
-        if (c == ')') { return makeOp(start, self.pos, @intFromEnum(Token.rparen)) }
-        if (c == '[') { return makeOp(start, self.pos, @intFromEnum(Token.lbrack)) }
-        if (c == ']') { return makeOp(start, self.pos, @intFromEnum(Token.rbrack)) }
-        if (c == '{') { return makeOp(start, self.pos, @intFromEnum(Token.lbrace)) }
-        if (c == '}') { return makeOp(start, self.pos, @intFromEnum(Token.rbrace)) }
-        if (c == ',') { return makeOp(start, self.pos, @intFromEnum(Token.comma)) }
-        if (c == ';') { return makeOp(start, self.pos, @intFromEnum(Token.semicolon)) }
-        if (c == ':') { return makeOp(start, self.pos, @intFromEnum(Token.colon)) }
-        if (c == '~') { return makeOp(start, self.pos, @intFromEnum(Token.@"not")) }
+        if (c == '(') { return makeOp(start, self.pos, Token.lparen as int) }
+        if (c == ')') { return makeOp(start, self.pos, Token.rparen as int) }
+        if (c == '[') { return makeOp(start, self.pos, Token.lbrack as int) }
+        if (c == ']') { return makeOp(start, self.pos, Token.rbrack as int) }
+        if (c == '{') { return makeOp(start, self.pos, Token.lbrace as int) }
+        if (c == '}') { return makeOp(start, self.pos, Token.rbrace as int) }
+        if (c == ',') { return makeOp(start, self.pos, Token.comma as int) }
+        if (c == ';') { return makeOp(start, self.pos, Token.semicolon as int) }
+        if (c == ':') { return makeOp(start, self.pos, Token.colon as int) }
+        if (c == '~') { return makeOp(start, self.pos, Token.@"not" as int) }
         if (c == '@') {
             // @"..." quoted identifier (Zig pattern: use keywords as identifiers)
             // Ported from scanner.zig:286-303
@@ -485,38 +485,38 @@ struct Scanner {
                     } else {
                         self.errorAt(start, ErrorCode.e100, "unterminated quoted identifier")
                     }
-                    return TokenInfo { tok: @intFromEnum(Token.ident), start_offset: start, end_offset: self.pos, text: ident_text }
+                    return TokenInfo { tok: Token.ident as int, start_offset: start, end_offset: self.pos, text: ident_text }
                 }
             }
-            return makeOp(start, self.pos, @intFromEnum(Token.at))
+            return makeOp(start, self.pos, Token.at as int)
         }
 
         // Two-char arithmetic operators
         if (c == '+') {
             if (self.ch) |nc| {
-                if (nc == '+') { self.advance(); return makeOp(start, self.pos, @intFromEnum(Token.concat)) }
-                if (nc == '=') { self.advance(); return makeOp(start, self.pos, @intFromEnum(Token.add_assign)) }
+                if (nc == '+') { self.advance(); return makeOp(start, self.pos, Token.concat as int) }
+                if (nc == '=') { self.advance(); return makeOp(start, self.pos, Token.add_assign as int) }
             }
-            return makeOp(start, self.pos, @intFromEnum(Token.add))
+            return makeOp(start, self.pos, Token.add as int)
         }
         if (c == '-') {
             if (self.ch) |nc| {
-                if (nc == '=') { self.advance(); return makeOp(start, self.pos, @intFromEnum(Token.sub_assign)) }
-                if (nc == '>') { self.advance(); return makeOp(start, self.pos, @intFromEnum(Token.arrow)) }
+                if (nc == '=') { self.advance(); return makeOp(start, self.pos, Token.sub_assign as int) }
+                if (nc == '>') { self.advance(); return makeOp(start, self.pos, Token.arrow as int) }
             }
-            return makeOp(start, self.pos, @intFromEnum(Token.sub))
+            return makeOp(start, self.pos, Token.sub as int)
         }
         if (c == '*') {
-            if (self.ch) |nc| { if (nc == '=') { self.advance(); return makeOp(start, self.pos, @intFromEnum(Token.mul_assign)) } }
-            return makeOp(start, self.pos, @intFromEnum(Token.mul))
+            if (self.ch) |nc| { if (nc == '=') { self.advance(); return makeOp(start, self.pos, Token.mul_assign as int) } }
+            return makeOp(start, self.pos, Token.mul as int)
         }
         if (c == '/') {
-            if (self.ch) |nc| { if (nc == '=') { self.advance(); return makeOp(start, self.pos, @intFromEnum(Token.quo_assign)) } }
-            return makeOp(start, self.pos, @intFromEnum(Token.quo))
+            if (self.ch) |nc| { if (nc == '=') { self.advance(); return makeOp(start, self.pos, Token.quo_assign as int) } }
+            return makeOp(start, self.pos, Token.quo as int)
         }
         if (c == '%') {
-            if (self.ch) |nc| { if (nc == '=') { self.advance(); return makeOp(start, self.pos, @intFromEnum(Token.rem_assign)) } }
-            return makeOp(start, self.pos, @intFromEnum(Token.rem))
+            if (self.ch) |nc| { if (nc == '=') { self.advance(); return makeOp(start, self.pos, Token.rem_assign as int) } }
+            return makeOp(start, self.pos, Token.rem as int)
         }
 
         // Delegate to second half for bitwise, comparison, and punctuation operators
@@ -526,62 +526,62 @@ struct Scanner {
     fn scanOperator2(c: int, start: int) TokenInfo {
         if (c == '&') {
             if (self.ch) |nc| {
-                if (nc == '&') { self.advance(); return makeOp(start, self.pos, @intFromEnum(Token.land)) }
-                if (nc == '=') { self.advance(); return makeOp(start, self.pos, @intFromEnum(Token.and_assign)) }
+                if (nc == '&') { self.advance(); return makeOp(start, self.pos, Token.land as int) }
+                if (nc == '=') { self.advance(); return makeOp(start, self.pos, Token.and_assign as int) }
             }
-            return makeOp(start, self.pos, @intFromEnum(Token.@"and"))
+            return makeOp(start, self.pos, Token.@"and" as int)
         }
         if (c == '|') {
             if (self.ch) |nc| {
-                if (nc == '|') { self.advance(); return makeOp(start, self.pos, @intFromEnum(Token.lor)) }
-                if (nc == '=') { self.advance(); return makeOp(start, self.pos, @intFromEnum(Token.or_assign)) }
+                if (nc == '|') { self.advance(); return makeOp(start, self.pos, Token.lor as int) }
+                if (nc == '=') { self.advance(); return makeOp(start, self.pos, Token.or_assign as int) }
             }
-            return makeOp(start, self.pos, @intFromEnum(Token.@"or"))
+            return makeOp(start, self.pos, Token.@"or" as int)
         }
         if (c == '^') {
-            if (self.ch) |nc| { if (nc == '=') { self.advance(); return makeOp(start, self.pos, @intFromEnum(Token.xor_assign)) } }
-            return makeOp(start, self.pos, @intFromEnum(Token.xor))
+            if (self.ch) |nc| { if (nc == '=') { self.advance(); return makeOp(start, self.pos, Token.xor_assign as int) } }
+            return makeOp(start, self.pos, Token.xor as int)
         }
         if (c == '=') {
             if (self.ch) |nc| {
-                if (nc == '=') { self.advance(); return makeOp(start, self.pos, @intFromEnum(Token.eql)) }
-                if (nc == '>') { self.advance(); return makeOp(start, self.pos, @intFromEnum(Token.fat_arrow)) }
+                if (nc == '=') { self.advance(); return makeOp(start, self.pos, Token.eql as int) }
+                if (nc == '>') { self.advance(); return makeOp(start, self.pos, Token.fat_arrow as int) }
             }
-            return makeOp(start, self.pos, @intFromEnum(Token.assign))
+            return makeOp(start, self.pos, Token.assign as int)
         }
         if (c == '!') {
-            if (self.ch) |nc| { if (nc == '=') { self.advance(); return makeOp(start, self.pos, @intFromEnum(Token.neq)) } }
-            return makeOp(start, self.pos, @intFromEnum(Token.lnot))
+            if (self.ch) |nc| { if (nc == '=') { self.advance(); return makeOp(start, self.pos, Token.neq as int) } }
+            return makeOp(start, self.pos, Token.lnot as int)
         }
         if (c == '<') {
             if (self.ch) |nc| {
-                if (nc == '=') { self.advance(); return makeOp(start, self.pos, @intFromEnum(Token.leq)) }
-                if (nc == '<') { self.advance(); return makeOp(start, self.pos, @intFromEnum(Token.shl)) }
+                if (nc == '=') { self.advance(); return makeOp(start, self.pos, Token.leq as int) }
+                if (nc == '<') { self.advance(); return makeOp(start, self.pos, Token.shl as int) }
             }
-            return makeOp(start, self.pos, @intFromEnum(Token.lss))
+            return makeOp(start, self.pos, Token.lss as int)
         }
         if (c == '>') {
             if (self.ch) |nc| {
-                if (nc == '=') { self.advance(); return makeOp(start, self.pos, @intFromEnum(Token.geq)) }
-                if (nc == '>') { self.advance(); return makeOp(start, self.pos, @intFromEnum(Token.shr)) }
+                if (nc == '=') { self.advance(); return makeOp(start, self.pos, Token.geq as int) }
+                if (nc == '>') { self.advance(); return makeOp(start, self.pos, Token.shr as int) }
             }
-            return makeOp(start, self.pos, @intFromEnum(Token.gtr))
+            return makeOp(start, self.pos, Token.gtr as int)
         }
         if (c == '.') {
             if (self.ch) |nc| {
-                if (nc == '.') { self.advance(); return makeOp(start, self.pos, @intFromEnum(Token.period_period)) }
-                if (nc == '*') { self.advance(); return makeOp(start, self.pos, @intFromEnum(Token.period_star)) }
-                if (nc == '?') { self.advance(); return makeOp(start, self.pos, @intFromEnum(Token.period_question)) }
+                if (nc == '.') { self.advance(); return makeOp(start, self.pos, Token.period_period as int) }
+                if (nc == '*') { self.advance(); return makeOp(start, self.pos, Token.period_star as int) }
+                if (nc == '?') { self.advance(); return makeOp(start, self.pos, Token.period_question as int) }
             }
-            return makeOp(start, self.pos, @intFromEnum(Token.period))
+            return makeOp(start, self.pos, Token.period as int)
         }
         if (c == '?') {
-            if (self.ch) |nc| { if (nc == '.') { self.advance(); return makeOp(start, self.pos, @intFromEnum(Token.optional_chain)) } }
-            return makeOp(start, self.pos, @intFromEnum(Token.question))
+            if (self.ch) |nc| { if (nc == '.') { self.advance(); return makeOp(start, self.pos, Token.optional_chain as int) } }
+            return makeOp(start, self.pos, Token.question as int)
         }
 
         self.errorAt(start, ErrorCode.e104, "unexpected character")
-        return makeOp(start, self.pos, @intFromEnum(Token.illegal))
+        return makeOp(start, self.pos, Token.illegal as int)
     }
 }
 
@@ -625,40 +625,40 @@ fn expectText(s: *Scanner, expected_text: string) void {
 
 test "scanner basics" {
     var s = Scanner.init("fn main() { return 42 }")
-    expectTok(s, @intFromEnum(Token.kw_fn))
-    expectTokText(s, @intFromEnum(Token.ident), "main")
-    expectTok(s, @intFromEnum(Token.lparen))
-    expectTok(s, @intFromEnum(Token.rparen))
-    expectTok(s, @intFromEnum(Token.lbrace))
-    expectTok(s, @intFromEnum(Token.kw_return))
-    expectTokText(s, @intFromEnum(Token.int_lit), "42")
-    expectTok(s, @intFromEnum(Token.rbrace))
-    expectTok(s, @intFromEnum(Token.eof))
+    expectTok(s, Token.kw_fn as int)
+    expectTokText(s, Token.ident as int, "main")
+    expectTok(s, Token.lparen as int)
+    expectTok(s, Token.rparen as int)
+    expectTok(s, Token.lbrace as int)
+    expectTok(s, Token.kw_return as int)
+    expectTokText(s, Token.int_lit as int, "42")
+    expectTok(s, Token.rbrace as int)
+    expectTok(s, Token.eof as int)
 }
 
 test "scanner operators" {
     var s = Scanner.init("== != <= >= << >> .* .? ?. orelse")
-    expectTok(s, @intFromEnum(Token.eql))
-    expectTok(s, @intFromEnum(Token.neq))
-    expectTok(s, @intFromEnum(Token.leq))
-    expectTok(s, @intFromEnum(Token.geq))
-    expectTok(s, @intFromEnum(Token.shl))
-    expectTok(s, @intFromEnum(Token.shr))
-    expectTok(s, @intFromEnum(Token.period_star))
-    expectTok(s, @intFromEnum(Token.period_question))
-    expectTok(s, @intFromEnum(Token.optional_chain))
-    expectTok(s, @intFromEnum(Token.kw_orelse))
+    expectTok(s, Token.eql as int)
+    expectTok(s, Token.neq as int)
+    expectTok(s, Token.leq as int)
+    expectTok(s, Token.geq as int)
+    expectTok(s, Token.shl as int)
+    expectTok(s, Token.shr as int)
+    expectTok(s, Token.period_star as int)
+    expectTok(s, Token.period_question as int)
+    expectTok(s, Token.optional_chain as int)
+    expectTok(s, Token.kw_orelse as int)
 }
 
 test "scanner strings" {
     var s = Scanner.init("\"hello world\"")
-    expectTokText(s, @intFromEnum(Token.string_lit), "\"hello world\"")
+    expectTokText(s, Token.string_lit as int, "\"hello world\"")
 }
 
 test "scanner numbers" {
     var s = Scanner.init("42 3.14 0xFF 0b1010 0o777 1_000_000")
-    expectTokText(s, @intFromEnum(Token.int_lit), "42")
-    expectTokText(s, @intFromEnum(Token.float_lit), "3.14")
+    expectTokText(s, Token.int_lit as int, "42")
+    expectTokText(s, Token.float_lit as int, "3.14")
     expectText(s, "0xFF")
     expectText(s, "0b1010")
     expectText(s, "0o777")
@@ -667,108 +667,108 @@ test "scanner numbers" {
 
 test "scanner comments" {
     var s = Scanner.init("// line comment\nx /* block */ y")
-    expectTokText(s, @intFromEnum(Token.ident), "x")
+    expectTokText(s, Token.ident as int, "x")
     expectText(s, "y")
-    expectTok(s, @intFromEnum(Token.eof))
+    expectTok(s, Token.eof as int)
 }
 
 test "scanner keywords" {
     var s = Scanner.init("fn var const if else while for return")
-    expectTok(s, @intFromEnum(Token.kw_fn))
-    expectTok(s, @intFromEnum(Token.kw_var))
-    expectTok(s, @intFromEnum(Token.kw_const))
-    expectTok(s, @intFromEnum(Token.kw_if))
-    expectTok(s, @intFromEnum(Token.kw_else))
-    expectTok(s, @intFromEnum(Token.kw_while))
-    expectTok(s, @intFromEnum(Token.kw_for))
-    expectTok(s, @intFromEnum(Token.kw_return))
+    expectTok(s, Token.kw_fn as int)
+    expectTok(s, Token.kw_var as int)
+    expectTok(s, Token.kw_const as int)
+    expectTok(s, Token.kw_if as int)
+    expectTok(s, Token.kw_else as int)
+    expectTok(s, Token.kw_while as int)
+    expectTok(s, Token.kw_for as int)
+    expectTok(s, Token.kw_return as int)
 }
 
 test "scanner type keywords" {
     var s = Scanner.init("int float bool string i64 u8")
-    expectTok(s, @intFromEnum(Token.kw_int))
-    expectTok(s, @intFromEnum(Token.kw_float))
-    expectTok(s, @intFromEnum(Token.kw_bool))
-    expectTok(s, @intFromEnum(Token.kw_string))
-    expectTok(s, @intFromEnum(Token.kw_i64))
-    expectTok(s, @intFromEnum(Token.kw_u8))
+    expectTok(s, Token.kw_int as int)
+    expectTok(s, Token.kw_float as int)
+    expectTok(s, Token.kw_bool as int)
+    expectTok(s, Token.kw_string as int)
+    expectTok(s, Token.kw_i64 as int)
+    expectTok(s, Token.kw_u8 as int)
 }
 
 test "scanner char literals" {
     var s = Scanner.init("'a' '\\n'")
-    expectTokText(s, @intFromEnum(Token.char_lit), "'a'")
-    expectTok(s, @intFromEnum(Token.char_lit))
+    expectTokText(s, Token.char_lit as int, "'a'")
+    expectTok(s, Token.char_lit as int)
 }
 
 test "scanner compound assignment" {
     var s = Scanner.init("+= -= *= /= %= &= |= ^=")
-    expectTok(s, @intFromEnum(Token.add_assign))
-    expectTok(s, @intFromEnum(Token.sub_assign))
-    expectTok(s, @intFromEnum(Token.mul_assign))
-    expectTok(s, @intFromEnum(Token.quo_assign))
-    expectTok(s, @intFromEnum(Token.rem_assign))
-    expectTok(s, @intFromEnum(Token.and_assign))
-    expectTok(s, @intFromEnum(Token.or_assign))
-    expectTok(s, @intFromEnum(Token.xor_assign))
+    expectTok(s, Token.add_assign as int)
+    expectTok(s, Token.sub_assign as int)
+    expectTok(s, Token.mul_assign as int)
+    expectTok(s, Token.quo_assign as int)
+    expectTok(s, Token.rem_assign as int)
+    expectTok(s, Token.and_assign as int)
+    expectTok(s, Token.or_assign as int)
+    expectTok(s, Token.xor_assign as int)
 }
 
 test "scanner arrows" {
     var s = Scanner.init("-> =>")
-    expectTok(s, @intFromEnum(Token.arrow))
-    expectTok(s, @intFromEnum(Token.fat_arrow))
+    expectTok(s, Token.arrow as int)
+    expectTok(s, Token.fat_arrow as int)
 }
 
 test "scanner doc comment" {
     var s = Scanner.init("/// hello world\nx")
-    expectTokText(s, @intFromEnum(Token.doc_comment), "hello world")
-    expectTokText(s, @intFromEnum(Token.ident), "x")
+    expectTokText(s, Token.doc_comment as int, "hello world")
+    expectTokText(s, Token.ident as int, "x")
 }
 
 test "scanner empty input" {
     var s = Scanner.init("")
-    expectTok(s, @intFromEnum(Token.eof))
+    expectTok(s, Token.eof as int)
 }
 
 test "scanner logical operators" {
     var s = Scanner.init("&& || ! & |")
-    expectTok(s, @intFromEnum(Token.land))
-    expectTok(s, @intFromEnum(Token.lor))
-    expectTok(s, @intFromEnum(Token.lnot))
-    expectTok(s, @intFromEnum(Token.@"and"))
-    expectTok(s, @intFromEnum(Token.@"or"))
+    expectTok(s, Token.land as int)
+    expectTok(s, Token.lor as int)
+    expectTok(s, Token.lnot as int)
+    expectTok(s, Token.@"and" as int)
+    expectTok(s, Token.@"or" as int)
 }
 
 test "scanner comparison operators" {
     var s = Scanner.init("< > = . ?")
-    expectTok(s, @intFromEnum(Token.lss))
-    expectTok(s, @intFromEnum(Token.gtr))
-    expectTok(s, @intFromEnum(Token.assign))
-    expectTok(s, @intFromEnum(Token.period))
-    expectTok(s, @intFromEnum(Token.question))
+    expectTok(s, Token.lss as int)
+    expectTok(s, Token.gtr as int)
+    expectTok(s, Token.assign as int)
+    expectTok(s, Token.period as int)
+    expectTok(s, Token.question as int)
 }
 
 test "scanner full statement" {
     var s = Scanner.init("var x = 42 + y")
-    expectTok(s, @intFromEnum(Token.kw_var))
-    expectTokText(s, @intFromEnum(Token.ident), "x")
-    expectTok(s, @intFromEnum(Token.assign))
-    expectTokText(s, @intFromEnum(Token.int_lit), "42")
-    expectTok(s, @intFromEnum(Token.add))
-    expectTokText(s, @intFromEnum(Token.ident), "y")
-    expectTok(s, @intFromEnum(Token.eof))
+    expectTok(s, Token.kw_var as int)
+    expectTokText(s, Token.ident as int, "x")
+    expectTok(s, Token.assign as int)
+    expectTokText(s, Token.int_lit as int, "42")
+    expectTok(s, Token.add as int)
+    expectTokText(s, Token.ident as int, "y")
+    expectTok(s, Token.eof as int)
 }
 
 test "scanner quoted identifier" {
     var s = Scanner.init("@\"or\" @\"and\"")
-    expectTokText(s, @intFromEnum(Token.ident), "or")
-    expectTokText(s, @intFromEnum(Token.ident), "and")
-    expectTok(s, @intFromEnum(Token.eof))
+    expectTokText(s, Token.ident as int, "or")
+    expectTokText(s, Token.ident as int, "and")
+    expectTok(s, Token.eof as int)
 }
 
 test "scanner concat operator" {
     var s = Scanner.init("a ++ b")
-    expectTokText(s, @intFromEnum(Token.ident), "a")
-    expectTok(s, @intFromEnum(Token.concat))
-    expectTokText(s, @intFromEnum(Token.ident), "b")
-    expectTok(s, @intFromEnum(Token.eof))
+    expectTokText(s, Token.ident as int, "a")
+    expectTok(s, Token.concat as int)
+    expectTokText(s, Token.ident as int, "b")
+    expectTok(s, Token.eof as int)
 }

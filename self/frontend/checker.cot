@@ -1164,7 +1164,7 @@ struct Checker {
                     return
                 }
                 // Check for undefined literal
-                if (nodeTag(self.ast, vs.value) != "literal" or self.getLiteralKind(vs.value) != @intFromEnum(LiteralKind.undefined_lit)) {
+                if (nodeTag(self.ast, vs.value) != "literal" or self.getLiteralKind(vs.value) != LiteralKind.undefined_lit) {
                     const saved_expected = self.expected_type
                     if (var_type != invalid_type) { self.expected_type = var_type }
                     const val_type = self.checkExpr(vs.value)
@@ -1242,7 +1242,7 @@ struct Checker {
             }
 
             // Compound assignment (+=, -=, *=, /=, etc.): both operands must be numeric
-            if (asgn.op != @intFromEnum(Token.assign)) {
+            if (asgn.op != Token.assign) {
                 if (!self.isNumericType(target_type) or !self.isNumericType(value_type)) {
                     self.reportError(idx, ErrorCode.e300, "compound assignment requires numeric operands")
                     return
@@ -1624,13 +1624,13 @@ struct Checker {
     fn checkLiteral(idx: int) int {
         var kind = 0
         switch (self.ast.getNode(idx)) { Node.expr |e| => switch (e) { Expr.literal |lit| => { kind = lit.kind }, else => {} }, else => {} }
-        if (kind == @intFromEnum(LiteralKind.@"int")) { return UNTYPED_INT }
-        if (kind == @intFromEnum(LiteralKind.@"float")) { return UNTYPED_FLOAT }
-        if (kind == @intFromEnum(LiteralKind.@"string")) { return STRING }
-        if (kind == @intFromEnum(LiteralKind.char)) { return U8 }
-        if (kind == @intFromEnum(LiteralKind.true_lit) or kind == @intFromEnum(LiteralKind.false_lit)) { return UNTYPED_BOOL }
-        if (kind == @intFromEnum(LiteralKind.null_lit) or kind == @intFromEnum(LiteralKind.undefined_lit)) { return UNTYPED_NULL }
-        if (kind == @intFromEnum(LiteralKind.unreachable_lit)) { return NORETURN }
+        if (kind == LiteralKind.@"int") { return UNTYPED_INT }
+        if (kind == LiteralKind.@"float") { return UNTYPED_FLOAT }
+        if (kind == LiteralKind.@"string") { return STRING }
+        if (kind == LiteralKind.char) { return U8 }
+        if (kind == LiteralKind.true_lit or kind == LiteralKind.false_lit) { return UNTYPED_BOOL }
+        if (kind == LiteralKind.null_lit or kind == LiteralKind.undefined_lit) { return UNTYPED_NULL }
+        if (kind == LiteralKind.unreachable_lit) { return NORETURN }
         return invalid_type
     }
 
@@ -1651,7 +1651,7 @@ struct Checker {
         const right_t = self.types.get(right_type)
 
         // Concat: ++
-        if (op == @intFromEnum(Token.concat)) {
+        if (op == Token.concat) {
             if (left_type == STRING and right_type == STRING) { return STRING }
             // [N]T ++ [M]T → [N+M]T (array concat)
             if (left_t.tag == TAG_ARRAY and right_t.tag == TAG_ARRAY) {
@@ -1676,7 +1676,7 @@ struct Checker {
         }
 
         // Orelse
-        if (op == @intFromEnum(Token.kw_orelse)) {
+        if (op == Token.kw_orelse) {
             if (left_t.tag == TAG_OPTIONAL) {
                 return switch (left_t) { Type.optional |o| => o.elem, else => left_type }
             }
@@ -1684,7 +1684,7 @@ struct Checker {
         }
 
         // Add: string/array/slice concat in @safe, pointer arithmetic, numeric
-        if (op == @intFromEnum(Token.add)) {
+        if (op == Token.add) {
             if (left_type == STRING and right_type == STRING) {
                 if (self.safe_mode) { return STRING }
                 self.reportError(idx, ErrorCode.e300, "'+' cannot concatenate strings; use '++'")
@@ -1721,7 +1721,7 @@ struct Checker {
         }
 
         // Sub: pointer arithmetic, numeric
-        if (op == @intFromEnum(Token.sub)) {
+        if (op == Token.sub) {
             if (left_t.tag == TAG_POINTER and self.isIntegerType(right_type)) { return left_type }
             if (!self.isNumericType(left_type) or !self.isNumericType(right_type)) {
                 self.reportError(idx, ErrorCode.e300, "invalid operation")
@@ -1731,8 +1731,8 @@ struct Checker {
         }
 
         // Mul, Quo, Rem
-        if (op == @intFromEnum(Token.mul) or op == @intFromEnum(Token.quo) or
-            op == @intFromEnum(Token.rem)) {
+        if (op == Token.mul or op == Token.quo or
+            op == Token.rem) {
             if (!self.isNumericType(left_type) or !self.isNumericType(right_type)) {
                 self.reportError(idx, ErrorCode.e300, "invalid operation")
                 return invalid_type
@@ -1741,9 +1741,9 @@ struct Checker {
         }
 
         // Comparison operators → bool (with validation)
-        if (op == @intFromEnum(Token.eql) or op == @intFromEnum(Token.neq) or
-            op == @intFromEnum(Token.lss) or op == @intFromEnum(Token.leq) or
-            op == @intFromEnum(Token.gtr) or op == @intFromEnum(Token.geq)) {
+        if (op == Token.eql or op == Token.neq or
+            op == Token.lss or op == Token.leq or
+            op == Token.gtr or op == Token.geq) {
             if (!self.isComparable(left_type, right_type)) {
                 self.reportError(idx, ErrorCode.e300, "invalid comparison")
                 return invalid_type
@@ -1752,8 +1752,8 @@ struct Checker {
         }
 
         // Logical AND/OR → bool (validate operands are bool)
-        if (op == @intFromEnum(Token.kw_and) or op == @intFromEnum(Token.kw_or) or
-            op == @intFromEnum(Token.land)) {
+        if (op == Token.kw_and or op == Token.kw_or or
+            op == Token.land) {
             if (!self.isBoolType(left_type) or !self.isBoolType(right_type)) {
                 self.reportError(idx, ErrorCode.e300, "invalid operation")
                 return invalid_type
@@ -1762,7 +1762,7 @@ struct Checker {
         }
 
         // Logical OR (||): also handles error set merge
-        if (op == @intFromEnum(Token.lor)) {
+        if (op == Token.lor) {
             // Error set merge: FileError || NetError
             if (left_t.tag == TAG_ERROR_SET and right_t.tag == TAG_ERROR_SET) {
                 return self.mergeErrorSets(left_type, right_type)
@@ -1774,9 +1774,9 @@ struct Checker {
         }
 
         // Bitwise (require integer operands)
-        if (op == @intFromEnum(Token.@"and") or op == @intFromEnum(Token.@"or") or
-            op == @intFromEnum(Token.xor) or op == @intFromEnum(Token.shl) or
-            op == @intFromEnum(Token.shr)) {
+        if (op == Token.@"and" or op == Token.@"or" or
+            op == Token.xor or op == Token.shl or
+            op == Token.shr) {
             if (!self.isIntegerType(left_type) or !self.isIntegerType(right_type)) {
                 self.reportError(idx, ErrorCode.e300, "invalid operation")
                 return invalid_type
@@ -1793,21 +1793,21 @@ struct Checker {
         switch (self.ast.getNode(idx)) { Node.expr |e| => switch (e) { Expr.unary |u| => { op = u.op; operand_n = u.operand }, else => {} }, else => {} }
         const operand_type = self.checkExpr(operand_n)
 
-        if (op == @intFromEnum(Token.sub)) {
+        if (op == Token.sub) {
             if (!self.isNumericType(operand_type)) {
                 self.reportError(idx, ErrorCode.e303, "unary '-' requires numeric operand")
                 return invalid_type
             }
             return operand_type
         }
-        if (op == @intFromEnum(Token.lnot) or op == @intFromEnum(Token.kw_not)) {
+        if (op == Token.lnot or op == Token.kw_not) {
             if (!self.isBoolType(operand_type)) {
                 self.reportError(idx, ErrorCode.e303, "unary '!' requires bool operand")
                 return invalid_type
             }
             return BOOL
         }
-        if (op == @intFromEnum(Token.@"not")) {
+        if (op == Token.@"not") {
             if (!self.isIntegerType(operand_type)) {
                 self.reportError(idx, ErrorCode.e303, "unary '~' requires integer operand")
                 return invalid_type
@@ -1815,7 +1815,7 @@ struct Checker {
             return operand_type
         }
         // .? optional unwrap (period_question token)
-        if (op == @intFromEnum(Token.period_question)) {
+        if (op == Token.period_question) {
             const ot = self.types.get(operand_type)
             if (ot.tag == TAG_OPTIONAL) {
                 return switch (ot) { Type.optional |o| => o.elem, else => invalid_type }
@@ -2652,7 +2652,7 @@ struct Checker {
             },
             else => {},
         }
-        const kind = @as(BuiltinKind, @enumFromInt(bc_kind))
+        const kind = @enumFromInt(bc_kind) as BuiltinKind
         const argc = args.count
 
         // --- Type introspection ---
@@ -3061,7 +3061,7 @@ struct Checker {
                 switch (self.ast.getNode(args.get(0))) {
                     Node.expr |ae| => switch (ae) {
                         Expr.literal |lit| => {
-                            if (lit.kind == @intFromEnum(LiteralKind.@"string")) {
+                            if (lit.kind == LiteralKind.@"string") {
                                 msg = lit.value
                             }
                         },
@@ -3187,7 +3187,7 @@ struct Checker {
         switch (self.ast.getNode(node_idx)) {
             Node.expr |ae| => switch (ae) {
                 Expr.literal |lit| => {
-                    return lit.kind == @intFromEnum(LiteralKind.@"string")
+                    return lit.kind == LiteralKind.@"string"
                 },
                 else => { return false },
             },
@@ -3218,7 +3218,7 @@ struct Checker {
         switch (self.ast.getNode(args.get(1))) {
             Node.expr |ae| => switch (ae) {
                 Expr.literal |lit| => {
-                    if (lit.kind == @intFromEnum(LiteralKind.@"string")) {
+                    if (lit.kind == LiteralKind.@"string") {
                         field_name = lit.value
                         is_str = true
                     }
@@ -3264,7 +3264,7 @@ struct Checker {
         switch (self.ast.getNode(args.get(0))) {
             Node.expr |ae| => switch (ae) {
                 Expr.literal |lit| => {
-                    if (lit.kind == @intFromEnum(LiteralKind.@"string")) {
+                    if (lit.kind == LiteralKind.@"string") {
                         field_name = lit.value
                         is_str = true
                     }
@@ -3443,7 +3443,7 @@ struct Checker {
             var bk = 0
             var barg = null_node
             switch (self.ast.getNode(idx)) { Node.expr |e| => switch (e) { Expr.builtin_call |bc| => { bk = bc.kind; barg = bc.type_arg }, else => {} }, else => {} }
-            if (bk == @intFromEnum(BuiltinKind.type_of) and barg != null_node) {
+            if (bk == BuiltinKind.type_of and barg != null_node) {
                 return self.checkExpr(barg)
             }
         }
@@ -3538,7 +3538,7 @@ struct Checker {
                     var lit_kind = 0
                     var lit_val = ""
                     switch (self.ast.getNode(d2)) { Node.expr |e| => switch (e) { Expr.literal |lit| => { lit_kind = lit.kind; lit_val = lit.value }, else => {} }, else => {} }
-                    if (lit_kind == @intFromEnum(LiteralKind.@"int")) {
+                    if (lit_kind == LiteralKind.@"int") {
                         size = parseInt(lit_val)
                     }
                 }
@@ -3557,8 +3557,8 @@ struct Checker {
         switch (self.ast.getNode(idx)) { Node.decl |d| => switch (d) { Decl.struct_decl |sd| => { sd_fields = sd.fields; sd_layout = sd.layout }, else => {} }, else => {} }
         const fields_count = sd_fields.count
         var total_size: int = 0
-        const is_packed = sd_layout == @intFromEnum(StructLayout.@"packed")
-        const is_extern = sd_layout == @intFromEnum(StructLayout.@"extern")
+        const is_packed = sd_layout == StructLayout.@"packed"
+        const is_extern = sd_layout == StructLayout.@"extern"
 
         // Build struct fields using raw pointer array
         const fields_ptr = alloc(0, fields_count * @sizeOf(StructField))
@@ -4259,9 +4259,9 @@ struct Checker {
         var kind = 0
         var val_str = ""
         switch (self.ast.getNode(idx)) { Node.expr |e| => switch (e) { Expr.literal |lit| => { kind = lit.kind; val_str = lit.value }, else => {} }, else => {} }
-        if (kind == @intFromEnum(LiteralKind.@"int")) { return (1, parseInt(val_str)) }
-        if (kind == @intFromEnum(LiteralKind.true_lit)) { return (1, 1) }
-        if (kind == @intFromEnum(LiteralKind.false_lit)) { return (1, 0) }
+        if (kind == LiteralKind.@"int") { return (1, parseInt(val_str)) }
+        if (kind == LiteralKind.true_lit) { return (1, 1) }
+        if (kind == LiteralKind.false_lit) { return (1, 0) }
         return (0, 0)
     }
 
@@ -4271,10 +4271,10 @@ struct Checker {
         switch (self.ast.getNode(idx)) { Node.expr |e| => switch (e) { Expr.unary |u| => { op = u.op; operand_idx = u.operand }, else => {} }, else => {} }
         const inner = self.evalConstExpr(operand_idx)
         if (inner.0 == 0) { return (0, 0) }
-        if (op == @intFromEnum(Token.sub)) { return (1, 0 - inner.1) }
-        if (op == @intFromEnum(Token.lnot)) { return (1, if (inner.1 == 0) { 1 } else { 0 }) }
+        if (op == Token.sub) { return (1, 0 - inner.1) }
+        if (op == Token.lnot) { return (1, if (inner.1 == 0) { 1 } else { 0 }) }
         // Bitwise not (Zig ref: checker.zig:742)
-        if (op == @intFromEnum(Token.@"not")) { return (1, ~inner.1) }
+        if (op == Token.@"not") { return (1, ~inner.1) }
         return (0, 0)
     }
 
@@ -4287,12 +4287,12 @@ struct Checker {
         const rv = self.evalConstExpr(right_n)
         if (lv.0 == 0 or rv.0 == 0) {
             // String equality comparison (Zig ref: checker.zig:782-793)
-            if (op == @intFromEnum(Token.eql) or op == @intFromEnum(Token.neq)) {
+            if (op == Token.eql or op == Token.neq) {
                 const ls = self.evalConstString(left_n)
                 const rs = self.evalConstString(right_n)
                 if (ls.0 != 0 and rs.0 != 0) {
                     const eq = if (ls.1 == rs.1) { 1 } else { 0 }
-                    if (op == @intFromEnum(Token.eql)) { return (1, eq) }
+                    if (op == Token.eql) { return (1, eq) }
                     return (1, if (eq == 1) { 0 } else { 1 })
                 }
             }
@@ -4300,23 +4300,23 @@ struct Checker {
         }
         const l = lv.1
         const r = rv.1
-        if (op == @intFromEnum(Token.add)) { return (1, l + r) }
-        if (op == @intFromEnum(Token.sub)) { return (1, l - r) }
-        if (op == @intFromEnum(Token.mul)) { return (1, l * r) }
-        if (op == @intFromEnum(Token.quo) and r != 0) { return (1, l / r) }
-        if (op == @intFromEnum(Token.rem) and r != 0) { return (1, l % r) }
-        if (op == @intFromEnum(Token.eql)) { return (1, if (l == r) { 1 } else { 0 }) }
-        if (op == @intFromEnum(Token.neq)) { return (1, if (l != r) { 1 } else { 0 }) }
-        if (op == @intFromEnum(Token.lss)) { return (1, if (l < r) { 1 } else { 0 }) }
-        if (op == @intFromEnum(Token.leq)) { return (1, if (l <= r) { 1 } else { 0 }) }
-        if (op == @intFromEnum(Token.gtr)) { return (1, if (l > r) { 1 } else { 0 }) }
-        if (op == @intFromEnum(Token.geq)) { return (1, if (l >= r) { 1 } else { 0 }) }
+        if (op == Token.add) { return (1, l + r) }
+        if (op == Token.sub) { return (1, l - r) }
+        if (op == Token.mul) { return (1, l * r) }
+        if (op == Token.quo and r != 0) { return (1, l / r) }
+        if (op == Token.rem and r != 0) { return (1, l % r) }
+        if (op == Token.eql) { return (1, if (l == r) { 1 } else { 0 }) }
+        if (op == Token.neq) { return (1, if (l != r) { 1 } else { 0 }) }
+        if (op == Token.lss) { return (1, if (l < r) { 1 } else { 0 }) }
+        if (op == Token.leq) { return (1, if (l <= r) { 1 } else { 0 }) }
+        if (op == Token.gtr) { return (1, if (l > r) { 1 } else { 0 }) }
+        if (op == Token.geq) { return (1, if (l >= r) { 1 } else { 0 }) }
         // Bitwise operators (Zig ref: checker.zig:765-769)
-        if (op == @intFromEnum(Token.@"and")) { return (1, l & r) }
-        if (op == @intFromEnum(Token.@"or")) { return (1, l | r) }
-        if (op == @intFromEnum(Token.xor)) { return (1, l ^ r) }
-        if (op == @intFromEnum(Token.shl)) { return (1, l << r) }
-        if (op == @intFromEnum(Token.shr)) { return (1, l >> r) }
+        if (op == Token.@"and") { return (1, l & r) }
+        if (op == Token.@"or") { return (1, l | r) }
+        if (op == Token.xor) { return (1, l ^ r) }
+        if (op == Token.shl) { return (1, l << r) }
+        if (op == Token.shr) { return (1, l >> r) }
         return (0, 0)
     }
 
@@ -4347,13 +4347,13 @@ struct Checker {
         var bk = 0
         var type_arg_n = null_node
         switch (self.ast.getNode(idx)) { Node.expr |e| => switch (e) { Expr.builtin_call |bc| => { bk = bc.kind; type_arg_n = bc.type_arg }, else => {} }, else => {} }
-        if (bk == @intFromEnum(BuiltinKind.size_of) and type_arg_n != null_node) {
+        if (bk == BuiltinKind.size_of and type_arg_n != null_node) {
             const type_idx = self.resolveTypeExpr(type_arg_n)
             if (type_idx != invalid_type) {
                 return (1, self.types.sizeOf(type_idx))
             }
         }
-        if (bk == @intFromEnum(BuiltinKind.enum_len) and type_arg_n != null_node) {
+        if (bk == BuiltinKind.enum_len and type_arg_n != null_node) {
             const type_idx = self.resolveTypeExpr(type_arg_n)
             if (type_idx != invalid_type) {
                 const t = self.types.get(type_idx)
@@ -4400,7 +4400,7 @@ struct Checker {
             var kind = 0
             var val_str = ""
             switch (self.ast.getNode(idx)) { Node.expr |e| => switch (e) { Expr.literal |lit| => { kind = lit.kind; val_str = lit.value }, else => {} }, else => {} }
-            if (kind == @intFromEnum(LiteralKind.@"string")) {
+            if (kind == LiteralKind.@"string") {
                 return (1, val_str)
             }
         }
@@ -4412,9 +4412,9 @@ struct Checker {
         if (tag == "builtin_call") {
             var bk = 0
             switch (self.ast.getNode(idx)) { Node.expr |e| => switch (e) { Expr.builtin_call |bc| => { bk = bc.kind }, else => {} }, else => {} }
-            if (bk == @intFromEnum(BuiltinKind.target_os)) { return (1, "macos") }
-            if (bk == @intFromEnum(BuiltinKind.target_arch)) { return (1, "aarch64") }
-            if (bk == @intFromEnum(BuiltinKind.target)) { return (1, "aarch64-macos") }
+            if (bk == BuiltinKind.target_os) { return (1, "macos") }
+            if (bk == BuiltinKind.target_arch) { return (1, "aarch64") }
+            if (bk == BuiltinKind.target) { return (1, "aarch64-macos") }
         }
         return (0, "")
     }
@@ -4498,15 +4498,15 @@ struct Checker {
                 if (target_name == "") { return (0, 0) }
                 const rhs = self.evalConstExpr(val_n)
                 if (rhs.0 == 0) { return (0, 0) }
-                if (op == @intFromEnum(Token.assign)) {
+                if (op == Token.assign) {
                     self.comptime_vars.set(target_name, rhs.1)
-                } else if (op == @intFromEnum(Token.add_assign)) {
+                } else if (op == Token.add_assign) {
                     const old = self.comptime_vars.get(target_name)
                     self.comptime_vars.set(target_name, old + rhs.1)
-                } else if (op == @intFromEnum(Token.sub_assign)) {
+                } else if (op == Token.sub_assign) {
                     const old = self.comptime_vars.get(target_name)
                     self.comptime_vars.set(target_name, old - rhs.1)
-                } else if (op == @intFromEnum(Token.mul_assign)) {
+                } else if (op == Token.mul_assign) {
                     const old = self.comptime_vars.get(target_name)
                     self.comptime_vars.set(target_name, old * rhs.1)
                 } else {
@@ -4545,13 +4545,13 @@ struct Checker {
                                 if (aname != "") {
                                     const arhs = self.evalConstExpr(av)
                                     if (arhs.0 != 0) {
-                                        if (aop == @intFromEnum(Token.assign)) {
+                                        if (aop == Token.assign) {
                                             self.comptime_vars.set(aname, arhs.1)
-                                        } else if (aop == @intFromEnum(Token.add_assign)) {
+                                        } else if (aop == Token.add_assign) {
                                             self.comptime_vars.set(aname, self.comptime_vars.get(aname) + arhs.1)
-                                        } else if (aop == @intFromEnum(Token.sub_assign)) {
+                                        } else if (aop == Token.sub_assign) {
                                             self.comptime_vars.set(aname, self.comptime_vars.get(aname) - arhs.1)
-                                        } else if (aop == @intFromEnum(Token.mul_assign)) {
+                                        } else if (aop == Token.mul_assign) {
                                             self.comptime_vars.set(aname, self.comptime_vars.get(aname) * arhs.1)
                                         }
                                     }
@@ -5159,7 +5159,7 @@ test "checker const evaluation" {
 
     // Create a literal node for "42"
     const s = Span { start: 0, end: 2 }
-    const lit = ast.addExpr(Expr.literal(Literal { kind: @intFromEnum(LiteralKind.@"int"), value: "42", span: s }))
+    const lit = ast.addExpr(Expr.literal(Literal { kind: LiteralKind.@"int" as int, value: "42", span: s }))
     const cv = c.evalConstExpr(lit)
     @assert(cv.0 != 0)
     @assertEq(cv.1, 42)
@@ -5172,9 +5172,9 @@ test "checker const evaluation binary" {
     var c = Checker.init(ast, types, errs)
 
     const s = Span { start: 0, end: 5 }
-    const left = ast.addExpr(Expr.literal(Literal { kind: @intFromEnum(LiteralKind.@"int"), value: "10", span: s }))
-    const right = ast.addExpr(Expr.literal(Literal { kind: @intFromEnum(LiteralKind.@"int"), value: "3", span: s }))
-    const bin = ast.addExpr(Expr.binary(Binary { op: @intFromEnum(Token.add), left: left, right: right, span: s }))
+    const left = ast.addExpr(Expr.literal(Literal { kind: LiteralKind.@"int" as int, value: "10", span: s }))
+    const right = ast.addExpr(Expr.literal(Literal { kind: LiteralKind.@"int" as int, value: "3", span: s }))
+    const bin = ast.addExpr(Expr.binary(Binary { op: Token.add as int, left: left, right: right, span: s }))
     const cv = c.evalConstExpr(bin)
     @assert(cv.0 != 0)
     @assertEq(cv.1, 13)
@@ -5187,13 +5187,13 @@ test "checker literal types" {
     var c = Checker.init(ast, types, errs)
 
     const s = Span { start: 0, end: 2 }
-    const int_lit = ast.addExpr(Expr.literal(Literal { kind: @intFromEnum(LiteralKind.@"int"), value: "42", span: s }))
+    const int_lit = ast.addExpr(Expr.literal(Literal { kind: LiteralKind.@"int" as int, value: "42", span: s }))
     @assertEq(c.checkExpr(int_lit), UNTYPED_INT)
 
-    const str_lit = ast.addExpr(Expr.literal(Literal { kind: @intFromEnum(LiteralKind.@"string"), value: "\"hello\"", span: s }))
+    const str_lit = ast.addExpr(Expr.literal(Literal { kind: LiteralKind.@"string" as int, value: "\"hello\"", span: s }))
     @assertEq(c.checkExpr(str_lit), STRING)
 
-    const true_lit = ast.addExpr(Expr.literal(Literal { kind: @intFromEnum(LiteralKind.true_lit), value: "true", span: s }))
+    const true_lit = ast.addExpr(Expr.literal(Literal { kind: LiteralKind.true_lit as int, value: "true", span: s }))
     @assertEq(c.checkExpr(true_lit), UNTYPED_BOOL)
 }
 

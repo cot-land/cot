@@ -1,0 +1,2021 @@
+/// AST-to-IR lowering pass for the self-hosted Cot compiler.
+/// Transforms type-checked AST into flat IR (intermediate representation).
+/// Ported from compiler/frontend/lower.zig
+
+import "std/list"
+import "std/map"
+import "std/string"
+import "ir"
+import "ast"
+import "types"
+import "source"
+import "errors"
+import "checker"
+import "token"
+
+// Constants null_node, null_local, null_block imported from ir.cot
+// Type constants (VOID, I64, BOOL, etc.) imported from types.cot
+// Type tag constants (TAG_STRUCT, etc.) imported from types.cot
+
+// ============================================================================
+// Supporting types
+// ============================================================================
+
+/// Cleanup entry for deferred operations (defer, errdefer, ARC release).
+struct CleanupEntry {
+    kind: int,
+    value: int,
+    type_idx: int,
+    local_idx: int,
+    func_name: string,
+}
+
+/// Cleanup kind constants
+const CLEANUP_DEFER: int = 0
+const CLEANUP_ERRDEFER: int = 1
+const CLEANUP_ARC_RELEASE: int = 2
+
+/// Loop context for break/continue targets.
+struct LoopContext {
+    cond_block: int,
+    exit_block: int,
+    cleanup_depth: int,
+    label: string,
+}
+
+// ============================================================================
+// Lowerer
+// ============================================================================
+
+struct Lowerer {
+    tree: *Ast,
+    types: *TypeRegistry,
+    err: *ErrorReporter,
+    chk: *Checker,
+    temp_counter: int,
+    test_mode: bool,
+    fail_fast: bool,
+    bench_mode: bool,
+    current_test_name: string,
+    closure_counter: int,
+    current_switch_enum_type: int,
+    next_error_idx: int,
+    release_mode: bool,
+    loop_stack: List(LoopContext),
+    cleanup_stack: List(CleanupEntry),
+    const_values: Map(string, int),
+    float_const_values: Map(string, int),
+    float_const_types: Map(string, int),
+    test_names: List(string),
+    test_display_names: List(string),
+    bench_names: List(string),
+    bench_display_names: List(string),
+    lowered_generics: Map(string, int),
+    global_error_table: Map(string, int),
+    weak_locals: Map(int, int),
+    comptime_value_vars: Map(string, int),
+    global_comptime_values: Map(string, int),
+    builder: Builder,
+
+    fn setTestMode(enabled: bool) void {
+        self.test_mode = enabled
+    }
+
+    fn setFailFast(enabled: bool) void {
+        self.fail_fast = enabled
+    }
+
+    fn setBenchMode(enabled: bool) void {
+        self.bench_mode = enabled
+    }
+
+    // ========================================================================
+    // Top-level lowering
+    // ========================================================================
+
+    /// Lower all declarations and return the completed IR.
+    fn lower() IR {
+        self.lowerToBuilder()
+        return self.builder.getIR()
+    }
+
+    /// Lower all root declarations into the builder.
+    fn lowerToBuilder() void {
+        for i in 0..self.tree.file_decls.count {
+            const decl_idx = self.tree.file_decls.get(i)
+            self.lowerDecl(decl_idx)
+        }
+        self.lowerQueuedGenericFunctions()
+    }
+
+    // ========================================================================
+    // Declaration lowering
+    // ========================================================================
+
+    fn lowerDecl(idx: int) void {
+        if (idx == null_node) { return }
+        const node = self.tree.getNode(idx)
+        // Extract decl from node
+        var fn_d: FnDecl = undefined
+        var var_d: VarDecl = undefined
+        var struct_d: StructDecl = undefined
+        var enum_d: EnumDecl = undefined
+        var impl_d: ImplBlock = undefined
+        var impl_t: ImplTraitBlock = undefined
+        var test_d: TestDecl = undefined
+        var bench_d: BenchDecl = undefined
+        var tag = ""
+        switch (node) { Node.decl |d| => switch (d) {
+            Decl.fn_decl |fd| => { fn_d = fd; tag = "fn" },
+            Decl.var_decl |vd| => { var_d = vd; tag = "var" },
+            Decl.struct_decl |sd| => { struct_d = sd; tag = "struct" },
+            Decl.enum_decl |ed| => { enum_d = ed; tag = "enum" },
+            Decl.impl_block |ib| => { impl_d = ib; tag = "impl" },
+            Decl.impl_trait |it| => { impl_t = it; tag = "impl_trait" },
+            Decl.test_decl |td| => { test_d = td; tag = "test" },
+            Decl.bench_decl |bd| => { bench_d = bd; tag = "bench" },
+            else => {},
+        }, else => {} }
+
+        if (tag == "fn") { self.lowerFnDecl(fn_d) }
+        else if (tag == "var") { self.lowerGlobalVarDecl(var_d) }
+        else if (tag == "struct") { self.lowerStructDecl(struct_d) }
+        else if (tag == "enum") { self.lowerEnumDecl(enum_d) }
+        else if (tag == "impl") { self.lowerImplBlock(impl_d) }
+        else if (tag == "impl_trait") { self.lowerImplTraitBlock(impl_t) }
+        else if (tag == "test") { if (self.test_mode) { self.lowerTestDecl(test_d) } }
+        else if (tag == "bench") { if (self.bench_mode) { self.lowerBenchDecl(bench_d) } }
+    }
+
+    // ========================================================================
+    // Function lowering
+    // ========================================================================
+
+    fn lowerFnDecl(fn_decl: FnDecl) void {
+        if (fn_decl.is_extern) { return }
+        if (fn_decl.type_params.count > 0) { return }  // Generic — lowered on demand
+        if ((self.test_mode or self.bench_mode) and fn_decl.name == "main") { return }
+
+        const return_type = if (fn_decl.return_type != null_node) {
+            self.resolveTypeNode(fn_decl.return_type)
+        } else { VOID }
+
+        const uses_sret = self.needsSret(return_type)
+        const wasm_return_type = if (uses_sret) { VOID } else { return_type }
+
+        self.builder.startFunc(fn_decl.name, VOID, wasm_return_type, fn_decl.span)
+        if (self.builder.func()) |fb| {
+            if (uses_sret) { fb.sret_return_type = return_type }
+            fb.is_destructor = strEndsWith(fn_decl.name, "_deinit")
+            fb.is_export = fn_decl.is_export
+            self.clearPerFunctionState()
+
+            // SRET: hidden first parameter
+            if (uses_sret) {
+                fb.addParam("__sret", I64, 8)
+            }
+
+            // Add regular parameters
+            for i in 0..fn_decl.params.count {
+                const param_idx = fn_decl.params.get(i)
+                self.addParamFromNode(fb, param_idx)
+            }
+
+            if (fn_decl.body != null_node) {
+                self.lowerBlockNode(fn_decl.body)
+
+                if (fb.is_destructor) {
+                    self.emitFieldReleases(fb, fn_decl.name, fn_decl.span)
+                }
+
+                if (return_type == VOID and fb.needsTerminator()) {
+                    self.emitCleanups(0)
+                    fb.emitRet(null_node, fn_decl.span)
+                }
+            }
+        }
+        self.builder.endFunc()
+    }
+
+    fn lowerMethodWithName(fn_decl: FnDecl, synth_name: string, is_destructor: bool) void {
+        const return_type = if (fn_decl.return_type != null_node) {
+            self.resolveTypeNode(fn_decl.return_type)
+        } else { VOID }
+
+        const uses_sret = self.needsSret(return_type)
+        const wasm_return_type = if (uses_sret) { VOID } else { return_type }
+
+        self.builder.startFunc(synth_name, VOID, wasm_return_type, fn_decl.span)
+        if (self.builder.func()) |fb| {
+            fb.is_destructor = is_destructor
+            if (uses_sret) { fb.sret_return_type = return_type }
+            self.clearPerFunctionState()
+
+            if (uses_sret) {
+                fb.addParam("__sret", I64, 8)
+            }
+
+            for i in 0..fn_decl.params.count {
+                const param_idx = fn_decl.params.get(i)
+                self.addParamFromNode(fb, param_idx)
+            }
+
+            if (fn_decl.body != null_node) {
+                self.lowerBlockNode(fn_decl.body)
+
+                if (is_destructor) {
+                    self.emitFieldReleases(fb, synth_name, fn_decl.span)
+                }
+
+                if (return_type == VOID and fb.needsTerminator()) {
+                    self.emitCleanups(0)
+                    fb.emitRet(null_node, fn_decl.span)
+                }
+            }
+        }
+        self.builder.endFunc()
+    }
+
+    // ========================================================================
+    // Struct/Enum/Impl lowering
+    // ========================================================================
+
+    fn lowerStructDecl(struct_decl: StructDecl) void {
+        if (struct_decl.type_params.count > 0) { return }  // Generic — instantiated on demand
+        const struct_type_idx = self.types.lookupByName(struct_decl.name)
+        if (struct_type_idx < 0) {
+            self.builder.addStruct(StructDef { name: struct_decl.name, type_idx: 0, span: struct_decl.span })
+        } else {
+            self.builder.addStruct(StructDef { name: struct_decl.name, type_idx: struct_type_idx, span: struct_decl.span })
+        }
+
+        // Nested declarations
+        for i in 0..struct_decl.nested_decls.count {
+            const nested_idx = struct_decl.nested_decls.get(i)
+            const nested_node = self.tree.getNode(nested_idx)
+            var ns_decl: StructDecl = undefined
+            var fd_decl: FnDecl = undefined
+            var nested_tag = ""
+            switch (nested_node) { Node.decl |nd| => switch (nd) { Decl.struct_decl |ns| => { ns_decl = ns; nested_tag = "struct" }, Decl.fn_decl |fd| => { fd_decl = fd; nested_tag = "fn" }, else => {} }, else => {} }
+
+            if (nested_tag == "struct") {
+                const qualified = struct_decl.name ++ "_" ++ ns_decl.name
+                const ns_type = self.types.lookupByName(qualified)
+                var ns_type_idx = 0
+                if (ns_type >= 0) { ns_type_idx = ns_type }
+                self.builder.addStruct(StructDef { name: qualified, type_idx: ns_type_idx, span: ns_decl.span })
+            } else if (nested_tag == "fn") {
+                const synth_name = struct_decl.name ++ "_" ++ fd_decl.name
+                const is_dtor = fd_decl.name == "deinit"
+                self.lowerMethodWithName(fd_decl, synth_name, is_dtor)
+            }
+        }
+    }
+
+    fn lowerEnumDecl(ed: EnumDecl) void {
+        for i in 0..ed.variants.count {
+            // Enum variants don't generate code — registered during checking
+        }
+        // But nested fn_decl methods do
+        // Note: EnumDecl in the self-hosted AST doesn't have nested_decls yet.
+        // Enum methods are in impl blocks until enum nested_decls are added to ast.cot.
+    }
+
+    fn lowerImplBlock(impl_block: ImplBlock) void {
+        if (impl_block.type_params.count > 0) { return }  // Generic — lowered via queue
+        for i in 0..impl_block.methods.count {
+            const method_idx = impl_block.methods.get(i)
+            var fd: FnDecl = undefined
+            var found = false
+            switch (self.tree.getNode(method_idx)) { Node.decl |d| => switch (d) { Decl.fn_decl |f| => { fd = f; found = true }, else => {} }, else => {} }
+            if (found) {
+                const synth_name = impl_block.type_name ++ "_" ++ fd.name
+                const is_dtor = fd.name == "deinit"
+                self.lowerMethodWithName(fd, synth_name, is_dtor)
+            }
+        }
+    }
+
+    fn lowerImplTraitBlock(impl_trait: ImplTraitBlock) void {
+        for i in 0..impl_trait.methods.count {
+            const method_idx = impl_trait.methods.get(i)
+            var fd: FnDecl = undefined
+            var found = false
+            switch (self.tree.getNode(method_idx)) { Node.decl |d| => switch (d) { Decl.fn_decl |f| => { fd = f; found = true }, else => {} }, else => {} }
+            if (found) {
+                const synth_name = impl_trait.target_type ++ "_" ++ fd.name
+                const is_dtor = fd.name == "deinit"
+                self.lowerMethodWithName(fd, synth_name, is_dtor)
+            }
+        }
+    }
+
+    // ========================================================================
+    // Test/Bench lowering
+    // ========================================================================
+
+    fn lowerTestDecl(test_decl: TestDecl) void {
+        const test_name = sanitizeName("test_", test_decl.name)
+        self.test_names.append(test_name)
+        self.test_display_names.append(test_decl.name)
+
+        // Test functions return !void (error union)
+        const err_void_type = self.types.makeErrorUnion(VOID)
+
+        self.builder.startFunc(test_name, VOID, err_void_type, test_decl.span)
+        if (self.builder.func()) |fb| {
+            self.current_test_name = test_decl.name
+            self.clearPerFunctionState()
+
+            if (test_decl.body != null_node) {
+                self.lowerBlockNode(test_decl.body)
+
+                if (fb.needsTerminator()) {
+                    self.emitCleanups(0)
+                    // Return success: error union tag=0
+                    const eu_size = self.types.sizeOf(err_void_type)
+                    const tmp_local = fb.addLocalWithSize("__test_ok", err_void_type, false, eu_size)
+                    const tag_zero = fb.emitConstInt(0, I64, test_decl.span)
+                    fb.emitStoreLocalField(tmp_local, 0, 0, tag_zero, test_decl.span)
+                    const zero_payload = fb.emitConstInt(0, I64, test_decl.span)
+                    fb.emitStoreLocalField(tmp_local, 1, 8, zero_payload, test_decl.span)
+                    const ret_ptr = fb.emitAddrLocal(tmp_local, I64, test_decl.span)
+                    fb.emitRet(ret_ptr, test_decl.span)
+                }
+            }
+            self.current_test_name = ""
+        }
+        self.builder.endFunc()
+    }
+
+    fn lowerBenchDecl(bench_decl: BenchDecl) void {
+        const bench_name = sanitizeName("bench_", bench_decl.name)
+        self.bench_names.append(bench_name)
+        self.bench_display_names.append(bench_decl.name)
+
+        self.builder.startFunc(bench_name, VOID, I64, bench_decl.span)
+        if (self.builder.func()) |fb| {
+            self.clearPerFunctionState()
+
+            if (bench_decl.body != null_node) {
+                self.lowerBlockNode(bench_decl.body)
+
+                if (fb.needsTerminator()) {
+                    self.emitCleanups(0)
+                    const zero = fb.emitConstInt(0, I64, bench_decl.span)
+                    fb.emitRet(zero, bench_decl.span)
+                }
+            }
+        }
+        self.builder.endFunc()
+    }
+
+    // ========================================================================
+    // Global variable lowering
+    // ========================================================================
+
+    fn lowerGlobalVarDecl(var_decl: VarDecl) void {
+        var type_idx = VOID
+        if (var_decl.type_expr != null_node) {
+            type_idx = self.resolveTypeNode(var_decl.type_expr)
+        } else if (var_decl.value != null_node) {
+            type_idx = self.inferExprType(var_decl.value)
+        }
+
+        if (var_decl.is_const) {
+            // Check for compile-time known integer constant
+            const sym_idx = self.chk.lookupSymbol(var_decl.name)
+            if (sym_idx >= 0) {
+                const sym = self.chk.getSymbol(sym_idx)
+                if (sym.is_const_val) {
+                    self.const_values.set(var_decl.name, sym.const_value)
+                    return
+                }
+                if (sym.float_const_value != 0) {
+                    self.float_const_values.set(var_decl.name, sym.float_const_value)
+                    self.float_const_types.set(var_decl.name, sym.type_idx)
+                    return
+                }
+            }
+
+            // Comptime block producing structured values
+            if (var_decl.value != null_node) {
+                var is_comptime = false
+                switch (self.tree.getNode(var_decl.value)) { Node.expr |e| => switch (e) { Expr.comptime_block |_| => { is_comptime = true }, else => {} }, else => {} }
+                if (is_comptime) {
+                    // Store in global_comptime_values for on-demand materialization
+                    // TODO: evalComptimeValue when comptime evaluation is ported
+                    return
+                }
+            }
+        }
+
+        const type_size = self.types.sizeOf(type_idx)
+        self.builder.addGlobal(Global.initWithSize(var_decl.name, type_idx, var_decl.is_const, var_decl.span, type_size))
+    }
+
+    // ========================================================================
+    // Block and statement lowering (stubs for Phase 2)
+    // ========================================================================
+
+    /// Lower a block node — dispatches to statement or expression lowering.
+    /// Returns true if the block terminated (return/break/continue).
+    fn lowerBlockNode(idx: int) bool {
+        if (idx == null_node) { return false }
+        const node = self.tree.getNode(idx)
+
+        // Statement
+        const maybe_stmt = asStmt(node)
+        if (maybe_stmt) |s| { return self.lowerStmt(s) }
+
+        // Expression
+        const maybe_expr = asExpr(node)
+        if (maybe_expr) |e| {
+            // Block expression
+            var be: BlockExpr = undefined
+            var is_block = false
+            switch (e) { Expr.block_expr |b| => { be = b; is_block = true }, else => {} }
+
+            if (is_block) {
+                if (self.builder.func()) |fb| {
+                    const scope_depth = fb.markScopeEntry()
+                    var terminated = false
+                    for i in 0..be.stmts.count {
+                        const stmt_idx = be.stmts.get(i)
+                        const stmt_node = self.tree.getNode(stmt_idx)
+                        const inner_stmt = asStmt(stmt_node)
+                        if (inner_stmt) |s| {
+                            if (self.lowerStmt(s)) { terminated = true }
+                        } else {
+                            var inner_sd: StructDecl = undefined
+                            var is_sd = false
+                            switch (stmt_node) { Node.decl |d| => switch (d) { Decl.struct_decl |sd| => { inner_sd = sd; is_sd = true }, else => {} }, else => {} }
+                            if (is_sd) { self.lowerStructDecl(inner_sd) }
+                        }
+                        if (terminated) { break }
+                    }
+                    if (!terminated and be.result_expr != null_node) {
+                        self.lowerExprNode(be.result_expr)
+                    }
+                    fb.restoreScope(scope_depth)
+                    return terminated
+                }
+            } else {
+                self.lowerExprNode(idx)
+            }
+        }
+        return false
+    }
+
+    /// Lower a statement. Returns true if it terminates the block.
+    fn lowerStmt(stmt: Stmt) bool {
+        switch (stmt) {
+            Stmt.return_stmt |ret| => {
+                self.lowerReturn(ret)
+                return true
+            },
+            Stmt.var_stmt |v| => {
+                self.lowerLocalVarDecl(v)
+                return false
+            },
+            Stmt.assign_stmt |a| => {
+                self.lowerAssign(a)
+                return false
+            },
+            Stmt.if_stmt |i| => {
+                return self.lowerIf(i)
+            },
+            Stmt.while_stmt |w| => {
+                self.lowerWhile(w)
+                return false
+            },
+            Stmt.for_stmt |f| => {
+                self.lowerFor(f)
+                return false
+            },
+            Stmt.block_stmt |block| => {
+                if (self.builder.func()) |fb| {
+                    const cleanup_depth = self.cleanup_stack.count
+                    const scope_depth = fb.markScopeEntry()
+                    for i in 0..block.stmts.count {
+                        const stmt_idx = block.stmts.get(i)
+                        const stmt_node = self.tree.getNode(stmt_idx)
+                        const inner_stmt = asStmt(stmt_node)
+                        if (inner_stmt) |s| {
+                            if (self.lowerStmt(s)) {
+                                fb.restoreScope(scope_depth)
+                                return true
+                            }
+                        } else {
+                            var inner_sd: StructDecl = undefined
+                            var is_sd = false
+                            switch (stmt_node) { Node.decl |d| => switch (d) { Decl.struct_decl |sd| => { inner_sd = sd; is_sd = true }, else => {} }, else => {} }
+                            if (is_sd) { self.lowerStructDecl(inner_sd) }
+                        }
+                    }
+                    self.emitCleanups(cleanup_depth)
+                    fb.restoreScope(scope_depth)
+                }
+                return false
+            },
+            Stmt.break_stmt |bs| => {
+                self.lowerBreak(bs.label)
+                return true
+            },
+            Stmt.continue_stmt |cs| => {
+                self.lowerContinue(cs.label)
+                return true
+            },
+            Stmt.expr_stmt |es| => {
+                self.lowerExprNode(es.expr)
+                return false
+            },
+            Stmt.defer_stmt |ds| => {
+                const kind = if (ds.is_errdefer) { CLEANUP_ERRDEFER } else { CLEANUP_DEFER }
+                self.cleanup_stack.append(CleanupEntry {
+                    kind: kind,
+                    value: ds.expr,
+                    type_idx: VOID,
+                    local_idx: null_local,
+                    func_name: "",
+                })
+                return false
+            },
+            Stmt.destructure_stmt |ds| => {
+                self.lowerDestructureStmt(ds)
+                return false
+            },
+            else => { return false },
+        }
+    }
+
+    // ========================================================================
+    // Statement stubs (Phase 2)
+    // ========================================================================
+
+    fn lowerReturn(ret: ReturnStmt) void {
+        if (self.builder.func()) |fb| {
+            if (ret.value != null_node) {
+                const val = self.lowerExprNode(ret.value)
+                self.emitCleanups(0)
+                fb.emitRet(val, ret.span)
+            } else {
+                self.emitCleanups(0)
+                fb.emitRet(null_node, ret.span)
+            }
+        }
+    }
+
+    fn lowerLocalVarDecl(v: VarStmt) void {
+        if (self.builder.func()) |fb| {
+            var type_idx = VOID
+            if (v.type_expr != null_node) {
+                type_idx = self.resolveTypeNode(v.type_expr)
+            } else if (v.value != null_node) {
+                type_idx = self.inferExprType(v.value)
+            }
+            const size = self.types.sizeOf(type_idx)
+            const local_idx = fb.addLocalWithSize(v.name, type_idx, !v.is_const, size)
+
+            if (v.value != null_node) {
+                const val = self.lowerExprNode(v.value)
+                if (val != null_node) {
+                    fb.emitStoreLocal(local_idx, val, v.span)
+                }
+            }
+        }
+    }
+
+    fn lowerAssign(a: AssignStmt) void {
+        // TODO: Phase 2 — full assignment lowering (field, index, deref, compound)
+        if (self.builder.func()) |fb| {
+            const val = self.lowerExprNode(a.value)
+            if (val == null_node) { return }
+
+            // Simple variable assignment
+            var id_name = ""
+            var is_ident = false
+            switch (self.tree.getNode(a.target)) { Node.expr |e| => switch (e) { Expr.ident |id| => { id_name = id.name; is_ident = true }, else => {} }, else => {} }
+            if (is_ident) {
+                if (fb.lookupLocal(id_name)) |local_idx| {
+                    fb.emitStoreLocal(local_idx, val, a.span)
+                }
+            }
+            // TODO: field, index, deref assignment
+        }
+    }
+
+    fn lowerIf(i: IfStmt) bool {
+        // TODO: Phase 2 — full if-statement lowering with optional capture
+        if (self.builder.func()) |fb| {
+            const cond = self.lowerExprNode(i.condition)
+            if (cond == null_node) { return false }
+
+            const then_block = fb.newBlock("if.then")
+            const else_block = fb.newBlock("if.else")
+            const merge_block = fb.newBlock("if.end")
+
+            fb.emitBranch(cond, then_block, else_block, i.span)
+
+            fb.setBlock(then_block)
+            const then_terminated = self.lowerBlockNode(i.then_branch)
+            if (!then_terminated) {
+                fb.emitJump(merge_block, i.span)
+            }
+
+            fb.setBlock(else_block)
+            if (i.else_branch != null_node) {
+                const else_terminated = self.lowerBlockNode(i.else_branch)
+                if (!else_terminated) {
+                    fb.emitJump(merge_block, i.span)
+                }
+                if (then_terminated and else_terminated) {
+                    return true
+                }
+            } else {
+                fb.emitJump(merge_block, i.span)
+            }
+
+            fb.setBlock(merge_block)
+        }
+        return false
+    }
+
+    fn lowerWhile(w: WhileStmt) void {
+        // TODO: Phase 2 — full while-loop lowering with capture and label
+        if (self.builder.func()) |fb| {
+            const cond_block = fb.newBlock("while.cond")
+            const body_block = fb.newBlock("while.body")
+            const exit_block = fb.newBlock("while.end")
+
+            self.loop_stack.append(LoopContext {
+                cond_block: cond_block,
+                exit_block: exit_block,
+                cleanup_depth: self.cleanup_stack.count,
+                label: w.label,
+            })
+
+            fb.emitJump(cond_block, w.span)
+            fb.setBlock(cond_block)
+
+            const cond = self.lowerExprNode(w.condition)
+            if (cond != null_node) {
+                fb.emitBranch(cond, body_block, exit_block, w.span)
+            }
+
+            fb.setBlock(body_block)
+            self.lowerBlockNode(w.body)
+            if (fb.needsTerminator()) {
+                // Continue expression (e.g. i += 1)
+                if (w.continue_expr != null_node) {
+                    self.lowerExprNode(w.continue_expr)
+                }
+                fb.emitJump(cond_block, w.span)
+            }
+
+            fb.setBlock(exit_block)
+            self.loop_stack.pop()
+        }
+    }
+
+    fn lowerFor(f: ForStmt) void {
+        // TODO: Phase 2 — full for-loop lowering (range, slice, inline)
+        if (self.builder.func()) |fb| {
+            if (isRange(f)) {
+                // Range for: for i in start..end
+                const start_val = self.lowerExprNode(f.range_start)
+                const end_val = self.lowerExprNode(f.range_end)
+                if (start_val == null_node or end_val == null_node) { return }
+
+                const iter_type = self.inferExprType(f.range_start)
+                const iter_size = self.types.sizeOf(iter_type)
+                const local_idx = fb.addLocalWithSize(f.binding, iter_type, true, iter_size)
+                fb.emitStoreLocal(local_idx, start_val, f.span)
+
+                const cond_block = fb.newBlock("for.cond")
+                const body_block = fb.newBlock("for.body")
+                const exit_block = fb.newBlock("for.end")
+
+                self.loop_stack.append(LoopContext {
+                    cond_block: cond_block,
+                    exit_block: exit_block,
+                    cleanup_depth: self.cleanup_stack.count,
+                    label: f.label,
+                })
+
+                fb.emitJump(cond_block, f.span)
+                fb.setBlock(cond_block)
+
+                const cur = fb.emitLoadLocal(local_idx, iter_type, f.span)
+                const cond = fb.emitBinary(BinaryOp.lt, cur, end_val, BOOL, f.span)
+                fb.emitBranch(cond, body_block, exit_block, f.span)
+
+                fb.setBlock(body_block)
+                self.lowerBlockNode(f.body)
+                if (fb.needsTerminator()) {
+                    const cur2 = fb.emitLoadLocal(local_idx, iter_type, f.span)
+                    const one = fb.emitConstInt(1, iter_type, f.span)
+                    const next = fb.emitBinary(BinaryOp.add, cur2, one, iter_type, f.span)
+                    fb.emitStoreLocal(local_idx, next, f.span)
+                    fb.emitJump(cond_block, f.span)
+                }
+
+                fb.setBlock(exit_block)
+                self.loop_stack.pop()
+            }
+            // TODO: slice iteration
+        }
+    }
+
+    fn lowerBreak(label: string) void {
+        if (self.builder.func()) |fb| {
+            // Find matching loop context
+            var i = self.loop_stack.count - 1
+            while (i >= 0) {
+                const ctx = self.loop_stack.get(i)
+                if (label == "" or label == ctx.label) {
+                    self.emitCleanups(ctx.cleanup_depth)
+                    fb.emitJump(ctx.exit_block, Span.zero())
+                    return
+                }
+                i = i - 1
+            }
+        }
+    }
+
+    fn lowerContinue(label: string) void {
+        if (self.builder.func()) |fb| {
+            var i = self.loop_stack.count - 1
+            while (i >= 0) {
+                const ctx = self.loop_stack.get(i)
+                if (label == "" or label == ctx.label) {
+                    self.emitCleanups(ctx.cleanup_depth)
+                    fb.emitJump(ctx.cond_block, Span.zero())
+                    return
+                }
+                i = i - 1
+            }
+        }
+    }
+
+    fn lowerDestructureStmt(ds: DestructureStmt) void {
+        // TODO: Phase 2 — destructuring assignment
+    }
+
+    // ========================================================================
+    // Expression lowering (stubs for Phase 3)
+    // ========================================================================
+
+    /// Lower an expression AST node to an IR node index.
+    fn lowerExprNode(idx: int) int {
+        if (idx == null_node) { return null_node }
+        const node = self.tree.getNode(idx)
+        const maybe_expr = asExpr(node)
+        if (maybe_expr) |e| { return self.lowerExpr(e, idx) }
+        return null_node
+    }
+
+    /// Lower an expression variant to IR. Returns IR node index.
+    fn lowerExpr(expr: Expr, idx: int) int {
+        if (self.builder.func()) |fb| {
+            switch (expr) {
+                Expr.literal |lit| => { return self.lowerLiteral(fb, lit, idx) },
+                Expr.ident |id| => { return self.lowerIdent(fb, id) },
+                Expr.binary |bin| => { return self.lowerBinary(fb, bin, idx) },
+                Expr.unary |un| => { return self.lowerUnary(fb, un, idx) },
+                Expr.paren |p| => { return self.lowerExprNode(p.inner) },
+                Expr.call |c| => { return self.lowerCall(fb, c, idx) },
+                Expr.field_access |fa| => { return self.lowerFieldAccess(fb, fa, idx) },
+                Expr.index_expr |ie| => { return self.lowerIndex(fb, ie, idx) },
+                Expr.struct_init |si| => { return self.lowerStructInit(fb, si, idx) },
+                Expr.if_expr |ie| => { return self.lowerIfExpr(fb, ie, idx) },
+                Expr.block_expr |be| => { return self.lowerBlockExpr(fb, be) },
+                Expr.addr_of |ao| => { return self.lowerAddrOf(fb, ao, idx) },
+                Expr.deref |dr| => { return self.lowerDeref(fb, dr, idx) },
+                Expr.slice_expr |se| => { return self.lowerSliceExpr(fb, se, idx) },
+                Expr.array_literal |al| => { return self.lowerArrayLiteral(fb, al, idx) },
+                Expr.string_interp |si| => { return self.lowerStringInterp(fb, si, idx) },
+                Expr.try_expr |te| => { return self.lowerTryExpr(fb, te, idx) },
+                Expr.catch_expr |ce| => { return self.lowerCatchExpr(fb, ce, idx) },
+                Expr.error_literal |el| => { return self.lowerErrorLiteral(fb, el, idx) },
+                Expr.builtin_call |bc| => { return self.lowerBuiltinCall(fb, bc, idx) },
+                Expr.switch_expr |se| => { return self.lowerSwitchExpr(fb, se, idx) },
+                Expr.new_expr |ne| => { return self.lowerNewExpr(fb, ne, idx) },
+                Expr.tuple_literal |tl| => { return self.lowerTupleLiteral(fb, tl, idx) },
+                else => {
+                    return null_node
+                },
+            }
+        }
+        return null_node
+    }
+
+    // ========================================================================
+    // Literal lowering
+    // ========================================================================
+
+    fn lowerLiteral(fb: *FuncBuilder, lit: Literal, idx: int) int {
+        const span = lit.span
+        const kind = lit.kind
+        if (kind == LiteralKind.@"int") {
+            const type_idx = self.inferExprType(idx)
+            const val = parseIntLit(lit.value)
+            return fb.emitConstInt(val, type_idx, span)
+        } else if (kind == LiteralKind.@"float") {
+            const type_idx = self.inferExprType(idx)
+            const val = parseFloatLit(lit.value)
+            return fb.emitConstFloat(val, type_idx, span)
+        } else if (kind == LiteralKind.@"string") {
+            const str_idx = fb.addStringLiteral(lit.value)
+            return fb.emitConstSlice(str_idx, span)
+        } else if (kind == LiteralKind.true_lit) {
+            return fb.emitConstBool(true, span)
+        } else if (kind == LiteralKind.false_lit) {
+            return fb.emitConstBool(false, span)
+        } else if (kind == LiteralKind.null_lit) {
+            const type_idx = self.inferExprType(idx)
+            return fb.emitConstNull(type_idx, span)
+        }
+        return null_node
+    }
+
+    fn lowerIdent(fb: *FuncBuilder, id: Ident) int {
+        // Check const_values first (compile-time known constants)
+        if (self.const_values.has(id.name) != 0) {
+            const val = self.const_values.get(id.name)
+            return fb.emitConstInt(val, I64, id.span)
+        }
+        // Check float const values
+        if (self.float_const_values.has(id.name) != 0) {
+            const val = self.float_const_values.get(id.name)
+            const type_idx = if (self.float_const_types.has(id.name) != 0) {
+                self.float_const_types.get(id.name)
+            } else { F64 }
+            const fval = @floatFromInt(f64, val)
+            return fb.emitConstFloat(fval, type_idx, id.span)
+        }
+        // Look up local variable
+        if (fb.lookupLocal(id.name)) |local_idx| {
+            const local = fb.locals.get(local_idx)
+            return fb.emitLoadLocal(local_idx, local.type_idx, id.span)
+        }
+        // Look up global
+        if (self.builder.lookupGlobal(id.name)) |result| {
+            return fb.emitGlobalRef(result.idx, id.name, result.global.type_idx, id.span)
+        }
+        // Function reference
+        return fb.emitFuncAddr(id.name, I64, id.span)
+    }
+
+    // ========================================================================
+    // Binary/Unary expression lowering
+    // ========================================================================
+
+    fn lowerBinary(fb: *FuncBuilder, bin: Binary, idx: int) int {
+        const tok = bin.op
+
+        // Short-circuit logical and
+        if (tok == Token.land or tok == Token.kw_and) {
+            return self.lowerShortCircuitAnd(fb, bin)
+        }
+        // Short-circuit logical or
+        if (tok == Token.lor or tok == Token.kw_or) {
+            return self.lowerShortCircuitOr(fb, bin)
+        }
+
+        // String concatenation (++ or + on strings)
+        if (tok == Token.concat or tok == Token.add) {
+            const left_type = self.inferExprType(bin.left)
+            if (left_type == STRING) {
+                return self.lowerStringConcat(fb, bin)
+            }
+        }
+
+        // String equality (== or != on strings)
+        if (tok == Token.eql or tok == Token.neq) {
+            const left_type = self.inferExprType(bin.left)
+            if (left_type == STRING) {
+                return self.lowerStringCompare(fb, bin)
+            }
+        }
+
+        // Generic binary expression
+        const left = self.lowerExprNode(bin.left)
+        const right = self.lowerExprNode(bin.right)
+        if (left == null_node or right == null_node) { return null_node }
+
+        const result_type = self.inferBinaryType(bin.op, bin.left, bin.right)
+        const op = tokenToBinaryOp(tok)
+        return fb.emitBinary(op, left, right, result_type, bin.span)
+    }
+
+    /// Short-circuit AND: left && right → if left then right else false
+    fn lowerShortCircuitAnd(fb: *FuncBuilder, bin: Binary) int {
+        const left = self.lowerExprNode(bin.left)
+        if (left == null_node) { return null_node }
+
+        const rhs_block = fb.newBlock("and.rhs")
+        const merge_block = fb.newBlock("and.end")
+        const false_val = fb.emitConstBool(false, bin.span)
+
+        fb.emitBranch(left, rhs_block, merge_block, bin.span)
+
+        fb.setBlock(rhs_block)
+        const right = self.lowerExprNode(bin.right)
+        fb.emitJump(merge_block, bin.span)
+
+        fb.setBlock(merge_block)
+        return fb.emitSelect(left, right, false_val, BOOL, bin.span)
+    }
+
+    /// Short-circuit OR: left || right → if left then true else right
+    fn lowerShortCircuitOr(fb: *FuncBuilder, bin: Binary) int {
+        const left = self.lowerExprNode(bin.left)
+        if (left == null_node) { return null_node }
+
+        const rhs_block = fb.newBlock("or.rhs")
+        const merge_block = fb.newBlock("or.end")
+        const true_val = fb.emitConstBool(true, bin.span)
+
+        fb.emitBranch(left, merge_block, rhs_block, bin.span)
+
+        fb.setBlock(rhs_block)
+        const right = self.lowerExprNode(bin.right)
+        fb.emitJump(merge_block, bin.span)
+
+        fb.setBlock(merge_block)
+        return fb.emitSelect(left, true_val, right, BOOL, bin.span)
+    }
+
+    /// String concatenation: decompose strings, call string_concat runtime
+    fn lowerStringConcat(fb: *FuncBuilder, bin: Binary) int {
+        const left = self.lowerExprNode(bin.left)
+        const right = self.lowerExprNode(bin.right)
+        if (left == null_node or right == null_node) { return null_node }
+
+        // Decompose left string into ptr/len
+        const left_local = fb.addLocalWithSize("__str_l", STRING, false, 16)
+        fb.emitStoreLocal(left_local, left, bin.span)
+        const left_ptr = fb.emitFieldLocal(left_local, 0, 0, I64, bin.span)
+        const left_len = fb.emitFieldLocal(left_local, 1, 8, I64, bin.span)
+
+        // Decompose right string into ptr/len
+        const right_local = fb.addLocalWithSize("__str_r", STRING, false, 16)
+        fb.emitStoreLocal(right_local, right, bin.span)
+        const right_ptr = fb.emitFieldLocal(right_local, 0, 0, I64, bin.span)
+        const right_len = fb.emitFieldLocal(right_local, 1, 8, I64, bin.span)
+
+        // Call string_concat(left_ptr, left_len, right_ptr, right_len)
+        var args: List(int) = .{}
+        args.append(left_ptr)
+        args.append(left_len)
+        args.append(right_ptr)
+        args.append(right_len)
+        return fb.emitCall("string_concat", args, false, STRING, bin.span)
+    }
+
+    /// String comparison: decompose strings, call string_eq runtime
+    fn lowerStringCompare(fb: *FuncBuilder, bin: Binary) int {
+        const left = self.lowerExprNode(bin.left)
+        const right = self.lowerExprNode(bin.right)
+        if (left == null_node or right == null_node) { return null_node }
+
+        // Decompose left string
+        const left_local = fb.addLocalWithSize("__str_l", STRING, false, 16)
+        fb.emitStoreLocal(left_local, left, bin.span)
+        const left_ptr = fb.emitFieldLocal(left_local, 0, 0, I64, bin.span)
+        const left_len = fb.emitFieldLocal(left_local, 1, 8, I64, bin.span)
+
+        // Decompose right string
+        const right_local = fb.addLocalWithSize("__str_r", STRING, false, 16)
+        fb.emitStoreLocal(right_local, right, bin.span)
+        const right_ptr = fb.emitFieldLocal(right_local, 0, 0, I64, bin.span)
+        const right_len = fb.emitFieldLocal(right_local, 1, 8, I64, bin.span)
+
+        // Call string_eq(left_ptr, left_len, right_ptr, right_len)
+        var args: List(int) = .{}
+        args.append(left_ptr)
+        args.append(left_len)
+        args.append(right_ptr)
+        args.append(right_len)
+        const eq_result = fb.emitCall("string_eq", args, false, BOOL, bin.span)
+
+        // For != invert the result
+        if (bin.op == Token.neq) {
+            return fb.emitUnary(UnaryOp.@"not", eq_result, BOOL, bin.span)
+        }
+        return eq_result
+    }
+
+    fn lowerUnary(fb: *FuncBuilder, un: Unary, idx: int) int {
+        const operand = self.lowerExprNode(un.operand)
+        if (operand == null_node) { return null_node }
+
+        const result_type = self.inferExprType(idx)
+        const op = tokenToUnaryOp(un.op)
+        return fb.emitUnary(op, operand, result_type, un.span)
+    }
+
+    // ========================================================================
+    // Field access / Index / Struct init (Phase 3)
+    // ========================================================================
+
+    fn lowerFieldAccess(fb: *FuncBuilder, fa: FieldAccessExpr, idx: int) int {
+        const base_type = self.inferExprType(fa.base)
+        const type_info = self.types.get(base_type)
+
+        // String .len
+        if (base_type == STRING and fa.field == "len") {
+            const base = self.lowerExprNode(fa.base)
+            if (base == null_node) { return null_node }
+            const tmp = fb.addLocalWithSize("__str", STRING, false, 16)
+            fb.emitStoreLocal(tmp, base, fa.span)
+            return fb.emitFieldLocal(tmp, 1, 8, I64, fa.span)
+        }
+
+        // String .ptr
+        if (base_type == STRING and fa.field == "ptr") {
+            const base = self.lowerExprNode(fa.base)
+            if (base == null_node) { return null_node }
+            const tmp = fb.addLocalWithSize("__str", STRING, false, 16)
+            fb.emitStoreLocal(tmp, base, fa.span)
+            return fb.emitFieldLocal(tmp, 0, 0, I64, fa.span)
+        }
+
+        // Slice .len
+        if (type_info.tag == TAG_SLICE and fa.field == "len") {
+            const base = self.lowerExprNode(fa.base)
+            if (base == null_node) { return null_node }
+            return fb.emitSliceLen(base, fa.span)
+        }
+
+        // Slice .ptr
+        if (type_info.tag == TAG_SLICE and fa.field == "ptr") {
+            const base = self.lowerExprNode(fa.base)
+            if (base == null_node) { return null_node }
+            var elem_type = I64
+            switch (type_info) { Type.slice |s| => { elem_type = s.elem }, else => {} }
+            const ptr_type = self.types.makePointer(elem_type)
+            return fb.emitSlicePtr(base, ptr_type, fa.span)
+        }
+
+        // Slice .cap
+        if (type_info.tag == TAG_SLICE and fa.field == "cap") {
+            const base = self.lowerExprNode(fa.base)
+            if (base == null_node) { return null_node }
+            return fb.emitSliceCap(base, fa.span)
+        }
+
+        // Array .len (compile-time constant)
+        if (type_info.tag == TAG_ARRAY and fa.field == "len") {
+            var length = 0
+            switch (type_info) { Type.array |a| => { length = a.length }, else => {} }
+            return fb.emitConstInt(length, I64, fa.span)
+        }
+
+        // Struct field access
+        if (type_info.tag == TAG_STRUCT) {
+            return self.lowerStructFieldAccess(fb, fa, base_type)
+        }
+
+        // Pointer to struct — auto-deref
+        if (type_info.tag == TAG_POINTER) {
+            var pointee_type = VOID
+            switch (type_info) { Type.pointer |p| => { pointee_type = p.elem }, else => {} }
+            const pointee_info = self.types.get(pointee_type)
+            if (pointee_info.tag == TAG_STRUCT) {
+                return self.lowerPtrStructFieldAccess(fb, fa, pointee_type)
+            }
+        }
+
+        // Enum variant constant (Color.Red → integer value)
+        if (type_info.tag == TAG_ENUM) {
+            const variant_val = self.findEnumVariant(base_type, fa.field)
+            if (variant_val >= 0) {
+                return fb.emitConstInt(variant_val, base_type, fa.span)
+            }
+        }
+
+        // List .count (common pattern)
+        if (type_info.tag == TAG_LIST and fa.field == "count") {
+            const base = self.lowerExprNode(fa.base)
+            if (base == null_node) { return null_node }
+            // List.count is at offset 8 (items=0, count=8)
+            const tmp = fb.addLocalWithSize("__list", base_type, false, 24)
+            fb.emitStoreLocal(tmp, base, fa.span)
+            return fb.emitFieldLocal(tmp, 1, 8, I64, fa.span)
+        }
+
+        // Fallback: try checker's type for the overall expression
+        const result_type = self.inferExprType(idx)
+        if (result_type != VOID) {
+            const field_idx = self.findStructFieldIdx(base_type, fa.field)
+            if (field_idx >= 0) {
+                const field = self.getStructField(base_type, field_idx)
+                const base = self.lowerExprNode(fa.base)
+                if (base == null_node) { return null_node }
+                return fb.emitFieldValue(base, field_idx, field.offset, field.type_idx, fa.span)
+            }
+        }
+
+        return null_node
+    }
+
+    /// Struct field access — checks for local ident base optimization.
+    fn lowerStructFieldAccess(fb: *FuncBuilder, fa: FieldAccessExpr, struct_type: int) int {
+        const field_idx = self.findStructFieldIdx(struct_type, fa.field)
+        if (field_idx < 0) { return null_node }
+        const field = self.getStructField(struct_type, field_idx)
+
+        // Check if base is a local ident — use emitFieldLocal
+        var base_name = ""
+        var is_ident = false
+        switch (self.tree.getNode(fa.base)) { Node.expr |e| => switch (e) {
+            Expr.ident |id| => { base_name = id.name; is_ident = true },
+            else => {},
+        }, else => {} }
+
+        if (is_ident) {
+            if (fb.lookupLocal(base_name)) |local_idx| {
+                return fb.emitFieldLocal(local_idx, field_idx, field.offset, field.type_idx, fa.span)
+            }
+        }
+
+        // Expression base — use emitFieldValue
+        const base = self.lowerExprNode(fa.base)
+        if (base == null_node) { return null_node }
+        return fb.emitFieldValue(base, field_idx, field.offset, field.type_idx, fa.span)
+    }
+
+    /// Pointer-to-struct field access — auto-deref then access field.
+    fn lowerPtrStructFieldAccess(fb: *FuncBuilder, fa: FieldAccessExpr, pointee_type: int) int {
+        const field_idx = self.findStructFieldIdx(pointee_type, fa.field)
+        if (field_idx < 0) { return null_node }
+        const field = self.getStructField(pointee_type, field_idx)
+
+        // Check if base is a local ident (pointer local)
+        var base_name = ""
+        var is_ident = false
+        switch (self.tree.getNode(fa.base)) { Node.expr |e| => switch (e) {
+            Expr.ident |id| => { base_name = id.name; is_ident = true },
+            else => {},
+        }, else => {} }
+
+        if (is_ident) {
+            if (fb.lookupLocal(base_name)) |local_idx| {
+                return fb.emitPtrField(local_idx, field_idx, field.offset, field.type_idx, fa.span)
+            }
+        }
+
+        // Expression base
+        const base = self.lowerExprNode(fa.base)
+        if (base == null_node) { return null_node }
+        // Offset from pointer value
+        const offset_const = fb.emitConstInt(field.offset, I64, fa.span)
+        const field_addr = fb.emitBinary(BinaryOp.add, base, offset_const, I64, fa.span)
+        return fb.emitPtrLoadValue(field_addr, field.type_idx, fa.span)
+    }
+
+    fn lowerIndex(fb: *FuncBuilder, ie: IndexExpr, idx: int) int {
+        const base_type = self.inferExprType(ie.base)
+        const type_info = self.types.get(base_type)
+
+        // Get element type and size
+        var elem_type = I64
+        if (type_info.tag == TAG_ARRAY) {
+            switch (type_info) { Type.array |a| => { elem_type = a.elem }, else => {} }
+        } else if (type_info.tag == TAG_SLICE) {
+            switch (type_info) { Type.slice |s| => { elem_type = s.elem }, else => {} }
+        } else if (base_type == STRING) {
+            // String indexing via charAt
+            const base = self.lowerExprNode(ie.base)
+            const index = self.lowerExprNode(ie.idx)
+            if (base == null_node or index == null_node) { return null_node }
+            var args: List(int) = .{}
+            args.append(base)
+            args.append(index)
+            return fb.emitCall("charAt", args, false, I64, ie.span)
+        }
+        const elem_size = self.types.sizeOf(elem_type)
+
+        // Lower index expression
+        const index = self.lowerExprNode(ie.idx)
+        if (index == null_node) { return null_node }
+
+        // Check if base is a local ident
+        var base_name = ""
+        var is_ident = false
+        switch (self.tree.getNode(ie.base)) { Node.expr |e| => switch (e) {
+            Expr.ident |id| => { base_name = id.name; is_ident = true },
+            else => {},
+        }, else => {} }
+
+        if (is_ident) {
+            if (fb.lookupLocal(base_name)) |local_idx| {
+                return fb.emitIndexLocal(local_idx, index, elem_size, elem_type, ie.span)
+            }
+        }
+
+        // Expression base
+        const base = self.lowerExprNode(ie.base)
+        if (base == null_node) { return null_node }
+        return fb.emitIndexValue(base, index, elem_size, elem_type, ie.span)
+    }
+
+    fn lowerStructInit(fb: *FuncBuilder, si: StructInitExpr, idx: int) int {
+        // Get struct type from checker or by name lookup
+        var struct_type = self.inferExprType(idx)
+        if (struct_type == VOID or struct_type == invalid_type) {
+            const looked_up = self.types.lookupByName(si.type_name)
+            if (looked_up >= 0) { struct_type = looked_up }
+        }
+        if (struct_type == VOID or struct_type == invalid_type) { return null_node }
+
+        const size = self.types.sizeOf(struct_type)
+        const tmp = fb.addLocalWithSize("__struct_init", struct_type, false, size)
+
+        // Store each field init
+        for i in 0..si.fields.count {
+            const field_init_idx = si.fields.get(i)
+            var fi_name = ""
+            var fi_value = null_node
+            var found = false
+            switch (self.tree.getNode(field_init_idx)) { Node.expr |e| => switch (e) {
+                Expr.field_init_node |fi| => { fi_name = fi.name; fi_value = fi.value; found = true },
+                else => {},
+            }, else => {} }
+
+            if (found) {
+                const field_idx = self.findStructFieldIdx(struct_type, fi_name)
+                if (field_idx >= 0) {
+                    const field = self.getStructField(struct_type, field_idx)
+                    const val = self.lowerExprNode(fi_value)
+                    if (val != null_node) {
+                        fb.emitStoreLocalField(tmp, field_idx, field.offset, val, si.span)
+                    }
+                }
+            }
+        }
+
+        // Return address of the initialized struct
+        return fb.emitAddrLocal(tmp, struct_type, si.span)
+    }
+
+    fn lowerAddrOf(fb: *FuncBuilder, ao: AddrOf, idx: int) int {
+        const operand_type = self.inferExprType(ao.operand)
+        const ptr_type = self.types.makePointer(operand_type)
+
+        // Check if operand is an ident — direct addr of local
+        var op_name = ""
+        var is_ident = false
+        switch (self.tree.getNode(ao.operand)) { Node.expr |e| => switch (e) {
+            Expr.ident |id| => { op_name = id.name; is_ident = true },
+            else => {},
+        }, else => {} }
+
+        if (is_ident) {
+            if (fb.lookupLocal(op_name)) |local_idx| {
+                return fb.emitAddrLocal(local_idx, ptr_type, ao.span)
+            }
+        }
+
+        // For non-ident operands, lower and store to temp
+        const val = self.lowerExprNode(ao.operand)
+        if (val == null_node) { return null_node }
+        const size = self.types.sizeOf(operand_type)
+        const tmp = fb.addLocalWithSize("__addr_tmp", operand_type, false, size)
+        fb.emitStoreLocal(tmp, val, ao.span)
+        return fb.emitAddrLocal(tmp, ptr_type, ao.span)
+    }
+
+    fn lowerDeref(fb: *FuncBuilder, dr: Deref, idx: int) int {
+        const ptr_type = self.inferExprType(dr.operand)
+        const ptr_info = self.types.get(ptr_type)
+
+        // Get element type from pointer
+        var elem_type = I64
+        if (ptr_info.tag == TAG_POINTER) {
+            switch (ptr_info) { Type.pointer |p| => { elem_type = p.elem }, else => {} }
+        }
+
+        // Check if operand is a local ident
+        var op_name = ""
+        var is_ident = false
+        switch (self.tree.getNode(dr.operand)) { Node.expr |e| => switch (e) {
+            Expr.ident |id| => { op_name = id.name; is_ident = true },
+            else => {},
+        }, else => {} }
+
+        if (is_ident) {
+            if (fb.lookupLocal(op_name)) |local_idx| {
+                return fb.emitPtrLoad(local_idx, elem_type, dr.span)
+            }
+        }
+
+        // Expression operand
+        const ptr = self.lowerExprNode(dr.operand)
+        if (ptr == null_node) { return null_node }
+        return fb.emitPtrLoadValue(ptr, elem_type, dr.span)
+    }
+
+    // ========================================================================
+    // Slice and array expressions (Phase 3)
+    // ========================================================================
+
+    fn lowerSliceExpr(fb: *FuncBuilder, se: SliceExpr, idx: int) int {
+        const base_type = self.inferExprType(se.base)
+        const type_info = self.types.get(base_type)
+
+        // String slicing
+        if (base_type == STRING) {
+            return self.lowerStringSlice(fb, se)
+        }
+
+        // Get element type
+        var elem_type = I64
+        if (type_info.tag == TAG_ARRAY) {
+            switch (type_info) { Type.array |a| => { elem_type = a.elem }, else => {} }
+        } else if (type_info.tag == TAG_SLICE) {
+            switch (type_info) { Type.slice |s| => { elem_type = s.elem }, else => {} }
+        }
+        const elem_size = self.types.sizeOf(elem_type)
+        const slice_type = self.types.makeSlice(elem_type)
+
+        // Lower start/end
+        var start = null_node
+        if (se.start != null_node) {
+            start = self.lowerExprNode(se.start)
+        }
+        var end = null_node
+        if (se.end != null_node) {
+            end = self.lowerExprNode(se.end)
+        }
+
+        // Default end to array length
+        if (end == null_node and type_info.tag == TAG_ARRAY) {
+            var length = 0
+            switch (type_info) { Type.array |a| => { length = a.length }, else => {} }
+            end = fb.emitConstInt(length, I64, se.span)
+        }
+        if (end == null_node) { return null_node }
+
+        // Default start to 0
+        if (start == null_node) {
+            start = fb.emitConstInt(0, I64, se.span)
+        }
+
+        // Check if base is a local ident
+        var base_name = ""
+        var is_ident = false
+        switch (self.tree.getNode(se.base)) { Node.expr |e| => switch (e) {
+            Expr.ident |id| => { base_name = id.name; is_ident = true },
+            else => {},
+        }, else => {} }
+
+        if (is_ident) {
+            if (fb.lookupLocal(base_name)) |local_idx| {
+                return fb.emitSliceLocal(local_idx, start, end, elem_size, slice_type, se.span)
+            }
+        }
+
+        const base = self.lowerExprNode(se.base)
+        if (base == null_node) { return null_node }
+        return fb.emitSliceValue(base, start, end, elem_size, slice_type, se.span)
+    }
+
+    /// String slicing: zero-copy substring (new ptr, new len).
+    fn lowerStringSlice(fb: *FuncBuilder, se: SliceExpr) int {
+        const base = self.lowerExprNode(se.base)
+        if (base == null_node) { return null_node }
+
+        // Store base string to temp for field access
+        const base_local = fb.addLocalWithSize("__str_base", STRING, false, 16)
+        fb.emitStoreLocal(base_local, base, se.span)
+        const str_ptr = fb.emitFieldLocal(base_local, 0, 0, I64, se.span)
+        const str_len = fb.emitFieldLocal(base_local, 1, 8, I64, se.span)
+
+        // Start value
+        var start_val = fb.emitConstInt(0, I64, se.span)
+        if (se.start != null_node) {
+            start_val = self.lowerExprNode(se.start)
+        }
+
+        // End value (default to string length)
+        var end_val = str_len
+        if (se.end != null_node) {
+            end_val = self.lowerExprNode(se.end)
+        }
+
+        // new_ptr = str_ptr + start
+        const new_ptr = fb.emitBinary(BinaryOp.add, str_ptr, start_val, I64, se.span)
+        // new_len = end - start
+        const new_len = fb.emitBinary(BinaryOp.sub, end_val, start_val, I64, se.span)
+
+        // Construct result string compound
+        const result_local = fb.addLocalWithSize("__str_slice", STRING, false, 16)
+        fb.emitStoreLocalField(result_local, 0, 0, new_ptr, se.span)
+        fb.emitStoreLocalField(result_local, 1, 8, new_len, se.span)
+        return fb.emitLoadLocal(result_local, STRING, se.span)
+    }
+
+    fn lowerArrayLiteral(fb: *FuncBuilder, al: ArrayLiteral, idx: int) int {
+        if (al.elements.count == 0) { return null_node }
+
+        const first_elem_type = self.inferExprType(al.elements.get(0))
+        const elem_size = self.types.sizeOf(first_elem_type)
+        const array_type = self.types.makeArray(first_elem_type, al.elements.count)
+        const array_size = self.types.sizeOf(array_type)
+
+        const local_idx = fb.addLocalWithSize("__arr", array_type, false, array_size)
+        for i in 0..al.elements.count {
+            const elem_idx = al.elements.get(i)
+            const elem = self.lowerExprNode(elem_idx)
+            if (elem != null_node) {
+                const idx_const = fb.emitConstInt(i, I64, al.span)
+                fb.emitStoreIndexLocal(local_idx, idx_const, elem, elem_size, al.span)
+            }
+        }
+        return fb.emitAddrLocal(local_idx, array_type, al.span)
+    }
+
+    // ========================================================================
+    // Complex expression stubs (Phase 4)
+    // ========================================================================
+
+    fn lowerCall(fb: *FuncBuilder, c: Call, idx: int) int {
+        // TODO: Phase 4 — function calls, method calls, builtin calls
+        return null_node
+    }
+
+    fn lowerIfExpr(fb: *FuncBuilder, ie: IfExpr, idx: int) int {
+        // TODO: Phase 4 — if-as-expression
+        return null_node
+    }
+
+    fn lowerStringInterp(fb: *FuncBuilder, si: StringInterpExpr, idx: int) int {
+        // TODO: Phase 4 — string interpolation
+        return null_node
+    }
+
+    fn lowerBuiltinCall(fb: *FuncBuilder, bc: BuiltinCallExpr, idx: int) int {
+        // TODO: Phase 4 — builtin calls (@sizeOf, @intCast, etc.)
+        return null_node
+    }
+
+    fn lowerSwitchExpr(fb: *FuncBuilder, se: SwitchExpr, idx: int) int {
+        // TODO: Phase 4 — switch-as-expression
+        return null_node
+    }
+
+    fn lowerNewExpr(fb: *FuncBuilder, ne: NewExpr, idx: int) int {
+        // TODO: Phase 4 — heap allocation
+        return null_node
+    }
+
+    fn lowerTupleLiteral(fb: *FuncBuilder, tl: TupleLiteral, idx: int) int {
+        // TODO: Phase 4 — tuple literal
+        return null_node
+    }
+
+    fn lowerTryExpr(fb: *FuncBuilder, te: TryExpr, idx: int) int {
+        // TODO: Phase 5 — try expression
+        return null_node
+    }
+
+    fn lowerCatchExpr(fb: *FuncBuilder, ce: CatchExpr, idx: int) int {
+        // TODO: Phase 5 — catch expression
+        return null_node
+    }
+
+    fn lowerErrorLiteral(fb: *FuncBuilder, el: ErrorLiteralExpr, idx: int) int {
+        // TODO: Phase 5 — error literal
+        return null_node
+    }
+
+    fn lowerBlockExpr(fb: *FuncBuilder, be: BlockExpr) int {
+        // Lower block contents, return result
+        const scope_depth = fb.markScopeEntry()
+        for i in 0..be.stmts.count {
+            const stmt_idx = be.stmts.get(i)
+            const maybe_stmt = asStmt(self.tree.getNode(stmt_idx))
+            if (maybe_stmt) |s| {
+                if (self.lowerStmt(s)) {
+                    fb.restoreScope(scope_depth)
+                    return null_node
+                }
+            }
+        }
+        var result = null_node
+        if (be.result_expr != null_node) {
+            result = self.lowerExprNode(be.result_expr)
+        }
+        fb.restoreScope(scope_depth)
+        return result
+    }
+
+    // ========================================================================
+    // Generic function queue (Phase 5)
+    // ========================================================================
+
+    fn lowerQueuedGenericFunctions() void {
+        // TODO: Phase 5 — process deferred generic instantiations
+    }
+
+    // ========================================================================
+    // Type query helpers
+    // ========================================================================
+
+    /// Find a struct field index by name. Returns -1 if not found.
+    fn findStructFieldIdx(struct_type_idx: int, field_name: string) int {
+        const info = self.types.get(struct_type_idx)
+        if (info.tag != TAG_STRUCT) { return -1 }
+        switch (info) {
+            Type.struct_type |st| => {
+                for i in 0..st.field_count {
+                    const field = st.getField(i)
+                    if (field.name == field_name) { return i }
+                }
+            },
+            else => {},
+        }
+        return -1
+    }
+
+    /// Get a struct field by index. Caller must ensure type is struct and index is valid.
+    fn getStructField(struct_type_idx: int, field_idx: int) *StructField {
+        switch (self.types.get(struct_type_idx)) {
+            Type.struct_type |st| => { return st.getField(field_idx) },
+            else => {},
+        }
+        return @intToPtr(*StructField, 0)
+    }
+
+    /// Find an enum variant's value by name. Returns -1 if not found.
+    fn findEnumVariant(enum_type_idx: int, variant_name: string) int {
+        const info = self.types.get(enum_type_idx)
+        if (info.tag != TAG_ENUM) { return -1 }
+        switch (info) {
+            Type.enum_type |e| => {
+                for i in 0..e.variant_count {
+                    const v = e.getVariant(i)
+                    if (v.name == variant_name) { return v.value }
+                }
+            },
+            else => {},
+        }
+        return -1
+    }
+
+    /// Infer the result type of a binary expression.
+    /// Comparisons always produce BOOL, others inherit left operand's type.
+    fn inferBinaryType(tok: int, left: int, right: int) int {
+        // Comparison operators → BOOL
+        if (tok == Token.eql or tok == Token.neq or
+            tok == Token.lss or tok == Token.leq or
+            tok == Token.gtr or tok == Token.geq) {
+            return BOOL
+        }
+        // Logical operators → BOOL
+        if (tok == Token.land or tok == Token.lor or
+            tok == Token.kw_and or tok == Token.kw_or) {
+            return BOOL
+        }
+        // All other ops inherit left operand's type
+        return self.inferExprType(left)
+    }
+
+    // ========================================================================
+    // Helper functions
+    // ========================================================================
+
+    /// Clear per-function state at function entry.
+    fn clearPerFunctionState() void {
+        var empty_cleanup: List(CleanupEntry) = .{}
+        self.cleanup_stack = empty_cleanup
+        var empty_comptime: Map(string, int) = .{}
+        self.comptime_value_vars = empty_comptime
+        var empty_weak: Map(int, int) = .{}
+        self.weak_locals = empty_weak
+    }
+
+    /// Emit pending cleanups down to the given depth.
+    fn emitCleanups(target_depth: int) void {
+        // Walk cleanup stack in reverse, emit defer bodies and ARC releases
+        var i = self.cleanup_stack.count - 1
+        while (i >= target_depth) {
+            const entry = self.cleanup_stack.get(i)
+            if (entry.kind == CLEANUP_DEFER) {
+                self.lowerExprNode(entry.value)
+            }
+            // TODO: ARC release, errdefer
+            i = i - 1
+        }
+    }
+
+    /// Emit ARC field releases for destructor functions.
+    fn emitFieldReleases(fb: *FuncBuilder, func_name: string, span: Span) void {
+        // TODO: Phase 5 — auto-release ARC fields in destructors
+    }
+
+    /// SRET: returns true if the type needs struct return (> 8 bytes).
+    fn needsSret(type_idx: int) bool {
+        const info = self.types.get(type_idx)
+        if (info.tag == TAG_STRUCT or info.tag == TAG_TUPLE or info.tag == TAG_UNION) {
+            if (self.types.sizeOf(type_idx) > 8) {
+                return true
+            }
+        }
+        if (info.tag == TAG_OPTIONAL) {
+            if (!self.isPtrLikeOptional(type_idx)) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Returns true if the optional wraps a pointer (single-value null=0 sentinel).
+    fn isPtrLikeOptional(type_idx: int) bool {
+        const info = self.types.get(type_idx)
+        if (info.tag != TAG_OPTIONAL) { return false }
+        // Extract elem type from optional
+        switch (info) {
+            Type.optional |opt| => {
+                return self.types.get(opt.elem).tag == TAG_POINTER
+            },
+            else => { return false },
+        }
+    }
+
+    /// Resolve a type expression AST node to a type index.
+    fn resolveTypeNode(idx: int) int {
+        if (idx == null_node) { return VOID }
+        // Prefer checker's per-file scoped resolution
+        if (self.chk.expr_types.has(idx) != 0) {
+            return self.chk.expr_types.get(idx)
+        }
+        return self.chk.resolveTypeExpr(idx)
+    }
+
+    /// Infer the type of an expression from the checker's type map.
+    fn inferExprType(idx: int) int {
+        if (self.chk.expr_types.has(idx) != 0) {
+            return self.chk.expr_types.get(idx)
+        }
+        return VOID
+    }
+
+    /// Add a parameter from a param AST node.
+    fn addParamFromNode(fb: *FuncBuilder, param_idx: int) void {
+        // Param nodes are stored as expression nodes containing field defs
+        var fd_name = ""
+        var fd_type_expr = null_node
+        var found = false
+        switch (self.tree.getNode(param_idx)) { Node.expr |e| => switch (e) { Expr.field_def |fd| => { fd_name = fd.name; fd_type_expr = fd.type_expr; found = true }, else => {} }, else => {} }
+        if (found) {
+            var param_type = self.resolveTypeNode(fd_type_expr)
+            const size = self.types.sizeOf(param_type)
+            fb.addParam(fd_name, param_type, size)
+        }
+    }
+}
+
+// ============================================================================
+// Free helper functions
+// ============================================================================
+
+/// Sanitize a name for use as an identifier (replace non-alphanum with underscore).
+fn sanitizeName(prefix: string, name: string) string {
+    var result = prefix ++ name
+    // TODO: replace non-alphanum chars with '_' — for now, use as-is
+    // The Zig compiler does char-by-char replacement but Cot doesn't have
+    // mutable string indexing yet. Names with spaces will be mangled by the backend.
+    return result
+}
+
+/// Check if a string ends with a suffix.
+fn strEndsWith(s: string, suffix: string) bool {
+    if (@lenOf(s) < @lenOf(suffix)) { return false }
+    const start = @lenOf(s) - @lenOf(suffix)
+    // TODO: proper substring comparison — for now, simple check
+    // Cot doesn't have s[start..] slicing on strings in @safe mode yet
+    return false  // Conservative: will miss auto-deinit, but won't crash
+}
+
+/// Parse an integer literal string to int.
+fn parseIntLit(s: string) int {
+    // TODO: handle hex (0x), octal (0o), binary (0b) prefixes
+    var result = 0
+    var negative = false
+    var i = 0
+    if (@lenOf(s) > 0) {
+        const first = charAt(s, 0)
+        if (first == 45) {  // '-'
+            negative = true
+            i = 1
+        }
+    }
+    while (i < @lenOf(s)) {
+        const c = charAt(s, i)
+        if (c >= 48 and c <= 57) {  // '0'-'9'
+            result = result * 10 + (c - 48)
+        } else if (c == 95) {  // '_' separator
+            // skip
+        } else {
+            break
+        }
+        i = i + 1
+    }
+    if (negative) { result = -result }
+    return result
+}
+
+/// Parse a float literal string to float.
+fn parseFloatLit(s: string) float {
+    // Simple float parsing — TODO: handle scientific notation
+    var result: float = 0.0
+    var frac: float = 0.0
+    var frac_div: float = 1.0
+    var in_frac = false
+    var negative = false
+    var i = 0
+    if (@lenOf(s) > 0) {
+        const first = charAt(s, 0)
+        if (first == 45) {
+            negative = true
+            i = 1
+        }
+    }
+    while (i < @lenOf(s)) {
+        const c = charAt(s, i)
+        if (c == 46) {  // '.'
+            in_frac = true
+        } else if (c >= 48 and c <= 57) {
+            const digit = c - 48
+            const fdigit = @floatFromInt(f64, digit)
+            if (in_frac) {
+                frac_div = frac_div * 10.0
+                frac = frac + fdigit / frac_div
+            } else {
+                result = result * 10.0 + fdigit
+            }
+        } else if (c == 95) {
+            // skip
+        } else {
+            break
+        }
+        i = i + 1
+    }
+    result = result + frac
+    if (negative) { result = -result }
+    return result
+}
+
+/// Map token op code to IR BinaryOp.
+fn tokenToBinaryOp(tok: int) BinaryOp {
+    if (tok == Token.add or tok == Token.add_assign) { return BinaryOp.add }
+    if (tok == Token.sub or tok == Token.sub_assign) { return BinaryOp.sub }
+    if (tok == Token.mul or tok == Token.mul_assign) { return BinaryOp.mul }
+    if (tok == Token.quo or tok == Token.quo_assign) { return BinaryOp.div }
+    if (tok == Token.rem or tok == Token.rem_assign) { return BinaryOp.mod }
+    if (tok == Token.eql) { return BinaryOp.eq }
+    if (tok == Token.neq) { return BinaryOp.ne }
+    if (tok == Token.lss) { return BinaryOp.lt }
+    if (tok == Token.leq) { return BinaryOp.le }
+    if (tok == Token.gtr) { return BinaryOp.gt }
+    if (tok == Token.geq) { return BinaryOp.ge }
+    if (tok == Token.land or tok == Token.kw_and) { return BinaryOp.@"and" }
+    if (tok == Token.lor or tok == Token.kw_or) { return BinaryOp.@"or" }
+    if (tok == Token.@"and" or tok == Token.and_assign) { return BinaryOp.bit_and }
+    if (tok == Token.@"or" or tok == Token.or_assign) { return BinaryOp.bit_or }
+    if (tok == Token.xor or tok == Token.xor_assign) { return BinaryOp.bit_xor }
+    if (tok == Token.shl) { return BinaryOp.shl }
+    if (tok == Token.shr) { return BinaryOp.shr }
+    if (tok == Token.concat) { return BinaryOp.add }
+    return BinaryOp.add
+}
+
+/// Map token op code to IR UnaryOp.
+fn tokenToUnaryOp(tok: int) UnaryOp {
+    if (tok == Token.sub) { return UnaryOp.neg }
+    if (tok == Token.lnot or tok == Token.kw_not) { return UnaryOp.@"not" }
+    if (tok == Token.@"not") { return UnaryOp.bit_not }
+    if (tok == Token.question) { return UnaryOp.optional_unwrap }
+    return UnaryOp.neg
+}
+
+/// Initialize Lowerer scalars and builder — step 1.
+fn initLowererScalars(lower: *Lowerer) void {
+    lower.temp_counter = 0
+    lower.test_mode = false
+    lower.fail_fast = false
+    lower.bench_mode = false
+    lower.current_test_name = ""
+    lower.closure_counter = 0
+    lower.current_switch_enum_type = invalid_type
+    lower.next_error_idx = 0
+    lower.release_mode = false
+    lower.builder = Builder.init()
+}
+
+/// Initialize Lowerer lists — step 2.
+fn initLowererLists(lower: *Lowerer) void {
+    var ls: List(LoopContext) = .{}
+    lower.loop_stack = ls
+    var cs: List(CleanupEntry) = .{}
+    lower.cleanup_stack = cs
+    var tn: List(string) = .{}
+    lower.test_names = tn
+    var tdn: List(string) = .{}
+    lower.test_display_names = tdn
+    var bn: List(string) = .{}
+    lower.bench_names = bn
+    var bdn: List(string) = .{}
+    lower.bench_display_names = bdn
+}
+
+/// Initialize Lowerer maps — step 3.
+fn initLowererMaps(lower: *Lowerer) void {
+    var cv: Map(string, int) = .{}
+    lower.const_values = cv
+    var fv: Map(string, int) = .{}
+    lower.float_const_values = fv
+    var ft: Map(string, int) = .{}
+    lower.float_const_types = ft
+    var lg: Map(string, int) = .{}
+    lower.lowered_generics = lg
+    var ge: Map(string, int) = .{}
+    lower.global_error_table = ge
+    var wl: Map(int, int) = .{}
+    lower.weak_locals = wl
+    var cvv: Map(string, int) = .{}
+    lower.comptime_value_vars = cvv
+    var gcv: Map(string, int) = .{}
+    lower.global_comptime_values = gcv
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "lowerer init" {
+    // Minimal: just a Lowerer with direct field writes (no other large structs)
+    var lower: Lowerer = undefined
+    lower.temp_counter = 0
+    lower.test_mode = false
+    lower.fail_fast = false
+    lower.bench_mode = false
+    lower.builder = Builder.init()
+    @assertEq(lower.temp_counter, 0)
+    @assertEq(lower.builder.funcs.count, 0)
+}
+
+test "lowerer set modes" {
+    var ast = Ast.init("test.cot")
+    var types = TypeRegistry.init()
+    var err = ErrorReporter.init()
+    var chk = Checker.init(&ast, &types, &err)
+
+    var lower: Lowerer = undefined
+    lower.tree = &ast
+    lower.types = &types
+    lower.err = &err
+    lower.chk = &chk
+    initLowererScalars(&lower)
+    initLowererLists(&lower)
+    initLowererMaps(&lower)
+    lower.setTestMode(true)
+    @assert(lower.test_mode)
+    lower.setFailFast(true)
+    @assert(lower.fail_fast)
+    lower.setBenchMode(true)
+    @assert(lower.bench_mode)
+}
+
+test "lowerer empty lower produces empty IR" {
+    var ast = Ast.init("test.cot")
+    var types = TypeRegistry.init()
+    var err = ErrorReporter.init()
+    var chk = Checker.init(&ast, &types, &err)
+
+    var lower: Lowerer = undefined
+    lower.tree = &ast
+    lower.types = &types
+    lower.err = &err
+    lower.chk = &chk
+    initLowererScalars(&lower)
+    initLowererLists(&lower)
+    initLowererMaps(&lower)
+    const result = lower.lower()
+    @assertEq(result.funcs.count, 0)
+    @assertEq(result.globals.count, 0)
+}
+
+test "sanitizeName" {
+    const result = sanitizeName("test_", "hello")
+    @assertEq(result, "test_hello")
+
+    const result2 = sanitizeName("bench_", "my bench")
+    @assertEq(result2, "bench_my bench")
+}
+
+test "parseInt basic" {
+    @assertEq(parseIntLit("0"), 0)
+    @assertEq(parseIntLit("42"), 42)
+    @assertEq(parseIntLit("100"), 100)
+    @assertEq(parseIntLit("-5"), -5)
+    @assertEq(parseIntLit("1_000"), 1000)
+}
+
+test "parseFloat basic" {
+    const f1 = parseFloatLit("3.14")
+    @assert(f1 > 3.13)
+    @assert(f1 < 3.15)
+
+    const f2 = parseFloatLit("0.5")
+    @assert(f2 > 0.49)
+    @assert(f2 < 0.51)
+
+    const f3 = parseFloatLit("-2.0")
+    @assert(f3 < -1.99)
+    @assert(f3 > -2.01)
+}
+
+test "needsSret basic types" {
+    var ast = Ast.init("test.cot")
+    var types = TypeRegistry.init()
+    var err = ErrorReporter.init()
+    var chk = Checker.init(&ast, &types, &err)
+
+    var lower: Lowerer = undefined
+    lower.tree = &ast
+    lower.types = &types
+    lower.err = &err
+    lower.chk = &chk
+    initLowererScalars(&lower)
+    initLowererLists(&lower)
+    initLowererMaps(&lower)
+    // Basic types don't need SRET
+    @assert(!lower.needsSret(VOID))
+    @assert(!lower.needsSret(I64))
+    @assert(!lower.needsSret(BOOL))
+    @assert(!lower.needsSret(F64))
+}
+
+test "clearPerFunctionState" {
+    var ast = Ast.init("test.cot")
+    var types = TypeRegistry.init()
+    var err = ErrorReporter.init()
+    var chk = Checker.init(&ast, &types, &err)
+
+    var lower: Lowerer = undefined
+    lower.tree = &ast
+    lower.types = &types
+    lower.err = &err
+    lower.chk = &chk
+    initLowererScalars(&lower)
+    initLowererLists(&lower)
+    initLowererMaps(&lower)
+    lower.cleanup_stack.append(CleanupEntry {
+        kind: CLEANUP_DEFER,
+        value: 0,
+        type_idx: VOID,
+        local_idx: null_local,
+        func_name: "",
+    })
+    @assertEq(lower.cleanup_stack.count, 1)
+    lower.clearPerFunctionState()
+    @assertEq(lower.cleanup_stack.count, 0)
+}
+
+test "tokenToBinaryOp arithmetic" {
+    @assertEq(tokenToBinaryOp(Token.add as int), BinaryOp.add)
+    @assertEq(tokenToBinaryOp(Token.sub as int), BinaryOp.sub)
+    @assertEq(tokenToBinaryOp(Token.mul as int), BinaryOp.mul)
+    @assertEq(tokenToBinaryOp(Token.quo as int), BinaryOp.div)
+    @assertEq(tokenToBinaryOp(Token.rem as int), BinaryOp.mod)
+}
+
+test "tokenToBinaryOp comparison" {
+    @assertEq(tokenToBinaryOp(Token.eql as int), BinaryOp.eq)
+    @assertEq(tokenToBinaryOp(Token.neq as int), BinaryOp.ne)
+    @assertEq(tokenToBinaryOp(Token.lss as int), BinaryOp.lt)
+    @assertEq(tokenToBinaryOp(Token.leq as int), BinaryOp.le)
+    @assertEq(tokenToBinaryOp(Token.gtr as int), BinaryOp.gt)
+    @assertEq(tokenToBinaryOp(Token.geq as int), BinaryOp.ge)
+}
+
+test "tokenToBinaryOp logical and bitwise" {
+    @assertEq(tokenToBinaryOp(Token.land as int), BinaryOp.@"and")
+    @assertEq(tokenToBinaryOp(Token.lor as int), BinaryOp.@"or")
+    @assertEq(tokenToBinaryOp(Token.kw_and as int), BinaryOp.@"and")
+    @assertEq(tokenToBinaryOp(Token.kw_or as int), BinaryOp.@"or")
+    @assertEq(tokenToBinaryOp(Token.shl as int), BinaryOp.shl)
+    @assertEq(tokenToBinaryOp(Token.shr as int), BinaryOp.shr)
+}
+
+test "tokenToUnaryOp" {
+    @assertEq(tokenToUnaryOp(Token.sub as int), UnaryOp.neg)
+    @assertEq(tokenToUnaryOp(Token.lnot as int), UnaryOp.@"not")
+    @assertEq(tokenToUnaryOp(Token.kw_not as int), UnaryOp.@"not")
+    @assertEq(tokenToUnaryOp(Token.question as int), UnaryOp.optional_unwrap)
+}
