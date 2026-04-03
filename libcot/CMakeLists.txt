@@ -25,6 +25,10 @@ add_definitions(${LLVM_DEFINITIONS})
 # libcot static library — compiler passes
 add_library(COT STATIC
   lib/CIRToLLVM.cpp
+  lib/ArithmeticPatterns.cpp
+  lib/BitwisePatterns.cpp
+  lib/MemoryPatterns.cpp
+  lib/ControlFlowPatterns.cpp
 )
 
 target_include_directories(COT PUBLIC

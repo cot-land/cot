@@ -19,15 +19,27 @@ class LLVMTypeConverter;
 
 namespace cot {
 
-/// Populate the pattern set with CIR → LLVM dialect lowering patterns.
-/// Reference: arith::populateArithToLLVMConversionPatterns()
+/// Populate ALL CIR → LLVM lowering patterns.
+/// Calls the category-specific functions below.
 void populateCIRToLLVMConversionPatterns(
     const mlir::LLVMTypeConverter &converter,
     mlir::RewritePatternSet &patterns);
 
+/// Category-specific pattern population (for selective use).
+void populateArithmeticPatterns(
+    const mlir::LLVMTypeConverter &converter,
+    mlir::RewritePatternSet &patterns);
+void populateBitwisePatterns(
+    const mlir::LLVMTypeConverter &converter,
+    mlir::RewritePatternSet &patterns);
+void populateMemoryPatterns(
+    const mlir::LLVMTypeConverter &converter,
+    mlir::RewritePatternSet &patterns);
+void populateControlFlowPatterns(
+    const mlir::LLVMTypeConverter &converter,
+    mlir::RewritePatternSet &patterns);
+
 /// Create the CIR → LLVM dialect lowering pass.
-/// Lowers all CIR ops to LLVM dialect equivalents.
-/// Reference: MLIR ConversionPatterns (Lattner's canonical lowering pattern)
 std::unique_ptr<mlir::Pass> createCIRToLLVMPass();
 
 } // namespace cot

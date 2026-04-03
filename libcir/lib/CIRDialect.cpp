@@ -33,6 +33,60 @@ void CIRDialect::initialize() {
 #include "CIR/CIRTypes.cpp.inc"
 
 //===----------------------------------------------------------------------===//
+// !cir.struct — custom print/parse + verifier
+// Syntax: !cir.struct<"Point", i32, i32>
+//===----------------------------------------------------------------------===//
+
+mlir::Type StructType::parse(mlir::AsmParser &parser) {
+  std::string name;
+  if (parser.parseLess() || parser.parseString(&name) || parser.parseComma())
+    return {};
+  llvm::SmallVector<mlir::Type> fields;
+  do {
+    mlir::Type field;
+    if (parser.parseType(field)) return {};
+    fields.push_back(field);
+  } while (succeeded(parser.parseOptionalComma()));
+  if (parser.parseGreater()) return {};
+  return get(parser.getContext(), name, fields);
+}
+
+void StructType::print(mlir::AsmPrinter &p) const {
+  p << "<\"" << getName() << "\"";
+  for (auto field : getFieldTypes())
+    p << ", " << field;
+  p << ">";
+}
+
+mlir::LogicalResult StructType::verify(
+    llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
+    llvm::StringRef name,
+    llvm::ArrayRef<mlir::Type> fieldTypes) {
+  if (name.empty())
+    return emitError() << "struct type must have a name";
+  return mlir::success();
+}
+
+//===----------------------------------------------------------------------===//
+// !cir.array — custom print/parse
+// Syntax: !cir.array<10 x i32>
+//===----------------------------------------------------------------------===//
+
+mlir::Type ArrayType::parse(mlir::AsmParser &parser) {
+  int64_t size;
+  mlir::Type elemType;
+  if (parser.parseLess() || parser.parseInteger(size) ||
+      parser.parseKeyword("x") || parser.parseType(elemType) ||
+      parser.parseGreater())
+    return {};
+  return get(parser.getContext(), size, elemType);
+}
+
+void ArrayType::print(mlir::AsmPrinter &p) const {
+  p << "<" << getSize() << " x " << getElementType() << ">";
+}
+
+//===----------------------------------------------------------------------===//
 // cir.constant — custom print/parse
 //===----------------------------------------------------------------------===//
 

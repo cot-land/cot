@@ -26,4 +26,37 @@ def CIR_PointerType : CIR_Type<"Pointer", "ptr"> {
   }];
 }
 
+def CIR_StructType : CIR_Type<"Struct", "struct"> {
+  let summary = "aggregate struct type";
+  let description = [{
+    Named aggregate type with ordered fields. Models C struct, Rust struct,
+    Zig struct. The name identifies the type; fields are an ordered list of
+    MLIR types.
+    Reference: fir.type (FIR RecordType) in Flang.
+  }];
+
+  let parameters = (ins
+    StringRefParameter<"struct name">:$name,
+    ArrayRefParameter<"mlir::Type", "field types">:$fieldTypes
+  );
+
+  let genVerifyDecl = 1;
+  let hasCustomAssemblyFormat = 1;
+}
+
+def CIR_ArrayType : CIR_Type<"Array", "array"> {
+  let summary = "fixed-size array type";
+  let description = [{
+    Fixed-size homogeneous array. Models C arrays, Zig [N]T, Rust [T; N].
+    Reference: fir.array (FIR SequenceType) in Flang.
+  }];
+
+  let parameters = (ins
+    "int64_t":$size,
+    "mlir::Type":$elementType
+  );
+
+  let hasCustomAssemblyFormat = 1;
+}
+
 #endif // CIR_TYPES
