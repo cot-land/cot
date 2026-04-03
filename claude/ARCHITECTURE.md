@@ -87,12 +87,21 @@ cir.array_init    construct array value
 cir.tuple_init    construct tuple value
 ```
 
-**Type Operations** (all four have casts)
+**Type Casts** (separate ops per direction — Arith dialect pattern)
 ```
-cir.cast          type cast (int widening, truncation, float-int, etc.)
+cir.extsi         sign-extend integer (i32 → i64)
+cir.extui         zero-extend integer (u32 → u64)
+cir.trunci        truncate integer (i64 → i32)
+cir.sitofp        signed int → float
+cir.fptosi        float → signed int
+cir.extf          extend float (f32 → f64)
+cir.truncf        truncate float (f64 → f32)
 cir.bitcast       reinterpret bits
-cir.ptr_cast      pointer type cast
 ```
+NOT a single cir.cast mega-op. Each op maps 1:1 to one LLVM op.
+Frontends emit the specific cast they need; Sema inserts casts at
+type boundaries (e.g., i32 argument to i64 parameter).
+Reference: mlir/Dialect/Arith/IR/ArithOps.td cast hierarchy.
 
 ### Frontend Ops (~40)
 
@@ -170,34 +179,79 @@ cir.overflow_check  arithmetic overflow check
 ## Pass Pipeline
 
 ```
-CIR (from frontend)
+CIR (from frontend — unresolved types at call boundaries)
   │
-  ├─ TypeResolution        resolve cir.type_ref → concrete MLIR types
-  ├─ ComptimeEval          evaluate cir.comptime_block → constants
-  ├─ GenericInstantiation   monomorphize generic functions
-  ├─ TraitResolution       resolve trait impls → concrete dispatch
-  ├─ ARCInsertion          insert cir.arc_retain / cir.arc_release
-  ├─ ARCOptimization       eliminate redundant retain/release pairs
-  ├─ ConcurrencyLower      lower cir.async_* → coroutine ops
+  ├─ Sema                  validate types, insert casts, resolve fields  [Phase 3]
+  ├─ ComptimeEval          evaluate cir.comptime_block → constants       [Phase 10]
+  ├─ GenericInstantiation   monomorphize generic functions                [Phase 7]
+  ├─ TraitResolution       resolve trait impls → concrete dispatch       [Phase 7]
+  ├─ ARCInsertion          insert cir.arc_retain / cir.arc_release      [Phase 8]
+  ├─ ARCOptimization       eliminate redundant retain/release pairs      [Phase 8]
+  ├─ ConcurrencyLower      lower cir.async_* → coroutine ops            [Phase 9]
   │
-  └─ LLVMLowering          cir.* → func.* + llvm.* (MLIR LLVM dialect)
+  └─ LLVMLowering          cir.* → func.* + llvm.* (MLIR LLVM dialect)  [Phase 1 ✓]
          │
          ▼
    LLVM IR → native binary or .wasm
 ```
 
-Each pass transforms CIR → CIR (or CIR → LLVM dialect for the final pass). Passes are C++ MLIR passes. The reference implementation for each:
+Passes are in `libcot/`. Transformation passes (CIR→CIR) are separate from
+lowering passes (CIR→LLVM). Reference: Flang splits `lib/Optimizer/Transforms/`
+from `lib/Optimizer/CodeGen/`.
 
-| Pass | Reference | Source |
-|------|-----------|--------|
-| TypeResolution | Zig Sema type patterns | `~/claude/references/zig/src/Sema.zig` |
-| ComptimeEval | Zig comptime interpreter | `~/claude/references/zig/src/Sema.zig` |
-| GenericInstantiation | Zig + Rust monomorphization | `~/claude/references/rust/compiler/rustc_monomorphize/` |
-| TraitResolution | Rust trait dispatch | `~/claude/references/rust/compiler/rustc_hir_analysis/` |
-| ARCInsertion | Swift SILOptimizer/ARC | `~/claude/references/swift/lib/SILOptimizer/ARC/` |
-| ARCOptimization | Swift bidirectional dataflow | `~/claude/references/swift/lib/SILOptimizer/ARC/` |
-| ConcurrencyLower | Swift async transform | `~/claude/references/swift/lib/SILOptimizer/Mandatory/` |
-| LLVMLowering | MLIR conversion patterns | `~/claude/references/llvm-project/mlir/lib/Conversion/` |
+```
+libcot/
+  lib/
+    Transforms/              CIR → CIR passes (semantic analysis, optimization)
+      SemanticAnalysis.cpp   Sema pass — type checking, cast insertion, field resolution
+    CIRToLLVM/               CIR → LLVM lowering (conversion patterns)
+      CIRToLLVM.cpp          Pass definition + pipeline
+      ArithmeticPatterns.cpp
+      BitwisePatterns.cpp
+      MemoryPatterns.cpp
+      ControlFlowPatterns.cpp
+```
+
+### Sema Pass Design
+
+The Sema pass is a **manual walk pass** (not pattern-based). It runs per-function
+(`OperationPass<func::FuncOp>`), walks operations in post-order, and maintains
+context across the walk.
+
+Reference: Zig Sema (`~/claude/references/zig/src/Sema.zig`) — transforms ZIR
+(untyped) → AIR (typed) via sequential instruction dispatch. Also informed by
+Flang's `lib/Optimizer/Transforms/` pass organization.
+
+**What Sema does (Phase 3):**
+1. **Build symbol table** from module — function signatures, struct type definitions
+2. **Validate call argument types** — check actual types match callee's parameter types
+3. **Insert cast ops** at type boundaries — e.g., `cir.extsi` when passing i32 to i64 param
+4. **Resolve struct field access** — validate field exists, determine result type
+5. **Report semantic errors** with source locations
+
+**Why manual walk, not patterns:**
+- Patterns (greedy rewrite) don't maintain context across operations
+- Sema needs a symbol table that persists across the walk
+- Type resolution has ordering dependencies (resolve operands before uses)
+- Validation is a constraint check, not a rewrite
+- Reference: MLIR canonicalizer uses patterns; Zig Sema uses sequential dispatch
+
+**Why NOT in the frontend:**
+- Frontends should emit unresolved CIR and let the pass pipeline handle the rest
+- This matches Lattner's progressive lowering — each pass does one job
+- Multiple frontends (ac, Zig) share the same Sema pass — no duplication
+- The pass is testable in isolation (feed it CIR, check output CIR)
+
+| Pass | Reference | Source | Status |
+|------|-----------|--------|--------|
+| Sema | Zig Sema + Flang Transforms | `~/claude/references/zig/src/Sema.zig` | Phase 3 |
+| ComptimeEval | Zig comptime interpreter | `~/claude/references/zig/src/Sema.zig` | Phase 10 |
+| GenericInstantiation | Zig + Rust monomorphization | `~/claude/references/rust/compiler/rustc_monomorphize/` | Phase 7 |
+| TraitResolution | Rust trait dispatch | `~/claude/references/rust/compiler/rustc_hir_analysis/` | Phase 7 |
+| ARCInsertion | Swift SILOptimizer/ARC | `~/claude/references/swift/lib/SILOptimizer/ARC/` | Phase 8 |
+| ARCOptimization | Swift bidirectional dataflow | `~/claude/references/swift/lib/SILOptimizer/ARC/` | Phase 8 |
+| ConcurrencyLower | Swift async transform | `~/claude/references/swift/lib/SILOptimizer/Mandatory/` | Phase 9 |
+| LLVMLowering | MLIR conversion patterns | `~/claude/references/llvm-project/mlir/lib/Conversion/` | ✓ |
 
 ---
 

@@ -65,19 +65,21 @@ CIR is audited against production MLIR references:
 
 ### Infrastructure (fix before Phase 3 features)
 
-| # | Issue | Severity | Notes |
-|---|-------|----------|-------|
-| I1 | **CIR type system — only 1 type** | CRITICAL | FIR has 15+ types. Need `!cir.struct` and `!cir.array` for Phase 3. Without them, struct semantics lost at lowering. |
-| I2 | **Codegen mega-functions** | HIGH | ac `emitStmt()` 180 lines (CC=12), Zig `mapStmt()` 110 lines. Will exceed 300 at Phase 3. Extract per-statement helpers. |
-| I3 | **CIRToLLVM.cpp monolithic** | HIGH | 330 lines, 24 patterns. At FIR scale (60+) becomes 700+. Split into ArithmeticPatterns, MemoryPatterns, ControlFlowPatterns. |
-| I4 | **No unified build** | HIGH | 4 manual steps in exact order. Need top-level Makefile. |
-| I5 | **No integration tests** | MEDIUM | Nothing verifies ac and Zig produce identical binaries for equivalent programs. |
+| # | Issue | Severity | Status | Notes |
+|---|-------|----------|--------|-------|
+| I1 | **CIR type system** | CRITICAL | DONE | `!cir.struct`, `!cir.array`, `!cir.ptr` defined in CIRTypes.td with LLVM lowering. |
+| I2 | **Codegen mega-functions** | HIGH | DONE | emitStmt() refactored into 9 helper methods, each under 40 lines. |
+| I3 | **CIRToLLVM.cpp monolithic** | HIGH | DONE | Split into 4 category files + shared header. |
+| I4 | **No unified build** | HIGH | DONE | `make all`, `make test` via top-level Makefile. |
+| I5 | **No integration tests** | MEDIUM | OPEN | Nothing verifies ac and Zig produce identical binaries. |
+| I6 | **No Sema pass** | CRITICAL | DESIGNED | Sema pass designed in ARCHITECTURE.md. Manual walk, not pattern-based. Implements in libcot/lib/Transforms/. |
+| I7 | **Cast ops: single mega-op** | HIGH | DESIGNED | Redesigned to follow Arith: separate ops per direction (extsi, trunci, sitofp, etc.). Documented in ARCHITECTURE.md. |
 
 ### Frontend (fix during Phase 3)
 
 | # | Issue | Severity | Notes |
 |---|-------|----------|-------|
-| F1 | **No symbol table** | CRITICAL | Neither frontend can resolve struct fields, check type compatibility, or track type definitions. Blocks #024-#027. |
+| F1 | **No symbol table** | CRITICAL | Partially addressed: Sema pass will resolve types from MLIR module (function signatures already queryable). Full symbol table (struct fields, type defs) built in Sema pass, not frontend. Frontends emit unresolved CIR; Sema resolves. |
 | F2 | **Zig fixed-size arrays** | HIGH | `param_names: [16]`, `local_names: [32]` — hard limits. Nested scopes will overflow. Need HashMap migration. |
 | F3 | **No error recovery** | HIGH | Parser reports first error, produces broken AST. Flang/Clang both had recovery before adding types. |
 | F4 | **Operator duplication (C++)** | MEDIUM | Operators appear in 3 places (scanner, precedence table, codegen switch). Use operator table. |
