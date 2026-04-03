@@ -107,7 +107,7 @@ count += 1              // compound assignment (✓ #014) — also -=, *=, /=, %
 ## Control Flow (#015-#019)
 
 ```ac
-if x > 0 {
+if x > 0 {             // (✓ #015) no parens — Go/Rust pattern
     // ...
 } else {
     // ...

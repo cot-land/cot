@@ -65,7 +65,7 @@ Status: `-` not started, `~` in progress, `✓` done.
 | 012 | Var bindings (mutable) | `cir.alloca`, `cir.store`, `cir.load` | `var x: i32 = 0` | `llvm.alloca/store/load` | Mutate and read | ✓ |
 | 013 | Assignment | `cir.store` | `x = 42` | `llvm.store` | Assign to var | ✓ |
 | 014 | Compound assignment | `cir.load`, `cir.add`, `cir.store` | `x += 1` | load+add+store | Increment variable | ✓ |
-| 015 | If/else statement | `cir.condbr`, `cir.br` | `if x > 0 { } else { }` | `llvm.cond_br`, `llvm.br` | Branch on condition | - |
+| 015 | If/else statement | `cir.condbr`, `cir.br` | `if x > 0 { } else { }` | `llvm.cond_br`, `llvm.br` | Branch on condition | ✓ |
 | 016 | If/else expression | `cir.condbr` + block value | `let x = if a > b { a } else { b }` | Phi node or select | Ternary-style | - |
 | 017 | While loop | `cir.loop`, `cir.condbr`, `cir.br` | `while x < 10 { }` | Loop with back-edge | Sum 1..10 = 55 | - |
 | 018 | Break/continue | `cir.break`, `cir.repeat` | `break`, `continue` | `llvm.br` to exit/header | Break from loop | - |

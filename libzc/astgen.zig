@@ -6,8 +6,9 @@
 //! Architecture: Zig AstGen single-pass recursive dispatch
 //!   ~/claude/references/zig/lib/std/zig/AstGen.zig (13,664 lines)
 //!
-//! Supports the same features as libac (Phase 1):
-//!   functions, arithmetic, comparisons, return, test blocks, assert
+//! Supports: functions, arithmetic, comparisons, booleans, negation,
+//!   bitwise, shifts, let/var bindings, assignment, compound assignment,
+//!   if/else, return, test blocks, assert
 
 const std = @import("std");
 const Ast = std.zig.Ast;
@@ -55,6 +56,10 @@ const Gen = struct {
     local_addrs: [32]mlir.Value = undefined,
     local_types: [32]mlir.Type = undefined,
     local_count: usize = 0,
+    // Current function's region (for adding blocks)
+    current_func: mlir.Operation = .{ .ptr = null },
+    // Current insertion block (changes after control flow)
+    current_block: mlir.Block = .{ .ptr = null },
     has_terminator: bool = false,
 
     fn init(gpa: Allocator, tree: *const Ast) Gen {
@@ -73,7 +78,6 @@ const Gen = struct {
     }
 
     fn resolveType(self: *Gen, node: Node.Index) mlir.Type {
-        // For now, resolve type identifiers to MLIR types
         const tag = self.tree.nodeTag(node);
         if (tag == .identifier) {
             const tok = self.tree.nodeMainToken(node);
@@ -83,7 +87,7 @@ const Gen = struct {
             if (std.mem.eql(u8, name, "bool")) return self.b.intType(1);
             if (std.mem.eql(u8, name, "void")) return self.b.intType(0);
         }
-        return self.i32Type(); // default
+        return self.i32Type();
     }
 
     fn resolve(self: *Gen, name: []const u8) ?mlir.Value {
@@ -104,6 +108,14 @@ const Gen = struct {
 
     fn ptrType(self: *Gen) mlir.Type {
         return self.b.parseType("!cir.ptr");
+    }
+
+    /// Create a new block and add it to the current function's region.
+    fn addBlock(self: *Gen) mlir.Block {
+        const block = self.b.createBlock(&.{});
+        const region = mlir.mlirOperationGetRegion(self.current_func, 0);
+        mlir.mlirRegionAppendOwnedBlock(region, block);
+        return block;
     }
 
     // ============================================================
@@ -130,7 +142,6 @@ const Gen = struct {
 
         const fn_name = if (proto.name_token) |tok| tree.tokenSlice(tok) else "anon";
 
-        // Count params and build types
         var param_count: usize = 0;
         var param_types: [16]mlir.Type = undefined;
         {
@@ -145,7 +156,6 @@ const Gen = struct {
             }
         }
 
-        // Return type
         var result_types: [1]mlir.Type = undefined;
         var n_results: usize = 0;
         if (proto.ast.return_type.unwrap()) |ret_node| {
@@ -154,15 +164,14 @@ const Gen = struct {
             n_results = 1;
         }
 
-        // Create function
         const func = self.b.createFunc(
             self.module,
             fn_name,
             param_types[0..param_count],
             result_types[0..n_results],
         );
+        self.current_func = func.func_op;
 
-        // Bind param names
         self.param_count = 0;
         self.local_count = 0;
         {
@@ -177,21 +186,19 @@ const Gen = struct {
             }
         }
 
-        // Map body
         self.mapBody(func.entry_block, body_node, result_types[0..n_results]);
     }
 
     fn mapTestDecl(self: *Gen, node: Node.Index) void {
         const tree = self.tree;
-        // test_decl: data is opt_token_and_node (name token + body)
         const data = tree.nodeData(node);
         const body_node = data.opt_token_and_node[1];
 
-        // Test blocks become void functions named __test_N
         var name_buf: [32]u8 = undefined;
         const name = std.fmt.bufPrint(&name_buf, "__test_{d}", .{node}) catch "test";
 
         const func = self.b.createFunc(self.module, name, &.{}, &.{});
+        self.current_func = func.func_op;
         self.param_count = 0;
         self.local_count = 0;
         self.mapBody(func.entry_block, body_node, &.{});
@@ -201,66 +208,84 @@ const Gen = struct {
     // Body / statement mapping
     // ============================================================
 
-    fn mapBody(self: *Gen, block: mlir.Block, node: Node.Index, result_types: []const mlir.Type) void {
+    /// Emit statements from a block node. Does NOT add implicit return.
+    fn mapBlock(self: *Gen, block: mlir.Block, node: Node.Index, result_types: []const mlir.Type) void {
         const tree = self.tree;
         const tag = tree.nodeTag(node);
         self.has_terminator = false;
+        self.current_block = block;
         switch (tag) {
             .block_two, .block_two_semicolon => {
                 const d = tree.nodeData(node).opt_node_and_opt_node;
-                if (d[0].unwrap()) |s| self.mapStmt(block, s, result_types);
-                if (d[1].unwrap()) |s| self.mapStmt(block, s, result_types);
+                if (d[0].unwrap()) |s| self.mapStmt(s, result_types);
+                if (d[1].unwrap()) |s| self.mapStmt(s, result_types);
             },
             .block, .block_semicolon => {
                 const stmts = tree.extraDataSlice(tree.nodeData(node).extra_range, Node.Index);
-                for (stmts) |stmt| self.mapStmt(block, stmt, result_types);
+                for (stmts) |stmt| self.mapStmt(stmt, result_types);
             },
-            else => self.mapStmt(block, node, result_types),
-        }
-        // Implicit void return only if no explicit return was emitted
-        if (!self.has_terminator) {
-            _ = self.b.emit(block, "func.return", &.{}, &.{}, &.{});
+            else => self.mapStmt(node, result_types),
         }
     }
 
-    fn mapStmt(self: *Gen, block: mlir.Block, node: Node.Index, result_types: []const mlir.Type) void {
+    /// Emit function body — statements + implicit void return.
+    fn mapBody(self: *Gen, block: mlir.Block, node: Node.Index, result_types: []const mlir.Type) void {
+        self.mapBlock(block, node, result_types);
+        if (!self.has_terminator) {
+            _ = self.b.emit(self.current_block, "func.return", &.{}, &.{}, &.{});
+        }
+    }
+
+    fn mapStmt(self: *Gen, node: Node.Index, result_types: []const mlir.Type) void {
         const tag = self.tree.nodeTag(node);
+        const blk = self.current_block;
         switch (tag) {
             .@"return" => {
                 const ret_opt = self.tree.nodeData(node).opt_node;
                 if (ret_opt.unwrap()) |ret_expr| {
                     if (result_types.len > 0) {
-                        const val = self.mapExpr(block, ret_expr, result_types[0]);
-                        _ = self.b.emit(block, "func.return", &.{}, &.{val}, &.{});
+                        const val = self.mapExpr(blk, ret_expr, result_types[0]);
+                        _ = self.b.emit(blk, "func.return", &.{}, &.{val}, &.{});
                     } else {
-                        _ = self.b.emit(block, "func.return", &.{}, &.{}, &.{});
+                        _ = self.b.emit(blk, "func.return", &.{}, &.{}, &.{});
                     }
                 } else {
-                    _ = self.b.emit(block, "func.return", &.{}, &.{}, &.{});
+                    _ = self.b.emit(blk, "func.return", &.{}, &.{}, &.{});
                 }
                 self.has_terminator = true;
+            },
+            .if_simple => {
+                const d = self.tree.nodeData(node).node_and_node;
+                const cond_node = d[0];
+                const then_node = d[1];
+                const cond = self.mapExpr(blk, cond_node, self.b.intType(1));
+                const then_block = self.addBlock();
+                const merge_block = self.addBlock();
+                self.b.emitBranch(blk, "cir.condbr", &.{cond}, &.{ then_block, merge_block });
+                self.mapBlock(then_block, then_node, result_types);
+                if (!self.has_terminator) {
+                    self.b.emitBranch(self.current_block, "cir.br", &.{}, &.{merge_block});
+                }
+                self.current_block = merge_block;
+                self.has_terminator = false;
             },
             .simple_var_decl => {
                 const d = self.tree.nodeData(node).opt_node_and_opt_node;
                 const type_node = d[0];
                 const init_node = d[1];
-                // Resolve type
                 var var_type = self.i32Type();
                 if (type_node.unwrap()) |tn| {
                     var_type = self.resolveType(tn);
                 }
-                // Emit alloca + store
                 const ptr_ty = self.ptrType();
-                const addr = self.b.emit(block, "cir.alloca", &.{ptr_ty}, &.{}, &.{
+                const addr = self.b.emit(blk, "cir.alloca", &.{ptr_ty}, &.{}, &.{
                     self.b.attr("elem_type", self.b.typeAttr(var_type)),
                 });
                 if (init_node.unwrap()) |init_expr| {
-                    const val = self.mapExpr(block, init_expr, var_type);
-                    _ = self.b.emit(block, "cir.store", &.{}, &.{ val, addr }, &.{});
+                    const val = self.mapExpr(blk, init_expr, var_type);
+                    _ = self.b.emit(blk, "cir.store", &.{}, &.{ val, addr }, &.{});
                 }
-                // Track local
                 const tok = self.tree.nodeMainToken(node);
-                // main_token is 'const' or 'var', name is next token
                 const name = self.tree.tokenSlice(tok + 1);
                 self.local_names[self.local_count] = name;
                 self.local_addrs[self.local_count] = addr;
@@ -273,8 +298,8 @@ const Gen = struct {
                 const rhs_node = d[1];
                 const name = self.tree.tokenSlice(self.tree.nodeMainToken(lhs_node));
                 if (self.resolveLocal(name)) |local| {
-                    const val = self.mapExpr(block, rhs_node, local.elem_type);
-                    _ = self.b.emit(block, "cir.store", &.{}, &.{ val, local.addr }, &.{});
+                    const val = self.mapExpr(blk, rhs_node, local.elem_type);
+                    _ = self.b.emit(blk, "cir.store", &.{}, &.{ val, local.addr }, &.{});
                 }
             },
             .assign_add, .assign_sub, .assign_mul, .assign_div, .assign_mod => {
@@ -283,8 +308,8 @@ const Gen = struct {
                 const rhs_node = d[1];
                 const name = self.tree.tokenSlice(self.tree.nodeMainToken(lhs_node));
                 if (self.resolveLocal(name)) |local| {
-                    const current = self.b.emit(block, "cir.load", &.{local.elem_type}, &.{local.addr}, &.{});
-                    const rhs = self.mapExpr(block, rhs_node, local.elem_type);
+                    const current = self.b.emit(blk, "cir.load", &.{local.elem_type}, &.{local.addr}, &.{});
+                    const rhs = self.mapExpr(blk, rhs_node, local.elem_type);
                     const op_name: []const u8 = switch (tag) {
                         .assign_add => "cir.add",
                         .assign_sub => "cir.sub",
@@ -293,13 +318,12 @@ const Gen = struct {
                         .assign_mod => "cir.rem",
                         else => unreachable,
                     };
-                    const result = self.b.emit(block, op_name, &.{local.elem_type}, &.{ current, rhs }, &.{});
-                    _ = self.b.emit(block, "cir.store", &.{}, &.{ result, local.addr }, &.{});
+                    const result = self.b.emit(blk, op_name, &.{local.elem_type}, &.{ current, rhs }, &.{});
+                    _ = self.b.emit(blk, "cir.store", &.{}, &.{ result, local.addr }, &.{});
                 }
             },
             else => {
-                // Expression statement — evaluate for side effects
-                _ = self.mapExpr(block, node, self.i32Type());
+                _ = self.mapExpr(blk, node, self.i32Type());
             },
         }
     }
@@ -314,11 +338,6 @@ const Gen = struct {
         return switch (tag) {
             .number_literal => self.mapNumberLit(block, node, result_type),
             .identifier => self.mapIdentifier(block, node),
-            .add => self.mapBinOp(block, node, "cir.add", result_type),
-            .sub => self.mapBinOp(block, node, "cir.sub", result_type),
-            .mul => self.mapBinOp(block, node, "cir.mul", result_type),
-            .div => self.mapBinOp(block, node, "cir.div", result_type),
-            .mod => self.mapBinOp(block, node, "cir.rem", result_type),
             .negation => self.mapUnaryOp(block, node, "cir.neg", result_type),
             .bit_not => self.mapUnaryOp(block, node, "cir.bit_not", result_type),
             .bit_and => self.mapBinOp(block, node, "cir.bit_and", result_type),
@@ -326,6 +345,11 @@ const Gen = struct {
             .bit_xor => self.mapBinOp(block, node, "cir.xor", result_type),
             .shl => self.mapBinOp(block, node, "cir.shl", result_type),
             .shr => self.mapBinOp(block, node, "cir.shr", result_type),
+            .add => self.mapBinOp(block, node, "cir.add", result_type),
+            .sub => self.mapBinOp(block, node, "cir.sub", result_type),
+            .mul => self.mapBinOp(block, node, "cir.mul", result_type),
+            .div => self.mapBinOp(block, node, "cir.div", result_type),
+            .mod => self.mapBinOp(block, node, "cir.rem", result_type),
             .equal_equal => self.mapCmp(block, node, 0),
             .bang_equal => self.mapCmp(block, node, 1),
             .less_than => self.mapCmp(block, node, 2),
@@ -334,9 +358,9 @@ const Gen = struct {
             .greater_or_equal => self.mapCmp(block, node, 5),
             .call_one, .call_one_comma => self.mapCall(block, node, result_type),
             .call, .call_comma => self.mapCall(block, node, result_type),
-            .grouped_expression => blk: {
+            .grouped_expression => blk2: {
                 const inner = tree.nodeData(node).node_and_token[0];
-                break :blk self.mapExpr(block, inner, result_type);
+                break :blk2 self.mapExpr(block, inner, result_type);
             },
             else => self.b.emit(block, "cir.constant", &.{result_type}, &.{}, &.{
                 self.b.attr("value", self.b.intAttr(result_type, 0)),
@@ -356,7 +380,6 @@ const Gen = struct {
     fn mapIdentifier(self: *Gen, block: mlir.Block, node: Node.Index) mlir.Value {
         const tok = self.tree.nodeMainToken(node);
         const name = self.tree.tokenSlice(tok);
-        // Boolean literals appear as identifiers in Zig AST
         if (std.mem.eql(u8, name, "true")) {
             const bool_type = self.b.intType(1);
             return self.b.emit(block, "cir.constant", &.{bool_type}, &.{}, &.{
@@ -369,7 +392,6 @@ const Gen = struct {
                 self.b.attr("value", self.b.intAttr(bool_type, 0)),
             });
         }
-        // Check locals first (need cir.load)
         if (self.resolveLocal(name)) |local| {
             return self.b.emit(block, "cir.load", &.{local.elem_type}, &.{local.addr}, &.{});
         }
@@ -402,19 +424,13 @@ const Gen = struct {
 
     fn mapCall(self: *Gen, block: mlir.Block, node: Node.Index, result_type: mlir.Type) mlir.Value {
         const tree = self.tree;
-
-        // Use Zig's fullCall helper — handles both call_one and call variants
-        // Reference: ~/claude/references/zig/lib/std/zig/Ast.zig callOne/callFull
         var call_buf: [1]Node.Index = undefined;
         const call = tree.fullCall(&call_buf, node) orelse return mlir.Value{ .ptr = null };
-
         const callee_name = tree.tokenSlice(tree.nodeMainToken(call.ast.fn_expr));
-
         var args: [16]mlir.Value = undefined;
         for (call.ast.params, 0..) |param_node, i| {
             args[i] = self.mapExpr(block, param_node, result_type);
         }
-
         return self.b.emit(block, "func.call", &.{result_type}, args[0..call.ast.params.len], &.{
             self.b.attr("callee", mlir.mlirFlatSymbolRefAttrGet(self.ctx, mlir.StringRef.fromSlice(callee_name))),
         });

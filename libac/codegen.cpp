@@ -229,8 +229,14 @@ class CodeGen {
       for (auto &st : s.elseBody) emitStmt(*st, returnType, parentFunc);
       if (elseBlock->empty() || !elseBlock->back().hasTrait<mlir::OpTrait::IsTerminator>())
         b.create<cir::BrOp>(loc, mergeBlock);
-      // Merge
+      // Merge — if both branches terminated, merge is unreachable
       b.setInsertionPointToStart(mergeBlock);
+      bool thenDone = !thenBlock->empty() &&
+          thenBlock->back().hasTrait<mlir::OpTrait::IsTerminator>();
+      bool elseDone = !elseBlock->empty() &&
+          elseBlock->back().hasTrait<mlir::OpTrait::IsTerminator>();
+      if (thenDone && elseDone)
+        b.create<cir::TrapOp>(loc);
       break;
     }
     }

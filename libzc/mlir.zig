@@ -64,6 +64,7 @@ pub extern "c" fn mlirOperationStateGet(name: StringRef, loc: Location) callconv
 pub extern "c" fn mlirOperationStateAddResults(state: *OperationState, n: isize, results: [*]const Type) callconv(.c) void;
 pub extern "c" fn mlirOperationStateAddOperands(state: *OperationState, n: isize, operands: [*]const Value) callconv(.c) void;
 pub extern "c" fn mlirOperationStateAddOwnedRegions(state: *OperationState, n: isize, regions: [*]const Region) callconv(.c) void;
+pub extern "c" fn mlirOperationStateAddSuccessors(state: *OperationState, n: isize, successors: [*]const Block) callconv(.c) void;
 pub extern "c" fn mlirOperationStateAddAttributes(state: *OperationState, n: isize, attrs: [*]const NamedAttribute) callconv(.c) void;
 pub extern "c" fn mlirOperationCreate(state: *OperationState) callconv(.c) Operation;
 pub extern "c" fn mlirOperationGetResult(op: Operation, pos: isize) callconv(.c) Value;
@@ -73,6 +74,7 @@ pub extern "c" fn mlirBlockAppendOwnedOperation(block: Block, op: Operation) cal
 pub extern "c" fn mlirBlockGetArgument(block: Block, pos: isize) callconv(.c) Value;
 pub extern "c" fn mlirRegionCreate() callconv(.c) Region;
 pub extern "c" fn mlirRegionAppendOwnedBlock(region: Region, block: Block) callconv(.c) void;
+pub extern "c" fn mlirOperationGetRegion(op: Operation, pos: isize) callconv(.c) Region;
 pub extern "c" fn mlirTypeParseGet(ctx: Context, type_str: StringRef) callconv(.c) Type;
 pub extern "c" fn mlirIntegerTypeGet(ctx: Context, bitwidth: c_uint) callconv(.c) Type;
 pub extern "c" fn mlirF32TypeGet(ctx: Context) callconv(.c) Type;
@@ -161,6 +163,15 @@ pub const Builder = struct {
         mlirBlockAppendOwnedOperation(block, operation);
         if (result_types.len > 0) return mlirOperationGetResult(operation, 0);
         return Value{ .ptr = null };
+    }
+
+    /// Emit a terminator op with successor blocks (cir.br, cir.condbr).
+    pub fn emitBranch(self: Builder, block: Block, name: []const u8, operands: []const Value, successors: []const Block) void {
+        var state = mlirOperationStateGet(StringRef.fromSlice(name), self.loc);
+        if (operands.len > 0) mlirOperationStateAddOperands(&state, @intCast(operands.len), operands.ptr);
+        if (successors.len > 0) mlirOperationStateAddSuccessors(&state, @intCast(successors.len), successors.ptr);
+        const operation = mlirOperationCreate(&state);
+        mlirBlockAppendOwnedOperation(block, operation);
     }
 
     pub fn createBlock(self: Builder, arg_types: []const Type) Block {
