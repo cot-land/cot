@@ -1,4 +1,6 @@
-#pragma once
+//===- parser.h - ac language parser ----------------------------*- C++ -*-===//
+#ifndef AC_PARSER_H
+#define AC_PARSER_H
 // Parser for the ac language.
 //
 // Architecture: Go parser recursive descent + Zig precedence table
@@ -74,3 +76,5 @@ struct Module {
 Module parse(std::string_view source, const std::vector<Token> &tokens);
 
 } // namespace ac
+
+#endif // AC_PARSER_H

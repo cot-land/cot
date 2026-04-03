@@ -1,0 +1,18 @@
+// RUN: %cot emit-cir %s | %FileCheck %s
+
+pub fn add(a: i32, b: i32) i32 {
+    return a + b;
+}
+
+pub fn main() i32 {
+    return add(19, 23);
+}
+
+// CHECK-LABEL: func.func @add
+// CHECK: cir.add %{{.*}}, %{{.*}} : i32
+// CHECK: return
+
+// CHECK-LABEL: func.func @main
+// CHECK: cir.constant 19
+// CHECK: cir.constant 23
+// CHECK: call @add

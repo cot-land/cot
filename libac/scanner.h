@@ -1,4 +1,6 @@
-#pragma once
+//===- scanner.h - ac language scanner --------------------------*- C++ -*-===//
+#ifndef AC_SCANNER_H
+#define AC_SCANNER_H
 // Scanner for the ac language.
 //
 // Architecture: Zig Tokenizer state machine (~/claude/references/zig/lib/std/zig/Tokenizer.zig)
@@ -168,3 +170,5 @@ private:
 std::vector<Token> scanAll(std::string_view source);
 
 } // namespace ac
+
+#endif // AC_SCANNER_H

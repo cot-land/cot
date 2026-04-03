@@ -55,8 +55,10 @@ The LLM bias lands on: Rust syntax + Go cleanliness. `fn`, `let`/`var`, `-> type
 4. **No stubs, no TODOs.** Every function works or doesn't exist yet.
 5. **Start minimal.** Gate test 1 before gate test 2.
 6. **C++ for compiler infrastructure.** Frontends can be any language via C ABI or bytecode.
-7. **NEVER** `git checkout`, `git restore`, `git reset --hard`, `git clean`. Edit manually.
-8. **NEVER** `git add .` — stage files by name.
+7. **LLVM/MLIR coding standards.** All C++ follows `claude/LLVM_MLIR_CODING_STANDARDS.md`. camelBack variables, UpperCamelCase types, 2-space indent, 80-col, no RTTI/exceptions, LLVM containers. CIR must be upstreamable.
+8. **Test every change.** Three test layers: lit+FileCheck (IR verification), inline tests (runtime), build tests (e2e). Run `lit test/lit/` before committing.
+9. **NEVER** `git checkout`, `git restore`, `git reset --hard`, `git clean`. Edit manually.
+10. **NEVER** `git add .` — stage files by name.
 
 ---
 
@@ -83,12 +85,26 @@ Full justifications in `claude/REFERENCES.md`.
 ## Build
 
 ```bash
-cd libcir/build && cmake --build .     # CIR dialect
-cd cot/build && cmake --build .        # Driver + ac frontend
+cd libcir/build && cmake --build .                  # CIR dialect (C++)
+cd libzc && ~/bin/zig-nightly build -Doptimize=ReleaseSafe  # Zig frontend
+cd cot/build && cmake --build .                     # Driver + ac frontend
+```
 
-# Test
-cd cot/build && ./cot test             # Gate test: add(19,23) = 42
-cd cot/build && ./cot build /tmp/hello.ac -o /tmp/hello && /tmp/hello
+## Test (run all three layers before committing)
+
+```bash
+cd cot/build && ./cot test                          # Gate test: add(19,23) = 42
+cd test && bash run.sh ../cot/build/cot             # Build tests (exit code)
+cd cot/build && ./cot test ../../test/inline/005_inline_test.ac  # Inline tests
+bin/lit test/lit/ -v                                # lit + FileCheck (IR verification)
+```
+
+## Inspect pipeline stages
+
+```bash
+./cot emit-cir file.ac     # Print CIR MLIR text (what frontend produces)
+./cot emit-cir file.zig    # Same for Zig input
+./cot emit-llvm file.ac    # Print LLVM dialect text (after lowering)
 ```
 
 ---

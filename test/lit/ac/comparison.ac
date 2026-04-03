@@ -1,0 +1,8 @@
+// RUN: %cot emit-cir %s | %FileCheck %s
+
+fn check(a: i32, b: i32) -> bool {
+    return a == b
+}
+
+// CHECK-LABEL: func.func @check
+// CHECK: cir.cmp

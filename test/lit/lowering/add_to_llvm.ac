@@ -1,0 +1,9 @@
+// RUN: %cot emit-llvm %s | %FileCheck %s
+
+fn add(a: i32, b: i32) -> i32 {
+    return a + b
+}
+
+// CHECK-LABEL: llvm.func @add
+// CHECK: llvm.add %{{.*}}, %{{.*}} : i32
+// CHECK: llvm.return

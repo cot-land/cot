@@ -223,6 +223,44 @@ static int emitBinary(ModuleOp module, const std::string &outputPath) {
 }
 
 //===----------------------------------------------------------------------===//
+// Lower CIR only (no LLVM IR translation, no object file)
+//===----------------------------------------------------------------------===//
+
+static int lowerCIRToLLVMDialect(ModuleOp module) {
+  MLIRContext *ctx = module.getContext();
+  PassManager pm(ctx);
+  pm.addPass(std::make_unique<CIRToLLVMPass>());
+  pm.addPass(createConvertFuncToLLVMPass(ConvertFuncToLLVMPassOptions{}));
+  if (failed(pm.run(module))) { llvm::errs() << "error: lowering failed\n"; return 1; }
+  return 0;
+}
+
+//===----------------------------------------------------------------------===//
+// Parse source file into CIR module (works for .ac and .zig)
+//===----------------------------------------------------------------------===//
+
+static OwningOpRef<ModuleOp> parseSourceToCIR(MLIRContext &ctx,
+    const std::string &inputFile, const std::string &source,
+    bool testMode = false) {
+  bool isZig = inputFile.size() >= 4 &&
+      inputFile.substr(inputFile.size() - 4) == ".zig";
+
+  if (isZig) {
+    const char *cirBytes = nullptr;
+    size_t cirLen = 0;
+    int rc = zc_parse(source.data(), source.size(), inputFile.c_str(), &cirBytes, &cirLen);
+    if (rc != 0) { llvm::errs() << "error: zig frontend failed\n"; return {}; }
+    ParserConfig config(&ctx);
+    return parseSourceString<ModuleOp>(llvm::StringRef(cirBytes, cirLen), config);
+  }
+
+  // ac frontend
+  auto tokens = ac::scanAll(source);
+  auto ast = ac::parse(source, tokens);
+  return ac::codegen(ctx, source, ast, testMode);
+}
+
+//===----------------------------------------------------------------------===//
 // CLI
 //===----------------------------------------------------------------------===//
 
@@ -238,9 +276,11 @@ int main(int argc, char **argv) {
   if (argc < 2) {
     llvm::outs() << "cot — compiler toolkit\n\n"
                  << "Usage:\n"
-                 << "  cot build <file.ac> [-o output]\n"
+                 << "  cot build <file>      compile to native binary\n"
                  << "  cot test <file.ac>    run inline tests\n"
                  << "  cot test              run gate test\n"
+                 << "  cot emit-cir <file>   print CIR MLIR text\n"
+                 << "  cot emit-llvm <file>  print LLVM dialect text\n"
                  << "  cot version\n";
     return 1;
   }
@@ -317,7 +357,32 @@ int main(int argc, char **argv) {
     return code == 42 ? 0 : 1;
   }
 
-  // ---- cot build <file> ----
+  // ---- cot emit-cir <file> — print CIR MLIR text (for lit/FileCheck) ----
+  if (cmd == "emit-cir" && argc >= 3) {
+    std::string inputFile = argv[2];
+    auto source = readFile(inputFile);
+    if (source.empty()) { llvm::errs() << "error: can't read " << inputFile << "\n"; return 1; }
+    auto module = parseSourceToCIR(ctx, inputFile, source);
+    if (!module) return 1;
+    if (failed(verify(*module))) { llvm::errs() << "error: verify failed\n"; return 1; }
+    (*module)->print(llvm::outs());
+    return 0;
+  }
+
+  // ---- cot emit-llvm <file> — print LLVM dialect MLIR text ----
+  if (cmd == "emit-llvm" && argc >= 3) {
+    std::string inputFile = argv[2];
+    auto source = readFile(inputFile);
+    if (source.empty()) { llvm::errs() << "error: can't read " << inputFile << "\n"; return 1; }
+    auto module = parseSourceToCIR(ctx, inputFile, source);
+    if (!module) return 1;
+    if (failed(verify(*module))) { llvm::errs() << "error: verify failed\n"; return 1; }
+    if (lowerCIRToLLVMDialect(*module)) return 1;
+    (*module)->print(llvm::outs());
+    return 0;
+  }
+
+  // ---- cot build <file> — compile to native binary ----
   if (cmd == "build" && argc >= 3) {
     std::string inputFile = argv[2];
     std::string outputFile = "a.out";
@@ -326,39 +391,9 @@ int main(int argc, char **argv) {
     auto source = readFile(inputFile);
     if (source.empty()) { llvm::errs() << "error: can't read " << inputFile << "\n"; return 1; }
 
-    bool isZig = inputFile.size() >= 4 &&
-        inputFile.substr(inputFile.size() - 4) == ".zig";
-
-    if (isZig) {
-      // Zig frontend: libzc via C ABI → CIR MLIR bytecode
-      const char *cirBytes = nullptr;
-      size_t cirLen = 0;
-      int rc = zc_parse(source.data(), source.size(), inputFile.c_str(), &cirBytes, &cirLen);
-      if (rc != 0) { llvm::errs() << "error: zig frontend failed\n"; return 1; }
-      llvm::outs() << "zig frontend: " << cirLen << " bytes CIR\n";
-
-      // Load CIR bytecode — MLIR parseSourceString auto-detects bytecode vs text
-      ParserConfig config(&ctx);
-      auto parsedModule = parseSourceString<ModuleOp>(
-          llvm::StringRef(cirBytes, cirLen), config);
-      if (!parsedModule) {
-        llvm::errs() << "error: failed to load CIR bytecode\n";
-        return 1;
-      }
-      if (failed(verify(*parsedModule))) { llvm::errs() << "error: verify failed\n"; return 1; }
-      if (emitBinary(*parsedModule, outputFile)) return 1;
-      llvm::outs() << outputFile << "\n";
-      return 0;
-    }
-
-    // ac frontend: scanner → parser → AST → CIR
-    auto tokens = ac::scanAll(source);
-    auto ast = ac::parse(source, tokens);
-    auto module = ac::codegen(ctx, source, ast);
-
+    auto module = parseSourceToCIR(ctx, inputFile, source);
+    if (!module) return 1;
     if (failed(verify(*module))) { llvm::errs() << "error: verify failed\n"; return 1; }
-
-    // Backend: CIR → LLVM → native
     if (emitBinary(*module, outputFile)) return 1;
     llvm::outs() << outputFile << "\n";
     return 0;
