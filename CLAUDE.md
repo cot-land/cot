@@ -106,19 +106,16 @@ Full justifications in `claude/REFERENCES.md`.
 ## Build
 
 ```bash
+make              # Build everything (libcir → libcot → libzc → cot)
+make test         # Run all test layers (lit, gate, inline, build)
+```
+
+Individual components (if needed):
+```bash
 cd libcir/build && cmake --build .                  # CIR dialect (C++)
 cd libcot/build && cmake --build .                  # Compiler passes (C++)
 cd libzc && ~/bin/zig-nightly build -Doptimize=ReleaseSafe  # Zig frontend
 cd cot/build && cmake --build .                     # Driver + ac frontend
-```
-
-## Test (run all three layers before committing)
-
-```bash
-cd cot/build && ./cot test                          # Gate test: add(19,23) = 42
-cd test && bash run.sh ../cot/build/cot             # Build tests (exit code)
-cd cot/build && ./cot test ../../test/inline/005_inline_test.ac  # Inline tests
-bin/lit test/lit/ -v                                # lit + FileCheck (IR verification)
 ```
 
 ## Inspect pipeline stages

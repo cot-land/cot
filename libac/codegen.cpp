@@ -145,7 +145,157 @@ class CodeGen {
     return {};
   }
 
-  void emitStmt(const Stmt &s, mlir::Type returnType, mlir::func::FuncOp parentFunc) {
+  // Helper: add a block to the current function's region.
+  mlir::Block *addBlock(mlir::func::FuncOp fn) {
+    auto *block = new mlir::Block();
+    fn.getBody().push_back(block);
+    return block;
+  }
+
+  // Helper: check if current insertion block is terminated.
+  bool blockTerminated() {
+    auto *cur = b.getInsertionBlock();
+    return !cur->empty() &&
+        cur->back().hasTrait<mlir::OpTrait::IsTerminator>();
+  }
+
+  void emitLetVar(const Stmt &s) {
+    auto varType = resolveType(s.varType);
+    auto ptrType = cir::PointerType::get(b.getContext());
+    auto addr = b.create<cir::AllocaOp>(loc, ptrType,
+        mlir::TypeAttr::get(varType));
+    auto val = emitExpr(*s.expr, varType);
+    b.create<cir::StoreOp>(loc, val, addr);
+    localAddrs[s.varName] = {addr, varType};
+  }
+
+  void emitAssign(const Stmt &s) {
+    auto lit = localAddrs.find(s.varName);
+    if (lit == localAddrs.end()) {
+      llvm::errs() << "error: undefined variable '" << s.varName << "'\n";
+      return;
+    }
+    auto [addr, elemType] = lit->second;
+    auto val = emitExpr(*s.expr, elemType);
+    b.create<cir::StoreOp>(loc, val, addr);
+  }
+
+  void emitCompoundAssign(const Stmt &s) {
+    auto lit = localAddrs.find(s.varName);
+    if (lit == localAddrs.end()) {
+      llvm::errs() << "error: undefined variable '" << s.varName << "'\n";
+      return;
+    }
+    auto [addr, elemType] = lit->second;
+    auto current = b.create<cir::LoadOp>(loc, elemType, addr);
+    auto rhs = emitExpr(*s.expr, elemType);
+    mlir::Value result;
+    switch (s.op) {
+      case Tag::plus:    result = b.create<cir::AddOp>(loc, elemType, current, rhs); break;
+      case Tag::minus:   result = b.create<cir::SubOp>(loc, elemType, current, rhs); break;
+      case Tag::star:    result = b.create<cir::MulOp>(loc, elemType, current, rhs); break;
+      case Tag::slash:   result = b.create<cir::DivOp>(loc, elemType, current, rhs); break;
+      case Tag::percent: result = b.create<cir::RemOp>(loc, elemType, current, rhs); break;
+      default: llvm::errs() << "error: unsupported compound op\n"; return;
+    }
+    b.create<cir::StoreOp>(loc, result, addr);
+  }
+
+  void emitForStmt(const Stmt &s, mlir::Type returnType,
+                   mlir::func::FuncOp parentFunc) {
+    auto i32Ty = b.getI32Type();
+    auto ptrType = cir::PointerType::get(b.getContext());
+    auto addr = b.create<cir::AllocaOp>(loc, ptrType,
+        mlir::TypeAttr::get(i32Ty));
+    auto startVal = emitExpr(*s.expr, i32Ty);
+    b.create<cir::StoreOp>(loc, startVal, addr);
+    localAddrs[s.varName] = {addr, i32Ty};
+    auto endVal = emitExpr(*s.rangeEnd, i32Ty);
+
+    auto *headerBlock = addBlock(parentFunc);
+    auto *bodyBlock = addBlock(parentFunc);
+    auto *exitBlock = addBlock(parentFunc);
+    b.create<cir::BrOp>(loc, mlir::ValueRange{}, headerBlock);
+
+    b.setInsertionPointToStart(headerBlock);
+    auto curVal = b.create<cir::LoadOp>(loc, i32Ty, addr);
+    auto cond = b.create<cir::CmpOp>(loc, cir::CmpIPredicate::slt,
+        curVal, endVal);
+    b.create<cir::CondBrOp>(loc, cond, bodyBlock, exitBlock);
+
+    b.setInsertionPointToStart(bodyBlock);
+    loopStack.push_back({headerBlock, exitBlock});
+    for (auto &st : s.thenBody) emitStmt(*st, returnType, parentFunc);
+    loopStack.pop_back();
+    if (!blockTerminated()) {
+      auto v = b.create<cir::LoadOp>(loc, i32Ty, addr);
+      auto one = b.create<cir::ConstantOp>(loc, i32Ty, b.getI32IntegerAttr(1));
+      auto inc = b.create<cir::AddOp>(loc, i32Ty, v, one);
+      b.create<cir::StoreOp>(loc, inc, addr);
+      b.create<cir::BrOp>(loc, mlir::ValueRange{}, headerBlock);
+    }
+    b.setInsertionPointToStart(exitBlock);
+  }
+
+  void emitWhileStmt(const Stmt &s, mlir::Type returnType,
+                     mlir::func::FuncOp parentFunc) {
+    auto *headerBlock = addBlock(parentFunc);
+    auto *bodyBlock = addBlock(parentFunc);
+    auto *exitBlock = addBlock(parentFunc);
+    b.create<cir::BrOp>(loc, mlir::ValueRange{}, headerBlock);
+
+    b.setInsertionPointToStart(headerBlock);
+    auto cond = emitExpr(*s.expr, b.getI1Type());
+    b.create<cir::CondBrOp>(loc, cond, bodyBlock, exitBlock);
+
+    b.setInsertionPointToStart(bodyBlock);
+    loopStack.push_back({headerBlock, exitBlock});
+    for (auto &st : s.thenBody) emitStmt(*st, returnType, parentFunc);
+    loopStack.pop_back();
+    if (!blockTerminated())
+      b.create<cir::BrOp>(loc, mlir::ValueRange{}, headerBlock);
+    b.setInsertionPointToStart(exitBlock);
+  }
+
+  void emitAssertStmt(const Stmt &s, mlir::func::FuncOp parentFunc) {
+    auto cond = emitExpr(*s.expr, b.getI1Type());
+    auto *trapBlock = addBlock(parentFunc);
+    auto *contBlock = addBlock(parentFunc);
+    b.create<cir::CondBrOp>(loc, cond, contBlock, trapBlock);
+    b.setInsertionPointToStart(trapBlock);
+    b.create<cir::TrapOp>(loc);
+    b.setInsertionPointToStart(contBlock);
+  }
+
+  void emitIfStmt(const Stmt &s, mlir::Type returnType,
+                  mlir::func::FuncOp parentFunc) {
+    auto cond = emitExpr(*s.expr, b.getI1Type());
+    auto *thenBlock = addBlock(parentFunc);
+    auto *elseBlock = addBlock(parentFunc);
+    auto *mergeBlock = addBlock(parentFunc);
+    b.create<cir::CondBrOp>(loc, cond, thenBlock, elseBlock);
+
+    b.setInsertionPointToStart(thenBlock);
+    for (auto &st : s.thenBody) emitStmt(*st, returnType, parentFunc);
+    bool thenReturns = !thenBlock->empty() &&
+        thenBlock->back().hasTrait<mlir::OpTrait::IsTerminator>();
+    if (!thenReturns)
+      b.create<cir::BrOp>(loc, mlir::ValueRange{}, mergeBlock);
+
+    b.setInsertionPointToStart(elseBlock);
+    for (auto &st : s.elseBody) emitStmt(*st, returnType, parentFunc);
+    bool elseReturns = !elseBlock->empty() &&
+        elseBlock->back().hasTrait<mlir::OpTrait::IsTerminator>();
+    if (!elseReturns)
+      b.create<cir::BrOp>(loc, mlir::ValueRange{}, mergeBlock);
+
+    b.setInsertionPointToStart(mergeBlock);
+    if (thenReturns && elseReturns)
+      b.create<cir::TrapOp>(loc);
+  }
+
+  void emitStmt(const Stmt &s, mlir::Type returnType,
+                mlir::func::FuncOp parentFunc) {
     switch (s.kind) {
     case StmtKind::Return:
       if (s.expr) {
@@ -155,175 +305,32 @@ class CodeGen {
         b.create<mlir::func::ReturnOp>(loc, mlir::ValueRange{});
       }
       break;
-
     case StmtKind::ExprStmt:
       if (s.expr) emitExpr(*s.expr, returnType);
       break;
-
     case StmtKind::Let:
-    case StmtKind::Var: {
-      auto varType = resolveType(s.varType);
-      auto ptrType = cir::PointerType::get(b.getContext());
-      auto addr = b.create<cir::AllocaOp>(loc, ptrType,
-          mlir::TypeAttr::get(varType));
-      auto val = emitExpr(*s.expr, varType);
-      b.create<cir::StoreOp>(loc, val, addr);
-      localAddrs[s.varName] = {addr, varType};
-      break;
-    }
-
-    case StmtKind::Assign: {
-      auto lit = localAddrs.find(s.varName);
-      if (lit == localAddrs.end()) {
-        llvm::errs() << "error: undefined variable '" << s.varName << "'\n";
-        break;
-      }
-      auto [addr, elemType] = lit->second;
-      auto val = emitExpr(*s.expr, elemType);
-      b.create<cir::StoreOp>(loc, val, addr);
-      break;
-    }
-
-    case StmtKind::CompoundAssign: {
-      auto lit = localAddrs.find(s.varName);
-      if (lit == localAddrs.end()) {
-        llvm::errs() << "error: undefined variable '" << s.varName << "'\n";
-        break;
-      }
-      auto [addr, elemType] = lit->second;
-      auto current = b.create<cir::LoadOp>(loc, elemType, addr);
-      auto rhs = emitExpr(*s.expr, elemType);
-      mlir::Value result;
-      switch (s.op) {
-        case Tag::plus:    result = b.create<cir::AddOp>(loc, elemType, current, rhs); break;
-        case Tag::minus:   result = b.create<cir::SubOp>(loc, elemType, current, rhs); break;
-        case Tag::star:    result = b.create<cir::MulOp>(loc, elemType, current, rhs); break;
-        case Tag::slash:   result = b.create<cir::DivOp>(loc, elemType, current, rhs); break;
-        case Tag::percent: result = b.create<cir::RemOp>(loc, elemType, current, rhs); break;
-        default: llvm::errs() << "error: unsupported compound op\n"; break;
-      }
-      b.create<cir::StoreOp>(loc, result, addr);
-      break;
-    }
-
-    case StmtKind::For: {
-      // Desugar: for i in start..end { body }
-      auto i32Ty = b.getI32Type();
-      auto ptrType = cir::PointerType::get(b.getContext());
-      auto addr = b.create<cir::AllocaOp>(loc, ptrType,
-          mlir::TypeAttr::get(i32Ty));
-      auto startVal = emitExpr(*s.expr, i32Ty);
-      b.create<cir::StoreOp>(loc, startVal, addr);
-      localAddrs[s.varName] = {addr, i32Ty};
-      auto endVal = emitExpr(*s.rangeEnd, i32Ty);
-      auto *headerBlock = new mlir::Block();
-      auto *bodyBlock = new mlir::Block();
-      auto *exitBlock = new mlir::Block();
-      parentFunc.getBody().push_back(headerBlock);
-      parentFunc.getBody().push_back(bodyBlock);
-      parentFunc.getBody().push_back(exitBlock);
-      b.create<cir::BrOp>(loc, mlir::ValueRange{}, headerBlock);
-      b.setInsertionPointToStart(headerBlock);
-      auto curVal = b.create<cir::LoadOp>(loc, i32Ty, addr);
-      auto cond = b.create<cir::CmpOp>(loc, cir::CmpIPredicate::slt,
-          curVal, endVal);
-      b.create<cir::CondBrOp>(loc, cond, bodyBlock, exitBlock);
-      b.setInsertionPointToStart(bodyBlock);
-      loopStack.push_back({headerBlock, exitBlock});
-      for (auto &st : s.thenBody) emitStmt(*st, returnType, parentFunc);
-      loopStack.pop_back();
-      { auto *cur = b.getInsertionBlock();
-        if (cur->empty() || !cur->back().hasTrait<mlir::OpTrait::IsTerminator>()) {
-          auto v = b.create<cir::LoadOp>(loc, i32Ty, addr);
-          auto one = b.create<cir::ConstantOp>(loc, i32Ty, b.getI32IntegerAttr(1));
-          auto inc = b.create<cir::AddOp>(loc, i32Ty, v, one);
-          b.create<cir::StoreOp>(loc, inc, addr);
-          b.create<cir::BrOp>(loc, mlir::ValueRange{}, headerBlock);
-        }
-      }
-      b.setInsertionPointToStart(exitBlock);
-      break;
-    }
-
-    case StmtKind::While: {
-      auto *headerBlock = new mlir::Block();
-      auto *bodyBlock = new mlir::Block();
-      auto *exitBlock = new mlir::Block();
-      parentFunc.getBody().push_back(headerBlock);
-      parentFunc.getBody().push_back(bodyBlock);
-      parentFunc.getBody().push_back(exitBlock);
-      b.create<cir::BrOp>(loc, mlir::ValueRange{}, headerBlock);
-      b.setInsertionPointToStart(headerBlock);
-      auto cond = emitExpr(*s.expr, b.getI1Type());
-      b.create<cir::CondBrOp>(loc, cond, bodyBlock, exitBlock);
-      b.setInsertionPointToStart(bodyBlock);
-      loopStack.push_back({headerBlock, exitBlock});
-      for (auto &st : s.thenBody) emitStmt(*st, returnType, parentFunc);
-      loopStack.pop_back();
-      { auto *cur = b.getInsertionBlock();
-        if (cur->empty() || !cur->back().hasTrait<mlir::OpTrait::IsTerminator>())
-          b.create<cir::BrOp>(loc, mlir::ValueRange{}, headerBlock);
-      }
-      b.setInsertionPointToStart(exitBlock);
-      break;
-    }
-
-    case StmtKind::Break: {
+    case StmtKind::Var:
+      emitLetVar(s); break;
+    case StmtKind::Assign:
+      emitAssign(s); break;
+    case StmtKind::CompoundAssign:
+      emitCompoundAssign(s); break;
+    case StmtKind::For:
+      emitForStmt(s, returnType, parentFunc); break;
+    case StmtKind::While:
+      emitWhileStmt(s, returnType, parentFunc); break;
+    case StmtKind::Break:
       if (!loopStack.empty())
         b.create<cir::BrOp>(loc, mlir::ValueRange{}, loopStack.back().exit);
       break;
-    }
-
-    case StmtKind::Continue: {
+    case StmtKind::Continue:
       if (!loopStack.empty())
         b.create<cir::BrOp>(loc, mlir::ValueRange{}, loopStack.back().header);
       break;
-    }
-
-    case StmtKind::Assert: {
-      // Zig pattern: assert condition, trap on failure.
-      // Emit: if (!cond) { cir.trap }
-      auto cond = emitExpr(*s.expr, b.getI1Type());
-      auto *trapBlock = new mlir::Block();
-      auto *contBlock = new mlir::Block();
-      parentFunc.getBody().push_back(trapBlock);
-      parentFunc.getBody().push_back(contBlock);
-      b.create<cir::CondBrOp>(loc, cond, contBlock, trapBlock);
-      b.setInsertionPointToStart(trapBlock);
-      b.create<cir::TrapOp>(loc);
-      b.setInsertionPointToStart(contBlock);
-      break;
-    }
-
-    case StmtKind::If: {
-      auto cond = emitExpr(*s.expr, b.getI1Type());
-      auto *thenBlock = new mlir::Block();
-      auto *elseBlock = new mlir::Block();
-      auto *mergeBlock = new mlir::Block();
-      parentFunc.getBody().push_back(thenBlock);
-      parentFunc.getBody().push_back(elseBlock);
-      parentFunc.getBody().push_back(mergeBlock);
-      b.create<cir::CondBrOp>(loc, cond, thenBlock, elseBlock);
-      // Then
-      b.setInsertionPointToStart(thenBlock);
-      for (auto &st : s.thenBody) emitStmt(*st, returnType, parentFunc);
-      bool thenReturns = !thenBlock->empty() &&
-          thenBlock->back().hasTrait<mlir::OpTrait::IsTerminator>();
-      if (!thenReturns)
-        b.create<cir::BrOp>(loc, mlir::ValueRange{}, mergeBlock);
-      // Else
-      b.setInsertionPointToStart(elseBlock);
-      for (auto &st : s.elseBody) emitStmt(*st, returnType, parentFunc);
-      bool elseReturns = !elseBlock->empty() &&
-          elseBlock->back().hasTrait<mlir::OpTrait::IsTerminator>();
-      if (!elseReturns)
-        b.create<cir::BrOp>(loc, mlir::ValueRange{}, mergeBlock);
-      // Merge — if both branches terminated, merge is unreachable
-      b.setInsertionPointToStart(mergeBlock);
-      if (thenReturns && elseReturns)
-        b.create<cir::TrapOp>(loc);
-      break;
-    }
+    case StmtKind::Assert:
+      emitAssertStmt(s, parentFunc); break;
+    case StmtKind::If:
+      emitIfStmt(s, returnType, parentFunc); break;
     }
   }
 
