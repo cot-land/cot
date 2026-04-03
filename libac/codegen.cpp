@@ -26,6 +26,7 @@ class CodeGen {
   mlir::OpBuilder b;
   mlir::Location loc;
   std::string_view source_;
+  mlir::ModuleOp module_;
 
   // Zig AstGen pattern: scope holds named values for current function.
   // params: SSA value (direct), locals: SSA address (needs cir.load)
@@ -37,11 +38,15 @@ class CodeGen {
   llvm::SmallVector<LoopContext> loopStack;
 
   mlir::Type resolveType(const TypeRef &t) {
-    if (t.name == "i32") return b.getI32Type();
-    if (t.name == "i64") return b.getI64Type();
+    // Integer types (signless in MLIR — signed/unsigned in op semantics)
+    if (t.name == "i8"  || t.name == "u8")  return b.getIntegerType(8);
+    if (t.name == "i16" || t.name == "u16") return b.getIntegerType(16);
+    if (t.name == "i32" || t.name == "u32") return b.getIntegerType(32);
+    if (t.name == "i64" || t.name == "u64") return b.getIntegerType(64);
+    if (t.name == "bool") return b.getI1Type();
+    // Float types
     if (t.name == "f32") return b.getF32Type();
     if (t.name == "f64") return b.getF64Type();
-    if (t.name == "bool") return b.getI1Type();
     return b.getI32Type();
   }
 
@@ -73,24 +78,25 @@ class CodeGen {
     }
 
     case ExprKind::BinOp: {
-      // Comparisons return i1, operands use their own type
       bool isCmp = (e.op == Tag::eq_eq || e.op == Tag::bang_eq ||
                     e.op == Tag::less || e.op == Tag::less_eq ||
                     e.op == Tag::greater || e.op == Tag::greater_eq);
-      mlir::Type operandType = isCmp ? b.getI32Type() : resultType;
-      auto lhs = emitExpr(*e.lhs, operandType);
+      // Emit LHS first, then use its actual type for RHS (handles
+      // cases where resultType from context doesn't match operand types)
+      auto lhs = emitExpr(*e.lhs, resultType);
+      auto operandType = lhs.getType();
       auto rhs = emitExpr(*e.rhs, operandType);
       switch (e.op) {
-        case Tag::plus:    return b.create<cir::AddOp>(loc, resultType, lhs, rhs);
-        case Tag::minus:   return b.create<cir::SubOp>(loc, resultType, lhs, rhs);
-        case Tag::star:    return b.create<cir::MulOp>(loc, resultType, lhs, rhs);
-        case Tag::slash:   return b.create<cir::DivOp>(loc, resultType, lhs, rhs);
-        case Tag::percent: return b.create<cir::RemOp>(loc, resultType, lhs, rhs);
-        case Tag::ampersand: return b.create<cir::BitAndOp>(loc, resultType, lhs, rhs);
-        case Tag::pipe:      return b.create<cir::BitOrOp>(loc, resultType, lhs, rhs);
-        case Tag::caret:     return b.create<cir::XorOp>(loc, resultType, lhs, rhs);
-        case Tag::shl:       return b.create<cir::ShlOp>(loc, resultType, lhs, rhs);
-        case Tag::shr:       return b.create<cir::ShrOp>(loc, resultType, lhs, rhs);
+        case Tag::plus:    return b.create<cir::AddOp>(loc, operandType, lhs, rhs);
+        case Tag::minus:   return b.create<cir::SubOp>(loc, operandType, lhs, rhs);
+        case Tag::star:    return b.create<cir::MulOp>(loc, operandType, lhs, rhs);
+        case Tag::slash:   return b.create<cir::DivOp>(loc, operandType, lhs, rhs);
+        case Tag::percent: return b.create<cir::RemOp>(loc, operandType, lhs, rhs);
+        case Tag::ampersand: return b.create<cir::BitAndOp>(loc, operandType, lhs, rhs);
+        case Tag::pipe:      return b.create<cir::BitOrOp>(loc, operandType, lhs, rhs);
+        case Tag::caret:     return b.create<cir::XorOp>(loc, operandType, lhs, rhs);
+        case Tag::shl:       return b.create<cir::ShlOp>(loc, operandType, lhs, rhs);
+        case Tag::shr:       return b.create<cir::ShrOp>(loc, operandType, lhs, rhs);
         // Comparisons: cir::CmpIPredicate enum
         case Tag::eq_eq:      return b.create<cir::CmpOp>(loc, cir::CmpIPredicate::eq, lhs, rhs);
         case Tag::bang_eq:    return b.create<cir::CmpOp>(loc, cir::CmpIPredicate::ne, lhs, rhs);
@@ -121,12 +127,20 @@ class CodeGen {
     }
 
     case ExprKind::Call: {
-      llvm::SmallVector<mlir::Value> args;
-      for (auto &arg : e.args)
-        args.push_back(emitExpr(*arg, resultType));
       std::string callee(e.name);
+      // Look up callee to get parameter types (mini symbol table via MLIR module)
+      auto funcOp = module_.lookupSymbol<mlir::func::FuncOp>(callee);
+      llvm::SmallVector<mlir::Value> args;
+      for (size_t i = 0; i < e.args.size(); i++) {
+        mlir::Type argType = (funcOp && i < funcOp.getNumArguments())
+            ? funcOp.getArgumentTypes()[i] : resultType;
+        args.push_back(emitExpr(*e.args[i], argType));
+      }
+      // Use callee's return type if available
+      mlir::Type callResultType = (funcOp && funcOp.getNumResults() > 0)
+          ? funcOp.getResultTypes()[0] : resultType;
       auto call = b.create<mlir::func::CallOp>(loc, callee,
-          mlir::TypeRange{resultType}, mlir::ValueRange(args));
+          mlir::TypeRange{callResultType}, mlir::ValueRange(args));
       return call.getResult(0);
     }
 
@@ -415,6 +429,7 @@ public:
 
   mlir::OwningOpRef<mlir::ModuleOp> emit(const Module &mod, bool testMode) {
     auto module = mlir::ModuleOp::create(loc);
+    module_ = module;
     for (auto &fn : mod.functions) emitFn(module, fn);
     if (testMode && !mod.tests.empty()) {
       for (size_t i = 0; i < mod.tests.size(); i++)

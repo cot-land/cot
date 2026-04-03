@@ -1,0 +1,29 @@
+// Feature 021-022: Multiple int types + floats — inline tests
+// Run with: cot test test/inline/021_int_types_test.ac
+//
+// Note: cross-type function calls (e.g. calling i16 fn from i32 context)
+// require a symbol table for parameter type lookup (audit issue F1).
+// These tests use same-type arithmetic within functions.
+
+fn add_i64(a: i64, b: i64) -> i64 {
+    return a + b
+}
+
+fn sum_i32(a: i32, b: i32) -> i32 {
+    let c: i32 = a + b
+    return c
+}
+
+test "i64 via function" {
+    assert(add_i64(100, 200) == 300)
+}
+
+test "i32 let binding" {
+    assert(sum_i32(19, 23) == 42)
+}
+
+test "i32 local arithmetic" {
+    let x: i32 = 6
+    let y: i32 = 7
+    assert(x * y == 42)
+}

@@ -82,9 +82,13 @@ const Gen = struct {
         if (tag == .identifier) {
             const tok = self.tree.nodeMainToken(node);
             const name = self.tree.tokenSlice(tok);
-            if (std.mem.eql(u8, name, "i32")) return self.b.intType(32);
-            if (std.mem.eql(u8, name, "i64")) return self.b.intType(64);
+            if (std.mem.eql(u8, name, "i8") or std.mem.eql(u8, name, "u8")) return self.b.intType(8);
+            if (std.mem.eql(u8, name, "i16") or std.mem.eql(u8, name, "u16")) return self.b.intType(16);
+            if (std.mem.eql(u8, name, "i32") or std.mem.eql(u8, name, "u32")) return self.b.intType(32);
+            if (std.mem.eql(u8, name, "i64") or std.mem.eql(u8, name, "u64")) return self.b.intType(64);
             if (std.mem.eql(u8, name, "bool")) return self.b.intType(1);
+            if (std.mem.eql(u8, name, "f32")) return mlir.mlirF32TypeGet(self.ctx);
+            if (std.mem.eql(u8, name, "f64")) return mlir.mlirF64TypeGet(self.ctx);
             if (std.mem.eql(u8, name, "void")) return self.b.intType(0);
         }
         return self.i32Type();
