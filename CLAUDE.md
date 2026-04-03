@@ -74,9 +74,10 @@ Every feature from `claude/FEATURES.md` follows this checklist. Do ALL steps —
 5. **Zig frontend.** Add handling in `libzc/astgen.zig` — map AST node to CIR ops. Both frontends must stay in sync.
 6. **lit tests — BOTH frontends.** Add `test/lit/ac/<feature>.ac` AND `test/lit/zig/<feature>.zig`. Use `%cot emit-cir` + FileCheck to verify CIR output.
 7. **Lowering test.** If feature adds new CIR→LLVM patterns, add `test/lit/lowering/<feature>.ac` to verify LLVM output.
-8. **Build ALL.** `libcir → libcot → libzc → cot` (order matters). Run `bin/lit test/lit/ -v`, `cot test`, `test/run.sh`.
-9. **Update docs.** Mark feature ✓ in `claude/FEATURES.md`. Update `claude/AC_SYNTAX.md` with new syntax. Update `claude/HANDOFF.md` (op count, test count, next features).
-10. **Check audit.** Read `claude/AUDIT.md` — if this feature naturally fixes an open audit issue, do it now. If it introduces a new pattern, check it against FIR/Arith references.
+8. **Inline tests.** Add or extend `test/inline/<NNN>_<name>_test.ac` with `test "name" { assert(...) }` blocks to verify runtime correctness. Run with `cot test file.ac`.
+9. **Build ALL.** `libcir → libcot → libzc → cot` (order matters). Run `bin/lit test/lit/ -v`, `cot test`, inline tests, `test/run.sh`.
+10. **Update docs.** Mark feature ✓ in `claude/FEATURES.md`. Update `claude/AC_SYNTAX.md` with new syntax. Update `claude/HANDOFF.md` (op count, test count, next features).
+11. **Check audit.** Read `claude/AUDIT.md` — if this feature naturally fixes an open audit issue, do it now. If it introduces a new pattern, check it against FIR/Arith references.
 
 Build order: `cd libcir/build && cmake --build .` → `cd libcot/build && cmake --build .` → `cd libzc && ~/bin/zig-nightly build -Doptimize=ReleaseSafe` → `cd cot/build && cmake --build .`
 

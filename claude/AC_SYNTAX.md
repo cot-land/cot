@@ -20,6 +20,20 @@ ac exists to dogfood the COT compiler toolkit. It is not the product — CIR is 
 No semicolons. Newlines terminate statements (Go-style automatic insertion).
 Line comments: `// comment`
 
+## Testing (Zig pattern)
+
+```ac
+test "addition" {
+    assert(add(19, 23) == 42)
+    assert(1 + 1 == 2)
+}
+```
+
+- `test "name" { body }` — Zig-style test blocks (compiled by `cot test file.ac`)
+- `assert(expr)` — trap on false (cir.condbr + cir.trap)
+- Test blocks become void functions; a generated main calls each one
+- Exit 0 = all passed, trap = assertion failure
+
 ## Functions (#003, #004)
 
 ```ac

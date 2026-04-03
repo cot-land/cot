@@ -1,0 +1,52 @@
+// Feature 011-015: Variables, assignment, compound assign, if/else — inline tests
+// Run with: cot test test/inline/015_variables_test.ac
+
+fn add(a: i32, b: i32) -> i32 {
+    return a + b
+}
+
+test "let bindings" {
+    let x: i32 = 10
+    let y: i32 = 32
+    assert(x + y == 42)
+    assert(add(x, y) == 42)
+}
+
+test "var and assignment" {
+    var x: i32 = 0
+    assert(x == 0)
+    x = 42
+    assert(x == 42)
+}
+
+test "compound assignment" {
+    var x: i32 = 10
+    x += 5
+    assert(x == 15)
+    x -= 3
+    assert(x == 12)
+    x *= 2
+    assert(x == 24)
+    x /= 6
+    assert(x == 4)
+    x %= 3
+    assert(x == 1)
+}
+
+test "if statement" {
+    var result: i32 = 0
+    if 1 > 0 {
+        result = 42
+    }
+    assert(result == 42)
+}
+
+test "if else" {
+    var result: i32 = 0
+    if 0 > 1 {
+        result = 1
+    } else {
+        result = 42
+    }
+    assert(result == 42)
+}

@@ -1,0 +1,28 @@
+// Feature 006-010: Booleans, negation, bitwise, shifts — inline tests
+// Run with: cot test test/inline/010_bitwise_test.ac
+
+test "negation" {
+    assert(-1 == 0 - 1)
+    assert(-42 == 0 - 42)
+}
+
+test "bitwise and" {
+    assert((12 & 10) == 8)
+    assert((7 & 3) == 3)
+}
+
+test "bitwise or" {
+    assert((12 | 10) == 14)
+    assert((4 | 2) == 6)
+}
+
+test "bitwise xor" {
+    assert((12 ^ 10) == 6)
+    assert((7 ^ 7) == 0)
+}
+
+test "shifts" {
+    assert((1 << 3) == 8)
+    assert((8 >> 2) == 2)
+    assert((16 << 1) == 32)
+}

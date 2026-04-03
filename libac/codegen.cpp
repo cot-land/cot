@@ -222,20 +222,20 @@ class CodeGen {
       // Then
       b.setInsertionPointToStart(thenBlock);
       for (auto &st : s.thenBody) emitStmt(*st, returnType, parentFunc);
-      if (thenBlock->empty() || !thenBlock->back().hasTrait<mlir::OpTrait::IsTerminator>())
+      bool thenReturns = !thenBlock->empty() &&
+          thenBlock->back().hasTrait<mlir::OpTrait::IsTerminator>();
+      if (!thenReturns)
         b.create<cir::BrOp>(loc, mergeBlock);
       // Else
       b.setInsertionPointToStart(elseBlock);
       for (auto &st : s.elseBody) emitStmt(*st, returnType, parentFunc);
-      if (elseBlock->empty() || !elseBlock->back().hasTrait<mlir::OpTrait::IsTerminator>())
+      bool elseReturns = !elseBlock->empty() &&
+          elseBlock->back().hasTrait<mlir::OpTrait::IsTerminator>();
+      if (!elseReturns)
         b.create<cir::BrOp>(loc, mergeBlock);
       // Merge — if both branches terminated, merge is unreachable
       b.setInsertionPointToStart(mergeBlock);
-      bool thenDone = !thenBlock->empty() &&
-          thenBlock->back().hasTrait<mlir::OpTrait::IsTerminator>();
-      bool elseDone = !elseBlock->empty() &&
-          elseBlock->back().hasTrait<mlir::OpTrait::IsTerminator>();
-      if (thenDone && elseDone)
+      if (thenReturns && elseReturns)
         b.create<cir::TrapOp>(loc);
       break;
     }
