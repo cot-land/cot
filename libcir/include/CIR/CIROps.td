@@ -180,8 +180,11 @@ def CIR_CmpOp : CIR_Op<"cmp", [Pure, SameTypeOperands]> {
 
 def CIR_BrOp : CIR_Op<"br", [Pure, Terminator]> {
   let summary = "unconditional branch";
+  let arguments = (ins Variadic<AnyType>:$destOperands);
   let successors = (successor AnySuccessor:$dest);
-  let assemblyFormat = "$dest attr-dict";
+  let assemblyFormat = [{
+    $dest (`(` $destOperands^ `:` type($destOperands) `)`)? attr-dict
+  }];
 }
 
 def CIR_CondBrOp : CIR_Op<"condbr", [Pure, Terminator]> {
@@ -191,6 +194,26 @@ def CIR_CondBrOp : CIR_Op<"condbr", [Pure, Terminator]> {
                               AnySuccessor:$falseDest);
   let assemblyFormat =
       "$condition `,` $trueDest `,` $falseDest attr-dict";
+}
+
+//===----------------------------------------------------------------------===//
+// Select — conditional value (ternary)
+// Reference: arith::SelectOp, llvm::SelectOp
+//===----------------------------------------------------------------------===//
+
+def CIR_SelectOp : CIR_Op<"select", [Pure,
+    AllTypesMatch<["trueValue", "falseValue", "result"]>]> {
+  let summary = "select value based on condition";
+  let description = [{
+    Returns trueValue if condition is true, falseValue otherwise.
+    Both values are computed eagerly (no short-circuit).
+    Reference: arith.select / llvm.select pattern.
+  }];
+
+  let arguments = (ins I1:$condition, AnyType:$trueValue, AnyType:$falseValue);
+  let results = (outs AnyType:$result);
+  let assemblyFormat =
+      "$condition `,` $trueValue `,` $falseValue attr-dict `:` type($result)";
 }
 
 def CIR_TrapOp : CIR_Op<"trap", [Terminator]> {

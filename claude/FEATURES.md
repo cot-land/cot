@@ -60,7 +60,7 @@ Status: `-` not started, `~` in progress, `✓` done.
 | 013 | Assignment | `cir.store` | `x = 42` | `x = 42;` | `llvm.store` | ✓ |
 | 014 | Compound assignment | `cir.load`, `cir.add`, `cir.store` | `x += 1` | `x += 1;` | load+op+store | ✓ |
 | 015 | If/else statement | `cir.condbr`, `cir.br` | `if x > 0 { } else { }` | `if (x > 0) { } else { }` | `llvm.cond_br/br` | ✓ |
-| 016 | If/else expression | `cir.condbr` + block args | `let x = if a > b { a } else { b }` | `const x = if (a > b) a else b;` | select or phi | - |
+| 016 | If/else expression | `cir.select` | `let x = if a > b { a } else { b }` | `const x = if (a > b) a else b;` | `llvm.select` | ✓ |
 | 017 | While loop | `cir.condbr`, `cir.br` | `while x < 10 { }` | `while (x < 10) { }` | Loop with back-edge | ✓ |
 | 018 | Break/continue | `cir.br` to exit/header | `break`, `continue` | `break`, `continue` | `llvm.br` | ✓ |
 | 019 | For loop (range) | Desugared to while | `for i in 0..10 { }` | `while` (Zig has no range for) | Desugared while | ✓ |

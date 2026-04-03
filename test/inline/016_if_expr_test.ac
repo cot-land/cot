@@ -1,0 +1,31 @@
+// Feature 016: If/else expression — inline tests
+// Run with: cot test test/inline/016_if_expr_test.ac
+
+fn max(a: i32, b: i32) -> i32 {
+    return if a > b { a } else { b }
+}
+
+fn min(a: i32, b: i32) -> i32 {
+    return if a < b { a } else { b }
+}
+
+fn abs(x: i32) -> i32 {
+    return if x > 0 { x } else { -x }
+}
+
+test "if expression max" {
+    assert(max(10, 20) == 20)
+    assert(max(42, 1) == 42)
+    assert(max(5, 5) == 5)
+}
+
+test "if expression min" {
+    assert(min(10, 20) == 10)
+    assert(min(42, 1) == 1)
+}
+
+test "if expression abs" {
+    assert(abs(42) == 42)
+    assert(abs(-42) == 42)
+    assert(abs(0) == 0)
+}

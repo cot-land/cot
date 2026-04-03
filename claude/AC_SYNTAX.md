@@ -127,6 +127,8 @@ if x > 0 {             // (✓ #015) no parens — Go/Rust pattern
     // ...
 }
 
+let x = if a > b { a } else { b }  // (✓ #016) if-expression → cir.select
+
 while x < 10 {             // (✓ #017) no parens
     x += 1
 }

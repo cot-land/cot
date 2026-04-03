@@ -130,6 +130,14 @@ class CodeGen {
       return call.getResult(0);
     }
 
+    case ExprKind::IfExpr: {
+      // if cond { thenVal } else { elseVal } → cir.select
+      auto cond = emitExpr(*e.args[0], b.getI1Type());
+      auto thenVal = emitExpr(*e.args[1], resultType);
+      auto elseVal = emitExpr(*e.args[2], resultType);
+      return b.create<cir::SelectOp>(loc, resultType, cond, thenVal, elseVal);
+    }
+
     case ExprKind::FloatLit:
       return b.create<cir::ConstantOp>(loc, resultType,
           b.getFloatAttr(resultType, e.floatVal));
@@ -214,7 +222,7 @@ class CodeGen {
       parentFunc.getBody().push_back(headerBlock);
       parentFunc.getBody().push_back(bodyBlock);
       parentFunc.getBody().push_back(exitBlock);
-      b.create<cir::BrOp>(loc, headerBlock);
+      b.create<cir::BrOp>(loc, mlir::ValueRange{}, headerBlock);
       b.setInsertionPointToStart(headerBlock);
       auto curVal = b.create<cir::LoadOp>(loc, i32Ty, addr);
       auto cond = b.create<cir::CmpOp>(loc, cir::CmpIPredicate::slt,
@@ -230,7 +238,7 @@ class CodeGen {
           auto one = b.create<cir::ConstantOp>(loc, i32Ty, b.getI32IntegerAttr(1));
           auto inc = b.create<cir::AddOp>(loc, i32Ty, v, one);
           b.create<cir::StoreOp>(loc, inc, addr);
-          b.create<cir::BrOp>(loc, headerBlock);
+          b.create<cir::BrOp>(loc, mlir::ValueRange{}, headerBlock);
         }
       }
       b.setInsertionPointToStart(exitBlock);
@@ -244,7 +252,7 @@ class CodeGen {
       parentFunc.getBody().push_back(headerBlock);
       parentFunc.getBody().push_back(bodyBlock);
       parentFunc.getBody().push_back(exitBlock);
-      b.create<cir::BrOp>(loc, headerBlock);
+      b.create<cir::BrOp>(loc, mlir::ValueRange{}, headerBlock);
       b.setInsertionPointToStart(headerBlock);
       auto cond = emitExpr(*s.expr, b.getI1Type());
       b.create<cir::CondBrOp>(loc, cond, bodyBlock, exitBlock);
@@ -254,7 +262,7 @@ class CodeGen {
       loopStack.pop_back();
       { auto *cur = b.getInsertionBlock();
         if (cur->empty() || !cur->back().hasTrait<mlir::OpTrait::IsTerminator>())
-          b.create<cir::BrOp>(loc, headerBlock);
+          b.create<cir::BrOp>(loc, mlir::ValueRange{}, headerBlock);
       }
       b.setInsertionPointToStart(exitBlock);
       break;
@@ -262,13 +270,13 @@ class CodeGen {
 
     case StmtKind::Break: {
       if (!loopStack.empty())
-        b.create<cir::BrOp>(loc, loopStack.back().exit);
+        b.create<cir::BrOp>(loc, mlir::ValueRange{}, loopStack.back().exit);
       break;
     }
 
     case StmtKind::Continue: {
       if (!loopStack.empty())
-        b.create<cir::BrOp>(loc, loopStack.back().header);
+        b.create<cir::BrOp>(loc, mlir::ValueRange{}, loopStack.back().header);
       break;
     }
 
@@ -302,14 +310,14 @@ class CodeGen {
       bool thenReturns = !thenBlock->empty() &&
           thenBlock->back().hasTrait<mlir::OpTrait::IsTerminator>();
       if (!thenReturns)
-        b.create<cir::BrOp>(loc, mergeBlock);
+        b.create<cir::BrOp>(loc, mlir::ValueRange{}, mergeBlock);
       // Else
       b.setInsertionPointToStart(elseBlock);
       for (auto &st : s.elseBody) emitStmt(*st, returnType, parentFunc);
       bool elseReturns = !elseBlock->empty() &&
           elseBlock->back().hasTrait<mlir::OpTrait::IsTerminator>();
       if (!elseReturns)
-        b.create<cir::BrOp>(loc, mergeBlock);
+        b.create<cir::BrOp>(loc, mlir::ValueRange{}, mergeBlock);
       // Merge — if both branches terminated, merge is unreachable
       b.setInsertionPointToStart(mergeBlock);
       if (thenReturns && elseReturns)

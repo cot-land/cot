@@ -142,6 +142,30 @@ class Parser {
       return e;
     }
 
+    // If expression: if cond { expr } else { expr }
+    if (tok.tag == Tag::kw_if) {
+      size_t p = advance().start;
+      auto cond = parseBinaryExpr(1); // condition (not full parseExpr to avoid consuming {)
+      expect(Tag::l_brace);
+      skipSemis();
+      auto thenVal = parseExpr();
+      skipSemis();
+      expect(Tag::r_brace);
+      expect(Tag::kw_else);
+      expect(Tag::l_brace);
+      skipSemis();
+      auto elseVal = parseExpr();
+      skipSemis();
+      expect(Tag::r_brace);
+      auto e = std::make_unique<Expr>();
+      e->kind = ExprKind::IfExpr;
+      e->pos = p;
+      e->args.push_back(std::move(cond));
+      e->args.push_back(std::move(thenVal));
+      e->args.push_back(std::move(elseVal));
+      return e;
+    }
+
     // Unary prefix: - !
     if (tok.tag == Tag::minus || tok.tag == Tag::bang || tok.tag == Tag::tilde) {
       auto op = advance().tag;

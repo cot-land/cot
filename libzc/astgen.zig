@@ -379,6 +379,25 @@ const Gen = struct {
             .greater_or_equal => self.mapCmp(block, node, 5),
             .call_one, .call_one_comma => self.mapCall(block, node, result_type),
             .call, .call_comma => self.mapCall(block, node, result_type),
+            .if_simple => blk2: {
+                // if (cond) then_val — no else, select with 0 default
+                const d = tree.nodeData(node).node_and_node;
+                const cond = self.mapExpr(block, d[0], self.b.intType(1));
+                const then_val = self.mapExpr(block, d[1], result_type);
+                const zero = self.b.emit(block, "cir.constant", &.{result_type}, &.{}, &.{
+                    self.b.attr("value", self.b.intAttr(result_type, 0)),
+                });
+                break :blk2 self.b.emit(block, "cir.select", &.{result_type}, &.{ cond, then_val, zero }, &.{});
+            },
+            .@"if" => blk2: {
+                // if (cond) then_val else else_val — full if expression
+                const cond_node, const extra_index = tree.nodeData(node).node_and_extra;
+                const extra = tree.extraData(extra_index, Node.If);
+                const cond = self.mapExpr(block, cond_node, self.b.intType(1));
+                const then_val = self.mapExpr(block, extra.then_expr, result_type);
+                const else_val = self.mapExpr(block, extra.else_expr, result_type);
+                break :blk2 self.b.emit(block, "cir.select", &.{result_type}, &.{ cond, then_val, else_val }, &.{});
+            },
             .grouped_expression => blk2: {
                 const inner = tree.nodeData(node).node_and_token[0];
                 break :blk2 self.mapExpr(block, inner, result_type);

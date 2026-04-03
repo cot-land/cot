@@ -1,0 +1,10 @@
+// RUN: %cot emit-cir %s | %FileCheck %s
+
+fn max(a: i32, b: i32) -> i32 {
+    return if a > b { a } else { b }
+}
+
+// CHECK-LABEL: func.func @max
+// CHECK: cir.cmp sgt
+// CHECK: cir.select
+// CHECK: return

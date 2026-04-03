@@ -246,11 +246,23 @@ struct LoadOpLowering : public OpConversionPattern<cir::LoadOp> {
 // Control flow lowering
 //===----------------------------------------------------------------------===//
 
+struct SelectOpLowering : public OpConversionPattern<cir::SelectOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::SelectOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<LLVM::SelectOp>(op,
+        adaptor.getCondition(), adaptor.getTrueValue(),
+        adaptor.getFalseValue());
+    return success();
+  }
+};
+
 struct BrOpLowering : public OpConversionPattern<cir::BrOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(cir::BrOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<LLVM::BrOp>(op, ValueRange{}, op.getDest());
+    rewriter.replaceOpWithNewOp<LLVM::BrOp>(op,
+        adaptor.getDestOperands(), op.getDest());
     return success();
   }
 };
@@ -337,7 +349,7 @@ void cot::populateCIRToLLVMConversionPatterns(
       // Shifts
       ShlOpLowering, ShrOpLowering,
       // Comparison, control flow, constants
-      CmpOpLowering, BrOpLowering, CondBrOpLowering,
+      CmpOpLowering, SelectOpLowering, BrOpLowering, CondBrOpLowering,
       TrapOpLowering, ConstantOpLowering
   >(converter, ctx);
 }
