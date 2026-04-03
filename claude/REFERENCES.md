@@ -21,6 +21,7 @@
 | Traits/generics | Rust monomorphization | `~/claude/references/rust/compiler/rustc_monomorphize/` | ~3,000 | Cleanest monomorphization. Go uses runtime interfaces. Swift uses witness tables. Zig uses comptime. Rust's zero-cost generics are proven. |
 | CIR→LLVM lowering | MLIR ConversionPatterns | `~/claude/references/llvm-project/mlir/lib/Conversion/` | — | Lattner's ConversionPattern + TypeConverter + ConversionTarget. The canonical MLIR lowering pattern. |
 | CIR dialect design | Flang FIR dialect | `~/claude/references/flang-ref/flang/include/flang/Optimizer/Dialect/` | — | Production MLIR dialect: FIROps.td, FIRTypes.td, FIRAttr.td. The closest real-world analogue to CIR. |
+| Type philosophy | Swift stdlib + Builtins | `~/claude/references/swift/stdlib/public/core/` + `include/swift/AST/BuiltinTypes.def` | — | Lattner's separation: compiler knows only builtins, stdlib defines Int/Bool/etc. as structs wrapping builtins. CIR adopts this: MLIR types are builtins, language types resolved by frontends. |
 | FIR→LLVM codegen | Flang CodeGen | `~/claude/references/flang-ref/flang/lib/Optimizer/CodeGen/` | — | Production FIR→LLVM lowering. ConversionPatterns at scale. |
 | Backend | MLIR→LLVM IR→TargetMachine | `~/claude/references/llvm-project/mlir/lib/Target/LLVMIR/` | — | Built into MLIR. translateModuleToLLVMIR → LLVM TargetMachine → native/wasm. Lattner's full pipeline. |
 

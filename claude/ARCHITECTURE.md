@@ -18,6 +18,39 @@ CIR is built on MLIR. A CIR module IS an MLIR module. CIR bytecode IS MLIR bytec
 
 ## CIR — The Universal IR
 
+### Type Philosophy: Builtins vs Language Types (from Swift)
+
+Chris Lattner's proudest Swift design decision: `Int`, `Float`, `Bool`, `String`
+are NOT compiler builtins — they're stdlib structs wrapping a small set of
+compiler-known primitives (`Builtin.Int64`, `Builtin.FPIEEE32`, etc.). This means:
+- Users can define types as powerful as `Int` (same protocols, same optimization)
+- The compiler stays small (only knows ~50 builtin types)
+- SIL passes never reference stdlib types — only builtins
+
+**CIR adopts this principle:**
+
+| Layer | What it knows | Example |
+|-------|---------------|---------|
+| **CIR ops** | MLIR primitive types only | `IntegerType(32)`, `Float32Type`, `!cir.ptr` |
+| **Frontends** | Language-level type names | ac `i32`, Zig `i32`, future `Int` |
+| **Sema pass** | Maps language types → MLIR types | `i32` → `IntegerType(32)` |
+| **CIR passes** | MLIR types only — never language names | ARC, optimization see `i32` not `ac::i32` |
+| **Lowering** | MLIR → LLVM type conversion | `IntegerType(32)` → `LLVM::IntegerType(32)` |
+
+MLIR's built-in `IntegerType(N)` and `FloatType` ARE our builtins — equivalent
+to Swift's `Builtin.Int64` and `Builtin.FPIEEE32`. CIR ops work on these
+directly. Language-level types (when we add structs, enums, traits) are
+user-defined types that frontends construct and Sema resolves.
+
+**Rule: CIR passes must never hardcode language-specific type names.**
+If a pass needs to know about "strings" or "arrays", it should work with
+the CIR type (`!cir.array`, `!cir.struct`) not the language name.
+
+Reference: Swift stdlib (`~/claude/references/swift/stdlib/public/core/`),
+SIL type lowering (`~/claude/references/swift/lib/SIL/IR/SILType.cpp`).
+
+### Core Ops
+
 CIR captures what every compiler IR has in common. We audited five reference compilers:
 
 | | Zig (ZIR) | Swift (SIL) | Rust (MIR) | Go (SSA) | TypeScript |
