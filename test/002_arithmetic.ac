@@ -1,0 +1,6 @@
+// Feature 002: Integer add/sub/mul
+// Expected exit code: 42
+
+fn main() -> i32 {
+    return 19 + 23
+}

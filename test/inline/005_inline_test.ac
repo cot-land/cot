@@ -1,0 +1,28 @@
+// Feature 005+007: Division, remainder, comparisons — inline tests
+// Run with: cot test test/005_inline_test.ac
+
+fn add(a: i32, b: i32) -> i32 {
+    return a + b
+}
+
+test "addition" {
+    assert(add(19, 23) == 42)
+    assert(add(0, 0) == 0)
+    assert(add(1, -1) == 0)
+}
+
+test "arithmetic" {
+    assert(2 + 3 == 5)
+    assert(10 - 3 == 7)
+    assert(6 * 7 == 42)
+    assert(100 / 10 == 10)
+    assert(10 % 3 == 1)
+}
+
+test "comparison" {
+    assert(1 < 2)
+    assert(2 > 1)
+    assert(1 <= 1)
+    assert(1 >= 1)
+    assert(1 != 2)
+}

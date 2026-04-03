@@ -1,0 +1,6 @@
+// Feature 002: Multiple arithmetic operations with precedence
+// Expected exit code: 42
+
+fn main() -> i32 {
+    return 2 + 8 * 5
+}
