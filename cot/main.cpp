@@ -10,6 +10,12 @@
 #include "parser.h"
 #include "codegen.h"
 
+// libzc C ABI — Zig frontend
+extern "C" int zc_parse(
+    const char *source_ptr, size_t source_len,
+    const char *filename,
+    const char **out_ptr, size_t *out_len);
+
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -22,6 +28,7 @@
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "mlir/Parser/Parser.h"
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
@@ -310,7 +317,7 @@ int main(int argc, char **argv) {
     return code == 42 ? 0 : 1;
   }
 
-  // ---- cot build <file.ac> ----
+  // ---- cot build <file> ----
   if (cmd == "build" && argc >= 3) {
     std::string inputFile = argv[2];
     std::string outputFile = "a.out";
@@ -319,7 +326,32 @@ int main(int argc, char **argv) {
     auto source = readFile(inputFile);
     if (source.empty()) { llvm::errs() << "error: can't read " << inputFile << "\n"; return 1; }
 
-    // Frontend: source → tokens → AST → CIR
+    bool isZig = inputFile.size() >= 4 &&
+        inputFile.substr(inputFile.size() - 4) == ".zig";
+
+    if (isZig) {
+      // Zig frontend: libzc via C ABI → CIR MLIR bytecode
+      const char *cirBytes = nullptr;
+      size_t cirLen = 0;
+      int rc = zc_parse(source.data(), source.size(), inputFile.c_str(), &cirBytes, &cirLen);
+      if (rc != 0) { llvm::errs() << "error: zig frontend failed\n"; return 1; }
+      llvm::outs() << "zig frontend: " << cirLen << " bytes CIR\n";
+
+      // Load CIR bytecode — MLIR parseSourceString auto-detects bytecode vs text
+      ParserConfig config(&ctx);
+      auto parsedModule = parseSourceString<ModuleOp>(
+          llvm::StringRef(cirBytes, cirLen), config);
+      if (!parsedModule) {
+        llvm::errs() << "error: failed to load CIR bytecode\n";
+        return 1;
+      }
+      if (failed(verify(*parsedModule))) { llvm::errs() << "error: verify failed\n"; return 1; }
+      if (emitBinary(*parsedModule, outputFile)) return 1;
+      llvm::outs() << outputFile << "\n";
+      return 0;
+    }
+
+    // ac frontend: scanner → parser → AST → CIR
     auto tokens = ac::scanAll(source);
     auto ast = ac::parse(source, tokens);
     auto module = ac::codegen(ctx, source, ast);

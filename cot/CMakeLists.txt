@@ -30,6 +30,9 @@ add_executable(cot
 )
 
 target_link_libraries(cot PRIVATE
+  # libzc — Zig frontend (C ABI)
+  ${PROJECT_SOURCE_DIR}/../libzc/zig-out/lib/libzc.a
+
   # libcir
   ${PROJECT_SOURCE_DIR}/../libcir/build/libCIR.a
 

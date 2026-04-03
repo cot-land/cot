@@ -34,7 +34,10 @@ add_public_tablegen_target(CIROpsIncGen)
 # libcir static library
 add_library(CIR STATIC
   lib/CIRDialect.cpp
+  c-api/CIRCApi.cpp
 )
+
+include_directories(${PROJECT_SOURCE_DIR}/c-api)
 
 target_include_directories(CIR PUBLIC
   ${PROJECT_SOURCE_DIR}/include
