@@ -1,0 +1,25 @@
+# Build directories
+libcir/build/
+libzc/zig-out/
+libzc/.zig-cache/
+cot/build/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Compiled objects
+*.o
+*.a
+*.so
+*.dylib
+
+# Temporary test outputs
+/tmp/

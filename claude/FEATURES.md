@@ -31,27 +31,35 @@ Test directory: `test/` with numbered files matching this table.
 
 ## Feature Table
 
-Each row is one deliverable: CIR op(s) + ac syntax + lowering pattern + test file.
+Each row is one deliverable. For each feature:
+1. Add CIR op(s) to `libcir/include/CIR/CIROps.td`
+2. Add lowering pattern to `cot/main.cpp` CIRToLLVMPass
+3. Add ac syntax to `libac/` (scanner + parser + codegen)
+4. Add Zig handling to `libzc/astgen.zig`
+5. Add lit test for BOTH frontends (`test/lit/ac/` and `test/lit/zig/`)
+6. Add inline test if feature supports assert
+7. Update `claude/AC_SYNTAX.md`
+
 Status: `-` not started, `~` in progress, `✓` done.
 
 ### Phase 1 — Minimal Viable Compiler
 
-| # | Feature | CIR Op(s) | ac Syntax | LLVM Lowering | Test | Status |
-|---|---------|-----------|-----------|---------------|------|--------|
-| 001 | Integer constants | `cir.constant` | `42` | `llvm.mlir.constant` | Return literal as exit code | ✓ |
-| 002 | Integer add/sub/mul | `cir.add`, `cir.sub`, `cir.mul` | `a + b`, `a - b`, `a * b` | `llvm.add/sub/mul` | `19 + 23 = 42` | ✓ |
-| 003 | Function declaration | (uses `func.func`) | `fn name(params) -> T { }` | `func-to-llvm` built-in | Two functions, one calls other | ✓ |
-| 004 | Function calls | (uses `func.call`) | `add(19, 23)` | `func-to-llvm` built-in | Call with args, use return value | ✓ |
-| 005 | Integer division/modulo | `cir.div`, `cir.rem` | `a / b`, `a % b` | `llvm.sdiv`, `llvm.srem` | `100 / 10 = 10`, `10 % 3 = 1` | ✓ |
-| 006 | Boolean constants | `cir.constant` (i1) | `true`, `false` | `llvm.mlir.constant` (i1) | Return bool as exit code | - |
-| 007 | Comparison operators | `cir.cmp` with predicate | `==`, `!=`, `<`, `<=`, `>`, `>=` | `llvm.icmp` | Compare two values, return result | ✓ |
-| 008 | Negation | `cir.neg` | `-x` | `llvm.sub` (0 - x) | `-(-42) = 42` | - |
-| 009 | Bitwise operators | `cir.bit_and`, `cir.bit_or`, `cir.xor`, `cir.bit_not` | `&`, `\|`, `^`, `~` | `llvm.and/or/xor` | Bit manipulation | - |
-| 010 | Shift operators | `cir.shl`, `cir.shr` | `<<`, `>>` | `llvm.shl`, `llvm.lshr` | Shift left/right | - |
+| # | Feature | CIR Op(s) | ac Syntax | Zig Syntax | LLVM Lowering | Status |
+|---|---------|-----------|-----------|------------|---------------|--------|
+| 001 | Integer constants | `cir.constant` | `42` | `42` | `llvm.mlir.constant` | ✓ |
+| 002 | Integer add/sub/mul | `cir.add/sub/mul` | `a + b` | `a + b` | `llvm.add/sub/mul` | ✓ |
+| 003 | Function declaration | `func.func` | `fn f(a: i32) -> i32 { }` | `fn f(a: i32) i32 { }` | `func-to-llvm` | ✓ |
+| 004 | Function calls | `func.call` | `add(19, 23)` | `add(19, 23)` | `func-to-llvm` | ✓ |
+| 005 | Integer div/mod | `cir.div/rem` | `a / b`, `a % b` | `a / b`, `a % b` | `llvm.sdiv/srem` | ✓ |
+| 006 | Boolean constants | `cir.constant` i1 | `true`, `false` | `true`, `false` | `llvm.mlir.constant` | - |
+| 007 | Comparisons | `cir.cmp` | `==` `!=` `<` `<=` `>` `>=` | same | `llvm.icmp` | ✓ |
+| 008 | Negation | `cir.neg` | `-x` | `-x` | `llvm.sub(0,x)` | - |
+| 009 | Bitwise ops | `cir.bit_and/or/xor/not` | `&` `\|` `^` `~` | same | `llvm.and/or/xor` | - |
+| 010 | Shift ops | `cir.shl/shr` | `<<` `>>` | same | `llvm.shl/lshr` | - |
 
 ### Phase 2 — Variables and Control Flow
 
-| # | Feature | CIR Op(s) | ac Syntax | LLVM Lowering | Test | Status |
+| # | Feature | CIR Op(s) | ac Syntax | Zig Syntax | LLVM Lowering | Status |
 |---|---------|-----------|-----------|---------------|------|--------|
 | 011 | Let bindings (immutable) | `cir.alloc`, `cir.store`, `cir.load` | `let x: i32 = 10` | `llvm.alloca/store/load` | Bind and use local | - |
 | 012 | Var bindings (mutable) | `cir.alloc`, `cir.store`, `cir.load` | `var x: i32 = 0` | `llvm.alloca/store/load` | Mutate and read | - |
