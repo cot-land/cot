@@ -15,203 +15,141 @@ A compiler toolkit built on MLIR/LLVM. CIR (Cot Intermediate Representation) is 
 ## What Works Right Now
 
 ```bash
-# Build everything
-cd libcir/build && cmake --build .                          # CIR dialect
-cd libcot/build && cmake --build .                          # Compiler passes
-cd libzc && ~/bin/zig-nightly build -Doptimize=ReleaseSafe  # Zig frontend
-cd cot/build && cmake --build .                             # Driver + ac frontend
-
-# Test everything (run all three before committing)
-cd cot/build && ./cot test                                  # Gate test: 42 ✓
-cd test && bash run.sh ../cot/build/cot                     # 4 build tests pass
-cd cot/build && ./cot test ../../test/inline/005_inline_test.ac  # 3 inline tests pass
-bin/lit test/lit/ -v                                        # 12 lit+FileCheck tests pass
+make              # Build everything (libcir → libcot → libzc → cot)
+make test         # Run all test layers (lit, gate, inline, build)
 ```
 
-**Total: 17 tests, all passing.**
-
-**Two frontends produce identical CIR:**
-```
-ac:   fn add(a: i32, b: i32) -> i32 { return a + b }    → cir.add → 42
-zig:  pub fn add(a: i32, b: i32) i32 { return a + b; }  → cir.add → 42
-```
-
-**Pipeline stages you can inspect:**
+**Pipeline stages:**
 ```bash
-./cot emit-cir file.ac     # Print CIR MLIR text
+./cot emit-cir file.ac     # Print CIR after Sema (typed)
 ./cot emit-cir file.zig    # Same for Zig
 ./cot emit-llvm file.ac    # Print LLVM dialect (after lowering)
 ./cot build file.ac -o out # Full compile to native
-./cot build file.zig -o out # Same for Zig
 ./cot test file.ac          # Run inline test blocks
 ```
 
+**Total: 34 lit + 22 inline + 1 gate + 4 build = 61 tests, all passing.**
+
 ---
 
-## CIR Ops Implemented
+## CIR Ops (28 ops, 3 custom types)
 
-| Op | TableGen | LLVM Lowering |
-|----|----------|---------------|
-| `cir.constant` | CIR_ConstantOp | `llvm.mlir.constant` |
-| `cir.add` | CIR_AddOp (SameOperandsAndResultType) | `llvm.add` |
-| `cir.sub` | CIR_SubOp | `llvm.sub` |
-| `cir.mul` | CIR_MulOp | `llvm.mul` |
-| `cir.div` | CIR_DivOp | `llvm.sdiv` |
-| `cir.rem` | CIR_RemOp | `llvm.srem` |
-| `cir.cmp` | CIR_CmpOp (predicate attr, returns i1) | `llvm.icmp` |
-| `cir.neg` | CIR_NegOp | `llvm.sub(0, x)` |
-| `cir.bit_and` | CIR_BitAndOp | `llvm.and` |
-| `cir.bit_or` | CIR_BitOrOp | `llvm.or` |
-| `cir.xor` | CIR_XorOp | `llvm.xor` |
-| `cir.bit_not` | CIR_BitNotOp | `llvm.xor(x, -1)` |
-| `cir.shl` | CIR_ShlOp | `llvm.shl` |
-| `cir.shr` | CIR_ShrOp | `llvm.lshr` |
-| `cir.alloca` | CIR_AllocaOp (elem_type attr) | `llvm.alloca` |
-| `cir.store` | CIR_StoreOp | `llvm.store` |
-| `cir.load` | CIR_LoadOp | `llvm.load` |
-| `cir.br` | CIR_BrOp (Terminator) | `llvm.br` |
-| `cir.condbr` | CIR_CondBrOp (Terminator) | `llvm.cond_br` |
-| `cir.trap` | CIR_TrapOp (Terminator) | `llvm.trap` + `llvm.unreachable` |
+| Op | Description | LLVM Lowering |
+|----|-------------|---------------|
+| `cir.constant` | integer/float/bool constant (ConstantLike + verifier) | `llvm.mlir.constant` |
+| `cir.add/sub/mul/div/rem` | arithmetic (AnyType — int + float) | `llvm.add/sub/mul/sdiv/srem` |
+| `cir.neg` | integer negation | `llvm.sub(0, x)` |
+| `cir.bit_and/bit_or/xor/bit_not` | bitwise (AnyInteger) | `llvm.and/or/xor` |
+| `cir.shl/shr` | shifts (AnyInteger) | `llvm.shl/lshr` |
+| `cir.cmp` | comparison (CmpIPredicate enum: eq/ne/slt/sle/sgt/sge) | `llvm.icmp` |
+| `cir.select` | conditional value (ternary) | `llvm.select` |
+| `cir.extsi/extui/trunci` | integer casts (1:1 Arith pattern) | `llvm.sext/zext/trunc` |
+| `cir.sitofp/fptosi` | int↔float casts | `llvm.sitofp/fptosi` |
+| `cir.extf/truncf` | float casts | `llvm.fpext/fptrunc` |
+| `cir.alloca` | stack allocation → `!cir.ptr` | `llvm.alloca` |
+| `cir.store/load` | memory access | `llvm.store/load` |
+| `cir.br` | unconditional branch (with block args) | `llvm.br` |
+| `cir.condbr` | conditional branch | `llvm.cond_br` |
+| `cir.trap` | abort (assertion failure) | `llvm.trap + unreachable` |
 
-Functions use MLIR's built-in `func.func` / `func.return` / `func.call`. CIR-specific `cir.func` will be added when we need CIR function semantics (comptime params, error returns, etc.).
+**Types:** `!cir.ptr` (opaque pointer), `!cir.struct<"Name", fields...>`, `!cir.array<N x T>`
 
 ---
 
 ## Project Structure
 
 ```
-libcir/          CIR MLIR dialect (C++/TableGen) — 20 ops, !cir.ptr type
-  include/CIR/   CIRDialect.td, CIROps.td, CIROps.h
-  lib/           CIRDialect.cpp
-  c-api/         CIRCApi.h/cpp — C API for dialect registration
-  build/         CMake build dir (cmake --build .)
+libcir/          CIR MLIR dialect (C++/TableGen) — 28 ops, 3 types
+  include/CIR/   CIRDialect.td, CIROps.td, CIRTypes.td, CIROps.h
+  lib/           CIRDialect.cpp (types, verifiers, custom parsing)
 
-libcot/          Compiler passes (C++ MLIR passes)
-  include/COT/   Passes.h — public API (createCIRToLLVMPass, future passes)
-  lib/           CIRToLLVM.cpp — CIR → LLVM lowering (15 ConversionPatterns)
-  build/         CMake build dir (cmake --build .)
+libcot/          Compiler passes (C++)
+  include/COT/   Passes.h, CIRToLLVMPatterns.h
+  lib/
+    Transforms/              CIR → CIR passes
+      SemanticAnalysis.cpp   Sema: type check, insert casts at call boundaries
+    CIRToLLVM/               CIR → LLVM lowering
+      CIRToLLVM.cpp          Pass definition + type conversions
+      ArithmeticPatterns.cpp  add/sub/mul/div/rem/neg/constant/cmp/select + 7 casts
+      BitwisePatterns.cpp     bit_and/or/xor/not/shl/shr
+      MemoryPatterns.cpp      alloca/store/load
+      ControlFlowPatterns.cpp br/condbr/trap
 
 libac/           ac frontend (C++) — scanner, parser, codegen → CIR
-  scanner.h/cpp  Zig tokenizer state machine + Go insertSemi pattern
-  parser.h/cpp   Go recursive descent + Zig precedence table
-  codegen.h/cpp  Zig AstGen dispatch → CIR ops via MLIR C++ API
-
 libzc/           Zig frontend (Zig) — uses std.zig.Ast parser → CIR
-  mlir.zig       MLIR C API bindings (ported from cot-failed, proven code)
-  astgen.zig     AST → CIR ops via MLIR C API
-  lib.zig        C ABI entry: zc_parse()
-  build.zig      Zig build (~/bin/zig-nightly build -Doptimize=ReleaseSafe)
 
 cot/             CLI driver (C++)
   main.cpp       Commands: build, test, emit-cir, emit-llvm, version
-                 CIR→LLVM lowering patterns (ConversionPattern per op)
-  CMakeLists.txt Links libcir + libzc + MLIR + LLVM
+                 Pipeline: Sema → verify → CIRToLLVM → func-to-llvm → LLVM IR → native
 
 test/            Test suite
+  lit/ac/        ac frontend lit tests (16)
+  lit/zig/       Zig frontend lit tests (11)
+  lit/lowering/  CIR→LLVM lowering tests (3)
+  inline/        Runtime correctness tests (8 files, 22 tests)
   *.ac           Build tests (exit code 42 = pass)
-  inline/        Inline test files (cot test file.ac)
-  lit/           lit+FileCheck tests
-    lit.cfg.py   Configuration
-    ac/          ac frontend CIR verification
-    zig/         Zig frontend CIR verification
-    lowering/    CIR → LLVM lowering verification
-  run.sh         Build test runner
-
-bin/
-  lit            Symlink to ~/Library/Python/3.9/bin/lit
 
 claude/          Internal docs
-  ARCHITECTURE.md    Full design, multi-frontend plan, CIR op inventory
-  REFERENCES.md      Component-to-reference mapping (CRITICAL — read before coding)
-  FEATURES.md        80 features across 11 phases, implementation order
-  AUDIT.md           MLIR/LLVM standards compliance — open issues, reference patterns
+  ARCHITECTURE.md    Design + pass pipeline + Sema design + Swift type philosophy
+  REFERENCES.md      Component-to-reference mapping (Zig, Go, MLIR, FIR, Swift)
+  FEATURES.md        80 features, Phases 1-2 complete (20/80), Phase 3 started (2/10)
+  AUDIT.md           3 audit rounds, scaling plan, open issues
   AC_SYNTAX.md       ac language syntax reference
-  LLVM_MLIR_CODING_STANDARDS.md  C++ style guide (LLVM conventions)
-  HANDOFF.md         THIS FILE
 ```
 
 ---
 
 ## Key Documents — Read Order
 
-1. **CLAUDE.md** — Project rules. THE TWO LAWS: study references for compiler logic, invent for ac syntax.
-2. **claude/REFERENCES.md** — Which reference to port from for each component. CRITICAL.
-3. **claude/FEATURES.md** — What to implement next, in order.
-4. **claude/ARCHITECTURE.md** — Design, CIR op inventory, multi-frontend plan.
-5. **claude/LLVM_MLIR_CODING_STANDARDS.md** — C++ style (camelBack, LLVM headers, no RTTI).
+1. **CLAUDE.md** — Rules + feature checklist (11 steps). READ THIS FIRST.
+2. **claude/ARCHITECTURE.md** — Design, CIR ops, Sema pass, Swift type philosophy, pass pipeline.
+3. **claude/REFERENCES.md** — Which reference to study for each component.
+4. **claude/FEATURES.md** — 80 features with Zig syntax column. Implementation order.
+5. **claude/AUDIT.md** — Compliance findings, open issues, scaling plan.
+
+---
+
+## What's Done
+
+**Phase 1 (10/10):** Integer constants, arithmetic, functions, calls, div/mod, booleans, comparisons, negation, bitwise, shifts.
+
+**Phase 2 (10/10):** Let/var bindings, assignment, compound assignment, if/else statement, if/else expression (select), while loop, break/continue, for loop, nested calls.
+
+**Phase 3 (2/10 started):**
+- ✓ #021 Multiple int types (i8-i64, u8-u64) — both frontends
+- ✓ #022 Float types (f32, f64) — both frontends
+- Infrastructure: Cast ops (7), Sema pass, `!cir.struct`/`!cir.array` types ready
 
 ---
 
 ## What To Do Next
 
-### Immediate: Continue Phase 1-2 features (FEATURES.md)
-
-Each feature adds:
-1. CIR op(s) in `libcir/include/CIR/CIROps.td`
-2. Lowering pattern in `cot/main.cpp` (CIRToLLVMPass)
-3. ac syntax in `libac/` (scanner token + parser rule + codegen emission)
-4. Zig handling in `libzc/astgen.zig` (AST node → CIR op)
-5. Tests: lit test for both frontends + inline test if applicable
-6. Update `claude/AC_SYNTAX.md` with new syntax
-7. Update `claude/FEATURES.md` status to ✓
+### Continue Phase 3
 
 **Next features in order:**
-- #012 Var bindings (mutable locals) — same infra as let, just allows reassignment
-- #013 Assignment (cir.store to existing var)
-- #014 Compound assignment (load+op+store)
-- #015 If/else as statement (cir.condbr/cir.br already done)
-- #016 If/else as expression (block values, phi nodes)
+- #023 Type casts — ac `x as i64` syntax, Zig `@intCast`. Cast ops exist, Sema inserts them at boundaries. Need frontend `as` keyword parsing.
+- #024 Struct declaration — `struct Point { x: i32, y: i32 }`. `!cir.struct` type exists. Need parser + codegen + Sema field resolution.
+- #025 Struct construction — `Point { x: 1, y: 2 }`. Need `cir.struct_init` op.
+- #026 Struct field access — `p.x`. Need `cir.field_val` / `cir.field_ptr` ops.
+- #027 Struct method syntax — `p.distance()`. Desugars to function call.
+- #028-030 Arrays — `[4]i32`, `[1,2,3,4]`, `arr[i]`. `!cir.array` type exists.
 
-### libcot: compiler passes library (DONE)
+**For each feature, follow the 11-step checklist in CLAUDE.md. Study references first.**
 
-CIR→LLVM lowering extracted into `libcot/`. Future passes (TypeResolution, ARCInsertion, etc.) go here. The driver links `libcot/build/libCOT.a`.
+### Key Architecture Decisions Already Made
 
----
-
-## How The Lowering Works
-
-CIR ops are lowered to LLVM dialect in a single pass (`CIRToLLVMPass` in main.cpp):
-
-```cpp
-struct CIRToLLVMPass : public PassWrapper<CIRToLLVMPass, OperationPass<ModuleOp>> {
-  void runOnOperation() override {
-    LLVMConversionTarget target(getContext());
-    LLVMTypeConverter tc(&getContext());
-    RewritePatternSet patterns(&getContext());
-    patterns.add<AddOpLowering, SubOpLowering, ...>(tc, &getContext());
-    applyPartialConversion(getOperation(), target, std::move(patterns));
-  }
-};
-```
-
-Each op has a `ConversionPattern` that replaces it with LLVM ops. After CIR→LLVM, `func-to-llvm` converts `func.func/call/return` to `llvm.func/call/return`. Then `translateModuleToLLVMIR` → `TargetMachine` → `.o` → `cc` link.
+1. **Cast ops:** 7 separate ops following Arith pattern (NOT a single mega-op). Each maps 1:1 to LLVM.
+2. **Sema pass:** Manual walk pass in libcot/lib/Transforms/. Runs before lowering. Inserts casts at call boundaries.
+3. **Type philosophy:** CIR builtins = MLIR types. Language names resolved by frontends. Passes never reference language-specific types (Swift Builtin pattern).
+4. **Progressive lowering:** Frontend → CIR (unresolved) → Sema → CIR (typed) → verify → LLVM.
+5. **Verification:** Sema runs with verification disabled (frontend may emit type mismatches). Verification happens after Sema.
 
 ---
 
-## How libzc Works
+## Rules (from CLAUDE.md)
 
-1. `zc_parse()` C ABI entry receives Zig source bytes
-2. `std.zig.Ast.parse()` produces AST (Zig's standard library parser)
-3. `astgen.generate()` walks AST nodes, emits CIR ops via MLIR C API
-4. `serializeToBytecode()` produces MLIR bytecode
-5. Driver loads bytecode with `parseSourceString<ModuleOp>(bytes, config)`
-6. Same lowering pipeline as ac
-
-Key Zig AST API patterns (used in astgen.zig):
-- `tree.fullFnProto(&buf, node)` — get function prototype
-- `proto.iterate(tree)` — iterate parameters
-- `tree.fullCall(&buf, node)` — get call args
-- `tree.nodeData(node).opt_node` — return value (optional)
-- `tree.nodeData(node).node_and_node` — binary op children
-
----
-
-## Rules
-
-1. **Study reference before writing.** See REFERENCES.md. Every component traces to Zig/Swift/Rust/Go/MLIR source.
-2. **ac syntax = LLM bias.** Whatever Claude would naturally predict.
-3. **LLVM coding standards.** camelBack variables, UpperCamelCase types, LLVM headers, no RTTI.
-4. **Test every change.** Run all three test layers before committing: `bin/lit test/lit/ -v`, build tests, inline tests.
-5. **Never simplify to work around a bug.** Fix the root cause.
-6. **NEVER** git checkout/restore/reset/clean. Edit manually.
-7. **NEVER** git add . — stage by name.
+1. **Study reference before writing.** Every component traces to Zig/Go/MLIR/FIR/Swift.
+2. **Never hack features.** If infrastructure is missing, build it first.
+3. **Both frontends in sync.** Every feature works in ac AND Zig.
+4. **11-step feature checklist.** Study → ops → lowering → ac → zig → lit tests → lowering test → inline test → build → docs → audit.
+5. **NEVER** git checkout/restore/reset. **NEVER** git add .
