@@ -73,6 +73,7 @@ pub extern "c" fn mlirBlockAppendOwnedOperation(block: Block, op: Operation) cal
 pub extern "c" fn mlirBlockGetArgument(block: Block, pos: isize) callconv(.c) Value;
 pub extern "c" fn mlirRegionCreate() callconv(.c) Region;
 pub extern "c" fn mlirRegionAppendOwnedBlock(region: Region, block: Block) callconv(.c) void;
+pub extern "c" fn mlirTypeParseGet(ctx: Context, type_str: StringRef) callconv(.c) Type;
 pub extern "c" fn mlirIntegerTypeGet(ctx: Context, bitwidth: c_uint) callconv(.c) Type;
 pub extern "c" fn mlirF32TypeGet(ctx: Context) callconv(.c) Type;
 pub extern "c" fn mlirF64TypeGet(ctx: Context) callconv(.c) Type;
@@ -140,6 +141,9 @@ pub const Builder = struct {
     }
 
     pub fn intType(self: Builder, bits: c_uint) Type { return mlirIntegerTypeGet(self.ctx, bits); }
+    pub fn parseType(self: Builder, type_str: []const u8) Type {
+        return mlirTypeParseGet(self.ctx, StringRef.fromSlice(type_str));
+    }
 
     pub fn attr(self: Builder, name: []const u8, value: Attribute) NamedAttribute {
         return mlirNamedAttributeGet(mlirIdentifierGet(self.ctx, StringRef.fromSlice(name)), value);

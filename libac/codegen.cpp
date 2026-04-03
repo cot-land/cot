@@ -149,7 +149,8 @@ class CodeGen {
       if (s.expr) emitExpr(*s.expr, returnType);
       break;
 
-    case StmtKind::Let: {
+    case StmtKind::Let:
+    case StmtKind::Var: {
       auto varType = resolveType(s.varType);
       auto ptrType = cir::PointerType::get(b.getContext());
       auto addr = b.create<cir::AllocaOp>(loc, ptrType,
@@ -157,6 +158,40 @@ class CodeGen {
       auto val = emitExpr(*s.expr, varType);
       b.create<cir::StoreOp>(loc, val, addr);
       localAddrs[s.varName] = {addr, varType};
+      break;
+    }
+
+    case StmtKind::Assign: {
+      auto lit = localAddrs.find(s.varName);
+      if (lit == localAddrs.end()) {
+        llvm::errs() << "error: undefined variable '" << s.varName << "'\n";
+        break;
+      }
+      auto [addr, elemType] = lit->second;
+      auto val = emitExpr(*s.expr, elemType);
+      b.create<cir::StoreOp>(loc, val, addr);
+      break;
+    }
+
+    case StmtKind::CompoundAssign: {
+      auto lit = localAddrs.find(s.varName);
+      if (lit == localAddrs.end()) {
+        llvm::errs() << "error: undefined variable '" << s.varName << "'\n";
+        break;
+      }
+      auto [addr, elemType] = lit->second;
+      auto current = b.create<cir::LoadOp>(loc, elemType, addr);
+      auto rhs = emitExpr(*s.expr, elemType);
+      mlir::Value result;
+      switch (s.op) {
+        case Tag::plus:    result = b.create<cir::AddOp>(loc, elemType, current, rhs); break;
+        case Tag::minus:   result = b.create<cir::SubOp>(loc, elemType, current, rhs); break;
+        case Tag::star:    result = b.create<cir::MulOp>(loc, elemType, current, rhs); break;
+        case Tag::slash:   result = b.create<cir::DivOp>(loc, elemType, current, rhs); break;
+        case Tag::percent: result = b.create<cir::RemOp>(loc, elemType, current, rhs); break;
+        default: llvm::errs() << "error: unsupported compound op\n"; break;
+      }
+      b.create<cir::StoreOp>(loc, result, addr);
       break;
     }
 

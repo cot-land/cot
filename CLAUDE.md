@@ -63,6 +63,25 @@ The LLM bias lands on: Rust syntax + Go cleanliness. `fn`, `let`/`var`, `-> type
 
 ---
 
+## Feature Implementation Checklist
+
+Every feature from `claude/FEATURES.md` follows this checklist. Do ALL steps — no exceptions.
+
+1. **Study reference.** Read `claude/REFERENCES.md` for the relevant component. Read the reference source before writing.
+2. **CIR ops.** Add any new ops to `libcir/include/CIR/CIROps.td`. Use base classes (`CIR_BinaryOp`, `CIR_IntBinaryOp`, `CIR_IntUnaryOp`) where applicable. Add types to `CIRTypes.td` if needed.
+3. **Lowering.** Add ConversionPattern in `libcot/lib/CIRToLLVM.cpp`. Register in `populateCIRToLLVMConversionPatterns()`.
+4. **ac frontend.** Add syntax to `libac/` — scanner token (if new), parser rule, codegen emission.
+5. **Zig frontend.** Add handling in `libzc/astgen.zig` — map AST node to CIR ops. Both frontends must stay in sync.
+6. **lit tests — BOTH frontends.** Add `test/lit/ac/<feature>.ac` AND `test/lit/zig/<feature>.zig`. Use `%cot emit-cir` + FileCheck to verify CIR output.
+7. **Lowering test.** If feature adds new CIR→LLVM patterns, add `test/lit/lowering/<feature>.ac` to verify LLVM output.
+8. **Build ALL.** `libcir → libcot → libzc → cot` (order matters). Run `bin/lit test/lit/ -v`, `cot test`, `test/run.sh`.
+9. **Update docs.** Mark feature ✓ in `claude/FEATURES.md`. Update `claude/AC_SYNTAX.md` with new syntax. Update `claude/HANDOFF.md` (op count, test count, next features).
+10. **Check audit.** Read `claude/AUDIT.md` — if this feature naturally fixes an open audit issue, do it now. If it introduces a new pattern, check it against FIR/Arith references.
+
+Build order: `cd libcir/build && cmake --build .` → `cd libcot/build && cmake --build .` → `cd libzc && ~/bin/zig-nightly build -Doptimize=ReleaseSafe` → `cd cot/build && cmake --build .`
+
+---
+
 ## Reference Compilers
 
 | Component | Reference | Source |

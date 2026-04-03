@@ -238,6 +238,21 @@ class Parser {
       return s;
     }
 
+    // Var binding: var x: i32 = expr
+    if (check(Tag::kw_var)) {
+      size_t p = advance().start;
+      auto s = std::make_unique<Stmt>();
+      s->kind = StmtKind::Var;
+      s->pos = p;
+      s->varName = tokenText(expect(Tag::identifier));
+      expect(Tag::colon);
+      s->varType = parseType();
+      expect(Tag::equal);
+      s->expr = parseExpr();
+      match(Tag::semicolon);
+      return s;
+    }
+
     // Assert statement: assert(expr)
     if (check(Tag::kw_assert)) {
       size_t p = advance().start;
@@ -249,6 +264,44 @@ class Parser {
       expect(Tag::r_paren);
       match(Tag::semicolon);
       return s;
+    }
+
+    // Assignment / compound assignment: ident = expr, ident += expr, etc.
+    if (check(Tag::identifier) && pos_ + 1 < tokens_.size()) {
+      auto nextTag = tokens_[pos_ + 1].tag;
+      // Simple assignment: x = expr
+      if (nextTag == Tag::equal) {
+        size_t p = peek().start;
+        auto name = tokenText(advance());
+        advance(); // consume '='
+        auto s = std::make_unique<Stmt>();
+        s->kind = StmtKind::Assign;
+        s->pos = p;
+        s->varName = name;
+        s->expr = parseExpr();
+        match(Tag::semicolon);
+        return s;
+      }
+      // Compound assignment: x += expr, x -= expr, etc.
+      Tag compoundOp = Tag::invalid;
+      if (nextTag == Tag::plus_eq) compoundOp = Tag::plus;
+      else if (nextTag == Tag::minus_eq) compoundOp = Tag::minus;
+      else if (nextTag == Tag::star_eq) compoundOp = Tag::star;
+      else if (nextTag == Tag::slash_eq) compoundOp = Tag::slash;
+      else if (nextTag == Tag::percent_eq) compoundOp = Tag::percent;
+      if (compoundOp != Tag::invalid) {
+        size_t p = peek().start;
+        auto name = tokenText(advance());
+        advance(); // consume '+=' etc.
+        auto s = std::make_unique<Stmt>();
+        s->kind = StmtKind::CompoundAssign;
+        s->pos = p;
+        s->varName = name;
+        s->op = compoundOp;
+        s->expr = parseExpr();
+        match(Tag::semicolon);
+        return s;
+      }
     }
 
     // Expression statement

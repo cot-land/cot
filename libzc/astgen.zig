@@ -50,6 +50,11 @@ const Gen = struct {
     param_names: [16][]const u8 = undefined,
     param_values: [16]mlir.Value = undefined,
     param_count: usize = 0,
+    // Local variables: addresses from cir.alloca
+    local_names: [32][]const u8 = undefined,
+    local_addrs: [32]mlir.Value = undefined,
+    local_types: [32]mlir.Type = undefined,
+    local_count: usize = 0,
     has_terminator: bool = false,
 
     fn init(gpa: Allocator, tree: *const Ast) Gen {
@@ -86,6 +91,19 @@ const Gen = struct {
             if (std.mem.eql(u8, self.param_names[i], name)) return self.param_values[i];
         }
         return null;
+    }
+
+    fn resolveLocal(self: *Gen, name: []const u8) ?struct { addr: mlir.Value, elem_type: mlir.Type } {
+        for (0..self.local_count) |i| {
+            if (std.mem.eql(u8, self.local_names[i], name)) {
+                return .{ .addr = self.local_addrs[i], .elem_type = self.local_types[i] };
+            }
+        }
+        return null;
+    }
+
+    fn ptrType(self: *Gen) mlir.Type {
+        return self.b.parseType("!cir.ptr");
     }
 
     // ============================================================
@@ -146,6 +164,7 @@ const Gen = struct {
 
         // Bind param names
         self.param_count = 0;
+        self.local_count = 0;
         {
             var it = proto.iterate(tree);
             var i: usize = 0;
@@ -174,6 +193,7 @@ const Gen = struct {
 
         const func = self.b.createFunc(self.module, name, &.{}, &.{});
         self.param_count = 0;
+        self.local_count = 0;
         self.mapBody(func.entry_block, body_node, &.{});
     }
 
@@ -220,8 +240,63 @@ const Gen = struct {
                 }
                 self.has_terminator = true;
             },
-            // Builtin call: assert is @import("std").testing.expect in Zig,
-            // but for simple test support we handle call_one where callee is "assert"
+            .simple_var_decl => {
+                const d = self.tree.nodeData(node).opt_node_and_opt_node;
+                const type_node = d[0];
+                const init_node = d[1];
+                // Resolve type
+                var var_type = self.i32Type();
+                if (type_node.unwrap()) |tn| {
+                    var_type = self.resolveType(tn);
+                }
+                // Emit alloca + store
+                const ptr_ty = self.ptrType();
+                const addr = self.b.emit(block, "cir.alloca", &.{ptr_ty}, &.{}, &.{
+                    self.b.attr("elem_type", self.b.typeAttr(var_type)),
+                });
+                if (init_node.unwrap()) |init_expr| {
+                    const val = self.mapExpr(block, init_expr, var_type);
+                    _ = self.b.emit(block, "cir.store", &.{}, &.{ val, addr }, &.{});
+                }
+                // Track local
+                const tok = self.tree.nodeMainToken(node);
+                // main_token is 'const' or 'var', name is next token
+                const name = self.tree.tokenSlice(tok + 1);
+                self.local_names[self.local_count] = name;
+                self.local_addrs[self.local_count] = addr;
+                self.local_types[self.local_count] = var_type;
+                self.local_count += 1;
+            },
+            .assign => {
+                const d = self.tree.nodeData(node).node_and_node;
+                const lhs_node = d[0];
+                const rhs_node = d[1];
+                const name = self.tree.tokenSlice(self.tree.nodeMainToken(lhs_node));
+                if (self.resolveLocal(name)) |local| {
+                    const val = self.mapExpr(block, rhs_node, local.elem_type);
+                    _ = self.b.emit(block, "cir.store", &.{}, &.{ val, local.addr }, &.{});
+                }
+            },
+            .assign_add, .assign_sub, .assign_mul, .assign_div, .assign_mod => {
+                const d = self.tree.nodeData(node).node_and_node;
+                const lhs_node = d[0];
+                const rhs_node = d[1];
+                const name = self.tree.tokenSlice(self.tree.nodeMainToken(lhs_node));
+                if (self.resolveLocal(name)) |local| {
+                    const current = self.b.emit(block, "cir.load", &.{local.elem_type}, &.{local.addr}, &.{});
+                    const rhs = self.mapExpr(block, rhs_node, local.elem_type);
+                    const op_name: []const u8 = switch (tag) {
+                        .assign_add => "cir.add",
+                        .assign_sub => "cir.sub",
+                        .assign_mul => "cir.mul",
+                        .assign_div => "cir.div",
+                        .assign_mod => "cir.rem",
+                        else => unreachable,
+                    };
+                    const result = self.b.emit(block, op_name, &.{local.elem_type}, &.{ current, rhs }, &.{});
+                    _ = self.b.emit(block, "cir.store", &.{}, &.{ result, local.addr }, &.{});
+                }
+            },
             else => {
                 // Expression statement — evaluate for side effects
                 _ = self.mapExpr(block, node, self.i32Type());
@@ -293,6 +368,10 @@ const Gen = struct {
             return self.b.emit(block, "cir.constant", &.{bool_type}, &.{}, &.{
                 self.b.attr("value", self.b.intAttr(bool_type, 0)),
             });
+        }
+        // Check locals first (need cir.load)
+        if (self.resolveLocal(name)) |local| {
+            return self.b.emit(block, "cir.load", &.{local.elem_type}, &.{local.addr}, &.{});
         }
         return self.resolve(name) orelse mlir.Value{ .ptr = null };
     }

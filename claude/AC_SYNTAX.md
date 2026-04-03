@@ -99,9 +99,9 @@ a || b      // logical or (short-circuit)
 
 ```ac
 let x: i32 = 42        // immutable binding (✓ #011)
-var count: i32 = 0      // mutable binding
-count = count + 1       // assignment
-count += 1              // compound assignment
+var count: i32 = 0      // mutable binding (✓ #012)
+count = count + 1       // assignment (✓ #013)
+count += 1              // compound assignment (✓ #014) — also -=, *=, /=, %=
 ```
 
 ## Control Flow (#015-#019)
