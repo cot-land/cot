@@ -1,0 +1,24 @@
+// RUN: %cot emit-cir %s | %FileCheck %s
+//
+// Tests Sema pass: i32 locals passed to i64 function.
+// Frontend loads produce i32; Sema inserts cir.extsi to widen.
+
+fn add_wide(a: i64, b: i64) -> i64 {
+    return a + b
+}
+
+fn caller() -> i64 {
+    let x: i32 = 10
+    let y: i32 = 20
+    return add_wide(x, y)
+}
+
+// CHECK-LABEL: func.func @add_wide
+// CHECK: cir.add %{{.*}}, %{{.*}} : i64
+
+// CHECK-LABEL: func.func @caller
+// CHECK: cir.load
+// CHECK: cir.load
+// CHECK: cir.extsi %{{.*}} : i32 to i64
+// CHECK: cir.extsi %{{.*}} : i32 to i64
+// CHECK: call @add_wide

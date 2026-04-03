@@ -39,6 +39,14 @@ void populateControlFlowPatterns(
     const mlir::LLVMTypeConverter &converter,
     mlir::RewritePatternSet &patterns);
 
+//--- CIR → CIR transformation passes ---
+
+/// Create the semantic analysis pass (type checking + cast insertion).
+/// Reference: Zig Sema, Flang Transforms.
+std::unique_ptr<mlir::Pass> createSemanticAnalysisPass();
+
+//--- CIR → LLVM lowering pass ---
+
 /// Create the CIR → LLVM dialect lowering pass.
 std::unique_ptr<mlir::Pass> createCIRToLLVMPass();
 

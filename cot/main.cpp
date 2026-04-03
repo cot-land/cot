@@ -55,7 +55,20 @@ using namespace mlir;
 static int emitBinary(ModuleOp module, const std::string &outputPath) {
   MLIRContext *ctx = module.getContext();
 
-  // CIR → LLVM, func → LLVM (via libcot)
+  // Sema (CIR → CIR: type check, insert casts)
+  // Frontend may emit type mismatches at call boundaries;
+  // Sema resolves them before verification.
+  {
+    PassManager semaPM(ctx);
+    semaPM.enableVerifier(false); // IR may be invalid pre-Sema
+    semaPM.addNestedPass<func::FuncOp>(cot::createSemanticAnalysisPass());
+    if (failed(semaPM.run(module))) {
+      llvm::errs() << "error: semantic analysis failed\n"; return 1;
+    }
+  }
+  if (failed(verify(module))) { llvm::errs() << "error: verify failed after sema\n"; return 1; }
+
+  // Lowering (CIR → LLVM → func-to-llvm)
   PassManager pm(ctx);
   pm.addPass(cot::createCIRToLLVMPass());
   pm.addPass(createConvertFuncToLLVMPass(ConvertFuncToLLVMPassOptions{}));
@@ -117,6 +130,14 @@ static int emitBinary(ModuleOp module, const std::string &outputPath) {
 
 static int lowerCIRToLLVMDialect(ModuleOp module) {
   MLIRContext *ctx = module.getContext();
+  // Sema first (may fix type mismatches)
+  {
+    PassManager semaPM(ctx);
+    semaPM.enableVerifier(false);
+    semaPM.addNestedPass<func::FuncOp>(cot::createSemanticAnalysisPass());
+    if (failed(semaPM.run(module))) { llvm::errs() << "error: sema failed\n"; return 1; }
+  }
+  // Then lower
   PassManager pm(ctx);
   pm.addPass(cot::createCIRToLLVMPass());
   pm.addPass(createConvertFuncToLLVMPass(ConvertFuncToLLVMPassOptions{}));
@@ -197,7 +218,6 @@ int main(int argc, char **argv) {
       }
 
       auto module = ac::codegen(ctx, source, ast, /*testMode=*/true);
-      if (failed(verify(*module))) { llvm::errs() << "error: verify failed\n"; return 1; }
       if (emitBinary(*module, "/tmp/cot_test")) return 1;
 
       llvm::outs() << "running " << ast.tests.size() << " test(s) from " << inputFile << "\n";
@@ -244,13 +264,20 @@ int main(int argc, char **argv) {
     return code == 42 ? 0 : 1;
   }
 
-  // ---- cot emit-cir <file> — print CIR MLIR text (for lit/FileCheck) ----
+  // ---- cot emit-cir <file> — print CIR MLIR text (after Sema) ----
   if (cmd == "emit-cir" && argc >= 3) {
     std::string inputFile = argv[2];
     auto source = readFile(inputFile);
     if (source.empty()) { llvm::errs() << "error: can't read " << inputFile << "\n"; return 1; }
     auto module = parseSourceToCIR(ctx, inputFile, source);
     if (!module) return 1;
+    // Run Sema to resolve types before printing
+    {
+      PassManager semaPM(&ctx);
+      semaPM.enableVerifier(false);
+      semaPM.addNestedPass<func::FuncOp>(cot::createSemanticAnalysisPass());
+      if (failed(semaPM.run(*module))) { llvm::errs() << "error: sema failed\n"; return 1; }
+    }
     if (failed(verify(*module))) { llvm::errs() << "error: verify failed\n"; return 1; }
     (*module)->print(llvm::outs());
     return 0;
@@ -263,7 +290,6 @@ int main(int argc, char **argv) {
     if (source.empty()) { llvm::errs() << "error: can't read " << inputFile << "\n"; return 1; }
     auto module = parseSourceToCIR(ctx, inputFile, source);
     if (!module) return 1;
-    if (failed(verify(*module))) { llvm::errs() << "error: verify failed\n"; return 1; }
     if (lowerCIRToLLVMDialect(*module)) return 1;
     (*module)->print(llvm::outs());
     return 0;
@@ -280,7 +306,7 @@ int main(int argc, char **argv) {
 
     auto module = parseSourceToCIR(ctx, inputFile, source);
     if (!module) return 1;
-    if (failed(verify(*module))) { llvm::errs() << "error: verify failed\n"; return 1; }
+    // Sema runs inside emitBinary; skip early verify
     if (emitBinary(*module, outputFile)) return 1;
     llvm::outs() << outputFile << "\n";
     return 0;

@@ -24,6 +24,9 @@ add_definitions(${LLVM_DEFINITIONS})
 
 # libcot static library — compiler passes
 add_library(COT STATIC
+  # CIR → CIR transformation passes
+  lib/Transforms/SemanticAnalysis.cpp
+  # CIR → LLVM lowering
   lib/CIRToLLVM.cpp
   lib/ArithmeticPatterns.cpp
   lib/BitwisePatterns.cpp
