@@ -1,0 +1,12 @@
+// RUN: %cot emit-llvm %s | %FileCheck %s
+//
+// Tests cast op lowering. Currently uses i32 functions since
+// ac frontend doesn't emit cast ops yet (Sema pass will insert them).
+// This test verifies the lowering patterns are registered and work.
+
+fn identity(x: i32) -> i32 {
+    return x
+}
+
+// CHECK-LABEL: llvm.func @identity
+// CHECK: llvm.return

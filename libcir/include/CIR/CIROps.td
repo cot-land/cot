@@ -97,6 +97,36 @@ def CIR_ShlOp : CIR_IntBinaryOp<"shl"> { let summary = "shift left"; }
 def CIR_ShrOp : CIR_IntBinaryOp<"shr"> { let summary = "logical shift right"; }
 
 //===----------------------------------------------------------------------===//
+// Type casts — separate ops per direction (Arith dialect pattern)
+// Reference: mlir/Dialect/Arith/IR/ArithOps.td cast hierarchy
+//
+// Each op maps 1:1 to one LLVM op. No if/else chains in lowering.
+// Sema pass inserts these at type boundaries.
+//===----------------------------------------------------------------------===//
+
+/// Base class for all CIR cast ops. Pure, input → output of different type.
+/// Shared assembly format: $in attr-dict : type($in) to type($out)
+class CIR_CastOp<string mnemonic, list<Trait> traits = []> :
+    CIR_Op<mnemonic, !listconcat([Pure], traits)> {
+  let arguments = (ins AnyType:$input);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$input attr-dict `:` type($input) `to` type($result)";
+}
+
+// Integer → integer
+def CIR_ExtSIOp  : CIR_CastOp<"extsi">  { let summary = "sign-extend integer"; }
+def CIR_ExtUIOp  : CIR_CastOp<"extui">  { let summary = "zero-extend integer"; }
+def CIR_TruncIOp : CIR_CastOp<"trunci"> { let summary = "truncate integer"; }
+
+// Integer ↔ float
+def CIR_SIToFPOp : CIR_CastOp<"sitofp"> { let summary = "signed int to float"; }
+def CIR_FPToSIOp : CIR_CastOp<"fptosi"> { let summary = "float to signed int"; }
+
+// Float → float
+def CIR_ExtFOp   : CIR_CastOp<"extf">   { let summary = "extend float (f32 → f64)"; }
+def CIR_TruncFOp : CIR_CastOp<"truncf"> { let summary = "truncate float (f64 → f32)"; }
+
+//===----------------------------------------------------------------------===//
 // Memory — alloca, store, load
 // Reference: LLVM dialect AllocaOp/StoreOp/LoadOp
 //===----------------------------------------------------------------------===//

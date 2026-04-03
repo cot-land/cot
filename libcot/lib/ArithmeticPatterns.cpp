@@ -110,6 +110,80 @@ struct SelectOpLowering : public OpConversionPattern<cir::SelectOp> {
   }
 };
 
+//===----------------------------------------------------------------------===//
+// Cast lowering — 1:1 mapping to LLVM ops (Arith pattern)
+//===----------------------------------------------------------------------===//
+
+struct ExtSIOpLowering : public OpConversionPattern<cir::ExtSIOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::ExtSIOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<LLVM::SExtOp>(op,
+        getTypeConverter()->convertType(op.getType()), adaptor.getInput());
+    return success();
+  }
+};
+
+struct ExtUIOpLowering : public OpConversionPattern<cir::ExtUIOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::ExtUIOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<LLVM::ZExtOp>(op,
+        getTypeConverter()->convertType(op.getType()), adaptor.getInput());
+    return success();
+  }
+};
+
+struct TruncIOpLowering : public OpConversionPattern<cir::TruncIOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::TruncIOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<LLVM::TruncOp>(op,
+        getTypeConverter()->convertType(op.getType()), adaptor.getInput());
+    return success();
+  }
+};
+
+struct SIToFPOpLowering : public OpConversionPattern<cir::SIToFPOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::SIToFPOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<LLVM::SIToFPOp>(op,
+        getTypeConverter()->convertType(op.getType()), adaptor.getInput());
+    return success();
+  }
+};
+
+struct FPToSIOpLowering : public OpConversionPattern<cir::FPToSIOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::FPToSIOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<LLVM::FPToSIOp>(op,
+        getTypeConverter()->convertType(op.getType()), adaptor.getInput());
+    return success();
+  }
+};
+
+struct ExtFOpLowering : public OpConversionPattern<cir::ExtFOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::ExtFOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<LLVM::FPExtOp>(op,
+        getTypeConverter()->convertType(op.getType()), adaptor.getInput());
+    return success();
+  }
+};
+
+struct TruncFOpLowering : public OpConversionPattern<cir::TruncFOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::TruncFOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<LLVM::FPTruncOp>(op,
+        getTypeConverter()->convertType(op.getType()), adaptor.getInput());
+    return success();
+  }
+};
+
 } // namespace
 
 void cot::populateArithmeticPatterns(
@@ -119,6 +193,10 @@ void cot::populateArithmeticPatterns(
   patterns.add<
       AddOpLowering, SubOpLowering, MulOpLowering,
       DivOpLowering, RemOpLowering, NegOpLowering,
-      ConstantOpLowering, CmpOpLowering, SelectOpLowering
+      ConstantOpLowering, CmpOpLowering, SelectOpLowering,
+      // Casts — 1:1 to LLVM
+      ExtSIOpLowering, ExtUIOpLowering, TruncIOpLowering,
+      SIToFPOpLowering, FPToSIOpLowering,
+      ExtFOpLowering, TruncFOpLowering
   >(converter, ctx);
 }
