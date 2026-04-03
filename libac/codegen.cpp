@@ -195,6 +195,32 @@ class CodeGen {
       break;
     }
 
+    case StmtKind::While: {
+      // header: eval condition, condbr to body or exit
+      // body: statements, br back to header
+      // exit: continue
+      auto *headerBlock = new mlir::Block();
+      auto *bodyBlock = new mlir::Block();
+      auto *exitBlock = new mlir::Block();
+      parentFunc.getBody().push_back(headerBlock);
+      parentFunc.getBody().push_back(bodyBlock);
+      parentFunc.getBody().push_back(exitBlock);
+      // Branch from current block to header
+      b.create<cir::BrOp>(loc, headerBlock);
+      // Header: evaluate condition
+      b.setInsertionPointToStart(headerBlock);
+      auto cond = emitExpr(*s.expr, b.getI1Type());
+      b.create<cir::CondBrOp>(loc, cond, bodyBlock, exitBlock);
+      // Body: statements + back-edge to header
+      b.setInsertionPointToStart(bodyBlock);
+      for (auto &st : s.thenBody) emitStmt(*st, returnType, parentFunc);
+      if (bodyBlock->empty() || !bodyBlock->back().hasTrait<mlir::OpTrait::IsTerminator>())
+        b.create<cir::BrOp>(loc, headerBlock);
+      // Exit: continue after loop
+      b.setInsertionPointToStart(exitBlock);
+      break;
+    }
+
     case StmtKind::Assert: {
       // Zig pattern: assert condition, trap on failure.
       // Emit: if (!cond) { cir.trap }

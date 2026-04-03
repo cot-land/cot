@@ -127,7 +127,7 @@ if x > 0 {             // (✓ #015) no parens — Go/Rust pattern
     // ...
 }
 
-while x < 10 {
+while x < 10 {             // (✓ #017) no parens
     x += 1
 }
 

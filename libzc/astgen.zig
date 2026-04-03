@@ -269,6 +269,27 @@ const Gen = struct {
                 self.current_block = merge_block;
                 self.has_terminator = false;
             },
+            .while_simple => {
+                const d = self.tree.nodeData(node).node_and_node;
+                const cond_node = d[0];
+                const body_node = d[1];
+                const header_block = self.addBlock();
+                const body_block = self.addBlock();
+                const exit_block = self.addBlock();
+                // br to header
+                self.b.emitBranch(blk, "cir.br", &.{}, &.{header_block});
+                // header: eval condition, condbr
+                self.current_block = header_block;
+                const cond = self.mapExpr(header_block, cond_node, self.b.intType(1));
+                self.b.emitBranch(header_block, "cir.condbr", &.{cond}, &.{ body_block, exit_block });
+                // body: statements + back-edge
+                self.mapBlock(body_block, body_node, result_types);
+                if (!self.has_terminator) {
+                    self.b.emitBranch(self.current_block, "cir.br", &.{}, &.{header_block});
+                }
+                self.current_block = exit_block;
+                self.has_terminator = false;
+            },
             .simple_var_decl => {
                 const d = self.tree.nodeData(node).opt_node_and_opt_node;
                 const type_node = d[0];

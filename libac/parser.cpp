@@ -223,6 +223,24 @@ class Parser {
       return s;
     }
 
+    // While loop: while cond { body }
+    if (check(Tag::kw_while)) {
+      size_t p = advance().start;
+      auto s = std::make_unique<Stmt>();
+      s->kind = StmtKind::While;
+      s->pos = p;
+      s->expr = parseExpr(); // condition
+      expect(Tag::l_brace);
+      skipSemis();
+      while (!check(Tag::r_brace) && !check(Tag::eof)) {
+        s->thenBody.push_back(parseStmt());
+        skipSemis();
+      }
+      expect(Tag::r_brace);
+      match(Tag::semicolon);
+      return s;
+    }
+
     // Let binding: let x: i32 = expr
     if (check(Tag::kw_let)) {
       size_t p = advance().start;

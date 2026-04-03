@@ -44,7 +44,7 @@ struct Expr {
 };
 
 // Statement kinds
-enum class StmtKind { Return, ExprStmt, If, Assert, Let, Var, Assign, CompoundAssign };
+enum class StmtKind { Return, ExprStmt, If, While, Assert, Let, Var, Assign, CompoundAssign };
 
 struct Stmt {
   StmtKind kind;

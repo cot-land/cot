@@ -67,7 +67,7 @@ Status: `-` not started, `~` in progress, `✓` done.
 | 014 | Compound assignment | `cir.load`, `cir.add`, `cir.store` | `x += 1` | load+add+store | Increment variable | ✓ |
 | 015 | If/else statement | `cir.condbr`, `cir.br` | `if x > 0 { } else { }` | `llvm.cond_br`, `llvm.br` | Branch on condition | ✓ |
 | 016 | If/else expression | `cir.condbr` + block value | `let x = if a > b { a } else { b }` | Phi node or select | Ternary-style | - |
-| 017 | While loop | `cir.loop`, `cir.condbr`, `cir.br` | `while x < 10 { }` | Loop with back-edge | Sum 1..10 = 55 | - |
+| 017 | While loop | `cir.condbr`, `cir.br` | `while x < 10 { }` | Loop with back-edge | Sum 1..10 = 55 | ✓ |
 | 018 | Break/continue | `cir.break`, `cir.repeat` | `break`, `continue` | `llvm.br` to exit/header | Break from loop | - |
 | 019 | For loop (range) | `cir.loop` + counter | `for i in 0..10 { }` | Desugared while | Sum range | - |
 | 020 | Nested functions/calls | (multiple `func.func`) | Functions calling functions | Already works | Call chain 3 deep | - |
