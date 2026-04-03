@@ -11,6 +11,9 @@
 
 #include "CIR/CIRDialect.h.inc"
 
+#define GET_TYPEDEF_CLASSES
+#include "CIR/CIRTypes.h.inc"
+
 #include "CIR/CIREnums.h.inc"
 
 #define GET_OP_CLASSES

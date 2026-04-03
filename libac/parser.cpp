@@ -223,6 +223,21 @@ class Parser {
       return s;
     }
 
+    // Let binding: let x: i32 = expr
+    if (check(Tag::kw_let)) {
+      size_t p = advance().start;
+      auto s = std::make_unique<Stmt>();
+      s->kind = StmtKind::Let;
+      s->pos = p;
+      s->varName = tokenText(expect(Tag::identifier));
+      expect(Tag::colon);
+      s->varType = parseType();
+      expect(Tag::equal);
+      s->expr = parseExpr();
+      match(Tag::semicolon);
+      return s;
+    }
+
     // Assert statement: assert(expr)
     if (check(Tag::kw_assert)) {
       size_t p = advance().start;

@@ -61,7 +61,7 @@ Status: `-` not started, `~` in progress, `✓` done.
 
 | # | Feature | CIR Op(s) | ac Syntax | Zig Syntax | LLVM Lowering | Status |
 |---|---------|-----------|-----------|---------------|------|--------|
-| 011 | Let bindings (immutable) | `cir.alloc`, `cir.store`, `cir.load` | `let x: i32 = 10` | `llvm.alloca/store/load` | Bind and use local | - |
+| 011 | Let bindings (immutable) | `cir.alloca`, `cir.store`, `cir.load` | `let x: i32 = 10` | `llvm.alloca/store/load` | Bind and use local | ✓ |
 | 012 | Var bindings (mutable) | `cir.alloc`, `cir.store`, `cir.load` | `var x: i32 = 0` | `llvm.alloca/store/load` | Mutate and read | - |
 | 013 | Assignment | `cir.store` | `x = 42` | `llvm.store` | Assign to var | - |
 | 014 | Compound assignment | `cir.load`, `cir.add`, `cir.store` | `x += 1` | load+add+store | Increment variable | - |

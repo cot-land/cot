@@ -44,7 +44,7 @@ struct Expr {
 };
 
 // Statement kinds
-enum class StmtKind { Return, ExprStmt, If, Assert };
+enum class StmtKind { Return, ExprStmt, If, Assert, Let };
 
 struct Stmt {
   StmtKind kind;
@@ -52,6 +52,8 @@ struct Stmt {
   ExprPtr expr;                   // Return value, ExprStmt expr, If condition, Assert condition
   std::vector<StmtPtr> thenBody;  // If then block
   std::vector<StmtPtr> elseBody;  // If else block
+  std::string_view varName;       // Let: variable name
+  TypeRef varType;                // Let: type annotation
 };
 
 struct FnDecl {

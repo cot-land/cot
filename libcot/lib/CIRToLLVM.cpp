@@ -203,6 +203,68 @@ struct CmpOpLowering : public OpConversionPattern<cir::CmpOp> {
 // Control flow / misc lowering
 //===----------------------------------------------------------------------===//
 
+//===----------------------------------------------------------------------===//
+// Memory lowering
+//===----------------------------------------------------------------------===//
+
+struct AllocaOpLowering : public OpConversionPattern<cir::AllocaOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::AllocaOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    auto elemType = op.getElemType();
+    auto ptrType = LLVM::LLVMPointerType::get(op.getContext());
+    auto one = rewriter.create<LLVM::ConstantOp>(
+        op.getLoc(), rewriter.getI64Type(), rewriter.getI64IntegerAttr(1));
+    rewriter.replaceOpWithNewOp<LLVM::AllocaOp>(
+        op, ptrType, elemType, one);
+    return success();
+  }
+};
+
+struct StoreOpLowering : public OpConversionPattern<cir::StoreOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::StoreOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<LLVM::StoreOp>(
+        op, adaptor.getValue(), adaptor.getAddr());
+    return success();
+  }
+};
+
+struct LoadOpLowering : public OpConversionPattern<cir::LoadOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::LoadOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<LLVM::LoadOp>(
+        op, getTypeConverter()->convertType(op.getType()),
+        adaptor.getAddr());
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// Control flow lowering
+//===----------------------------------------------------------------------===//
+
+struct BrOpLowering : public OpConversionPattern<cir::BrOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::BrOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<LLVM::BrOp>(op, ValueRange{}, op.getDest());
+    return success();
+  }
+};
+
+struct CondBrOpLowering : public OpConversionPattern<cir::CondBrOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::CondBrOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<LLVM::CondBrOp>(op,
+        adaptor.getCondition(), op.getTrueDest(), op.getFalseDest());
+    return success();
+  }
+};
+
 struct TrapOpLowering : public OpConversionPattern<cir::TrapOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(cir::TrapOp op, OpAdaptor adaptor,
@@ -241,6 +303,10 @@ struct CIRToLLVMPass
     // func ops are lowered by a separate func-to-llvm pass
     target.addLegalDialect<func::FuncDialect>();
     LLVMTypeConverter tc(&getContext());
+    // cir.ptr → llvm.ptr conversion
+    tc.addConversion([](cir::PointerType type) {
+      return LLVM::LLVMPointerType::get(type.getContext());
+    });
     RewritePatternSet patterns(&getContext());
     cot::populateCIRToLLVMConversionPatterns(tc, patterns);
     if (failed(applyPartialConversion(getOperation(), target,
@@ -261,6 +327,8 @@ void cot::populateCIRToLLVMConversionPatterns(
   // Reference: arith::populateArithToLLVMConversionPatterns()
   MLIRContext *ctx = patterns.getContext();
   patterns.add<
+      // Memory
+      AllocaOpLowering, StoreOpLowering, LoadOpLowering,
       // Arithmetic
       AddOpLowering, SubOpLowering, MulOpLowering,
       DivOpLowering, RemOpLowering, NegOpLowering,
@@ -269,7 +337,8 @@ void cot::populateCIRToLLVMConversionPatterns(
       // Shifts
       ShlOpLowering, ShrOpLowering,
       // Comparison, control flow, constants
-      CmpOpLowering, TrapOpLowering, ConstantOpLowering
+      CmpOpLowering, BrOpLowering, CondBrOpLowering,
+      TrapOpLowering, ConstantOpLowering
   >(converter, ctx);
 }
 

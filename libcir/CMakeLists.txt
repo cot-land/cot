@@ -26,6 +26,11 @@ mlir_tablegen(include/CIR/CIRDialect.h.inc -gen-dialect-decls)
 mlir_tablegen(include/CIR/CIRDialect.cpp.inc -gen-dialect-defs)
 add_public_tablegen_target(CIRDialectIncGen)
 
+set(LLVM_TARGET_DEFINITIONS include/CIR/CIRTypes.td)
+mlir_tablegen(include/CIR/CIRTypes.h.inc -gen-typedef-decls)
+mlir_tablegen(include/CIR/CIRTypes.cpp.inc -gen-typedef-defs)
+add_public_tablegen_target(CIRTypesIncGen)
+
 set(LLVM_TARGET_DEFINITIONS include/CIR/CIROps.td)
 mlir_tablegen(include/CIR/CIROps.h.inc -gen-op-decls)
 mlir_tablegen(include/CIR/CIROps.cpp.inc -gen-op-defs)
@@ -46,7 +51,7 @@ target_include_directories(CIR PUBLIC
   ${PROJECT_BINARY_DIR}/include
 )
 
-add_dependencies(CIR CIRDialectIncGen CIROpsIncGen)
+add_dependencies(CIR CIRDialectIncGen CIRTypesIncGen CIROpsIncGen)
 
 target_link_libraries(CIR PUBLIC
   MLIRIR

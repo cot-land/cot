@@ -98,7 +98,7 @@ a || b      // logical or (short-circuit)
 ## Variables (#011, #012, #013, #014)
 
 ```ac
-let x: i32 = 42        // immutable binding
+let x: i32 = 42        // immutable binding (✓ #011)
 var count: i32 = 0      // mutable binding
 count = count + 1       // assignment
 count += 1              // compound assignment

@@ -16,7 +16,6 @@
 #include "codegen.h"
 #include "CIR/CIROps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
 
 #include <unordered_map>
@@ -30,7 +29,9 @@ class CodeGen {
 
   // Zig AstGen pattern: scope holds named values for current function.
   // Zig uses a linked-list scope chain (GenZir → parent). For now, flat map suffices.
+  // params: SSA value (direct), locals: SSA address (needs cir.load)
   std::unordered_map<std::string_view, mlir::Value> namedValues;
+  std::unordered_map<std::string_view, std::pair<mlir::Value, mlir::Type>> localAddrs;
 
   mlir::Type resolveType(const TypeRef &t) {
     if (t.name == "i32") return b.getI32Type();
@@ -53,6 +54,13 @@ class CodeGen {
           b.getIntegerAttr(resultType, e.boolVal ? 1 : 0));
 
     case ExprKind::Ident: {
+      // Check locals first (let bindings — stored as addresses, need load)
+      auto lit = localAddrs.find(e.name);
+      if (lit != localAddrs.end()) {
+        auto [addr, elemType] = lit->second;
+        return b.create<cir::LoadOp>(loc, elemType, addr);
+      }
+      // Then params (direct SSA values)
       auto it = namedValues.find(e.name);
       if (it == namedValues.end()) {
         llvm::errs() << "error: undefined '" << e.name << "'\n";
@@ -141,22 +149,28 @@ class CodeGen {
       if (s.expr) emitExpr(*s.expr, returnType);
       break;
 
+    case StmtKind::Let: {
+      auto varType = resolveType(s.varType);
+      auto ptrType = cir::PointerType::get(b.getContext());
+      auto addr = b.create<cir::AllocaOp>(loc, ptrType,
+          mlir::TypeAttr::get(varType));
+      auto val = emitExpr(*s.expr, varType);
+      b.create<cir::StoreOp>(loc, val, addr);
+      localAddrs[s.varName] = {addr, varType};
+      break;
+    }
+
     case StmtKind::Assert: {
       // Zig pattern: assert condition, trap on failure.
       // Emit: if (!cond) { cir.trap }
-      // We need basic blocks for this.
       auto cond = emitExpr(*s.expr, b.getI1Type());
-      auto *parentBlock = b.getInsertionBlock();
       auto *trapBlock = new mlir::Block();
       auto *contBlock = new mlir::Block();
       parentFunc.getBody().push_back(trapBlock);
       parentFunc.getBody().push_back(contBlock);
-      // Branch: if cond → continue, else → trap
-      b.create<mlir::LLVM::CondBrOp>(loc, cond, contBlock, trapBlock);
-      // Trap block
+      b.create<cir::CondBrOp>(loc, cond, contBlock, trapBlock);
       b.setInsertionPointToStart(trapBlock);
       b.create<cir::TrapOp>(loc);
-      // Continue block
       b.setInsertionPointToStart(contBlock);
       break;
     }
@@ -169,17 +183,17 @@ class CodeGen {
       parentFunc.getBody().push_back(thenBlock);
       parentFunc.getBody().push_back(elseBlock);
       parentFunc.getBody().push_back(mergeBlock);
-      b.create<mlir::LLVM::CondBrOp>(loc, cond, thenBlock, elseBlock);
+      b.create<cir::CondBrOp>(loc, cond, thenBlock, elseBlock);
       // Then
       b.setInsertionPointToStart(thenBlock);
       for (auto &st : s.thenBody) emitStmt(*st, returnType, parentFunc);
       if (thenBlock->empty() || !thenBlock->back().hasTrait<mlir::OpTrait::IsTerminator>())
-        b.create<mlir::LLVM::BrOp>(loc, mlir::ValueRange{}, mergeBlock);
+        b.create<cir::BrOp>(loc, mergeBlock);
       // Else
       b.setInsertionPointToStart(elseBlock);
       for (auto &st : s.elseBody) emitStmt(*st, returnType, parentFunc);
       if (elseBlock->empty() || !elseBlock->back().hasTrait<mlir::OpTrait::IsTerminator>())
-        b.create<mlir::LLVM::BrOp>(loc, mlir::ValueRange{}, mergeBlock);
+        b.create<cir::BrOp>(loc, mergeBlock);
       // Merge
       b.setInsertionPointToStart(mergeBlock);
       break;
@@ -204,6 +218,7 @@ class CodeGen {
 
     // Zig AstGen pattern: bind param names in scope.
     namedValues.clear();
+    localAddrs.clear();
     for (size_t i = 0; i < fn.params.size(); i++)
       namedValues[fn.params[i].name] = entry->getArgument(i);
 

@@ -34,6 +34,7 @@ CIR is audited against three production MLIR references:
 | Missing `dependentDialects` | Added func::FuncDialect, LLVM::LLVMDialect | CIRDialect.td |
 | func ops not marked legal in CIR lowering | Added `target.addLegalDialect<func::FuncDialect>()` | CIRToLLVM.cpp |
 | ConstantOp no verifier | Added `hasVerifier=1`, validates attr type matches result | CIRDialect.cpp |
+| ac codegen emitted LLVM dialect ops directly | Added `cir.br`/`cir.condbr` ops, codegen uses CIR only | CIROps.td, codegen.cpp, CIRToLLVM.cpp |
 
 ---
 
@@ -43,7 +44,6 @@ CIR is audited against three production MLIR references:
 
 | Issue | Severity | Notes |
 |-------|----------|-------|
-| **ac codegen emits LLVM dialect ops** | HIGH | `codegen.cpp` creates `LLVM::CondBrOp`/`LLVM::BrOp` directly for assert/if. Fix when adding `cir.condbr`/`cir.br` (feature #015). |
 | **`cir.shr` — no signed variant** | MEDIUM | Only logical (unsigned) shift right. Need `cir.shr_s` (arithmetic) for signed types. Fix when adding signed type semantics. |
 
 ### Fix before Phase 3 (types/structs)

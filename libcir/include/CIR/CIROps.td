@@ -97,6 +97,45 @@ def CIR_ShlOp : CIR_IntBinaryOp<"shl"> { let summary = "shift left"; }
 def CIR_ShrOp : CIR_IntBinaryOp<"shr"> { let summary = "logical shift right"; }
 
 //===----------------------------------------------------------------------===//
+// Memory — alloca, store, load
+// Reference: LLVM dialect AllocaOp/StoreOp/LoadOp
+//===----------------------------------------------------------------------===//
+
+def CIR_AllocaOp : CIR_Op<"alloca"> {
+  let summary = "stack allocation";
+  let description = [{
+    Allocates stack space for one value of the given type.
+    Returns an opaque pointer (!cir.ptr).
+    Zig: alloc. Swift: alloc_stack. Rust: StorageLive. Go: LocalAddr.
+  }];
+
+  let arguments = (ins TypeAttr:$elem_type);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$elem_type attr-dict `:` type($result)";
+}
+
+def CIR_StoreOp : CIR_Op<"store"> {
+  let summary = "store value to memory";
+  let description = [{
+    Stores a value to the address produced by cir.alloca.
+  }];
+
+  let arguments = (ins AnyType:$value, AnyType:$addr);
+  let assemblyFormat = "$value `,` $addr attr-dict `:` type($value) `,` type($addr)";
+}
+
+def CIR_LoadOp : CIR_Op<"load"> {
+  let summary = "load value from memory";
+  let description = [{
+    Loads a value from the address produced by cir.alloca.
+  }];
+
+  let arguments = (ins AnyType:$addr);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$addr attr-dict `:` type($addr) `->` type($result)";
+}
+
+//===----------------------------------------------------------------------===//
 // Comparison predicate enum
 // Reference: mlir/include/mlir/Dialect/Arith/IR/ArithBase.td CmpIPredicate
 //===----------------------------------------------------------------------===//
@@ -135,8 +174,24 @@ def CIR_CmpOp : CIR_Op<"cmp", [Pure, SameTypeOperands]> {
 }
 
 //===----------------------------------------------------------------------===//
-// Control flow
+// Control flow — branches and blocks
+// Reference: mlir/Dialect/ControlFlow/IR/ControlFlowOps.td
 //===----------------------------------------------------------------------===//
+
+def CIR_BrOp : CIR_Op<"br", [Pure, Terminator]> {
+  let summary = "unconditional branch";
+  let successors = (successor AnySuccessor:$dest);
+  let assemblyFormat = "$dest attr-dict";
+}
+
+def CIR_CondBrOp : CIR_Op<"condbr", [Pure, Terminator]> {
+  let summary = "conditional branch";
+  let arguments = (ins I1:$condition);
+  let successors = (successor AnySuccessor:$trueDest,
+                              AnySuccessor:$falseDest);
+  let assemblyFormat =
+      "$condition `,` $trueDest `,` $falseDest attr-dict";
+}
 
 def CIR_TrapOp : CIR_Op<"trap", [Terminator]> {
   let summary = "abort execution (assertion failure)";

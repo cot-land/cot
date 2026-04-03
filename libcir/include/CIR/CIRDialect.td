@@ -14,6 +14,7 @@ def CIR_Dialect : Dialect {
   let name = "cir";
   let summary = "Cot Intermediate Representation — universal IR for C-style languages";
   let cppNamespace = "::cir";
+  let useDefaultTypePrinterParser = 1;
   let dependentDialects = [
     "mlir::func::FuncDialect",
     "mlir::LLVM::LLVMDialect"

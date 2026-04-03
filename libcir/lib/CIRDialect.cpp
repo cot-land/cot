@@ -3,6 +3,8 @@
 #include "CIR/CIROps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "llvm/ADT/TypeSwitch.h"
+#include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
 
 using namespace mlir;
@@ -17,11 +19,18 @@ using namespace cir;
 #include "CIR/CIREnums.cpp.inc"
 
 void CIRDialect::initialize() {
+  addTypes<
+#define GET_TYPEDEF_LIST
+#include "CIR/CIRTypes.cpp.inc"
+  >();
   addOperations<
 #define GET_OP_LIST
 #include "CIR/CIROps.cpp.inc"
   >();
 }
+
+#define GET_TYPEDEF_CLASSES
+#include "CIR/CIRTypes.cpp.inc"
 
 //===----------------------------------------------------------------------===//
 // cir.constant — custom print/parse

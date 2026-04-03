@@ -25,10 +25,10 @@ cd cot/build && cmake --build .                             # Driver + ac fronte
 cd cot/build && ./cot test                                  # Gate test: 42 ✓
 cd test && bash run.sh ../cot/build/cot                     # 4 build tests pass
 cd cot/build && ./cot test ../../test/inline/005_inline_test.ac  # 3 inline tests pass
-bin/lit test/lit/ -v                                        # 11 lit+FileCheck tests pass
+bin/lit test/lit/ -v                                        # 12 lit+FileCheck tests pass
 ```
 
-**Total: 16 tests, all passing.**
+**Total: 17 tests, all passing.**
 
 **Two frontends produce identical CIR:**
 ```
@@ -66,6 +66,11 @@ zig:  pub fn add(a: i32, b: i32) i32 { return a + b; }  → cir.add → 42
 | `cir.bit_not` | CIR_BitNotOp | `llvm.xor(x, -1)` |
 | `cir.shl` | CIR_ShlOp | `llvm.shl` |
 | `cir.shr` | CIR_ShrOp | `llvm.lshr` |
+| `cir.alloca` | CIR_AllocaOp (elem_type attr) | `llvm.alloca` |
+| `cir.store` | CIR_StoreOp | `llvm.store` |
+| `cir.load` | CIR_LoadOp | `llvm.load` |
+| `cir.br` | CIR_BrOp (Terminator) | `llvm.br` |
+| `cir.condbr` | CIR_CondBrOp (Terminator) | `llvm.cond_br` |
 | `cir.trap` | CIR_TrapOp (Terminator) | `llvm.trap` + `llvm.unreachable` |
 
 Functions use MLIR's built-in `func.func` / `func.return` / `func.call`. CIR-specific `cir.func` will be added when we need CIR function semantics (comptime params, error returns, etc.).
@@ -75,7 +80,7 @@ Functions use MLIR's built-in `func.func` / `func.return` / `func.call`. CIR-spe
 ## Project Structure
 
 ```
-libcir/          CIR MLIR dialect (C++/TableGen) — 15 ops
+libcir/          CIR MLIR dialect (C++/TableGen) — 20 ops, !cir.ptr type
   include/CIR/   CIRDialect.td, CIROps.td, CIROps.h
   lib/           CIRDialect.cpp
   c-api/         CIRCApi.h/cpp — C API for dialect registration
@@ -151,11 +156,11 @@ Each feature adds:
 7. Update `claude/FEATURES.md` status to ✓
 
 **Next features in order:**
-- #011 Let bindings (cir.alloc, cir.store, cir.load) — THIS IS THE BIG ONE
-- #012 Var bindings (mutable locals)
-- #013 Assignment (cir.store)
+- #012 Var bindings (mutable locals) — same infra as let, just allows reassignment
+- #013 Assignment (cir.store to existing var)
 - #014 Compound assignment (load+op+store)
-- #015 If/else as statement (already partially works in ac codegen)
+- #015 If/else as statement (cir.condbr/cir.br already done)
+- #016 If/else as expression (block values, phi nodes)
 
 ### libcot: compiler passes library (DONE)
 
