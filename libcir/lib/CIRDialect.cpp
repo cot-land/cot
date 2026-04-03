@@ -1,6 +1,8 @@
 //===- CIRDialect.cpp - CIR dialect implementation --------------------===//
 
 #include "CIR/CIROps.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/OpImplementation.h"
 
 using namespace mlir;
@@ -11,6 +13,8 @@ using namespace cir;
 //===----------------------------------------------------------------------===//
 
 #include "CIR/CIRDialect.cpp.inc"
+
+#include "CIR/CIREnums.cpp.inc"
 
 void CIRDialect::initialize() {
   addOperations<
@@ -36,6 +40,32 @@ ParseResult ConstantOp::parse(OpAsmParser &parser, OperationState &result) {
 
 void ConstantOp::print(OpAsmPrinter &p) {
   p << " " << getValue() << " : " << getResult().getType();
+}
+
+//===----------------------------------------------------------------------===//
+// cir.constant — verifier
+//===----------------------------------------------------------------------===//
+
+LogicalResult ConstantOp::verify() {
+  auto resType = getResult().getType();
+
+  // Integer attribute type must match result type
+  if (auto intAttr = llvm::dyn_cast<IntegerAttr>(getValue())) {
+    if (intAttr.getType() != resType)
+      return emitOpError("integer value type ")
+             << intAttr.getType() << " must match result type " << resType;
+    return success();
+  }
+
+  // Float attribute type must match result type
+  if (auto floatAttr = llvm::dyn_cast<FloatAttr>(getValue())) {
+    if (floatAttr.getType() != resType)
+      return emitOpError("float value type ")
+             << floatAttr.getType() << " must match result type " << resType;
+    return success();
+  }
+
+  return success();
 }
 
 //===----------------------------------------------------------------------===//

@@ -29,6 +29,8 @@ add_public_tablegen_target(CIRDialectIncGen)
 set(LLVM_TARGET_DEFINITIONS include/CIR/CIROps.td)
 mlir_tablegen(include/CIR/CIROps.h.inc -gen-op-decls)
 mlir_tablegen(include/CIR/CIROps.cpp.inc -gen-op-defs)
+mlir_tablegen(include/CIR/CIREnums.h.inc -gen-enum-decls)
+mlir_tablegen(include/CIR/CIREnums.cpp.inc -gen-enum-defs)
 add_public_tablegen_target(CIROpsIncGen)
 
 # libcir static library

@@ -6,6 +6,7 @@
 //===----------------------------------------------------------------===//
 
 #include "CIR/CIROps.h"
+#include "COT/Passes.h"
 #include "scanner.h"
 #include "parser.h"
 #include "codegen.h"
@@ -22,12 +23,8 @@ extern "C" int zc_parse(
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Verifier.h"
-#include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVMPass.h"
-#include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
-#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
-#include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
@@ -39,133 +36,17 @@ extern "C" int zc_parse(
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/TargetSelect.h"
+#include "llvm/Support/Program.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/TargetParser/Host.h"
 
+#include "llvm/Support/MemoryBuffer.h"
+
 #include <cstdlib>
-#include <fstream>
-#include <sstream>
 #include <string>
 
 using namespace mlir;
-
-//===----------------------------------------------------------------------===//
-// CIR → LLVM lowering patterns
-//===----------------------------------------------------------------------===//
-
-namespace {
-
-struct AddOpLowering : public OpConversionPattern<cir::AddOp> {
-  using OpConversionPattern::OpConversionPattern;
-  LogicalResult matchAndRewrite(cir::AddOp op, OpAdaptor adaptor,
-      ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<LLVM::AddOp>(op,
-        getTypeConverter()->convertType(op.getType()),
-        adaptor.getLhs(), adaptor.getRhs());
-    return success();
-  }
-};
-
-struct SubOpLowering : public OpConversionPattern<cir::SubOp> {
-  using OpConversionPattern::OpConversionPattern;
-  LogicalResult matchAndRewrite(cir::SubOp op, OpAdaptor adaptor,
-      ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<LLVM::SubOp>(op,
-        getTypeConverter()->convertType(op.getType()),
-        adaptor.getLhs(), adaptor.getRhs());
-    return success();
-  }
-};
-
-struct MulOpLowering : public OpConversionPattern<cir::MulOp> {
-  using OpConversionPattern::OpConversionPattern;
-  LogicalResult matchAndRewrite(cir::MulOp op, OpAdaptor adaptor,
-      ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<LLVM::MulOp>(op,
-        getTypeConverter()->convertType(op.getType()),
-        adaptor.getLhs(), adaptor.getRhs());
-    return success();
-  }
-};
-
-struct DivOpLowering : public OpConversionPattern<cir::DivOp> {
-  using OpConversionPattern::OpConversionPattern;
-  LogicalResult matchAndRewrite(cir::DivOp op, OpAdaptor adaptor,
-      ConversionPatternRewriter &rewriter) const override {
-    // Reference: ArithToLLVM DivSIOpLowering → llvm.sdiv
-    rewriter.replaceOpWithNewOp<LLVM::SDivOp>(op,
-        getTypeConverter()->convertType(op.getType()),
-        adaptor.getLhs(), adaptor.getRhs());
-    return success();
-  }
-};
-
-struct RemOpLowering : public OpConversionPattern<cir::RemOp> {
-  using OpConversionPattern::OpConversionPattern;
-  LogicalResult matchAndRewrite(cir::RemOp op, OpAdaptor adaptor,
-      ConversionPatternRewriter &rewriter) const override {
-    // Reference: ArithToLLVM RemSIOpLowering → llvm.srem
-    rewriter.replaceOpWithNewOp<LLVM::SRemOp>(op,
-        getTypeConverter()->convertType(op.getType()),
-        adaptor.getLhs(), adaptor.getRhs());
-    return success();
-  }
-};
-
-struct CmpOpLowering : public OpConversionPattern<cir::CmpOp> {
-  using OpConversionPattern::OpConversionPattern;
-  LogicalResult matchAndRewrite(cir::CmpOp op, OpAdaptor adaptor,
-      ConversionPatternRewriter &rewriter) const override {
-    // Reference: ArithToLLVM CmpIOpLowering — predicate values match directly
-    // CIR predicate attr: 0=eq,1=ne,2=slt,3=sle,4=sgt,5=sge
-    // LLVM::ICmpPredicate enum has same numerical values
-    auto pred = static_cast<LLVM::ICmpPredicate>(op.getPredicate());
-    rewriter.replaceOpWithNewOp<LLVM::ICmpOp>(op,
-        getTypeConverter()->convertType(op.getResult().getType()),
-        pred, adaptor.getLhs(), adaptor.getRhs());
-    return success();
-  }
-};
-
-struct TrapOpLowering : public OpConversionPattern<cir::TrapOp> {
-  using OpConversionPattern::OpConversionPattern;
-  LogicalResult matchAndRewrite(cir::TrapOp op, OpAdaptor adaptor,
-      ConversionPatternRewriter &rewriter) const override {
-    // Lower to llvm.trap + llvm.unreachable (trap is not a terminator in MLIR)
-    rewriter.create<LLVM::Trap>(op.getLoc());
-    rewriter.replaceOpWithNewOp<LLVM::UnreachableOp>(op);
-    return success();
-  }
-};
-
-struct ConstantOpLowering : public OpConversionPattern<cir::ConstantOp> {
-  using OpConversionPattern::OpConversionPattern;
-  LogicalResult matchAndRewrite(cir::ConstantOp op, OpAdaptor adaptor,
-      ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<LLVM::ConstantOp>(op,
-        getTypeConverter()->convertType(op.getType()), op.getValue());
-    return success();
-  }
-};
-
-struct CIRToLLVMPass : public PassWrapper<CIRToLLVMPass, OperationPass<ModuleOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(CIRToLLVMPass)
-  StringRef getArgument() const override { return "cir-to-llvm"; }
-  void runOnOperation() override {
-    LLVMConversionTarget target(getContext());
-    target.addLegalOp<ModuleOp>();
-    LLVMTypeConverter tc(&getContext());
-    RewritePatternSet patterns(&getContext());
-    patterns.add<AddOpLowering, SubOpLowering, MulOpLowering,
-                 DivOpLowering, RemOpLowering, CmpOpLowering,
-                 TrapOpLowering, ConstantOpLowering>(tc, &getContext());
-    if (failed(applyPartialConversion(getOperation(), target, std::move(patterns))))
-      signalPassFailure();
-  }
-};
-
-} // namespace
 
 //===----------------------------------------------------------------------===//
 // Backend: MLIR → object file → link
@@ -174,9 +55,9 @@ struct CIRToLLVMPass : public PassWrapper<CIRToLLVMPass, OperationPass<ModuleOp>
 static int emitBinary(ModuleOp module, const std::string &outputPath) {
   MLIRContext *ctx = module.getContext();
 
-  // CIR → LLVM, func → LLVM
+  // CIR → LLVM, func → LLVM (via libcot)
   PassManager pm(ctx);
-  pm.addPass(std::make_unique<CIRToLLVMPass>());
+  pm.addPass(cot::createCIRToLLVMPass());
   pm.addPass(createConvertFuncToLLVMPass(ConvertFuncToLLVMPassOptions{}));
   if (failed(pm.run(module))) { llvm::errs() << "error: lowering failed\n"; return 1; }
 
@@ -203,7 +84,10 @@ static int emitBinary(ModuleOp module, const std::string &outputPath) {
       llvm::TargetOptions(), std::nullopt);
   llvmMod->setDataLayout(tm->createDataLayout());
 
-  std::string objPath = "/tmp/cot_build.o";
+  llvm::SmallString<128> objPath;
+  if (auto ec = llvm::sys::fs::createTemporaryFile("cot", "o", objPath)) {
+    llvm::errs() << ec.message() << "\n"; return 1;
+  }
   std::error_code ec;
   llvm::raw_fd_ostream out(objPath, ec, llvm::sys::fs::OF_None);
   if (ec) { llvm::errs() << ec.message() << "\n"; return 1; }
@@ -215,9 +99,14 @@ static int emitBinary(ModuleOp module, const std::string &outputPath) {
   pass.run(*llvmMod);
   out.flush();
 
-  // Link
-  std::string linkCmd = "cc -o " + outputPath + " " + objPath;
-  if (std::system(linkCmd.c_str())) { llvm::errs() << "error: link failed\n"; return 1; }
+  // Link via cc (safe invocation, no shell)
+  auto ccPath = llvm::sys::findProgramByName("cc");
+  if (!ccPath) { llvm::errs() << "error: cc not found\n"; return 1; }
+  llvm::SmallVector<llvm::StringRef> linkArgs = {
+      *ccPath, "-o", outputPath, objPath};
+  int linkResult = llvm::sys::ExecuteAndWait(*ccPath, linkArgs);
+  llvm::sys::fs::remove(objPath);
+  if (linkResult) { llvm::errs() << "error: link failed\n"; return 1; }
 
   return 0;
 }
@@ -229,7 +118,7 @@ static int emitBinary(ModuleOp module, const std::string &outputPath) {
 static int lowerCIRToLLVMDialect(ModuleOp module) {
   MLIRContext *ctx = module.getContext();
   PassManager pm(ctx);
-  pm.addPass(std::make_unique<CIRToLLVMPass>());
+  pm.addPass(cot::createCIRToLLVMPass());
   pm.addPass(createConvertFuncToLLVMPass(ConvertFuncToLLVMPassOptions{}));
   if (failed(pm.run(module))) { llvm::errs() << "error: lowering failed\n"; return 1; }
   return 0;
@@ -265,11 +154,9 @@ static OwningOpRef<ModuleOp> parseSourceToCIR(MLIRContext &ctx,
 //===----------------------------------------------------------------------===//
 
 static std::string readFile(const std::string &path) {
-  std::ifstream f(path);
-  if (!f) return "";
-  std::stringstream ss;
-  ss << f.rdbuf();
-  return ss.str();
+  auto bufOrErr = llvm::MemoryBuffer::getFile(path);
+  if (!bufOrErr) return "";
+  return (*bufOrErr)->getBuffer().str();
 }
 
 int main(int argc, char **argv) {

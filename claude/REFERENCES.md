@@ -20,6 +20,8 @@
 | Concurrency | Swift SILOptimizer/Mandatory | `~/claude/references/swift/lib/SILOptimizer/Mandatory/` | ~4,000 | Swift's structured concurrency is the reference. Async→coroutine transform, actor isolation. Go uses runtime goroutines. Rust uses library Pin/Future. |
 | Traits/generics | Rust monomorphization | `~/claude/references/rust/compiler/rustc_monomorphize/` | ~3,000 | Cleanest monomorphization. Go uses runtime interfaces. Swift uses witness tables. Zig uses comptime. Rust's zero-cost generics are proven. |
 | CIR→LLVM lowering | MLIR ConversionPatterns | `~/claude/references/llvm-project/mlir/lib/Conversion/` | — | Lattner's ConversionPattern + TypeConverter + ConversionTarget. The canonical MLIR lowering pattern. |
+| CIR dialect design | Flang FIR dialect | `~/claude/references/flang-ref/flang/include/flang/Optimizer/Dialect/` | — | Production MLIR dialect: FIROps.td, FIRTypes.td, FIRAttr.td. The closest real-world analogue to CIR. |
+| FIR→LLVM codegen | Flang CodeGen | `~/claude/references/flang-ref/flang/lib/Optimizer/CodeGen/` | — | Production FIR→LLVM lowering. ConversionPatterns at scale. |
 | Backend | MLIR→LLVM IR→TargetMachine | `~/claude/references/llvm-project/mlir/lib/Target/LLVMIR/` | — | Built into MLIR. translateModuleToLLVMIR → LLVM TargetMachine → native/wasm. Lattner's full pipeline. |
 
 ---

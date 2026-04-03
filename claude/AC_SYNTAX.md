@@ -50,7 +50,7 @@ false       // bool
 null        // null value
 ```
 
-## Arithmetic (#002, #005)
+## Arithmetic (#002, #005, #008)
 
 ```ac
 a + b       // addition
@@ -58,7 +58,7 @@ a - b       // subtraction
 a * b       // multiplication
 a / b       // division
 a % b       // remainder
--x          // negation
+-x          // negation (cir.neg)
 ```
 
 ## Comparison (#007)

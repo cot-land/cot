@@ -17,6 +17,7 @@ include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(${MLIR_INCLUDE_DIRS})
 include_directories(${PROJECT_SOURCE_DIR}/../libcir/include)
 include_directories(${PROJECT_SOURCE_DIR}/../libcir/build/include)
+include_directories(${PROJECT_SOURCE_DIR}/../libcot/include)
 include_directories(${PROJECT_SOURCE_DIR}/../libac)
 
 link_directories(${LLVM_BUILD_LIBRARY_DIR})
@@ -32,6 +33,9 @@ add_executable(cot
 target_link_libraries(cot PRIVATE
   # libzc — Zig frontend (C ABI)
   ${PROJECT_SOURCE_DIR}/../libzc/zig-out/lib/libzc.a
+
+  # libcot — compiler passes
+  ${PROJECT_SOURCE_DIR}/../libcot/build/libCOT.a
 
   # libcir
   ${PROJECT_SOURCE_DIR}/../libcir/build/libCIR.a

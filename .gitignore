@@ -1,5 +1,6 @@
 # Build directories
 libcir/build/
+libcot/build/
 libzc/zig-out/
 libzc/.zig-cache/
 cot/build/
@@ -23,3 +24,7 @@ Thumbs.db
 
 # Temporary test outputs
 /tmp/
+
+# lit test artifacts
+test/lit/**/Output/
+test/lit/.lit_test_times.txt

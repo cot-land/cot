@@ -75,14 +75,18 @@ class CodeGen {
         case Tag::star:    return b.create<cir::MulOp>(loc, resultType, lhs, rhs);
         case Tag::slash:   return b.create<cir::DivOp>(loc, resultType, lhs, rhs);
         case Tag::percent: return b.create<cir::RemOp>(loc, resultType, lhs, rhs);
-        // Comparisons: predicate values match LLVM ICmpPredicate
-        // 0=eq, 1=ne, 2=slt, 3=sle, 4=sgt, 5=sge
-        case Tag::eq_eq:      return b.create<cir::CmpOp>(loc, b.getI64IntegerAttr(0), lhs, rhs);
-        case Tag::bang_eq:    return b.create<cir::CmpOp>(loc, b.getI64IntegerAttr(1), lhs, rhs);
-        case Tag::less:       return b.create<cir::CmpOp>(loc, b.getI64IntegerAttr(2), lhs, rhs);
-        case Tag::less_eq:    return b.create<cir::CmpOp>(loc, b.getI64IntegerAttr(3), lhs, rhs);
-        case Tag::greater:    return b.create<cir::CmpOp>(loc, b.getI64IntegerAttr(4), lhs, rhs);
-        case Tag::greater_eq: return b.create<cir::CmpOp>(loc, b.getI64IntegerAttr(5), lhs, rhs);
+        case Tag::ampersand: return b.create<cir::BitAndOp>(loc, resultType, lhs, rhs);
+        case Tag::pipe:      return b.create<cir::BitOrOp>(loc, resultType, lhs, rhs);
+        case Tag::caret:     return b.create<cir::XorOp>(loc, resultType, lhs, rhs);
+        case Tag::shl:       return b.create<cir::ShlOp>(loc, resultType, lhs, rhs);
+        case Tag::shr:       return b.create<cir::ShrOp>(loc, resultType, lhs, rhs);
+        // Comparisons: cir::CmpIPredicate enum
+        case Tag::eq_eq:      return b.create<cir::CmpOp>(loc, cir::CmpIPredicate::eq, lhs, rhs);
+        case Tag::bang_eq:    return b.create<cir::CmpOp>(loc, cir::CmpIPredicate::ne, lhs, rhs);
+        case Tag::less:       return b.create<cir::CmpOp>(loc, cir::CmpIPredicate::slt, lhs, rhs);
+        case Tag::less_eq:    return b.create<cir::CmpOp>(loc, cir::CmpIPredicate::sle, lhs, rhs);
+        case Tag::greater:    return b.create<cir::CmpOp>(loc, cir::CmpIPredicate::sgt, lhs, rhs);
+        case Tag::greater_eq: return b.create<cir::CmpOp>(loc, cir::CmpIPredicate::sge, lhs, rhs);
         default:
           llvm::errs() << "error: unsupported binary op\n";
           return {};
@@ -91,10 +95,15 @@ class CodeGen {
 
     case ExprKind::UnaryOp: {
       auto operand = emitExpr(*e.rhs, resultType);
-      if (e.op == Tag::minus) {
-        auto zero = b.create<cir::ConstantOp>(loc, resultType,
-            b.getIntegerAttr(resultType, 0));
-        return b.create<cir::SubOp>(loc, resultType, zero, operand);
+      if (e.op == Tag::minus)
+        return b.create<cir::NegOp>(loc, resultType, operand);
+      if (e.op == Tag::tilde)
+        return b.create<cir::BitNotOp>(loc, resultType, operand);
+      if (e.op == Tag::bang) {
+        // Logical NOT: xor with 1 (for booleans)
+        auto one = b.create<cir::ConstantOp>(loc, resultType,
+            b.getIntegerAttr(resultType, 1));
+        return b.create<cir::XorOp>(loc, resultType, operand, one);
       }
       llvm::errs() << "error: unsupported unary op\n";
       return {};

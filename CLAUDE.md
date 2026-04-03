@@ -57,8 +57,9 @@ The LLM bias lands on: Rust syntax + Go cleanliness. `fn`, `let`/`var`, `-> type
 6. **C++ for compiler infrastructure.** Frontends can be any language via C ABI or bytecode.
 7. **LLVM/MLIR coding standards.** All C++ follows `claude/LLVM_MLIR_CODING_STANDARDS.md`. camelBack variables, UpperCamelCase types, 2-space indent, 80-col, no RTTI/exceptions, LLVM containers. CIR must be upstreamable.
 8. **Test every change.** Three test layers: lit+FileCheck (IR verification), inline tests (runtime), build tests (e2e). Run `lit test/lit/` before committing.
-9. **NEVER** `git checkout`, `git restore`, `git reset --hard`, `git clean`. Edit manually.
-10. **NEVER** `git add .` — stage files by name.
+9. **Audit regularly.** Read `claude/AUDIT.md` — it tracks compliance with MLIR/LLVM standards, open issues, and reference patterns. Audit CIR against Flang FIR (`~/claude/references/flang-ref/flang/`), MLIR Arith, and ArithToLLVM before each phase milestone. Update AUDIT.md with findings. When implementing a feature that naturally addresses an open audit issue, prompt the user to fix it at the same time.
+10. **NEVER** `git checkout`, `git restore`, `git reset --hard`, `git clean`. Edit manually.
+11. **NEVER** `git add .` — stage files by name.
 
 ---
 
@@ -86,6 +87,7 @@ Full justifications in `claude/REFERENCES.md`.
 
 ```bash
 cd libcir/build && cmake --build .                  # CIR dialect (C++)
+cd libcot/build && cmake --build .                  # Compiler passes (C++)
 cd libzc && ~/bin/zig-nightly build -Doptimize=ReleaseSafe  # Zig frontend
 cd cot/build && cmake --build .                     # Driver + ac frontend
 ```
@@ -113,7 +115,7 @@ bin/lit test/lit/ -v                                # lit + FileCheck (IR verifi
 
 ```
 libcir/        CIR MLIR dialect (C++ / TableGen)
-libcot/        Compiler passes (C++ MLIR passes) [not yet created]
+libcot/        Compiler passes (C++ MLIR passes) — CIRToLLVM lowering
 libac/         ac (agentic cot) language frontend (C++) — agent-designed syntax, dogfoods CIR
 cot/           CLI driver (C++)
 claude/

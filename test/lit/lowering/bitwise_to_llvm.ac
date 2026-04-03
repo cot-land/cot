@@ -1,0 +1,25 @@
+// RUN: %cot emit-llvm %s | %FileCheck %s
+
+fn bitops(a: i32, b: i32) -> i32 {
+    return a & b | a ^ b
+}
+
+fn negate(x: i32) -> i32 {
+    return -x
+}
+
+fn shifts(a: i32, b: i32) -> i32 {
+    return a << b >> b
+}
+
+// CHECK-LABEL: llvm.func @bitops
+// CHECK: llvm.and
+// CHECK: llvm.xor
+// CHECK: llvm.or
+
+// CHECK-LABEL: llvm.func @negate
+// CHECK: llvm.sub
+
+// CHECK-LABEL: llvm.func @shifts
+// CHECK: llvm.shl
+// CHECK: llvm.lshr

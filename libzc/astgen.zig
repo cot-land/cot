@@ -75,6 +75,7 @@ const Gen = struct {
             const name = self.tree.tokenSlice(tok);
             if (std.mem.eql(u8, name, "i32")) return self.b.intType(32);
             if (std.mem.eql(u8, name, "i64")) return self.b.intType(64);
+            if (std.mem.eql(u8, name, "bool")) return self.b.intType(1);
             if (std.mem.eql(u8, name, "void")) return self.b.intType(0);
         }
         return self.i32Type(); // default
@@ -243,6 +244,13 @@ const Gen = struct {
             .mul => self.mapBinOp(block, node, "cir.mul", result_type),
             .div => self.mapBinOp(block, node, "cir.div", result_type),
             .mod => self.mapBinOp(block, node, "cir.rem", result_type),
+            .negation => self.mapUnaryOp(block, node, "cir.neg", result_type),
+            .bit_not => self.mapUnaryOp(block, node, "cir.bit_not", result_type),
+            .bit_and => self.mapBinOp(block, node, "cir.bit_and", result_type),
+            .bit_or => self.mapBinOp(block, node, "cir.bit_or", result_type),
+            .bit_xor => self.mapBinOp(block, node, "cir.xor", result_type),
+            .shl => self.mapBinOp(block, node, "cir.shl", result_type),
+            .shr => self.mapBinOp(block, node, "cir.shr", result_type),
             .equal_equal => self.mapCmp(block, node, 0),
             .bang_equal => self.mapCmp(block, node, 1),
             .less_than => self.mapCmp(block, node, 2),
@@ -271,10 +279,28 @@ const Gen = struct {
     }
 
     fn mapIdentifier(self: *Gen, block: mlir.Block, node: Node.Index) mlir.Value {
-        _ = block;
         const tok = self.tree.nodeMainToken(node);
         const name = self.tree.tokenSlice(tok);
+        // Boolean literals appear as identifiers in Zig AST
+        if (std.mem.eql(u8, name, "true")) {
+            const bool_type = self.b.intType(1);
+            return self.b.emit(block, "cir.constant", &.{bool_type}, &.{}, &.{
+                self.b.attr("value", self.b.intAttr(bool_type, 1)),
+            });
+        }
+        if (std.mem.eql(u8, name, "false")) {
+            const bool_type = self.b.intType(1);
+            return self.b.emit(block, "cir.constant", &.{bool_type}, &.{}, &.{
+                self.b.attr("value", self.b.intAttr(bool_type, 0)),
+            });
+        }
         return self.resolve(name) orelse mlir.Value{ .ptr = null };
+    }
+
+    fn mapUnaryOp(self: *Gen, block: mlir.Block, node: Node.Index, op_name: []const u8, result_type: mlir.Type) mlir.Value {
+        const operand_node = self.tree.nodeData(node).node;
+        const operand = self.mapExpr(block, operand_node, result_type);
+        return self.b.emit(block, op_name, &.{result_type}, &.{operand}, &.{});
     }
 
     fn mapBinOp(self: *Gen, block: mlir.Block, node: Node.Index, op_name: []const u8, result_type: mlir.Type) mlir.Value {

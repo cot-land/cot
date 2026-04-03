@@ -17,6 +17,7 @@ A compiler toolkit built on MLIR/LLVM. CIR (Cot Intermediate Representation) is 
 ```bash
 # Build everything
 cd libcir/build && cmake --build .                          # CIR dialect
+cd libcot/build && cmake --build .                          # Compiler passes
 cd libzc && ~/bin/zig-nightly build -Doptimize=ReleaseSafe  # Zig frontend
 cd cot/build && cmake --build .                             # Driver + ac frontend
 
@@ -24,10 +25,10 @@ cd cot/build && cmake --build .                             # Driver + ac fronte
 cd cot/build && ./cot test                                  # Gate test: 42 ✓
 cd test && bash run.sh ../cot/build/cot                     # 4 build tests pass
 cd cot/build && ./cot test ../../test/inline/005_inline_test.ac  # 3 inline tests pass
-bin/lit test/lit/ -v                                        # 5 lit+FileCheck tests pass
+bin/lit test/lit/ -v                                        # 11 lit+FileCheck tests pass
 ```
 
-**Total: 12 tests, all passing.**
+**Total: 16 tests, all passing.**
 
 **Two frontends produce identical CIR:**
 ```
@@ -58,6 +59,13 @@ zig:  pub fn add(a: i32, b: i32) i32 { return a + b; }  → cir.add → 42
 | `cir.div` | CIR_DivOp | `llvm.sdiv` |
 | `cir.rem` | CIR_RemOp | `llvm.srem` |
 | `cir.cmp` | CIR_CmpOp (predicate attr, returns i1) | `llvm.icmp` |
+| `cir.neg` | CIR_NegOp | `llvm.sub(0, x)` |
+| `cir.bit_and` | CIR_BitAndOp | `llvm.and` |
+| `cir.bit_or` | CIR_BitOrOp | `llvm.or` |
+| `cir.xor` | CIR_XorOp | `llvm.xor` |
+| `cir.bit_not` | CIR_BitNotOp | `llvm.xor(x, -1)` |
+| `cir.shl` | CIR_ShlOp | `llvm.shl` |
+| `cir.shr` | CIR_ShrOp | `llvm.lshr` |
 | `cir.trap` | CIR_TrapOp (Terminator) | `llvm.trap` + `llvm.unreachable` |
 
 Functions use MLIR's built-in `func.func` / `func.return` / `func.call`. CIR-specific `cir.func` will be added when we need CIR function semantics (comptime params, error returns, etc.).
@@ -67,10 +75,15 @@ Functions use MLIR's built-in `func.func` / `func.return` / `func.call`. CIR-spe
 ## Project Structure
 
 ```
-libcir/          CIR MLIR dialect (C++/TableGen) — 8 ops
+libcir/          CIR MLIR dialect (C++/TableGen) — 15 ops
   include/CIR/   CIRDialect.td, CIROps.td, CIROps.h
   lib/           CIRDialect.cpp
   c-api/         CIRCApi.h/cpp — C API for dialect registration
+  build/         CMake build dir (cmake --build .)
+
+libcot/          Compiler passes (C++ MLIR passes)
+  include/COT/   Passes.h — public API (createCIRToLLVMPass, future passes)
+  lib/           CIRToLLVM.cpp — CIR → LLVM lowering (15 ConversionPatterns)
   build/         CMake build dir (cmake --build .)
 
 libac/           ac frontend (C++) — scanner, parser, codegen → CIR
@@ -106,6 +119,7 @@ claude/          Internal docs
   ARCHITECTURE.md    Full design, multi-frontend plan, CIR op inventory
   REFERENCES.md      Component-to-reference mapping (CRITICAL — read before coding)
   FEATURES.md        80 features across 11 phases, implementation order
+  AUDIT.md           MLIR/LLVM standards compliance — open issues, reference patterns
   AC_SYNTAX.md       ac language syntax reference
   LLVM_MLIR_CODING_STANDARDS.md  C++ style guide (LLVM conventions)
   HANDOFF.md         THIS FILE
@@ -137,17 +151,15 @@ Each feature adds:
 7. Update `claude/FEATURES.md` status to ✓
 
 **Next features in order:**
-- #006 Boolean constants (cir.constant i1)
-- #008 Negation (cir.neg or sub from 0)
-- #009 Bitwise operators (cir.bit_and, cir.bit_or, cir.xor, cir.bit_not)
-- #010 Shift operators (cir.shl, cir.shr)
 - #011 Let bindings (cir.alloc, cir.store, cir.load) — THIS IS THE BIG ONE
 - #012 Var bindings (mutable locals)
+- #013 Assignment (cir.store)
+- #014 Compound assignment (load+op+store)
 - #015 If/else as statement (already partially works in ac codegen)
 
-### After Phase 2: libcot (compiler passes library)
+### libcot: compiler passes library (DONE)
 
-Extract CIR→LLVM lowering from `cot/main.cpp` into `libcot/`. This becomes the compiler library that the driver links against.
+CIR→LLVM lowering extracted into `libcot/`. Future passes (TypeResolution, ARCInsertion, etc.) go here. The driver links `libcot/build/libCOT.a`.
 
 ---
 

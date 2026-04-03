@@ -51,11 +51,11 @@ Status: `-` not started, `~` in progress, `✓` done.
 | 003 | Function declaration | `func.func` | `fn f(a: i32) -> i32 { }` | `fn f(a: i32) i32 { }` | `func-to-llvm` | ✓ |
 | 004 | Function calls | `func.call` | `add(19, 23)` | `add(19, 23)` | `func-to-llvm` | ✓ |
 | 005 | Integer div/mod | `cir.div/rem` | `a / b`, `a % b` | `a / b`, `a % b` | `llvm.sdiv/srem` | ✓ |
-| 006 | Boolean constants | `cir.constant` i1 | `true`, `false` | `true`, `false` | `llvm.mlir.constant` | - |
+| 006 | Boolean constants | `cir.constant` i1 | `true`, `false` | `true`, `false` | `llvm.mlir.constant` | ✓ |
 | 007 | Comparisons | `cir.cmp` | `==` `!=` `<` `<=` `>` `>=` | same | `llvm.icmp` | ✓ |
-| 008 | Negation | `cir.neg` | `-x` | `-x` | `llvm.sub(0,x)` | - |
-| 009 | Bitwise ops | `cir.bit_and/or/xor/not` | `&` `\|` `^` `~` | same | `llvm.and/or/xor` | - |
-| 010 | Shift ops | `cir.shl/shr` | `<<` `>>` | same | `llvm.shl/lshr` | - |
+| 008 | Negation | `cir.neg` | `-x` | `-x` | `llvm.sub(0,x)` | ✓ |
+| 009 | Bitwise ops | `cir.bit_and/or/xor/not` | `&` `\|` `^` `~` | same | `llvm.and/or/xor` | ✓ |
+| 010 | Shift ops | `cir.shl/shr` | `<<` `>>` | same | `llvm.shl/lshr` | ✓ |
 
 ### Phase 2 — Variables and Control Flow
 

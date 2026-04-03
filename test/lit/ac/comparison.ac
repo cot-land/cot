@@ -5,4 +5,4 @@ fn check(a: i32, b: i32) -> bool {
 }
 
 // CHECK-LABEL: func.func @check
-// CHECK: cir.cmp
+// CHECK: cir.cmp eq

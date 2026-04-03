@@ -223,7 +223,7 @@ Same MLIR → LLVM IR → TargetMachine pipeline for all targets.
 ```
 ~/cot-land/cot/
   libcir/        CIR MLIR dialect definition (C++ / TableGen)
-  libcot/        Compiler passes (C++ MLIR passes) [planned]
+  libcot/        Compiler passes (C++ MLIR passes) — CIRToLLVM lowering
   libac/         ac (agentic cot) frontend (C++) — agent-designed syntax, dogfoods CIR
   libzc/         Zig frontend (Zig) — uses std.zig.Ast parser, C ABI or bytecode
   libts/         TypeScript frontend [planned]
