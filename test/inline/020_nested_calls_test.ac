@@ -1,0 +1,24 @@
+// Feature 020: Nested functions/calls — inline tests
+// Run with: cot test test/inline/020_nested_calls_test.ac
+
+fn double(x: i32) -> i32 {
+    return x + x
+}
+
+fn quadruple(x: i32) -> i32 {
+    return double(double(x))
+}
+
+fn add3(a: i32, b: i32, c: i32) -> i32 {
+    return a + b + c
+}
+
+test "nested calls" {
+    assert(double(5) == 10)
+    assert(quadruple(3) == 12)
+    assert(quadruple(10) + double(1) == 42)
+}
+
+test "3-deep call chain" {
+    assert(add3(double(1), double(2), double(3)) == 12)
+}

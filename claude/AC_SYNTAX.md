@@ -131,7 +131,7 @@ while x < 10 {             // (✓ #017) no parens
     x += 1
 }
 
-for i in 0..10 {
+for i in 0..10 {            // (✓ #019) desugars to while
     // ...
 }
 ```

@@ -28,10 +28,13 @@ class CodeGen {
   std::string_view source_;
 
   // Zig AstGen pattern: scope holds named values for current function.
-  // Zig uses a linked-list scope chain (GenZir → parent). For now, flat map suffices.
   // params: SSA value (direct), locals: SSA address (needs cir.load)
   std::unordered_map<std::string_view, mlir::Value> namedValues;
   std::unordered_map<std::string_view, std::pair<mlir::Value, mlir::Type>> localAddrs;
+
+  // Loop stack for break/continue — {header, exit} block pairs
+  struct LoopContext { mlir::Block *header; mlir::Block *exit; };
+  llvm::SmallVector<LoopContext> loopStack;
 
   mlir::Type resolveType(const TypeRef &t) {
     if (t.name == "i32") return b.getI32Type();
@@ -195,29 +198,77 @@ class CodeGen {
       break;
     }
 
-    case StmtKind::While: {
-      // header: eval condition, condbr to body or exit
-      // body: statements, br back to header
-      // exit: continue
+    case StmtKind::For: {
+      // Desugar: for i in start..end { body }
+      auto i32Ty = b.getI32Type();
+      auto ptrType = cir::PointerType::get(b.getContext());
+      auto addr = b.create<cir::AllocaOp>(loc, ptrType,
+          mlir::TypeAttr::get(i32Ty));
+      auto startVal = emitExpr(*s.expr, i32Ty);
+      b.create<cir::StoreOp>(loc, startVal, addr);
+      localAddrs[s.varName] = {addr, i32Ty};
+      auto endVal = emitExpr(*s.rangeEnd, i32Ty);
       auto *headerBlock = new mlir::Block();
       auto *bodyBlock = new mlir::Block();
       auto *exitBlock = new mlir::Block();
       parentFunc.getBody().push_back(headerBlock);
       parentFunc.getBody().push_back(bodyBlock);
       parentFunc.getBody().push_back(exitBlock);
-      // Branch from current block to header
       b.create<cir::BrOp>(loc, headerBlock);
-      // Header: evaluate condition
+      b.setInsertionPointToStart(headerBlock);
+      auto curVal = b.create<cir::LoadOp>(loc, i32Ty, addr);
+      auto cond = b.create<cir::CmpOp>(loc, cir::CmpIPredicate::slt,
+          curVal, endVal);
+      b.create<cir::CondBrOp>(loc, cond, bodyBlock, exitBlock);
+      b.setInsertionPointToStart(bodyBlock);
+      loopStack.push_back({headerBlock, exitBlock});
+      for (auto &st : s.thenBody) emitStmt(*st, returnType, parentFunc);
+      loopStack.pop_back();
+      { auto *cur = b.getInsertionBlock();
+        if (cur->empty() || !cur->back().hasTrait<mlir::OpTrait::IsTerminator>()) {
+          auto v = b.create<cir::LoadOp>(loc, i32Ty, addr);
+          auto one = b.create<cir::ConstantOp>(loc, i32Ty, b.getI32IntegerAttr(1));
+          auto inc = b.create<cir::AddOp>(loc, i32Ty, v, one);
+          b.create<cir::StoreOp>(loc, inc, addr);
+          b.create<cir::BrOp>(loc, headerBlock);
+        }
+      }
+      b.setInsertionPointToStart(exitBlock);
+      break;
+    }
+
+    case StmtKind::While: {
+      auto *headerBlock = new mlir::Block();
+      auto *bodyBlock = new mlir::Block();
+      auto *exitBlock = new mlir::Block();
+      parentFunc.getBody().push_back(headerBlock);
+      parentFunc.getBody().push_back(bodyBlock);
+      parentFunc.getBody().push_back(exitBlock);
+      b.create<cir::BrOp>(loc, headerBlock);
       b.setInsertionPointToStart(headerBlock);
       auto cond = emitExpr(*s.expr, b.getI1Type());
       b.create<cir::CondBrOp>(loc, cond, bodyBlock, exitBlock);
-      // Body: statements + back-edge to header
       b.setInsertionPointToStart(bodyBlock);
+      loopStack.push_back({headerBlock, exitBlock});
       for (auto &st : s.thenBody) emitStmt(*st, returnType, parentFunc);
-      if (bodyBlock->empty() || !bodyBlock->back().hasTrait<mlir::OpTrait::IsTerminator>())
-        b.create<cir::BrOp>(loc, headerBlock);
-      // Exit: continue after loop
+      loopStack.pop_back();
+      { auto *cur = b.getInsertionBlock();
+        if (cur->empty() || !cur->back().hasTrait<mlir::OpTrait::IsTerminator>())
+          b.create<cir::BrOp>(loc, headerBlock);
+      }
       b.setInsertionPointToStart(exitBlock);
+      break;
+    }
+
+    case StmtKind::Break: {
+      if (!loopStack.empty())
+        b.create<cir::BrOp>(loc, loopStack.back().exit);
+      break;
+    }
+
+    case StmtKind::Continue: {
+      if (!loopStack.empty())
+        b.create<cir::BrOp>(loc, loopStack.back().header);
       break;
     }
 

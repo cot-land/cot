@@ -1,0 +1,37 @@
+// Feature 018: Break/continue — inline tests
+// Run with: cot test test/inline/018_break_continue_test.ac
+
+test "break" {
+    var i: i32 = 0
+    while i < 100 {
+        if i == 42 {
+            break
+        }
+        i += 1
+    }
+    assert(i == 42)
+}
+
+test "continue" {
+    var total: i32 = 0
+    var i: i32 = 0
+    while i < 10 {
+        i += 1
+        if i == 5 {
+            continue
+        }
+        total += i
+    }
+    assert(total == 50)
+}
+
+test "break from for" {
+    var last: i32 = 0
+    for i in 0..100 {
+        last = i
+        if i == 9 {
+            break
+        }
+    }
+    assert(last == 9)
+}

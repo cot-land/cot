@@ -1,0 +1,26 @@
+// Feature 019: For loop (range) — inline tests
+// Run with: cot test test/inline/019_for_test.ac
+
+test "sum 0..10" {
+    var total: i32 = 0
+    for i in 0..10 {
+        total += i
+    }
+    assert(total == 45)
+}
+
+test "sum 1..6" {
+    var total: i32 = 0
+    for i in 1..6 {
+        total += i
+    }
+    assert(total == 15)
+}
+
+test "empty range" {
+    var total: i32 = 42
+    for i in 5..5 {
+        total = 0
+    }
+    assert(total == 42)
+}

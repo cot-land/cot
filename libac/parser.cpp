@@ -223,6 +223,28 @@ class Parser {
       return s;
     }
 
+    // For loop: for i in start..end { body }
+    if (check(Tag::kw_for)) {
+      size_t p = advance().start;
+      auto s = std::make_unique<Stmt>();
+      s->kind = StmtKind::For;
+      s->pos = p;
+      s->varName = tokenText(expect(Tag::identifier));
+      expect(Tag::kw_in);
+      s->expr = parseExpr();     // start
+      expect(Tag::dot_dot);
+      s->rangeEnd = parseExpr(); // end
+      expect(Tag::l_brace);
+      skipSemis();
+      while (!check(Tag::r_brace) && !check(Tag::eof)) {
+        s->thenBody.push_back(parseStmt());
+        skipSemis();
+      }
+      expect(Tag::r_brace);
+      match(Tag::semicolon);
+      return s;
+    }
+
     // While loop: while cond { body }
     if (check(Tag::kw_while)) {
       size_t p = advance().start;
@@ -237,6 +259,26 @@ class Parser {
         skipSemis();
       }
       expect(Tag::r_brace);
+      match(Tag::semicolon);
+      return s;
+    }
+
+    // Break
+    if (check(Tag::kw_break)) {
+      size_t p = advance().start;
+      auto s = std::make_unique<Stmt>();
+      s->kind = StmtKind::Break;
+      s->pos = p;
+      match(Tag::semicolon);
+      return s;
+    }
+
+    // Continue
+    if (check(Tag::kw_continue)) {
+      size_t p = advance().start;
+      auto s = std::make_unique<Stmt>();
+      s->kind = StmtKind::Continue;
+      s->pos = p;
       match(Tag::semicolon);
       return s;
     }

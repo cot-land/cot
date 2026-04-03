@@ -44,7 +44,7 @@ struct Expr {
 };
 
 // Statement kinds
-enum class StmtKind { Return, ExprStmt, If, While, Assert, Let, Var, Assign, CompoundAssign };
+enum class StmtKind { Return, ExprStmt, If, While, For, Break, Continue, Assert, Let, Var, Assign, CompoundAssign };
 
 struct Stmt {
   StmtKind kind;
@@ -52,9 +52,10 @@ struct Stmt {
   ExprPtr expr;                   // Return value, ExprStmt expr, If condition, Assert condition
   std::vector<StmtPtr> thenBody;  // If then block
   std::vector<StmtPtr> elseBody;  // If else block
-  std::string_view varName;       // Let/Var/Assign/CompoundAssign: variable name
+  std::string_view varName;       // Let/Var/Assign/CompoundAssign/For: variable name
   TypeRef varType;                // Let/Var: type annotation
   Tag op = Tag::invalid;          // CompoundAssign: operator (+= → plus, etc.)
+  ExprPtr rangeEnd;               // For: end of range
 };
 
 struct FnDecl {
