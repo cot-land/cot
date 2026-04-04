@@ -1,0 +1,18 @@
+// RUN: %cot emit-cir %s | %FileCheck %s
+
+// Feature #044: If-unwrap optional — ac syntax
+
+fn unwrap_or(x: ?i32, default: i32) -> i32 {
+    if x |val| {
+        return val
+    }
+    return default
+}
+
+// CHECK-LABEL: func.func @unwrap_or
+// CHECK-SAME: !cir.optional<i32>
+// CHECK: cir.is_non_null
+// CHECK: cir.condbr
+// CHECK: cir.optional_payload
+// CHECK-SAME: !cir.optional<i32> to i32
+// CHECK: return

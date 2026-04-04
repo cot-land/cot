@@ -427,9 +427,21 @@ class Parser {
     if (check(Tag::kw_if)) {
       size_t p = advance().start;
       auto s = std::make_unique<Stmt>();
-      s->kind = StmtKind::If;
       s->pos = p;
-      s->expr = parseExpr();  // condition (no parens — Go/Rust pattern)
+      // Detect if-unwrap: if <ident> |<ident>| { — lookahead for pipe after primary
+      // Check: next is identifier, then next+1 is pipe
+      if (check(Tag::identifier) && pos_ + 1 < tokens_.size() &&
+          tokens_[pos_ + 1].tag == Tag::pipe) {
+        // if-unwrap: if optVar |captureVar| { ... }
+        s->kind = StmtKind::IfUnwrap;
+        s->expr = parsePrimary();  // parse just the optional variable (no binary ops)
+        expect(Tag::pipe);         // consume '|'
+        s->varName = tokenText(expect(Tag::identifier));
+        expect(Tag::pipe);         // consume '|'
+      } else {
+        s->kind = StmtKind::If;
+        s->expr = parseExpr();     // regular condition
+      }
       expect(Tag::l_brace);
       skipSemis();
       while (!check(Tag::r_brace) && !check(Tag::eof)) {

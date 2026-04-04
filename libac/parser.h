@@ -52,7 +52,7 @@ struct Expr {
 };
 
 // Statement kinds
-enum class StmtKind { Return, ExprStmt, If, While, For, Break, Continue, Assert, Let, Var, Assign, CompoundAssign };
+enum class StmtKind { Return, ExprStmt, If, IfUnwrap, While, For, Break, Continue, Assert, Let, Var, Assign, CompoundAssign };
 
 struct Stmt {
   StmtKind kind;

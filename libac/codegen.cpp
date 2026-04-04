@@ -646,7 +646,74 @@ class CodeGen {
       emitAssertStmt(s, parentFunc); break;
     case StmtKind::If:
       emitIfStmt(s, returnType, parentFunc); break;
+    case StmtKind::IfUnwrap:
+      emitIfUnwrapStmt(s, returnType, parentFunc); break;
     }
+  }
+
+  void emitIfUnwrapStmt(const Stmt &s, mlir::Type returnType,
+                         mlir::func::FuncOp parentFunc) {
+    // if optExpr |val| { thenBody } else { elseBody }
+    // Desugar:
+    //   %opt = <emit optExpr>
+    //   %is_some = cir.is_non_null %opt
+    //   cir.condbr %is_some, ^then, ^else
+    //   ^then:
+    //     %val = cir.optional_payload %opt
+    //     <thenBody with val in scope>
+    //     cir.br ^merge
+    //   ^else:
+    //     <elseBody>
+    //     cir.br ^merge
+    //   ^merge:
+
+    // Emit the optional expression. We don't know the payload type yet,
+    // so use a dummy. The expr should produce an optional type.
+    auto optVal = emitExpr(*s.expr, b.getI32Type());
+    auto optType = llvm::dyn_cast<cir::OptionalType>(optVal.getType());
+    if (!optType) {
+      llvm::errs() << "error: if-unwrap requires optional type\n";
+      return;
+    }
+
+    auto cond = b.create<cir::IsNonNullOp>(loc, b.getI1Type(), optVal);
+
+    auto *thenBlock = addBlock(parentFunc);
+    auto *elseBlock = addBlock(parentFunc);
+    auto *mergeBlock = addBlock(parentFunc);
+    b.create<cir::CondBrOp>(loc, cond, thenBlock, elseBlock);
+
+    // Then block: extract payload, bind as local
+    b.setInsertionPointToStart(thenBlock);
+    auto payloadType = optType.getPayloadType();
+    auto payload = b.create<cir::OptionalPayloadOp>(loc, payloadType, optVal);
+    // Bind captured variable in scope (alloca + store pattern)
+    auto ptrType = cir::PointerType::get(b.getContext());
+    auto valAddr = b.create<cir::AllocaOp>(loc, ptrType,
+        mlir::TypeAttr::get(payloadType));
+    b.create<cir::StoreOp>(loc, payload, valAddr);
+    localAddrs[s.varName] = {valAddr, payloadType};
+
+    for (auto &st : s.thenBody) emitStmt(*st, returnType, parentFunc);
+    bool thenReturns = !thenBlock->empty() &&
+        thenBlock->back().hasTrait<mlir::OpTrait::IsTerminator>();
+    if (!thenReturns)
+      b.create<cir::BrOp>(loc, mlir::ValueRange{}, mergeBlock);
+
+    // Remove captured variable from scope
+    localAddrs.erase(s.varName);
+
+    // Else block
+    b.setInsertionPointToStart(elseBlock);
+    for (auto &st : s.elseBody) emitStmt(*st, returnType, parentFunc);
+    bool elseReturns = !elseBlock->empty() &&
+        elseBlock->back().hasTrait<mlir::OpTrait::IsTerminator>();
+    if (!elseReturns)
+      b.create<cir::BrOp>(loc, mlir::ValueRange{}, mergeBlock);
+
+    b.setInsertionPointToStart(mergeBlock);
+    if (thenReturns && elseReturns)
+      b.create<cir::TrapOp>(loc);
   }
 
   void emitFn(mlir::ModuleOp module, const FnDecl &fn) {

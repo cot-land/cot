@@ -1,0 +1,38 @@
+fn unwrap_or(x: ?i32, default: i32) -> i32 {
+    if x |val| {
+        return val
+    }
+    return default
+}
+
+test "unwrap some value" {
+    let x: ?i32 = 42
+    assert(unwrap_or(x, 0) == 42)
+}
+
+test "unwrap null returns default" {
+    let x: ?i32 = null
+    assert(unwrap_or(x, 99) == 99)
+}
+
+test "if-unwrap with else" {
+    let x: ?i32 = 10
+    var result: i32 = 0
+    if x |val| {
+        result = val
+    } else {
+        result = -1
+    }
+    assert(result == 10)
+}
+
+test "if-unwrap null takes else" {
+    let x: ?i32 = null
+    var result: i32 = 0
+    if x |val| {
+        result = val
+    } else {
+        result = -1
+    }
+    assert(result == -1)
+}

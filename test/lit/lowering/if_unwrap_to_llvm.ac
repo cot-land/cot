@@ -1,0 +1,17 @@
+// RUN: %cot emit-llvm %s | %FileCheck %s
+
+// Feature #044: If-unwrap lowering
+// is_non_null → extractvalue [1], optional_payload → extractvalue [0]
+
+fn unwrap_or(x: ?i32, default: i32) -> i32 {
+    if x |val| {
+        return val
+    }
+    return default
+}
+
+// CHECK-LABEL: llvm.func @unwrap_or
+// CHECK: llvm.extractvalue {{.*}}[1] : !llvm.struct<(i32, i1)>
+// CHECK: llvm.cond_br
+// CHECK: llvm.extractvalue {{.*}}[0] : !llvm.struct<(i32, i1)>
+// CHECK: llvm.return
