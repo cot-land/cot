@@ -524,6 +524,24 @@ func CirStructTypeGet(ctx MlirContext, name string, fieldNames []string, fieldTy
 	return MlirType{ptr: C.cirStructTypeGet(ctx.ptr, nameRef, C.intptr_t(nFields), fnPtr, ftPtr)}
 }
 
+// --- Slice Operations ---
+
+func CirBuildSlicePtr(block MlirBlock, loc MlirLocation, slice MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildSlicePtr(block.ptr, loc.ptr, slice.ptr)}
+}
+
+func CirBuildSliceLen(block MlirBlock, loc MlirLocation, slice MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildSliceLen(block.ptr, loc.ptr, slice.ptr)}
+}
+
+func CirBuildSliceElem(block MlirBlock, loc MlirLocation, elemType MlirType, slice MlirValue, index MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildSliceElem(block.ptr, loc.ptr, elemType.ptr, slice.ptr, index.ptr)}
+}
+
+func CirTypeIsSlice(ty MlirType) bool {
+	return bool(C.cirTypeIsSlice(ty.ptr))
+}
+
 // --- Type Queries ---
 
 func CirTypeIsStruct(ty MlirType) bool {

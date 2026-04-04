@@ -1,0 +1,24 @@
+fn str_len(s: string) -> i64 {
+    return s.len
+}
+
+test "string slice length" {
+    let s: string = "hello"
+    assert(s.len == 5)
+}
+
+test "empty string length" {
+    let s: string = ""
+    assert(s.len == 0)
+}
+
+test "string length via function" {
+    assert(str_len("world") == 5)
+}
+
+test "string element access" {
+    let s: string = "hello"
+    let idx: i64 = 0
+    let c: i8 = s[idx]
+    assert(c == 104)
+}

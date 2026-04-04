@@ -501,4 +501,59 @@ def CIR_StringConstantOp : CIR_Op<"string_constant", [Pure]> {
   let hasVerifier = 1;
 }
 
+def CIR_SlicePtrOp : CIR_Op<"slice_ptr", [Pure]> {
+  let summary = "extract pointer from slice";
+  let description = [{
+    Extracts the data pointer from a !cir.slice<T>.
+    Returns !cir.ptr (raw pointer to the first element).
+
+    Lowers to: llvm.extractvalue [0] (ptr field of fat pointer struct).
+
+    Example:
+      %p = cir.slice_ptr %s : !cir.slice<i32> to !cir.ptr
+  }];
+
+  let arguments = (ins AnyType:$input);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$input attr-dict `:` type($input) `to` type($result)";
+  let hasVerifier = 1;
+}
+
+def CIR_SliceLenOp : CIR_Op<"slice_len", [Pure]> {
+  let summary = "extract length from slice";
+  let description = [{
+    Extracts the length from a !cir.slice<T>. Returns i64.
+
+    Lowers to: llvm.extractvalue [1] (len field of fat pointer struct).
+
+    Example:
+      %n = cir.slice_len %s : !cir.slice<i32> to i64
+  }];
+
+  let arguments = (ins AnyType:$input);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$input attr-dict `:` type($input) `to` type($result)";
+  let hasVerifier = 1;
+}
+
+def CIR_SliceElemOp : CIR_Op<"slice_elem", [Pure]> {
+  let summary = "index into slice (unchecked)";
+  let description = [{
+    Loads the element at index %idx from a !cir.slice<T>.
+    Extracts the pointer, GEPs to the element, and loads it.
+    No bounds checking (safety passes can add cir.bounds_check before this).
+
+    Lowers to: extractvalue [0] (ptr) + GEP + load.
+
+    Example:
+      %v = cir.slice_elem %s, %i : !cir.slice<i32>, i64 to i32
+  }];
+
+  let arguments = (ins AnyType:$input, AnyInteger:$index);
+  let results = (outs AnyType:$result);
+  let assemblyFormat =
+      "$input `,` $index attr-dict `:` type($input) `,` type($index) `to` type($result)";
+  let hasVerifier = 1;
+}
+
 #endif // CIR_OPS

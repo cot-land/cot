@@ -398,3 +398,32 @@ void cirBuildTrap(MlirBlock block, MlirLocation loc) {
   auto b = builderAtEnd(block, loc);
   b.create<cir::TrapOp>(unwrap(loc));
 }
+
+//===----------------------------------------------------------------------===//
+// Slice Operations
+//===----------------------------------------------------------------------===//
+
+MlirValue cirBuildSlicePtr(MlirBlock block, MlirLocation loc,
+                           MlirValue slice) {
+  auto b = builderAtEnd(block, loc);
+  auto ptrType = cir::PointerType::get(b.getContext());
+  auto op = b.create<cir::SlicePtrOp>(unwrap(loc), ptrType, unwrap(slice));
+  return wrap(op.getResult());
+}
+
+MlirValue cirBuildSliceLen(MlirBlock block, MlirLocation loc,
+                           MlirValue slice) {
+  auto b = builderAtEnd(block, loc);
+  auto i64Type = b.getI64Type();
+  auto op = b.create<cir::SliceLenOp>(unwrap(loc), i64Type, unwrap(slice));
+  return wrap(op.getResult());
+}
+
+MlirValue cirBuildSliceElem(MlirBlock block, MlirLocation loc,
+                            MlirType elemType, MlirValue slice,
+                            MlirValue index) {
+  auto b = builderAtEnd(block, loc);
+  auto op = b.create<cir::SliceElemOp>(unwrap(loc), unwrap(elemType),
+                                        unwrap(slice), unwrap(index));
+  return wrap(op.getResult());
+}

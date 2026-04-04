@@ -420,6 +420,43 @@ LogicalResult StringConstantOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// cir.slice_ptr — verifier
+//===----------------------------------------------------------------------===//
+
+LogicalResult SlicePtrOp::verify() {
+  if (!llvm::isa<cir::SliceType>(getInput().getType()))
+    return emitOpError("input must be !cir.slice<T>");
+  if (!llvm::isa<cir::PointerType>(getResult().getType()))
+    return emitOpError("result must be !cir.ptr");
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// cir.slice_len — verifier
+//===----------------------------------------------------------------------===//
+
+LogicalResult SliceLenOp::verify() {
+  if (!llvm::isa<cir::SliceType>(getInput().getType()))
+    return emitOpError("input must be !cir.slice<T>");
+  if (!getResult().getType().isInteger(64))
+    return emitOpError("result must be i64");
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// cir.slice_elem — verifier
+//===----------------------------------------------------------------------===//
+
+LogicalResult SliceElemOp::verify() {
+  auto sliceType = llvm::dyn_cast<cir::SliceType>(getInput().getType());
+  if (!sliceType)
+    return emitOpError("input must be !cir.slice<T>");
+  if (getResult().getType() != sliceType.getElementType())
+    return emitOpError("result type must match slice element type");
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // Cast op verifiers — width constraints per Arith dialect pattern
 // Reference: mlir/lib/Dialect/Arith/IR/ArithOps.cpp verifyExtOp/verifyTruncateOp
 //===----------------------------------------------------------------------===//

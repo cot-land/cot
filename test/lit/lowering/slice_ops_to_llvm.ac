@@ -1,0 +1,26 @@
+// RUN: %cot emit-llvm %s | %FileCheck %s
+
+// Features #037-040: Slice ops lowering
+// cir.slice_len → llvm.extractvalue [1]
+// cir.slice_elem → llvm.extractvalue [0] + llvm.getelementptr + llvm.load
+
+fn get_len() -> i64 {
+    let s: string = "hello"
+    return s.len
+}
+
+fn get_char() -> i8 {
+    let s: string = "hello"
+    let idx: i64 = 0
+    return s[idx]
+}
+
+// CHECK-LABEL: llvm.func @get_len
+// CHECK: llvm.extractvalue {{.*}}[1] : !llvm.struct<(ptr, i64)>
+// CHECK: llvm.return
+
+// CHECK-LABEL: llvm.func @get_char
+// CHECK: llvm.extractvalue {{.*}}[0] : !llvm.struct<(ptr, i64)>
+// CHECK: llvm.getelementptr
+// CHECK: llvm.load
+// CHECK: llvm.return

@@ -186,6 +186,11 @@ pub extern "c" fn cirBuildBr(block: Block, loc: Location, dest: Block, n: isize,
 pub extern "c" fn cirBuildCondBr(block: Block, loc: Location, cond: Value, t: Block, f: Block) callconv(.c) void;
 pub extern "c" fn cirBuildTrap(block: Block, loc: Location) callconv(.c) void;
 
+// Slice ops
+pub extern "c" fn cirBuildSlicePtr(block: Block, loc: Location, slice: Value) callconv(.c) Value;
+pub extern "c" fn cirBuildSliceLen(block: Block, loc: Location, slice: Value) callconv(.c) Value;
+pub extern "c" fn cirBuildSliceElem(block: Block, loc: Location, elem: Type, slice: Value, idx: Value) callconv(.c) Value;
+
 // ============================================================
 // Convenience API (ported from cot-failed/libzc/mlir.zig)
 // ============================================================

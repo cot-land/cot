@@ -632,7 +632,13 @@ func (g *Gen) mapArrayLiteral(block MlirBlock, node *ast.Node, resultType MlirTy
 func (g *Gen) mapElementAccess(block MlirBlock, node *ast.Node, resultType MlirType) MlirValue {
 	ea := node.AsElementAccessExpression()
 	arr := g.mapExpr(block, ea.Expression, resultType)
-	// Get constant index from argument
+	arrType := ValueGetType(arr)
+	// Slice indexing: s[i] → cir.slice_elem
+	if CirTypeIsSlice(arrType) {
+		idx := g.mapExpr(block, ea.ArgumentExpression, g.b.IntType(64))
+		return CirBuildSliceElem(block, g.b.loc, resultType, arr, idx)
+	}
+	// Array indexing: arr[i] → cir.elem_val (constant index)
 	var idxVal int64
 	if ea.ArgumentExpression != nil && ea.ArgumentExpression.Kind == ast.KindNumericLiteral {
 		lit := ea.ArgumentExpression.AsNumericLiteral()
@@ -649,6 +655,14 @@ func (g *Gen) mapPropertyAccess(block MlirBlock, node *ast.Node, resultType Mlir
 	// Emit object expression
 	obj := g.mapExpr(block, pa.Expression, resultType)
 	objType := ValueGetType(obj)
+
+	// Slice field access: s.length → slice_len
+	if CirTypeIsSlice(objType) {
+		if fieldName == "length" || fieldName == "len" {
+			return CirBuildSliceLen(block, g.b.loc, obj)
+		}
+		return MlirValue{}
+	}
 
 	// Find struct index and field index
 	for i, st := range g.structTypes {

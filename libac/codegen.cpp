@@ -233,14 +233,19 @@ class CodeGen {
     }
 
     case ExprKind::IndexAccess: {
-      // Array indexing: arr[i]
-      // arr is a local (alloca) — use elem_ptr + load for dynamic index
+      // Indexing: arr[i] or slice[i]
       auto obj = emitExpr(*e.lhs, resultType);
       auto objType = obj.getType();
-      // If the object is an array SSA value and index is a constant, use elem_val
+      // Slice indexing: s[i] → cir.slice_elem
+      if (auto sliceTy = llvm::dyn_cast<cir::SliceType>(objType)) {
+        auto idx = emitExpr(*e.rhs, b.getI64Type());
+        return b.create<cir::SliceElemOp>(loc, sliceTy.getElementType(),
+            obj, idx);
+      }
+      // Array indexing: arr[i] → elem_val or elem_ptr + load
       auto arrayTy = llvm::dyn_cast<cir::ArrayType>(objType);
       if (!arrayTy) {
-        llvm::errs() << "error: indexing non-array type\n";
+        llvm::errs() << "error: indexing non-array/slice type\n";
         return {};
       }
       auto idx = emitExpr(*e.rhs, b.getI32Type());
@@ -302,6 +307,17 @@ class CodeGen {
       if (auto refType = llvm::dyn_cast<cir::RefType>(objType)) {
         obj = b.create<cir::DerefOp>(loc, refType.getPointeeType(), obj);
         objType = obj.getType();
+      }
+      // Slice field access: s.len → cir.slice_len, s.ptr → cir.slice_ptr
+      if (llvm::isa<cir::SliceType>(objType)) {
+        auto fieldName = llvm::StringRef(e.name.data(), e.name.size());
+        if (fieldName == "len")
+          return b.create<cir::SliceLenOp>(loc, b.getI64Type(), obj);
+        if (fieldName == "ptr")
+          return b.create<cir::SlicePtrOp>(loc,
+              cir::PointerType::get(b.getContext()), obj);
+        llvm::errs() << "error: no field '" << e.name << "' on slice\n";
+        return {};
       }
       auto structTy = llvm::dyn_cast<cir::StructType>(objType);
       if (!structTy) {

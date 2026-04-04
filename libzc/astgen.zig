@@ -642,6 +642,14 @@ const Gen = struct {
                 const field_name = tree.tokenSlice(field_tok);
                 var obj = self.mapExpr(block, obj_node, result_type);
                 var obj_type = mlir.mlirValueGetType(obj);
+                // Slice field access: s.len → slice_len, s.ptr → slice_ptr
+                if (mlir.cirTypeIsSlice(obj_type)) {
+                    if (std.mem.eql(u8, field_name, "len"))
+                        break :blk2 mlir.cirBuildSliceLen(block, self.b.loc, obj);
+                    if (std.mem.eql(u8, field_name, "ptr"))
+                        break :blk2 mlir.cirBuildSlicePtr(block, self.b.loc, obj);
+                    break :blk2 mlir.Value{ .ptr = null };
+                }
                 // Auto-deref: if field lookup fails, try deref first (pointer to struct)
                 var field_idx = self.findFieldIndex(obj_type, field_name);
                 if (field_idx < 0) {
@@ -975,9 +983,15 @@ const Gen = struct {
         const d = tree.nodeData(node).node_and_node;
         const arr_node = d[0];
         const idx_node = d[1];
-        // Get the array value (load from local)
+        // Get the array/slice value
         const arr = self.mapExpr(block, arr_node, result_type);
-        // Try to get constant index from number literal
+        const arr_type = mlir.mlirValueGetType(arr);
+        // Slice indexing: s[i] → cir.slice_elem
+        if (mlir.cirTypeIsSlice(arr_type)) {
+            const idx = self.mapExpr(block, idx_node, self.b.intType(64));
+            return mlir.cirBuildSliceElem(block, self.b.loc, result_type, arr, idx);
+        }
+        // Array indexing: arr[i] → cir.elem_val (constant index)
         var idx_val: i64 = 0;
         if (tree.nodeTag(idx_node) == .number_literal) {
             const tok = tree.nodeMainToken(idx_node);

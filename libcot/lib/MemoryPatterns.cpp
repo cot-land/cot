@@ -206,6 +206,54 @@ struct StringConstantOpLowering
   }
 };
 
+/// cir.slice_ptr → llvm.extractvalue [0] (pointer field)
+struct SlicePtrOpLowering : public OpConversionPattern<cir::SlicePtrOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::SlicePtrOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    // Slice is !llvm.struct<(!llvm.ptr, i64)> — field 0 is the pointer
+    rewriter.replaceOpWithNewOp<LLVM::ExtractValueOp>(
+        op, adaptor.getInput(), 0);
+    return success();
+  }
+};
+
+/// cir.slice_len → llvm.extractvalue [1] (length field)
+struct SliceLenOpLowering : public OpConversionPattern<cir::SliceLenOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::SliceLenOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    // Slice is !llvm.struct<(!llvm.ptr, i64)> — field 1 is the length
+    rewriter.replaceOpWithNewOp<LLVM::ExtractValueOp>(
+        op, adaptor.getInput(), 1);
+    return success();
+  }
+};
+
+/// cir.slice_elem → extractvalue [0] (ptr) + GEP + load
+/// Reference: Zig slice indexing pattern
+struct SliceElemOpLowering : public OpConversionPattern<cir::SliceElemOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::SliceElemOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto elemType = getTypeConverter()->convertType(op.getType());
+    if (!elemType)
+      return rewriter.notifyMatchFailure(op, "type conversion failed");
+    // Extract pointer from slice struct
+    auto ptr = rewriter.create<LLVM::ExtractValueOp>(
+        loc, adaptor.getInput(), 0);
+    // GEP to the element
+    auto ptrType = LLVM::LLVMPointerType::get(op.getContext());
+    auto gep = rewriter.create<LLVM::GEPOp>(
+        loc, ptrType, elemType, ptr,
+        llvm::ArrayRef<LLVM::GEPArg>{adaptor.getIndex()});
+    // Load the element
+    rewriter.replaceOpWithNewOp<LLVM::LoadOp>(op, elemType, gep);
+    return success();
+  }
+};
+
 /// cir.struct_init → llvm.mlir.undef + llvm.insertvalue chain
 /// Reference: FIR UndefOpConversion + InsertValueOpConversion
 ///   ~/claude/references/flang-ref/flang/lib/Optimizer/CodeGen/CodeGen.cpp
@@ -238,6 +286,7 @@ void cot::populateMemoryPatterns(
                AddrOfOpLowering, DerefOpLowering,
                FieldValOpLowering, FieldPtrOpLowering,
                StructInitOpLowering, StringConstantOpLowering,
+               SlicePtrOpLowering, SliceLenOpLowering, SliceElemOpLowering,
                ArrayInitOpLowering, ElemValOpLowering, ElemPtrOpLowering>(
       converter, ctx);
 }

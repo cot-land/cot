@@ -92,10 +92,10 @@ Status: `-` not started, `~` in progress, `✓` done.
 | 034 | Pointer to struct field | auto-deref + `cir.field_ptr` | `p.x` (auto-deref) | `p.x` (auto-deref) | deref + extractvalue | ✓ |
 | 035 | String type | `!cir.slice<i8>` | `string` | `[]const u8` | `!llvm.struct<(ptr, i64)>` | ✓ |
 | 036 | String literal | `cir.string_constant` | `"hello"` | `"hello"` | `llvm.mlir.global` + addressof + struct | ✓ |
-| 037 | Slice type | `cir.slice_type` | `[]i32` | `[]i32` | `{ptr, len}` struct | - |
-| 038 | Slice indexing | `cir.slice_elem` | `s[i]` | `s[i]` | GEP on ptr field | - |
+| 037 | Slice ptr/len | `cir.slice_ptr`, `cir.slice_len` | `s.ptr`, `s.len` | `s.ptr`, `s.len` | `llvm.extractvalue [0]/[1]` | ✓ |
+| 038 | Slice indexing | `cir.slice_elem` | `s[i]` | `s[i]` | extractvalue + GEP + load | ✓ |
 | 039 | Slice from array | `cir.array_to_slice` | `arr[1..3]` | `arr[1..3]` | Build `{ptr+off, len}` | - |
-| 040 | Slice length | `cir.slice_len` | `s.len` | `s.len` | Extract len field | - |
+| 040 | Slice type syntax | — | `[]i32` | `[]i32` | — (type already exists) | - |
 
 ### Phase 5 — Error Handling and Optionals
 

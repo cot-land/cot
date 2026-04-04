@@ -266,6 +266,23 @@ void cirBuildCondBr(MlirBlock block, MlirLocation loc,
 /// Create cir.trap (abort).
 void cirBuildTrap(MlirBlock block, MlirLocation loc);
 
+//===----------------------------------------------------------------------===//
+// Slice Operations
+//===----------------------------------------------------------------------===//
+
+/// Create cir.slice_ptr (extract pointer from slice). Returns !cir.ptr.
+MlirValue cirBuildSlicePtr(MlirBlock block, MlirLocation loc,
+                           MlirValue slice);
+
+/// Create cir.slice_len (extract length from slice). Returns i64.
+MlirValue cirBuildSliceLen(MlirBlock block, MlirLocation loc,
+                           MlirValue slice);
+
+/// Create cir.slice_elem (index into slice, unchecked). Returns element type.
+MlirValue cirBuildSliceElem(MlirBlock block, MlirLocation loc,
+                            MlirType elemType, MlirValue slice,
+                            MlirValue index);
+
 #ifdef __cplusplus
 }
 #endif
