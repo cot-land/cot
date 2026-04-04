@@ -1,12 +1,46 @@
 // RUN: %cot emit-llvm %s | %FileCheck %s
 //
-// Tests cast op lowering. Currently uses i32 functions since
-// ac frontend doesn't emit cast ops yet (Sema pass will insert them).
-// This test verifies the lowering patterns are registered and work.
+// Feature #023: Cast op lowering — CIR → LLVM
+// Verifies each cast op maps to the correct LLVM op.
 
-fn identity(x: i32) -> i32 {
-    return x
+fn widen(x: i32) -> i64 {
+    return x as i64
 }
 
-// CHECK-LABEL: llvm.func @identity
-// CHECK: llvm.return
+fn narrow(x: i64) -> i32 {
+    return x as i32
+}
+
+fn int_to_float(x: i32) -> f64 {
+    return x as f64
+}
+
+fn float_to_int(x: f64) -> i32 {
+    return x as i32
+}
+
+fn float_narrow(x: f64) -> f32 {
+    return x as f32
+}
+
+fn float_widen(x: f32) -> f64 {
+    return x as f64
+}
+
+// CHECK-LABEL: llvm.func @widen
+// CHECK: llvm.sext %{{.*}} : i32 to i64
+
+// CHECK-LABEL: llvm.func @narrow
+// CHECK: llvm.trunc %{{.*}} : i64 to i32
+
+// CHECK-LABEL: llvm.func @int_to_float
+// CHECK: llvm.sitofp %{{.*}} : i32 to f64
+
+// CHECK-LABEL: llvm.func @float_to_int
+// CHECK: llvm.fptosi %{{.*}} : f64 to i32
+
+// CHECK-LABEL: llvm.func @float_narrow
+// CHECK: llvm.fptrunc %{{.*}} : f64 to f32
+
+// CHECK-LABEL: llvm.func @float_widen
+// CHECK: llvm.fpext %{{.*}} : f32 to f64

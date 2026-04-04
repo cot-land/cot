@@ -1,7 +1,7 @@
 # COT Feature Implementation Plan
 
 **Date:** 2026-04-04
-**Rule:** Each feature adds CIR ops + ac syntax + Zig syntax + lowering + test. Nothing ships without a test.
+**Rule:** Each feature adds CIR ops + ac syntax + Zig syntax + TypeScript syntax + lowering + test. All three frontends must stay in sync. Nothing ships without a test.
 
 ---
 
@@ -72,8 +72,8 @@ Status: `-` not started, `~` in progress, `✓` done.
 |---|---------|-----------|-----------|------------|---------------|--------|
 | 021 | Multiple int types | `cir.constant` typed | `i8`, `i16`, `i32`, `i64`, `u8`..`u64` | `i8`, `i16`, `i32`, `i64`, `u8`..`u64` | MLIR integer types | ✓ |
 | 022 | Float types | `cir.constant` (f32/f64) | `f32`, `f64`, `3.14` | `f32`, `f64`, `3.14` | `llvm.fadd/fsub/fmul/fdiv` | ✓ |
-| 023 | Type casts | `cir.cast` | `x as i64` | `@intCast(x)`, `@floatCast(x)` | `llvm.sext/trunc/sitofp/fptosi` | - |
-| 024 | Struct declaration | `cir.struct_type` | `struct Point { x: i32, y: i32 }` | `const Point = struct { x: i32, y: i32 };` | LLVM struct type | - |
+| 023 | Type casts | `cir.extsi/trunci/sitofp/fptosi/extf/truncf` | `x as i64` | `@intCast(x)`, `@floatCast(x)` | `llvm.sext/trunc/sitofp/fptosi/fpext/fptrunc` | ✓ |
+| 024 | Struct declaration | `!cir.struct<"Name", fields...>` | `struct Point { x: i32, y: i32 }` | `const Point = struct { x: i32, y: i32 };` | LLVM struct type | ✓ |
 | 025 | Struct construction | `cir.struct_init` | `Point { x: 1, y: 2 }` | `Point{ .x = 1, .y = 2 }` | `llvm.insertvalue` | - |
 | 026 | Struct field access | `cir.field_val`, `cir.field_ptr` | `p.x`, `p.y` | `p.x`, `p.y` | `llvm.extractvalue`, GEP | - |
 | 027 | Struct method syntax | Desugar to call | `p.distance()` | `p.distance()` | Regular function call | - |

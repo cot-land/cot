@@ -1,0 +1,26 @@
+// Feature #023: Type casts — inline tests
+// Run with: cot test test/inline/023_type_casts_test.ac
+
+fn widen(x: i32) -> i64 {
+    return x as i64
+}
+
+fn narrow(x: i64) -> i32 {
+    return x as i32
+}
+
+fn add_wide(a: i32, b: i32) -> i64 {
+    return a as i64 + b as i64
+}
+
+test "widen i32 to i64" {
+    assert(widen(42) == 42)
+}
+
+test "narrow i64 to i32" {
+    assert(narrow(100) == 100)
+}
+
+test "cast in expression" {
+    assert(add_wide(20, 22) == 42)
+}

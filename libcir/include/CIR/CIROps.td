@@ -12,6 +12,7 @@
 include "CIR/CIRDialect.td"
 include "mlir/IR/OpBase.td"
 include "mlir/IR/EnumAttr.td"
+include "mlir/Interfaces/CastInterfaces.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
@@ -104,27 +105,60 @@ def CIR_ShrOp : CIR_IntBinaryOp<"shr"> { let summary = "logical shift right"; }
 // Sema pass inserts these at type boundaries.
 //===----------------------------------------------------------------------===//
 
-/// Base class for all CIR cast ops. Pure, input → output of different type.
-/// Shared assembly format: $in attr-dict : type($in) to type($out)
-class CIR_CastOp<string mnemonic, list<Trait> traits = []> :
-    CIR_Op<mnemonic, !listconcat([Pure], traits)> {
-  let arguments = (ins AnyType:$input);
-  let results = (outs AnyType:$result);
+/// Base class for CIR cast ops. Pure, input → output of different type.
+/// Reference: Arith_CastOp — CastOpInterface enables MLIR fold/verify infra.
+class CIR_CastOp<string mnemonic, TypeConstraint From, TypeConstraint To,
+                  list<Trait> traits = []> :
+    CIR_Op<mnemonic, !listconcat([Pure,
+      DeclareOpInterfaceMethods<CastOpInterface>], traits)> {
+  let arguments = (ins From:$input);
+  let results = (outs To:$result);
   let assemblyFormat = "$input attr-dict `:` type($input) `to` type($result)";
 }
 
+/// Integer → integer cast (ext/trunc). Verifier checks width.
+class CIR_IToICastOp<string mnemonic, list<Trait> traits = []> :
+    CIR_CastOp<mnemonic, AnyInteger, AnyInteger, traits>;
+
+/// Integer → float cast.
+class CIR_IToFCastOp<string mnemonic, list<Trait> traits = []> :
+    CIR_CastOp<mnemonic, AnyInteger, AnyFloat, traits>;
+
+/// Float → integer cast.
+class CIR_FToICastOp<string mnemonic, list<Trait> traits = []> :
+    CIR_CastOp<mnemonic, AnyFloat, AnyInteger, traits>;
+
+/// Float → float cast (ext/trunc). Verifier checks width.
+class CIR_FToFCastOp<string mnemonic, list<Trait> traits = []> :
+    CIR_CastOp<mnemonic, AnyFloat, AnyFloat, traits>;
+
 // Integer → integer
-def CIR_ExtSIOp  : CIR_CastOp<"extsi">  { let summary = "sign-extend integer"; }
-def CIR_ExtUIOp  : CIR_CastOp<"extui">  { let summary = "zero-extend integer"; }
-def CIR_TruncIOp : CIR_CastOp<"trunci"> { let summary = "truncate integer"; }
+def CIR_ExtSIOp  : CIR_IToICastOp<"extsi">  {
+  let summary = "sign-extend integer (src narrower than dst)";
+  let hasVerifier = 1;
+}
+def CIR_ExtUIOp  : CIR_IToICastOp<"extui">  {
+  let summary = "zero-extend integer (src narrower than dst)";
+  let hasVerifier = 1;
+}
+def CIR_TruncIOp : CIR_IToICastOp<"trunci"> {
+  let summary = "truncate integer (src wider than dst)";
+  let hasVerifier = 1;
+}
 
 // Integer ↔ float
-def CIR_SIToFPOp : CIR_CastOp<"sitofp"> { let summary = "signed int to float"; }
-def CIR_FPToSIOp : CIR_CastOp<"fptosi"> { let summary = "float to signed int"; }
+def CIR_SIToFPOp : CIR_IToFCastOp<"sitofp"> { let summary = "signed int to float"; }
+def CIR_FPToSIOp : CIR_FToICastOp<"fptosi"> { let summary = "float to signed int"; }
 
 // Float → float
-def CIR_ExtFOp   : CIR_CastOp<"extf">   { let summary = "extend float (f32 → f64)"; }
-def CIR_TruncFOp : CIR_CastOp<"truncf"> { let summary = "truncate float (f64 → f32)"; }
+def CIR_ExtFOp   : CIR_FToFCastOp<"extf">   {
+  let summary = "extend float (f32 to f64)";
+  let hasVerifier = 1;
+}
+def CIR_TruncFOp : CIR_FToFCastOp<"truncf"> {
+  let summary = "truncate float (f64 to f32)";
+  let hasVerifier = 1;
+}
 
 //===----------------------------------------------------------------------===//
 // Memory — alloca, store, load

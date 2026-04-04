@@ -149,17 +149,40 @@ void                    // no value
 string                  // UTF-8 string (slice of u8)
 ```
 
+## Type Casts (#023)
+
+```ac
+x as i64               // integer widening (cir.extsi)
+x as i32               // integer narrowing (cir.trunci)
+x as f64               // int to float (cir.sitofp)
+x as i32               // float to int (cir.fptosi)
+x as f32               // float narrowing (cir.truncf)
+x as f64               // float widening (cir.extf)
+```
+
+- `as` is a postfix operator with higher precedence than all binary ops
+- Each cast direction maps to a distinct CIR op (Arith dialect pattern)
+- Frontends determine the specific cast op; Sema also inserts implicit casts at call boundaries
+
 ## Structs (#024-#027)
 
 ```ac
-struct Point {
+struct Point {              // (✓ #024) named aggregate type
     x: i32
     y: i32
 }
 
-let p = Point { x: 1, y: 2 }
-let x = p.x
+fn takes_point(p: Point) -> i32 {   // struct as parameter type
+    return 0
+}
+
+let p = Point { x: 1, y: 2 }       // (#025) struct construction
+let x = p.x                         // (#026) field access
 ```
+
+- Struct fields: `name: type` per line (newline-separated, no commas needed)
+- Struct types appear in CIR as `!cir.struct<"Point", x: i32, y: i32>`
+- Field names stored in the type (FIR pattern) — enables name-based field access
 
 ## Arrays and Slices (#028-#040)
 

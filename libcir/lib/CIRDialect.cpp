@@ -3,6 +3,7 @@
 #include "CIR/CIROps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Interfaces/CastInterfaces.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
@@ -37,34 +38,60 @@ void CIRDialect::initialize() {
 // Syntax: !cir.struct<"Point", i32, i32>
 //===----------------------------------------------------------------------===//
 
+/// Parse: !cir.struct<"Name", field1: type1, field2: type2>
+/// Reference: FIR RecordType parse — name{field:type, ...}
 mlir::Type StructType::parse(mlir::AsmParser &parser) {
   std::string name;
-  if (parser.parseLess() || parser.parseString(&name) || parser.parseComma())
+  if (parser.parseLess() || parser.parseString(&name))
     return {};
-  llvm::SmallVector<mlir::Type> fields;
-  do {
-    mlir::Type field;
-    if (parser.parseType(field)) return {};
-    fields.push_back(field);
-  } while (succeeded(parser.parseOptionalComma()));
+  llvm::SmallVector<mlir::StringAttr> fieldNames;
+  llvm::SmallVector<mlir::Type> fieldTypes;
+  // Parse optional fields: , name: type, name: type, ...
+  while (succeeded(parser.parseOptionalComma())) {
+    llvm::StringRef fieldName;
+    mlir::Type fieldType;
+    if (parser.parseKeyword(&fieldName) || parser.parseColon() ||
+        parser.parseType(fieldType))
+      return {};
+    fieldNames.push_back(
+        mlir::StringAttr::get(parser.getContext(), fieldName));
+    fieldTypes.push_back(fieldType);
+  }
   if (parser.parseGreater()) return {};
-  return get(parser.getContext(), name, fields);
+  return get(parser.getContext(), name, fieldNames, fieldTypes);
 }
 
+/// Print: !cir.struct<"Name", field1: type1, field2: type2>
 void StructType::print(mlir::AsmPrinter &p) const {
   p << "<\"" << getName() << "\"";
-  for (auto field : getFieldTypes())
-    p << ", " << field;
+  auto names = getFieldNames();
+  auto types = getFieldTypes();
+  for (size_t i = 0; i < names.size(); i++)
+    p << ", " << names[i].getValue() << ": " << types[i];
   p << ">";
 }
 
 mlir::LogicalResult StructType::verify(
     llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
     llvm::StringRef name,
+    llvm::ArrayRef<mlir::StringAttr> fieldNames,
     llvm::ArrayRef<mlir::Type> fieldTypes) {
   if (name.empty())
     return emitError() << "struct type must have a name";
+  if (fieldNames.size() != fieldTypes.size())
+    return emitError() << "field names count (" << fieldNames.size()
+                       << ") must match field types count ("
+                       << fieldTypes.size() << ")";
   return mlir::success();
+}
+
+/// Look up field index by name. Returns -1 if not found.
+/// Reference: FIR RecordType::getFieldIndex
+int StructType::getFieldIndex(llvm::StringRef fieldName) const {
+  auto names = getFieldNames();
+  for (size_t i = 0; i < names.size(); i++)
+    if (names[i].getValue() == fieldName) return static_cast<int>(i);
+  return -1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -129,6 +156,98 @@ LogicalResult ConstantOp::verify() {
   }
 
   return success();
+}
+
+//===----------------------------------------------------------------------===//
+// Cast op verifiers — width constraints per Arith dialect pattern
+// Reference: mlir/lib/Dialect/Arith/IR/ArithOps.cpp verifyExtOp/verifyTruncateOp
+//===----------------------------------------------------------------------===//
+
+/// Extension: destination must be strictly wider than source.
+template <typename OpTy>
+static LogicalResult verifyExtOp(OpTy op) {
+  unsigned srcW = op.getInput().getType().getIntOrFloatBitWidth();
+  unsigned dstW = op.getResult().getType().getIntOrFloatBitWidth();
+  if (srcW >= dstW)
+    return op.emitOpError("result type must be wider than operand type");
+  return success();
+}
+
+/// Truncation: destination must be strictly narrower than source.
+template <typename OpTy>
+static LogicalResult verifyTruncOp(OpTy op) {
+  unsigned srcW = op.getInput().getType().getIntOrFloatBitWidth();
+  unsigned dstW = op.getResult().getType().getIntOrFloatBitWidth();
+  if (srcW <= dstW)
+    return op.emitOpError("result type must be narrower than operand type");
+  return success();
+}
+
+LogicalResult ExtSIOp::verify()  { return verifyExtOp(*this); }
+LogicalResult ExtUIOp::verify()  { return verifyExtOp(*this); }
+LogicalResult TruncIOp::verify() { return verifyTruncOp(*this); }
+LogicalResult ExtFOp::verify()   { return verifyExtOp(*this); }
+LogicalResult TruncFOp::verify() { return verifyTruncOp(*this); }
+
+//===----------------------------------------------------------------------===//
+// CastOpInterface — areCastCompatible
+// Reference: mlir/lib/Dialect/Arith/IR/ArithOps.cpp checkWidthChangeCast
+//===----------------------------------------------------------------------===//
+
+/// Check that inputs/outputs are valid and have the expected type.
+static bool areValidCastTypes(TypeRange inputs, TypeRange outputs) {
+  return inputs.size() == 1 && outputs.size() == 1;
+}
+
+/// Integer extension: dst must be wider than src.
+bool ExtSIOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
+  if (!areValidCastTypes(inputs, outputs)) return false;
+  auto src = llvm::dyn_cast<IntegerType>(inputs[0]);
+  auto dst = llvm::dyn_cast<IntegerType>(outputs[0]);
+  return src && dst && dst.getWidth() > src.getWidth();
+}
+
+bool ExtUIOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
+  if (!areValidCastTypes(inputs, outputs)) return false;
+  auto src = llvm::dyn_cast<IntegerType>(inputs[0]);
+  auto dst = llvm::dyn_cast<IntegerType>(outputs[0]);
+  return src && dst && dst.getWidth() > src.getWidth();
+}
+
+/// Integer truncation: dst must be narrower than src.
+bool TruncIOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
+  if (!areValidCastTypes(inputs, outputs)) return false;
+  auto src = llvm::dyn_cast<IntegerType>(inputs[0]);
+  auto dst = llvm::dyn_cast<IntegerType>(outputs[0]);
+  return src && dst && dst.getWidth() < src.getWidth();
+}
+
+/// Int → float: any integer to any float.
+bool SIToFPOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
+  if (!areValidCastTypes(inputs, outputs)) return false;
+  return llvm::isa<IntegerType>(inputs[0]) && llvm::isa<FloatType>(outputs[0]);
+}
+
+/// Float → int: any float to any integer.
+bool FPToSIOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
+  if (!areValidCastTypes(inputs, outputs)) return false;
+  return llvm::isa<FloatType>(inputs[0]) && llvm::isa<IntegerType>(outputs[0]);
+}
+
+/// Float extension: dst must be wider than src.
+bool ExtFOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
+  if (!areValidCastTypes(inputs, outputs)) return false;
+  auto src = llvm::dyn_cast<FloatType>(inputs[0]);
+  auto dst = llvm::dyn_cast<FloatType>(outputs[0]);
+  return src && dst && dst.getWidth() > src.getWidth();
+}
+
+/// Float truncation: dst must be narrower than src.
+bool TruncFOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
+  if (!areValidCastTypes(inputs, outputs)) return false;
+  auto src = llvm::dyn_cast<FloatType>(inputs[0]);
+  auto dst = llvm::dyn_cast<FloatType>(outputs[0]);
+  return src && dst && dst.getWidth() < src.getWidth();
 }
 
 //===----------------------------------------------------------------------===//

@@ -92,6 +92,14 @@ pub extern "c" fn mlirBytecodeWriterConfigDestroy(config: BytecodeWriterConfig) 
 pub extern "c" fn mlirBytecodeWriterConfigDesiredEmitVersion(config: BytecodeWriterConfig, version: i64) callconv(.c) void;
 pub extern "c" fn mlirOperationWriteBytecodeWithConfig(op: Operation, config: BytecodeWriterConfig, callback: StringCallback, user_data: ?*anyopaque) callconv(.c) LogicalResult;
 
+// Type introspection (for cast ops)
+pub extern "c" fn mlirValueGetType(value: Value) callconv(.c) Type;
+pub extern "c" fn mlirTypeEqual(t1: Type, t2: Type) callconv(.c) bool;
+pub extern "c" fn mlirTypeIsAInteger(ty: Type) callconv(.c) bool;
+pub extern "c" fn mlirTypeIsAFloat(ty: Type) callconv(.c) bool;
+pub extern "c" fn mlirIntegerTypeGetWidth(ty: Type) callconv(.c) c_uint;
+pub extern "c" fn mlirFloatTypeGetWidth(ty: Type) callconv(.c) c_uint;
+
 // CIR dialect registration (from libcir/c-api/CIRCApi.h)
 pub extern "c" fn cirRegisterDialect(ctx: Context) callconv(.c) void;
 

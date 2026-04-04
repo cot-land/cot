@@ -68,18 +68,19 @@ The LLM bias lands on: Rust syntax + Go cleanliness. `fn`, `let`/`var`, `-> type
 Every feature from `claude/FEATURES.md` follows this checklist. Do ALL steps — no exceptions.
 
 1. **Study reference.** Read `claude/REFERENCES.md` for the relevant component. Read the reference source before writing.
-2. **CIR ops.** Add any new ops to `libcir/include/CIR/CIROps.td`. Use base classes (`CIR_BinaryOp`, `CIR_IntBinaryOp`, `CIR_IntUnaryOp`) where applicable. Add types to `CIRTypes.td` if needed.
-3. **Lowering.** Add ConversionPattern in `libcot/lib/CIRToLLVM.cpp`. Register in `populateCIRToLLVMConversionPatterns()`.
-4. **ac frontend.** Add syntax to `libac/` — scanner token (if new), parser rule, codegen emission.
-5. **Zig frontend.** Add handling in `libzc/astgen.zig` — map AST node to CIR ops. Both frontends must stay in sync.
-6. **lit tests — BOTH frontends.** Add `test/lit/ac/<feature>.ac` AND `test/lit/zig/<feature>.zig`. Use `%cot emit-cir` + FileCheck to verify CIR output.
-7. **Lowering test.** If feature adds new CIR→LLVM patterns, add `test/lit/lowering/<feature>.ac` to verify LLVM output.
-8. **Inline tests.** Add or extend `test/inline/<NNN>_<name>_test.ac` with `test "name" { assert(...) }` blocks to verify runtime correctness. Run with `cot test file.ac`.
-9. **Build ALL.** `libcir → libcot → libzc → cot` (order matters). Run `bin/lit test/lit/ -v`, `cot test`, inline tests, `test/run.sh`.
-10. **Update docs.** Mark feature ✓ in `claude/FEATURES.md`. Update `claude/AC_SYNTAX.md` with new syntax. Update `claude/HANDOFF.md` (op count, test count, next features).
-11. **Check audit.** Read `claude/AUDIT.md` — if this feature naturally fixes an open audit issue, do it now. If it introduces a new pattern, check it against FIR/Arith references.
+2. **Check audit.** Read `claude/AUDIT.md` — fix related open issues NOW, not later.
+3. **CIR ops.** Add any new ops to `libcir/include/CIR/CIROps.td`. Use base classes (`CIR_BinaryOp`, `CIR_IntBinaryOp`, `CIR_IntUnaryOp`, `CIR_CastOp`). Add types to `CIRTypes.td` if needed.
+4. **Lowering.** Add ConversionPattern in `libcot/lib/CIRToLLVM/`. Register in `populateCIRToLLVMConversionPatterns()`.
+5. **ac frontend.** Add syntax to `libac/` — scanner token (if new), parser rule, codegen emission. Update `claude/AC_SYNTAX.md`.
+6. **Zig frontend.** Add handling in `libzc/astgen.zig` — map AST node to CIR ops.
+7. **TypeScript frontend.** Add handling in `libtc/codegen.go` — map TS AST node to CIR ops.
+8. **lit tests — ALL THREE frontends.** Add `test/lit/ac/<feature>.ac` AND `test/lit/zig/<feature>.zig` AND `test/lit/ts/<feature>.ts`. Use `%cot emit-cir` + FileCheck. All three must produce equivalent CIR.
+9. **Lowering test.** If feature adds new CIR→LLVM patterns, add `test/lit/lowering/<feature>.ac` to verify LLVM output.
+10. **Inline tests.** Add or extend `test/inline/<NNN>_<name>_test.ac` with `test "name" { assert(...) }` blocks to verify runtime correctness.
+11. **Build + test ALL.** Run `make all && make test`. All tests must pass.
+12. **Update docs.** Mark feature ✓ in `claude/FEATURES.md`. Update `claude/HANDOFF.md` (op count, test count, next features).
 
-Build order: `cd libcir/build && cmake --build .` → `cd libcot/build && cmake --build .` → `cd libzc && ~/bin/zig-nightly build -Doptimize=ReleaseSafe` → `cd cot/build && cmake --build .`
+Build order: `make all` (libcir → libcot → libzc → libtc → cot)
 
 ---
 
@@ -90,7 +91,8 @@ Build order: `cd libcir/build && cmake --build .` → `cd libcot/build && cmake 
 | Scanner | Zig Tokenizer + Go insertSemi | `~/claude/references/zig/lib/std/zig/Tokenizer.zig` + `~/claude/references/go/src/go/scanner/scanner.go` |
 | Parser | Go parser + Zig precedence table | `~/claude/references/go/src/go/parser/parser.go` + `~/claude/references/zig/lib/std/zig/Parse.zig` |
 | AST | Zig index-based arena | `~/claude/references/zig/lib/std/zig/Ast.zig` |
-| AST→CIR | Zig AstGen | `~/claude/references/zig/lib/std/zig/AstGen.zig` |
+| AST→CIR (Zig) | Zig AstGen | `~/claude/references/zig/lib/std/zig/AstGen.zig` |
+| AST→CIR (TS) | TypeScript-Go | `~/claude/references/typescript-go/internal/parser/` |
 | CIR dialect | MLIR (Lattner) | `~/claude/references/llvm-project/mlir/` |
 | Type resolution | Zig Sema | `~/claude/references/zig/src/Sema.zig` |
 | Comptime | Zig Sema | `~/claude/references/zig/src/Sema.zig` |
@@ -115,14 +117,16 @@ Individual components (if needed):
 cd libcir/build && cmake --build .                  # CIR dialect (C++)
 cd libcot/build && cmake --build .                  # Compiler passes (C++)
 cd libzc && ~/bin/zig-nightly build -Doptimize=ReleaseSafe  # Zig frontend
+cd libtc && CGO_ENABLED=1 go build -buildmode=c-archive -o libtc.a .  # TypeScript frontend
 cd cot/build && cmake --build .                     # Driver + ac frontend
 ```
 
 ## Inspect pipeline stages
 
 ```bash
-./cot emit-cir file.ac     # Print CIR MLIR text (what frontend produces)
+./cot emit-cir file.ac     # Print CIR MLIR text (ac frontend)
 ./cot emit-cir file.zig    # Same for Zig input
+./cot emit-cir file.ts     # Same for TypeScript input
 ./cot emit-llvm file.ac    # Print LLVM dialect text (after lowering)
 ```
 
@@ -133,7 +137,9 @@ cd cot/build && cmake --build .                     # Driver + ac frontend
 ```
 libcir/        CIR MLIR dialect (C++ / TableGen)
 libcot/        Compiler passes (C++ MLIR passes) — CIRToLLVM lowering
-libac/         ac (agentic cot) language frontend (C++) — agent-designed syntax, dogfoods CIR
+libac/         ac frontend (C++) — Agentic-Cot, agent-designed syntax
+libzc/         zc frontend (Zig) — Zig-Cot, uses std.zig.Ast parser
+libtc/         tc frontend (Go) — TypeScript-Cot, uses TypeScript-Go parser
 cot/           CLI driver (C++)
 claude/
   ARCHITECTURE.md    THE DESIGN — read first

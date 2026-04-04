@@ -37,6 +37,9 @@ class CodeGen {
   struct LoopContext { mlir::Block *header; mlir::Block *exit; };
   llvm::SmallVector<LoopContext> loopStack;
 
+  // Struct type registry — populated by emitStructDecl, queried by resolveType
+  std::unordered_map<std::string_view, mlir::Type> structTypes;
+
   mlir::Type resolveType(const TypeRef &t) {
     // Integer types (signless in MLIR — signed/unsigned in op semantics)
     if (t.name == "i8"  || t.name == "u8")  return b.getIntegerType(8);
@@ -47,6 +50,9 @@ class CodeGen {
     // Float types
     if (t.name == "f32") return b.getF32Type();
     if (t.name == "f64") return b.getF64Type();
+    // Struct types
+    auto sit = structTypes.find(t.name);
+    if (sit != structTypes.end()) return sit->second;
     return b.getI32Type();
   }
 
@@ -81,9 +87,11 @@ class CodeGen {
       bool isCmp = (e.op == Tag::eq_eq || e.op == Tag::bang_eq ||
                     e.op == Tag::less || e.op == Tag::less_eq ||
                     e.op == Tag::greater || e.op == Tag::greater_eq);
-      // Emit LHS first, then use its actual type for RHS (handles
-      // cases where resultType from context doesn't match operand types)
-      auto lhs = emitExpr(*e.lhs, resultType);
+      // Comparisons return i1, but operands should not be i1.
+      // Use i32 default for comparison operands when context is boolean.
+      auto opResultType = (isCmp && resultType == b.getI1Type())
+          ? b.getI32Type() : resultType;
+      auto lhs = emitExpr(*e.lhs, opResultType);
       auto operandType = lhs.getType();
       auto rhs = emitExpr(*e.rhs, operandType);
       switch (e.op) {
@@ -155,8 +163,53 @@ class CodeGen {
     case ExprKind::FloatLit:
       return b.create<cir::ConstantOp>(loc, resultType,
           b.getFloatAttr(resultType, e.floatVal));
+
+    case ExprKind::Cast: {
+      // Explicit cast: x as i64
+      // Emit operand with its own type, then insert the correct cast op.
+      auto dstType = resolveType(e.targetType);
+      auto srcVal = emitExpr(*e.lhs, resultType);
+      auto srcType = srcVal.getType();
+      if (srcType == dstType) return srcVal; // no-op cast
+      return emitCast(srcVal, srcType, dstType);
+    }
     }
     return {};
+  }
+
+  /// Emit the correct CIR cast op based on source and destination types.
+  /// Reference: Arith dialect — one op per direction, no mega-cast.
+  mlir::Value emitCast(mlir::Value input, mlir::Type srcType,
+                       mlir::Type dstType) {
+    bool srcInt = llvm::isa<mlir::IntegerType>(srcType);
+    bool dstInt = llvm::isa<mlir::IntegerType>(dstType);
+    bool srcFloat = llvm::isa<mlir::FloatType>(srcType);
+    bool dstFloat = llvm::isa<mlir::FloatType>(dstType);
+
+    if (srcInt && dstInt) {
+      unsigned srcW = srcType.getIntOrFloatBitWidth();
+      unsigned dstW = dstType.getIntOrFloatBitWidth();
+      if (dstW > srcW)
+        return b.create<cir::ExtSIOp>(loc, dstType, input);
+      if (dstW < srcW)
+        return b.create<cir::TruncIOp>(loc, dstType, input);
+      return input;
+    }
+    if (srcInt && dstFloat)
+      return b.create<cir::SIToFPOp>(loc, dstType, input);
+    if (srcFloat && dstInt)
+      return b.create<cir::FPToSIOp>(loc, dstType, input);
+    if (srcFloat && dstFloat) {
+      unsigned srcW = srcType.getIntOrFloatBitWidth();
+      unsigned dstW = dstType.getIntOrFloatBitWidth();
+      if (dstW > srcW)
+        return b.create<cir::ExtFOp>(loc, dstType, input);
+      if (dstW < srcW)
+        return b.create<cir::TruncFOp>(loc, dstType, input);
+      return input;
+    }
+    llvm::errs() << "error: unsupported cast\n";
+    return input;
   }
 
   // Helper: add a block to the current function's region.
@@ -423,6 +476,21 @@ class CodeGen {
     module.push_back(funcOp);
   }
 
+  /// Register a struct type from a parsed struct declaration.
+  /// Creates !cir.struct<"Name", field1: type1, ...> in the MLIR context.
+  void emitStructDecl(const StructDecl &sd) {
+    llvm::SmallVector<mlir::StringAttr> fieldNames;
+    llvm::SmallVector<mlir::Type> fieldTypes;
+    for (auto &f : sd.fields) {
+      fieldNames.push_back(mlir::StringAttr::get(
+          b.getContext(), llvm::StringRef(f.name.data(), f.name.size())));
+      fieldTypes.push_back(resolveType(f.type));
+    }
+    auto structTy = cir::StructType::get(
+        b.getContext(), std::string(sd.name), fieldNames, fieldTypes);
+    structTypes[sd.name] = structTy;
+  }
+
 public:
   CodeGen(mlir::MLIRContext &ctx, std::string_view source)
       : b(&ctx), loc(b.getUnknownLoc()), source_(source) {}
@@ -430,6 +498,8 @@ public:
   mlir::OwningOpRef<mlir::ModuleOp> emit(const Module &mod, bool testMode) {
     auto module = mlir::ModuleOp::create(loc);
     module_ = module;
+    // Register struct types first — needed before resolving function param types
+    for (auto &sd : mod.structs) emitStructDecl(sd);
     for (auto &fn : mod.functions) emitFn(module, fn);
     if (testMode && !mod.tests.empty()) {
       for (size_t i = 0; i < mod.tests.size(); i++)

@@ -28,7 +28,7 @@ struct Param {
 };
 
 // Expression kinds
-enum class ExprKind { IntLit, FloatLit, BoolLit, Ident, BinOp, UnaryOp, Call, IfExpr };
+enum class ExprKind { IntLit, FloatLit, BoolLit, Ident, BinOp, UnaryOp, Call, IfExpr, Cast };
 
 struct Expr {
   ExprKind kind;
@@ -41,6 +41,7 @@ struct Expr {
   Tag op = Tag::invalid;          // BinOp, UnaryOp
   ExprPtr lhs, rhs;              // BinOp (lhs, rhs), UnaryOp (rhs only)
   std::vector<ExprPtr> args;     // Call
+  TypeRef targetType;             // Cast: target type (x as i64)
 };
 
 // Statement kinds
@@ -56,6 +57,17 @@ struct Stmt {
   TypeRef varType;                // Let/Var: type annotation
   Tag op = Tag::invalid;          // CompoundAssign: operator (+= → plus, etc.)
   ExprPtr rangeEnd;               // For: end of range
+};
+
+struct StructField {
+  std::string_view name;
+  TypeRef type;
+};
+
+struct StructDecl {
+  std::string_view name;
+  std::vector<StructField> fields;
+  size_t pos;
 };
 
 struct FnDecl {
@@ -74,7 +86,8 @@ struct TestDecl {
 
 struct Module {
   std::vector<FnDecl> functions;
-  std::vector<TestDecl> tests;    // Zig pattern: test blocks are separate
+  std::vector<TestDecl> tests;
+  std::vector<StructDecl> structs;
 };
 
 Module parse(std::string_view source, const std::vector<Token> &tokens);

@@ -27,18 +27,26 @@ def CIR_PointerType : CIR_Type<"Pointer", "ptr"> {
 }
 
 def CIR_StructType : CIR_Type<"Struct", "struct"> {
-  let summary = "aggregate struct type";
+  let summary = "aggregate struct type with named fields";
   let description = [{
-    Named aggregate type with ordered fields. Models C struct, Rust struct,
-    Zig struct. The name identifies the type; fields are an ordered list of
-    MLIR types.
-    Reference: fir.type (FIR RecordType) in Flang.
+    Named aggregate type with ordered, named fields. Models C struct, Rust
+    struct, Zig struct. Field names are stored for semantic resolution (field
+    access by name → index). Names are dropped when lowering to LLVM.
+    Reference: fir.type (FIR RecordType) in Flang — stores field names as
+    TypePair<string, Type>.
+    Syntax: !cir.struct<"Point", x: i32, y: i32>
   }];
 
   let parameters = (ins
     StringRefParameter<"struct name">:$name,
+    ArrayRefParameter<"mlir::StringAttr", "field names">:$fieldNames,
     ArrayRefParameter<"mlir::Type", "field types">:$fieldTypes
   );
+
+  let extraClassDeclaration = [{
+    /// Get the index of a field by name. Returns -1 if not found.
+    int getFieldIndex(llvm::StringRef fieldName) const;
+  }];
 
   let genVerifyDecl = 1;
   let hasCustomAssemblyFormat = 1;

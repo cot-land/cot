@@ -28,7 +28,7 @@ make test         # Run all test layers (lit, gate, inline, build)
 ./cot test file.ac          # Run inline test blocks
 ```
 
-**Total: 34 lit + 22 inline + 1 gate + 4 build = 61 tests, all passing.**
+**Total: 51 lit + 30 inline + 1 gate + 4 build = 86 tests, all passing.**
 
 ---
 
@@ -75,24 +75,26 @@ libcot/          Compiler passes (C++)
       MemoryPatterns.cpp      alloca/store/load
       ControlFlowPatterns.cpp br/condbr/trap
 
-libac/           ac frontend (C++) — scanner, parser, codegen → CIR
-libzc/           Zig frontend (Zig) — uses std.zig.Ast parser → CIR
+libac/           ac frontend (C++) — Agentic-Cot, scanner/parser/codegen → CIR
+libzc/           Zig frontend (Zig) — Zig-Cot, uses std.zig.Ast parser → CIR
+libtc/           TypeScript frontend (Go) — TypeScript-Cot, uses TypeScript-Go parser → CIR
 
 cot/             CLI driver (C++)
   main.cpp       Commands: build, test, emit-cir, emit-llvm, version
                  Pipeline: Sema → verify → CIRToLLVM → func-to-llvm → LLVM IR → native
 
 test/            Test suite
-  lit/ac/        ac frontend lit tests (16)
-  lit/zig/       Zig frontend lit tests (11)
+  lit/ac/        ac frontend lit tests (18)
+  lit/zig/       Zig frontend lit tests (13)
+  lit/ts/        TypeScript frontend lit tests (13)
   lit/lowering/  CIR→LLVM lowering tests (3)
-  inline/        Runtime correctness tests (8 files, 22 tests)
+  inline/        Runtime correctness tests (10 files, 30 tests)
   *.ac           Build tests (exit code 42 = pass)
 
 claude/          Internal docs
   ARCHITECTURE.md    Design + pass pipeline + Sema design + Swift type philosophy
   REFERENCES.md      Component-to-reference mapping (Zig, Go, MLIR, FIR, Swift)
-  FEATURES.md        80 features, Phases 1-2 complete (20/80), Phase 3 started (2/10)
+  FEATURES.md        80 features, Phases 1-2 complete (20/80), Phase 3 in progress (4/10)
   AUDIT.md           3 audit rounds, scaling plan, open issues
   AC_SYNTAX.md       ac language syntax reference
 ```
@@ -115,10 +117,12 @@ claude/          Internal docs
 
 **Phase 2 (10/10):** Let/var bindings, assignment, compound assignment, if/else statement, if/else expression (select), while loop, break/continue, for loop, nested calls.
 
-**Phase 3 (2/10 started):**
+**Phase 3 (4/10):**
 - ✓ #021 Multiple int types (i8-i64, u8-u64) — both frontends
 - ✓ #022 Float types (f32, f64) — both frontends
-- Infrastructure: Cast ops (7), Sema pass, `!cir.struct`/`!cir.array` types ready
+- ✓ #023 Type casts — ac `x as i64`, Zig `@intCast`/`@floatCast`/`@truncate`/`@floatFromInt`
+- ✓ #024 Struct declaration — ac `struct Point { x: i32, y: i32 }`, Zig `const Point = struct { ... }`
+- Infrastructure: Cast ops (7, CastOpInterface + verifiers), Sema pass, `!cir.struct` with field names
 
 ---
 
@@ -127,7 +131,6 @@ claude/          Internal docs
 ### Continue Phase 3
 
 **Next features in order:**
-- #023 Type casts — ac `x as i64` syntax, Zig `@intCast`. Cast ops exist, Sema inserts them at boundaries. Need frontend `as` keyword parsing.
 - #024 Struct declaration — `struct Point { x: i32, y: i32 }`. `!cir.struct` type exists. Need parser + codegen + Sema field resolution.
 - #025 Struct construction — `Point { x: 1, y: 2 }`. Need `cir.struct_init` op.
 - #026 Struct field access — `p.x`. Need `cir.field_val` / `cir.field_ptr` ops.

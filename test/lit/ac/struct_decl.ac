@@ -1,0 +1,28 @@
+// RUN: %cot emit-cir %s | %FileCheck %s
+
+// Feature #024: Struct declaration — ac syntax
+
+struct Point {
+    x: i32
+    y: i32
+}
+
+struct Color {
+    r: i8
+    g: i8
+    b: i8
+}
+
+fn takes_point(p: Point) -> i32 {
+    return 0
+}
+
+fn takes_color(c: Color) -> i32 {
+    return 0
+}
+
+// CHECK-LABEL: func.func @takes_point
+// CHECK-SAME: !cir.struct<"Point", x: i32, y: i32>
+
+// CHECK-LABEL: func.func @takes_color
+// CHECK-SAME: !cir.struct<"Color", r: i8, g: i8, b: i8>

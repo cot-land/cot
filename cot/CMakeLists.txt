@@ -31,6 +31,9 @@ add_executable(cot
 )
 
 target_link_libraries(cot PRIVATE
+  # libtc — TypeScript frontend (Go, C ABI)
+  ${PROJECT_SOURCE_DIR}/../libtc/libtc.a
+
   # libzc — Zig frontend (C ABI)
   ${PROJECT_SOURCE_DIR}/../libzc/zig-out/lib/libzc.a
 
@@ -67,5 +70,5 @@ target_link_libraries(cot PRIVATE
 )
 
 if(APPLE)
-  target_link_libraries(cot PRIVATE "-framework CoreFoundation" "-lz" "-lcurses")
+  target_link_libraries(cot PRIVATE "-framework CoreFoundation" "-framework Security" "-lz" "-lcurses" "-lresolv" "-lpthread")
 endif()

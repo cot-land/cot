@@ -17,6 +17,12 @@ extern "C" int zc_parse(
     const char *filename,
     const char **out_ptr, size_t *out_len);
 
+// libtc C ABI — TypeScript frontend (Go)
+extern "C" int tc_parse(
+    char *source_ptr, size_t source_len,
+    char *filename,
+    char **out_ptr, size_t *out_len);
+
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -43,10 +49,39 @@ extern "C" int zc_parse(
 
 #include "llvm/Support/MemoryBuffer.h"
 
-#include <cstdlib>
 #include <string>
 
 using namespace mlir;
+
+/// Run an executable with a timeout. Returns the exit code, or -1 on timeout.
+static int runWithTimeout(const std::string &path, unsigned timeoutSeconds = 10) {
+  auto prog = llvm::sys::findProgramByName(path);
+  if (!prog) {
+    // Try the path directly
+    llvm::SmallVector<llvm::StringRef> args = {path};
+    std::string errMsg;
+    bool failed = false;
+    int rc = llvm::sys::ExecuteAndWait(path, args,
+        /*Env=*/std::nullopt, /*Redirects=*/{},
+        timeoutSeconds, /*MemoryLimit=*/0, &errMsg, &failed);
+    if (failed && !errMsg.empty()) {
+      llvm::errs() << "error: " << errMsg << "\n";
+      return -1;
+    }
+    return rc;
+  }
+  llvm::SmallVector<llvm::StringRef> args = {*prog};
+  std::string errMsg;
+  bool failed = false;
+  int rc = llvm::sys::ExecuteAndWait(*prog, args,
+      /*Env=*/std::nullopt, /*Redirects=*/{},
+      timeoutSeconds, /*MemoryLimit=*/0, &errMsg, &failed);
+  if (failed && !errMsg.empty()) {
+    llvm::errs() << "error: " << errMsg << "\n";
+    return -1;
+  }
+  return rc;
+}
 
 //===----------------------------------------------------------------------===//
 // Backend: MLIR → object file → link
@@ -146,22 +181,39 @@ static int lowerCIRToLLVMDialect(ModuleOp module) {
 }
 
 //===----------------------------------------------------------------------===//
-// Parse source file into CIR module (works for .ac and .zig)
+// Parse source file into CIR module (works for .ac, .zig, .ts)
 //===----------------------------------------------------------------------===//
+
+static bool endsWith(const std::string &s, const std::string &suffix) {
+  return s.size() >= suffix.size() &&
+      s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
 
 static OwningOpRef<ModuleOp> parseSourceToCIR(MLIRContext &ctx,
     const std::string &inputFile, const std::string &source,
     bool testMode = false) {
-  bool isZig = inputFile.size() >= 4 &&
-      inputFile.substr(inputFile.size() - 4) == ".zig";
 
-  if (isZig) {
+  // Zig frontend
+  if (endsWith(inputFile, ".zig")) {
     const char *cirBytes = nullptr;
     size_t cirLen = 0;
     int rc = zc_parse(source.data(), source.size(), inputFile.c_str(), &cirBytes, &cirLen);
     if (rc != 0) { llvm::errs() << "error: zig frontend failed\n"; return {}; }
     ParserConfig config(&ctx);
     return parseSourceString<ModuleOp>(llvm::StringRef(cirBytes, cirLen), config);
+  }
+
+  // TypeScript frontend
+  if (endsWith(inputFile, ".ts")) {
+    char *cirBytes = nullptr;
+    size_t cirLen = 0;
+    int rc = tc_parse(const_cast<char*>(source.data()), source.size(),
+        const_cast<char*>(inputFile.c_str()), &cirBytes, &cirLen);
+    if (rc != 0) { llvm::errs() << "error: typescript frontend failed\n"; return {}; }
+    ParserConfig config(&ctx);
+    auto result = parseSourceString<ModuleOp>(llvm::StringRef(cirBytes, cirLen), config);
+    free(cirBytes); // tc_parse allocates with C.malloc
+    return result;
   }
 
   // ac frontend
@@ -221,12 +273,15 @@ int main(int argc, char **argv) {
       if (emitBinary(*module, "/tmp/cot_test")) return 1;
 
       llvm::outs() << "running " << ast.tests.size() << " test(s) from " << inputFile << "\n";
-      int rc = std::system("/tmp/cot_test");
-      int code = WEXITSTATUS(rc);
+      int code = runWithTimeout("/tmp/cot_test");
+      if (code == -1) {
+        llvm::errs() << "test timed out (infinite loop?)\n";
+        return 1;
+      }
       if (code == 0) {
         llvm::outs() << "all tests passed\n";
       } else {
-        llvm::errs() << "test failed (signal " << code << ")\n";
+        llvm::errs() << "test failed (exit " << code << ")\n";
       }
       return code;
     }
@@ -258,8 +313,7 @@ int main(int argc, char **argv) {
 
     if (failed(verify(module))) { llvm::errs() << "verify failed\n"; return 1; }
     if (emitBinary(module, "/tmp/cot_test")) return 1;
-    int rc = std::system("/tmp/cot_test");
-    int code = WEXITSTATUS(rc);
+    int code = runWithTimeout("/tmp/cot_test");
     llvm::outs() << "add(19, 23) = " << code << (code == 42 ? " ✓\n" : " ✗\n");
     return code == 42 ? 0 : 1;
   }

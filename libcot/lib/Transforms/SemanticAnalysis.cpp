@@ -7,9 +7,12 @@
 // Reference: Zig Sema — ~/claude/references/zig/src/Sema.zig
 //            Flang Transforms — ~/claude/references/flang-ref/flang/lib/Optimizer/Transforms/
 //
-// The pass walks each function in post-order, maintaining a symbol table
+// The pass walks each function in forward order, maintaining a symbol table
 // (function signatures from the module). It validates type constraints and
-// inserts explicit cast ops (cir.extsi, cir.trunci, etc.) at type boundaries.
+// inserts implicit cast ops (cir.extsi, cir.trunci, etc.) at type boundaries.
+//
+// Explicit casts (user-written `as` / `@intCast`) are emitted by frontends.
+// This pass handles implicit coercion at call boundaries.
 //
 //===----------------------------------------------------------------===//
 
@@ -53,24 +56,30 @@ struct SemanticAnalysisPass
     // Walk in forward order within each block.
     // Process calls to validate argument types and insert casts.
     funcOp.walk([&](func::CallOp callOp) {
-      resolveCallTypes(moduleOp, callOp);
+      if (failed(resolveCallTypes(moduleOp, callOp)))
+        signalPassFailure();
     });
   }
 
 private:
   /// Look up callee signature and insert casts for type mismatches.
+  /// Returns failure() on semantic errors that should halt compilation.
   /// Reference: Zig Sema coerce() — inserts explicit casts at call boundaries.
-  void resolveCallTypes(ModuleOp moduleOp, func::CallOp callOp) {
+  LogicalResult resolveCallTypes(ModuleOp moduleOp, func::CallOp callOp) {
     auto callee = moduleOp.lookupSymbol<func::FuncOp>(
         callOp.getCallee());
-    if (!callee) return;
+    if (!callee) return success(); // external function — skip
 
     auto paramTypes = callee.getArgumentTypes();
     auto operands = callOp.getOperands();
-    if (paramTypes.size() != operands.size()) return;
+    if (paramTypes.size() != operands.size()) {
+      callOp.emitError("call to '") << callee.getName()
+          << "' passes " << operands.size() << " arguments, expected "
+          << paramTypes.size();
+      return failure();
+    }
 
     OpBuilder builder(callOp);
-    bool modified = false;
 
     for (unsigned i = 0; i < paramTypes.size(); i++) {
       auto paramType = paramTypes[i];
@@ -82,21 +91,15 @@ private:
       // Insert appropriate cast based on type pair
       Value cast = insertCast(builder, callOp.getLoc(),
                               argValue, argType, paramType);
-      if (cast) {
-        callOp.setOperand(i, cast);
-        modified = true;
+      if (!cast) {
+        callOp.emitError("cannot convert argument ")
+            << i << " from " << argType << " to " << paramType;
+        return failure();
       }
+      callOp.setOperand(i, cast);
     }
 
-    // Also fix result type if needed
-    if (callee.getNumResults() > 0 &&
-        callOp.getNumResults() > 0) {
-      auto expectedType = callee.getResultTypes()[0];
-      auto actualType = callOp.getResult(0).getType();
-      if (expectedType != actualType) {
-        callOp.getResult(0).setType(expectedType);
-      }
-    }
+    return success();
   }
 
   /// Determine and insert the correct cast op for a type conversion.
@@ -106,10 +109,10 @@ private:
   /// separate op. No if/else chains at lowering time.
   Value insertCast(OpBuilder &builder, Location loc,
                    Value input, Type srcType, Type dstType) {
-    bool srcInt = srcType.isa<IntegerType>();
-    bool dstInt = dstType.isa<IntegerType>();
-    bool srcFloat = srcType.isa<FloatType>();
-    bool dstFloat = dstType.isa<FloatType>();
+    bool srcInt = llvm::isa<IntegerType>(srcType);
+    bool dstInt = llvm::isa<IntegerType>(dstType);
+    bool srcFloat = llvm::isa<FloatType>(srcType);
+    bool dstFloat = llvm::isa<FloatType>(dstType);
 
     if (srcInt && dstInt) {
       unsigned srcW = srcType.getIntOrFloatBitWidth();
@@ -137,7 +140,7 @@ private:
       return input;
     }
 
-    return nullptr; // unsupported cast
+    return nullptr; // unsupported cast — caller will emit diagnostic
   }
 };
 

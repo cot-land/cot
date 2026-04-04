@@ -183,9 +183,26 @@ class Parser {
     return std::make_unique<Expr>();
   }
 
+  // Parse postfix 'as' cast: expr as type
+  // Highest precedence after primary — matches Rust's `as` cast.
+  ExprPtr parsePostfix() {
+    auto expr = parsePrimary();
+    while (check(Tag::kw_as)) {
+      size_t p = advance().start; // consume 'as'
+      auto type = parseType();
+      auto cast = std::make_unique<Expr>();
+      cast->kind = ExprKind::Cast;
+      cast->pos = p;
+      cast->lhs = std::move(expr);
+      cast->targetType = type;
+      expr = std::move(cast);
+    }
+    return expr;
+  }
+
   // Go pattern: precedence climbing for binary operators.
   ExprPtr parseBinaryExpr(int minPrec) {
-    auto left = parsePrimary();
+    auto left = parsePostfix();
     while (true) {
       int prec = precedence(peek().tag);
       if (prec == 0 || prec < minPrec) break;
@@ -439,6 +456,28 @@ class Parser {
     return fn;
   }
 
+  // ---- Struct declaration: struct Name { field: type, ... } ----
+  StructDecl parseStructDecl() {
+    expect(Tag::kw_struct);
+    StructDecl sd;
+    sd.pos = peek().start;
+    sd.name = tokenText(expect(Tag::identifier));
+    expect(Tag::l_brace);
+    skipSemis();
+    while (!check(Tag::r_brace) && !check(Tag::eof)) {
+      StructField f;
+      f.name = tokenText(expect(Tag::identifier));
+      expect(Tag::colon);
+      f.type = parseType();
+      sd.fields.push_back(f);
+      match(Tag::comma);
+      skipSemis();
+    }
+    expect(Tag::r_brace);
+    match(Tag::semicolon);
+    return sd;
+  }
+
   // ---- Test declaration (Zig pattern: test "name" { body }) ----
   TestDecl parseTestDecl() {
     expect(Tag::kw_test);
@@ -478,6 +517,8 @@ public:
         mod.functions.push_back(parseFnDecl());
       } else if (check(Tag::kw_test)) {
         mod.tests.push_back(parseTestDecl());
+      } else if (check(Tag::kw_struct)) {
+        mod.structs.push_back(parseStructDecl());
       } else {
         llvm::errs() << "error: unexpected '" << tokenText(peek()) << "' at top level\n";
         advance();

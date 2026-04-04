@@ -1,0 +1,52 @@
+// RUN: %cot emit-cir %s | %FileCheck %s
+
+// Feature #023: Explicit type casts — ac `as` keyword
+
+fn widen_i32_to_i64(x: i32) -> i64 {
+    return x as i64
+}
+
+fn narrow_i64_to_i32(x: i64) -> i32 {
+    return x as i32
+}
+
+fn int_to_float(x: i32) -> f64 {
+    return x as f64
+}
+
+fn float_to_int(x: f64) -> i32 {
+    return x as i32
+}
+
+fn float_narrow(x: f64) -> f32 {
+    return x as f32
+}
+
+fn float_widen(x: f32) -> f64 {
+    return x as f64
+}
+
+fn widen_i8_to_i64(x: i8) -> i64 {
+    return x as i64
+}
+
+// CHECK-LABEL: func.func @widen_i32_to_i64
+// CHECK: cir.extsi %{{.*}} : i32 to i64
+
+// CHECK-LABEL: func.func @narrow_i64_to_i32
+// CHECK: cir.trunci %{{.*}} : i64 to i32
+
+// CHECK-LABEL: func.func @int_to_float
+// CHECK: cir.sitofp %{{.*}} : i32 to f64
+
+// CHECK-LABEL: func.func @float_to_int
+// CHECK: cir.fptosi %{{.*}} : f64 to i32
+
+// CHECK-LABEL: func.func @float_narrow
+// CHECK: cir.truncf %{{.*}} : f64 to f32
+
+// CHECK-LABEL: func.func @float_widen
+// CHECK: cir.extf %{{.*}} : f32 to f64
+
+// CHECK-LABEL: func.func @widen_i8_to_i64
+// CHECK: cir.extsi %{{.*}} : i8 to i64
