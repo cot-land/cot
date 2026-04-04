@@ -488,6 +488,12 @@ func (g *Gen) mapExpr(block MlirBlock, node *ast.Node, resultType MlirType) Mlir
 		return CirBuildConstantBool(block, g.b.loc, true)
 	case ast.KindFalseKeyword:
 		return CirBuildConstantBool(block, g.b.loc, false)
+	case ast.KindNullKeyword:
+		// null → cir.none (need optional type from context)
+		if CirTypeIsOptional(resultType) {
+			return CirBuildNone(block, g.b.loc, resultType)
+		}
+		return CirBuildConstantInt(block, g.b.loc, resultType, 0)
 	case ast.KindStringLiteral:
 		lit := node.AsStringLiteral()
 		// Strip surrounding quotes from text

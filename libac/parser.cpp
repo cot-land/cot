@@ -108,6 +108,15 @@ class Parser {
       auto elemType = tokenText(advance());
       return TypeRef{"", size, elemType};
     }
+    // Optional type: ?T
+    if (check(Tag::question)) {
+      advance(); // consume '?'
+      auto inner = tokenText(advance());
+      TypeRef t;
+      t.name = inner;
+      t.isOptional = true;
+      return t;
+    }
     // Pointer/ref type: *T
     if (check(Tag::star)) {
       advance(); // consume '*'
@@ -171,6 +180,14 @@ class Parser {
         }
       }
       e->strVal = std::move(result);
+      return e;
+    }
+
+    if (tok.tag == Tag::kw_null) {
+      advance();
+      auto e = std::make_unique<Expr>();
+      e->kind = ExprKind::NullLit;
+      e->pos = tok.start;
       return e;
     }
 

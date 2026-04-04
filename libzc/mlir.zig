@@ -186,6 +186,15 @@ pub extern "c" fn cirBuildBr(block: Block, loc: Location, dest: Block, n: isize,
 pub extern "c" fn cirBuildCondBr(block: Block, loc: Location, cond: Value, t: Block, f: Block) callconv(.c) void;
 pub extern "c" fn cirBuildTrap(block: Block, loc: Location) callconv(.c) void;
 
+// Optional type + ops
+pub extern "c" fn cirOptionalTypeGet(ctx: Context, payload: Type) callconv(.c) Type;
+pub extern "c" fn cirTypeIsOptional(ty: Type) callconv(.c) bool;
+pub extern "c" fn cirOptionalTypeGetPayload(ty: Type) callconv(.c) Type;
+pub extern "c" fn cirBuildNone(block: Block, loc: Location, ty: Type) callconv(.c) Value;
+pub extern "c" fn cirBuildWrapOptional(block: Block, loc: Location, ty: Type, val: Value) callconv(.c) Value;
+pub extern "c" fn cirBuildIsNonNull(block: Block, loc: Location, opt: Value) callconv(.c) Value;
+pub extern "c" fn cirBuildOptionalPayload(block: Block, loc: Location, payload: Type, opt: Value) callconv(.c) Value;
+
 // Slice ops
 pub extern "c" fn cirBuildSlicePtr(block: Block, loc: Location, slice: Value) callconv(.c) Value;
 pub extern "c" fn cirBuildSliceLen(block: Block, loc: Location, slice: Value) callconv(.c) Value;

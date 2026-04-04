@@ -101,10 +101,10 @@ Status: `-` not started, `~` in progress, `✓` done.
 
 | # | Feature | CIR Op(s) | ac Syntax | Zig Syntax | LLVM Lowering | Status |
 |---|---------|-----------|-----------|------------|---------------|--------|
-| 041 | Optional type | `cir.optional_type` | `?i32` | `?i32` | `{tag, payload}` or null-ptr | - |
-| 042 | Optional wrap/unwrap | `cir.wrap_optional`, `cir.optional_payload` | `?x`, `x!` | `x.?`, `x orelse 0` | Tag check + extract | - |
-| 043 | Null literal | `cir.constant` (null) | `null` | `null` | Zero-initialized optional | - |
-| 044 | If-let optional | `cir.is_non_null` + branch | `if x \|val\| { }` | `if (x) \|val\| { }` | Branch on tag | - |
+| 041 | Optional type | `!cir.optional<T>` | `?i32` | `?i32` | `!llvm.struct<(T, i1)>` or null-ptr | ✓ |
+| 042 | Optional wrap | `cir.wrap_optional` | `let x: ?i32 = 42` | implicit | insertvalue {val, true} | ✓ |
+| 043 | Null literal | `cir.none` | `null` | `null` | undef + insertvalue {_, false} | ✓ |
+| 044 | is_non_null + payload | `cir.is_non_null`, `cir.optional_payload` | — | — | extractvalue [1], extractvalue [0] | ✓ |
 | 045 | Error union type | `cir.error_union_type` | `!i32` or `Error!i32` | `Error!i32` or `anyerror!i32` | `{error_code, payload}` | - |
 | 046 | Try expression | `cir.try` | `try foo()` | `try foo()` | Branch on error code | - |
 | 047 | Catch expression | `cir.catch` | `foo() catch \|e\| { }` | `foo() catch \|e\| { }` | Branch + error handler | - |

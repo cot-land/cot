@@ -1,0 +1,28 @@
+test "optional null" {
+    let x: ?i32 = null
+    assert(1 == 1)
+}
+
+test "optional wrap" {
+    let y: ?i32 = 42
+    assert(1 == 1)
+}
+
+test "optional function return null" {
+    let n: ?i32 = get_null()
+    assert(1 == 1)
+}
+
+test "optional function return some" {
+    let s: ?i32 = get_some()
+    assert(1 == 1)
+}
+
+fn get_null() -> ?i32 {
+    return null
+}
+
+fn get_some() -> ?i32 {
+    let v: ?i32 = 99
+    return v
+}

@@ -55,6 +55,19 @@ struct CIRToLLVMPass
       return LLVM::LLVMArrayType::get(
           tc.convertType(type.getElementType()), type.getSize());
     });
+    // !cir.optional<T>:
+    //   Pointer-like: → !llvm.ptr (null = none)
+    //   Non-pointer:  → !llvm.struct<(T, i1)> where i1 is tag (1=some, 0=none)
+    // Reference: Zig ?T layout, Rust Option niche encoding
+    tc.addConversion([&tc](cir::OptionalType type) -> mlir::Type {
+      auto ctx = type.getContext();
+      if (type.isPointerLike()) {
+        return LLVM::LLVMPointerType::get(ctx);
+      }
+      auto payloadType = tc.convertType(type.getPayloadType());
+      auto tagType = IntegerType::get(ctx, 1);
+      return LLVM::LLVMStructType::getLiteral(ctx, {payloadType, tagType});
+    });
     // !cir.slice<T> → !llvm.struct<(!llvm.ptr, i64)>
     // Fat pointer: {pointer to data, length}
     // Reference: Zig []T, FIR fir.boxchar

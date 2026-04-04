@@ -105,6 +105,7 @@ enum class Tag {
   // Operators (multi char)
   arrow,       // ->
   fat_arrow,   // =>
+  question,    // ?
   dot_dot,     // ..
   plus_eq,     // +=
   minus_eq,    // -=

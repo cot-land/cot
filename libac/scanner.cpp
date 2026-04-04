@@ -277,6 +277,7 @@ Token Scanner::next() {
     case ':': tag = Tag::colon; break;
     case ';': tag = Tag::semicolon; break;
     case '~': tag = Tag::tilde; break;
+    case '?': tag = Tag::question; break;
 
     default: tag = Tag::invalid; break;
   }

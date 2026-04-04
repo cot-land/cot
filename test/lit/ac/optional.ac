@@ -1,0 +1,23 @@
+// RUN: %cot emit-cir %s | %FileCheck %s
+
+// Features #041-044: Optional type + ops — ac syntax
+
+fn get_null() -> ?i32 {
+    let x: ?i32 = null
+    return x
+}
+
+fn get_some() -> ?i32 {
+    let y: ?i32 = 42
+    return y
+}
+
+// CHECK-LABEL: func.func @get_null
+// CHECK: cir.none : !cir.optional<i32>
+// CHECK: return
+
+// CHECK-LABEL: func.func @get_some
+// CHECK: cir.constant 42
+// CHECK: cir.wrap_optional
+// CHECK-SAME: i32 to !cir.optional<i32>
+// CHECK: return

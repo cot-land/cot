@@ -115,6 +115,14 @@ void ArrayType::print(mlir::AsmPrinter &p) const {
 }
 
 //===----------------------------------------------------------------------===//
+// !cir.optional<T> — isPointerLike helper
+//===----------------------------------------------------------------------===//
+
+bool OptionalType::isPointerLike() const {
+  return llvm::isa<cir::PointerType, cir::RefType>(getPayloadType());
+}
+
+//===----------------------------------------------------------------------===//
 // cir.constant — custom print/parse
 //===----------------------------------------------------------------------===//
 
@@ -463,6 +471,52 @@ LogicalResult SliceElemOp::verify() {
     return emitOpError("input must be !cir.slice<T>");
   if (getResult().getType() != sliceType.getElementType())
     return emitOpError("result type must match slice element type");
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// cir.none — verifier
+//===----------------------------------------------------------------------===//
+
+LogicalResult NoneOp::verify() {
+  if (!llvm::isa<cir::OptionalType>(getResult().getType()))
+    return emitOpError("result must be !cir.optional<T>");
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// cir.wrap_optional — verifier
+//===----------------------------------------------------------------------===//
+
+LogicalResult WrapOptionalOp::verify() {
+  auto optType = llvm::dyn_cast<cir::OptionalType>(getResult().getType());
+  if (!optType)
+    return emitOpError("result must be !cir.optional<T>");
+  if (getInput().getType() != optType.getPayloadType())
+    return emitOpError("input type must match optional payload type");
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// cir.is_non_null — verifier
+//===----------------------------------------------------------------------===//
+
+LogicalResult IsNonNullOp::verify() {
+  if (!llvm::isa<cir::OptionalType>(getInput().getType()))
+    return emitOpError("input must be !cir.optional<T>");
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// cir.optional_payload — verifier
+//===----------------------------------------------------------------------===//
+
+LogicalResult OptionalPayloadOp::verify() {
+  auto optType = llvm::dyn_cast<cir::OptionalType>(getInput().getType());
+  if (!optType)
+    return emitOpError("input must be !cir.optional<T>");
+  if (getResult().getType() != optType.getPayloadType())
+    return emitOpError("result type must match optional payload type");
   return success();
 }
 

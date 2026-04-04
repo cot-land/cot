@@ -283,6 +283,38 @@ MlirValue cirBuildSliceElem(MlirBlock block, MlirLocation loc,
                             MlirType elemType, MlirValue slice,
                             MlirValue index);
 
+//===----------------------------------------------------------------------===//
+// Optional Type + Operations
+//===----------------------------------------------------------------------===//
+
+/// Get !cir.optional<T> type.
+MlirType cirOptionalTypeGet(MlirContext ctx, MlirType payloadType);
+
+/// Check if a type is !cir.optional<T>.
+bool cirTypeIsOptional(MlirType type);
+
+/// Get payload type from !cir.optional<T>.
+MlirType cirOptionalTypeGetPayload(MlirType optType);
+
+/// Check if optional uses null-pointer optimization.
+bool cirOptionalTypeIsPointerLike(MlirType optType);
+
+/// Create cir.none (null optional).
+MlirValue cirBuildNone(MlirBlock block, MlirLocation loc,
+                       MlirType optionalType);
+
+/// Create cir.wrap_optional (T → ?T).
+MlirValue cirBuildWrapOptional(MlirBlock block, MlirLocation loc,
+                               MlirType optionalType, MlirValue value);
+
+/// Create cir.is_non_null (?T → i1).
+MlirValue cirBuildIsNonNull(MlirBlock block, MlirLocation loc,
+                            MlirValue optional);
+
+/// Create cir.optional_payload (?T → T, unchecked).
+MlirValue cirBuildOptionalPayload(MlirBlock block, MlirLocation loc,
+                                  MlirType payloadType, MlirValue optional);
+
 /// Create cir.array_to_slice (array pointer + range → slice).
 MlirValue cirBuildArrayToSlice(MlirBlock block, MlirLocation loc,
                                MlirType sliceType, MlirValue base,

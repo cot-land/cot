@@ -47,6 +47,12 @@ class CodeGen {
       auto pointeeType = resolveType(elemRef);
       return cir::RefType::get(b.getContext(), pointeeType);
     }
+    // Optional type: ?T
+    if (t.isOptional) {
+      TypeRef innerRef{t.name};
+      auto innerType = resolveType(innerRef);
+      return cir::OptionalType::get(b.getContext(), innerType);
+    }
     // Slice type: []T
     if (t.isSlice) {
       TypeRef elemRef{t.arrayElemType};
@@ -92,6 +98,15 @@ class CodeGen {
       auto sliceType = cir::SliceType::get(b.getContext(), b.getIntegerType(8));
       return b.create<cir::StringConstantOp>(loc, sliceType,
           b.getStringAttr(e.strVal));
+    }
+
+    case ExprKind::NullLit: {
+      // null literal — resultType must be an optional type
+      if (!llvm::isa<cir::OptionalType>(resultType)) {
+        llvm::errs() << "error: null used in non-optional context\n";
+        return {};
+      }
+      return b.create<cir::NoneOp>(loc, resultType);
     }
 
     case ExprKind::Ident: {
@@ -441,12 +456,30 @@ class CodeGen {
         cur->back().hasTrait<mlir::OpTrait::IsTerminator>();
   }
 
+  /// If target is optional but value isn't, auto-wrap with cir.wrap_optional.
+  mlir::Value maybeWrapOptional(mlir::Value val, mlir::Type targetType) {
+    auto optType = llvm::dyn_cast<cir::OptionalType>(targetType);
+    if (!optType) return val;
+    if (llvm::isa<cir::OptionalType>(val.getType())) return val;
+    // Value is T, target is ?T — wrap
+    return b.create<cir::WrapOptionalOp>(loc, optType, val);
+  }
+
   void emitLetVar(const Stmt &s) {
     auto varType = resolveType(s.varType);
     auto ptrType = cir::PointerType::get(b.getContext());
     auto addr = b.create<cir::AllocaOp>(loc, ptrType,
         mlir::TypeAttr::get(varType));
-    auto val = emitExpr(*s.expr, varType);
+    // For optional vars with non-null initializer, pass the payload type
+    // to emitExpr so it produces T, then auto-wrap to ?T.
+    // For null initializer, pass the full optional type.
+    mlir::Type exprType = varType;
+    if (auto optType = llvm::dyn_cast<cir::OptionalType>(varType)) {
+      if (s.expr->kind != ExprKind::NullLit)
+        exprType = optType.getPayloadType();
+    }
+    auto val = emitExpr(*s.expr, exprType);
+    val = maybeWrapOptional(val, varType);
     b.create<cir::StoreOp>(loc, val, addr);
     localAddrs[s.varName] = {addr, varType};
   }

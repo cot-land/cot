@@ -538,6 +538,32 @@ func CirBuildSliceElem(block MlirBlock, loc MlirLocation, elemType MlirType, sli
 	return MlirValue{ptr: C.cirBuildSliceElem(block.ptr, loc.ptr, elemType.ptr, slice.ptr, index.ptr)}
 }
 
+// --- Optional Operations ---
+
+func CirOptionalTypeGet(ctx MlirContext, payload MlirType) MlirType {
+	return MlirType{ptr: C.cirOptionalTypeGet(ctx.ptr, payload.ptr)}
+}
+
+func CirTypeIsOptional(ty MlirType) bool {
+	return bool(C.cirTypeIsOptional(ty.ptr))
+}
+
+func CirBuildNone(block MlirBlock, loc MlirLocation, ty MlirType) MlirValue {
+	return MlirValue{ptr: C.cirBuildNone(block.ptr, loc.ptr, ty.ptr)}
+}
+
+func CirBuildWrapOptional(block MlirBlock, loc MlirLocation, ty MlirType, val MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildWrapOptional(block.ptr, loc.ptr, ty.ptr, val.ptr)}
+}
+
+func CirBuildIsNonNull(block MlirBlock, loc MlirLocation, opt MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildIsNonNull(block.ptr, loc.ptr, opt.ptr)}
+}
+
+func CirBuildOptionalPayload(block MlirBlock, loc MlirLocation, payloadType MlirType, opt MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildOptionalPayload(block.ptr, loc.ptr, payloadType.ptr, opt.ptr)}
+}
+
 func CirTypeIsSlice(ty MlirType) bool {
 	return bool(C.cirTypeIsSlice(ty.ptr))
 }

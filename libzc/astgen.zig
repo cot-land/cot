@@ -152,6 +152,12 @@ const Gen = struct {
             const type_str = std.fmt.bufPrint(&buf, "!cir.array<{d} x {s}>", .{ len_val, elem_name }) catch return self.i32Type();
             return self.b.parseType(type_str);
         }
+        // Optional type: ?T
+        if (tag == .optional_type) {
+            const child_node = self.tree.nodeData(node).node;
+            const child_type = self.resolveType(child_node);
+            return mlir.cirOptionalTypeGet(self.ctx, child_type);
+        }
         return self.i32Type();
     }
 
@@ -719,6 +725,12 @@ const Gen = struct {
         }
         if (std.mem.eql(u8, name, "false")) {
             return mlir.cirBuildConstantBool(block, self.b.loc, false);
+        }
+        if (std.mem.eql(u8, name, "null")) {
+            // null literal — need optional type from context
+            // For now, use i32 optional as default
+            const opt_type = mlir.cirOptionalTypeGet(self.ctx, self.b.intType(32));
+            return mlir.cirBuildNone(block, self.b.loc, opt_type);
         }
         if (self.resolveLocal(name)) |local| {
             return mlir.cirBuildLoad(block, self.b.loc, local.elem_type, local.addr);

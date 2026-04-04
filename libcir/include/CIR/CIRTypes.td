@@ -107,4 +107,29 @@ def CIR_SliceType : CIR_Type<"Slice", "slice"> {
   let assemblyFormat = "`<` $elementType `>`";
 }
 
+def CIR_OptionalType : CIR_Type<"Optional", "optional"> {
+  let summary = "optional type (?T — value or null)";
+  let description = [{
+    A type that holds either a value of type T or null (none).
+    This is Zig's ?T, Rust's Option<T>, Swift's Optional<T>.
+
+    Null-pointer optimization: when T is a pointer type (!cir.ptr or
+    !cir.ref<U>), the optional uses null as the none representation —
+    no tag byte, zero runtime cost. For non-pointer T, lowers to
+    !llvm.struct<(T, i1)> where i1 is the tag (1 = some, 0 = none).
+
+    Reference: Zig ?T (InternPool opt_type), Rust Option<T> niche encoding.
+    Syntax: !cir.optional<i32>, !cir.optional<!cir.ptr>
+  }];
+
+  let parameters = (ins "mlir::Type":$payloadType);
+  let assemblyFormat = "`<` $payloadType `>`";
+
+  let extraClassDeclaration = [{
+    /// Returns true if this optional can use null-pointer optimization.
+    /// True when payload is !cir.ptr or !cir.ref<T>.
+    bool isPointerLike() const;
+  }];
+}
+
 #endif // CIR_TYPES

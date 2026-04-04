@@ -28,11 +28,11 @@ make test         # Run all test layers (lit, gate, inline, build)
 ./cot test file.ac          # Run inline test blocks
 ```
 
-**Total: 82 lit + 17 inline files + 1 gate + 4 build = 104 test targets, all passing.**
+**Total: 86 lit + 18 inline files + 1 gate + 4 build = 109 test targets, all passing.**
 
 ---
 
-## CIR Ops (41 ops, 5 custom types)
+## CIR Ops (45 ops, 6 custom types)
 
 | Op | Description | LLVM Lowering |
 |----|-------------|---------------|
@@ -59,8 +59,12 @@ make test         # Run all test layers (lit, gate, inline, build)
 | `cir.slice_len` | extract length from slice | `llvm.extractvalue [1]` |
 | `cir.slice_elem` | index into slice (unchecked) | extractvalue + GEP + load |
 | `cir.array_to_slice` | array range → slice | GEP + sub + struct |
+| `cir.none` | null optional constant | undef + insertvalue(false, [1]) |
+| `cir.wrap_optional` | wrap T → ?T | undef + insertvalue(val, [0]) + insertvalue(true, [1]) |
+| `cir.is_non_null` | test ?T → i1 | extractvalue [1] or icmp ne null |
+| `cir.optional_payload` | extract T from ?T | extractvalue [0] or identity |
 
-**Types:** `!cir.ptr` (opaque pointer), `!cir.ref<T>` (typed safe reference), `!cir.struct<"Name", fields...>`, `!cir.array<N x T>`, `!cir.slice<T>` (fat pointer {ptr, len})
+**Types:** `!cir.ptr` (opaque pointer), `!cir.ref<T>` (typed safe reference), `!cir.struct<"Name", fields...>`, `!cir.array<N x T>`, `!cir.slice<T>` (fat pointer {ptr, len}), `!cir.optional<T>` (nullable value)
 
 ---
 

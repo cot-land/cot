@@ -296,6 +296,114 @@ struct ArrayToSliceOpLowering
   }
 };
 
+/// Helper: check if CIR optional type is pointer-like (null-ptr optimization).
+static bool isPointerLikeOptional(cir::OptionalType optType) {
+  return optType.isPointerLike();
+}
+
+/// cir.none → null optional value
+/// Non-pointer: undef struct + insertvalue(i1 0, [1])
+/// Pointer: llvm.mlir.zero (null pointer)
+struct NoneOpLowering : public OpConversionPattern<cir::NoneOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::NoneOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto optType = llvm::cast<cir::OptionalType>(op.getType());
+    auto llvmType = getTypeConverter()->convertType(op.getType());
+    if (!llvmType)
+      return rewriter.notifyMatchFailure(op, "type conversion failed");
+    if (isPointerLikeOptional(optType)) {
+      // Null pointer
+      rewriter.replaceOpWithNewOp<LLVM::ZeroOp>(op, llvmType);
+    } else {
+      // Struct with tag=0: {undef_payload, i1 0}
+      Value result = rewriter.create<LLVM::UndefOp>(loc, llvmType);
+      auto zero = rewriter.create<LLVM::ConstantOp>(
+          loc, rewriter.getI1Type(), rewriter.getBoolAttr(false));
+      result = rewriter.create<LLVM::InsertValueOp>(loc, result, zero, 1);
+      rewriter.replaceOp(op, result);
+    }
+    return success();
+  }
+};
+
+/// cir.wrap_optional → wrap T in ?T
+/// Non-pointer: undef struct + insertvalue(payload, [0]) + insertvalue(i1 1, [1])
+/// Pointer: identity (pointer IS the optional)
+struct WrapOptionalOpLowering
+    : public OpConversionPattern<cir::WrapOptionalOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::WrapOptionalOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto optType = llvm::cast<cir::OptionalType>(op.getType());
+    auto llvmType = getTypeConverter()->convertType(op.getType());
+    if (!llvmType)
+      return rewriter.notifyMatchFailure(op, "type conversion failed");
+    if (isPointerLikeOptional(optType)) {
+      // Pointer: the value IS the optional
+      rewriter.replaceOp(op, adaptor.getInput());
+    } else {
+      // Struct: {payload, tag=1}
+      Value result = rewriter.create<LLVM::UndefOp>(loc, llvmType);
+      result = rewriter.create<LLVM::InsertValueOp>(
+          loc, result, adaptor.getInput(), 0);
+      auto one = rewriter.create<LLVM::ConstantOp>(
+          loc, rewriter.getI1Type(), rewriter.getBoolAttr(true));
+      result = rewriter.create<LLVM::InsertValueOp>(loc, result, one, 1);
+      rewriter.replaceOp(op, result);
+    }
+    return success();
+  }
+};
+
+/// cir.is_non_null → test optional for non-null
+/// Non-pointer: extractvalue [1] (tag field)
+/// Pointer: icmp ne ptr, null
+struct IsNonNullOpLowering
+    : public OpConversionPattern<cir::IsNonNullOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::IsNonNullOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto optType = llvm::cast<cir::OptionalType>(op.getInput().getType());
+    if (isPointerLikeOptional(optType)) {
+      // icmp ne ptr, null
+      auto null = rewriter.create<LLVM::ZeroOp>(
+          loc, LLVM::LLVMPointerType::get(op.getContext()));
+      rewriter.replaceOpWithNewOp<LLVM::ICmpOp>(
+          op, LLVM::ICmpPredicate::ne, adaptor.getInput(), null);
+    } else {
+      // extractvalue [1] — the tag field
+      rewriter.replaceOpWithNewOp<LLVM::ExtractValueOp>(
+          op, adaptor.getInput(), 1);
+    }
+    return success();
+  }
+};
+
+/// cir.optional_payload → extract payload from optional (unchecked)
+/// Non-pointer: extractvalue [0] (payload field)
+/// Pointer: identity (pointer IS the payload)
+struct OptionalPayloadOpLowering
+    : public OpConversionPattern<cir::OptionalPayloadOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::OptionalPayloadOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    auto optType = llvm::cast<cir::OptionalType>(op.getInput().getType());
+    if (isPointerLikeOptional(optType)) {
+      // Pointer: the optional IS the payload
+      rewriter.replaceOp(op, adaptor.getInput());
+    } else {
+      // extractvalue [0] — the payload field
+      rewriter.replaceOpWithNewOp<LLVM::ExtractValueOp>(
+          op, adaptor.getInput(), 0);
+    }
+    return success();
+  }
+};
+
 /// cir.struct_init → llvm.mlir.undef + llvm.insertvalue chain
 /// Reference: FIR UndefOpConversion + InsertValueOpConversion
 ///   ~/claude/references/flang-ref/flang/lib/Optimizer/CodeGen/CodeGen.cpp
@@ -330,6 +438,8 @@ void cot::populateMemoryPatterns(
                StructInitOpLowering, StringConstantOpLowering,
                SlicePtrOpLowering, SliceLenOpLowering, SliceElemOpLowering,
                ArrayToSliceOpLowering,
+               NoneOpLowering, WrapOptionalOpLowering,
+               IsNonNullOpLowering, OptionalPayloadOpLowering,
                ArrayInitOpLowering, ElemValOpLowering, ElemPtrOpLowering>(
       converter, ctx);
 }

@@ -583,4 +583,65 @@ def CIR_ArrayToSliceOp : CIR_Op<"array_to_slice", [Pure]> {
   let hasVerifier = 1;
 }
 
+//===----------------------------------------------------------------------===//
+// Optional operations
+// Reference: Zig ?T — is_non_null, optional_payload_unsafe, null
+//===----------------------------------------------------------------------===//
+
+def CIR_NoneOp : CIR_Op<"none", [Pure]> {
+  let summary = "null optional constant";
+  let description = [{
+    Produces the null/none value for an optional type.
+    Reference: Zig null literal.
+    Example:
+      %n = cir.none : !cir.optional<i32>
+  }];
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "attr-dict `:` type($result)";
+  let hasVerifier = 1;
+}
+
+def CIR_WrapOptionalOp : CIR_Op<"wrap_optional", [Pure]> {
+  let summary = "wrap value in optional (T → ?T)";
+  let description = [{
+    Wraps a non-optional value into an optional (the Some case).
+    Reference: Zig implicit T → ?T coercion.
+    Example:
+      %opt = cir.wrap_optional %val : i32 to !cir.optional<i32>
+  }];
+  let arguments = (ins AnyType:$input);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$input attr-dict `:` type($input) `to` type($result)";
+  let hasVerifier = 1;
+}
+
+def CIR_IsNonNullOp : CIR_Op<"is_non_null", [Pure]> {
+  let summary = "test optional for non-null → i1";
+  let description = [{
+    Returns true (i1) if the optional contains a value, false if null.
+    Reference: Zig is_non_null ZIR instruction.
+    Example:
+      %b = cir.is_non_null %opt : !cir.optional<i32> to i1
+  }];
+  let arguments = (ins AnyType:$input);
+  let results = (outs I1:$result);
+  let assemblyFormat = "$input attr-dict `:` type($input) `to` type($result)";
+  let hasVerifier = 1;
+}
+
+def CIR_OptionalPayloadOp : CIR_Op<"optional_payload", [Pure]> {
+  let summary = "extract value from optional (unchecked)";
+  let description = [{
+    Extracts the payload from an optional. Unchecked — caller must have
+    already branched on cir.is_non_null. Safety passes can add checks.
+    Reference: Zig optional_payload_unsafe ZIR instruction.
+    Example:
+      %val = cir.optional_payload %opt : !cir.optional<i32> to i32
+  }];
+  let arguments = (ins AnyType:$input);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$input attr-dict `:` type($input) `to` type($result)";
+  let hasVerifier = 1;
+}
+
 #endif // CIR_OPS

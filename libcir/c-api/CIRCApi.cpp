@@ -428,6 +428,58 @@ MlirValue cirBuildSliceElem(MlirBlock block, MlirLocation loc,
   return wrap(op.getResult());
 }
 
+//===----------------------------------------------------------------------===//
+// Optional Type + Operations
+//===----------------------------------------------------------------------===//
+
+MlirType cirOptionalTypeGet(MlirContext ctx, MlirType payloadType) {
+  return wrap(cir::OptionalType::get(unwrap(ctx), unwrap(payloadType)));
+}
+
+bool cirTypeIsOptional(MlirType type) {
+  return llvm::isa<cir::OptionalType>(unwrap(type));
+}
+
+MlirType cirOptionalTypeGetPayload(MlirType optType) {
+  return wrap(
+      llvm::cast<cir::OptionalType>(unwrap(optType)).getPayloadType());
+}
+
+bool cirOptionalTypeIsPointerLike(MlirType optType) {
+  return llvm::cast<cir::OptionalType>(unwrap(optType)).isPointerLike();
+}
+
+MlirValue cirBuildNone(MlirBlock block, MlirLocation loc,
+                       MlirType optionalType) {
+  auto b = builderAtEnd(block, loc);
+  auto op = b.create<cir::NoneOp>(unwrap(loc), unwrap(optionalType));
+  return wrap(op.getResult());
+}
+
+MlirValue cirBuildWrapOptional(MlirBlock block, MlirLocation loc,
+                               MlirType optionalType, MlirValue value) {
+  auto b = builderAtEnd(block, loc);
+  auto op = b.create<cir::WrapOptionalOp>(unwrap(loc), unwrap(optionalType),
+                                           unwrap(value));
+  return wrap(op.getResult());
+}
+
+MlirValue cirBuildIsNonNull(MlirBlock block, MlirLocation loc,
+                            MlirValue optional) {
+  auto b = builderAtEnd(block, loc);
+  auto op = b.create<cir::IsNonNullOp>(unwrap(loc), b.getI1Type(),
+                                        unwrap(optional));
+  return wrap(op.getResult());
+}
+
+MlirValue cirBuildOptionalPayload(MlirBlock block, MlirLocation loc,
+                                  MlirType payloadType, MlirValue optional) {
+  auto b = builderAtEnd(block, loc);
+  auto op = b.create<cir::OptionalPayloadOp>(unwrap(loc), unwrap(payloadType),
+                                              unwrap(optional));
+  return wrap(op.getResult());
+}
+
 MlirValue cirBuildArrayToSlice(MlirBlock block, MlirLocation loc,
                                MlirType sliceType, MlirValue base,
                                MlirValue start, MlirValue end,
