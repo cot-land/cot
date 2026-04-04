@@ -203,12 +203,12 @@ func (g *Gen) mapStmt(node *ast.Node) {
 		g.mapForStmt(node)
 	case ast.KindBreakStatement:
 		if len(g.loopStack) > 0 {
-			g.b.EmitBranch(g.currentBlock, "cir.br", nil, []MlirBlock{g.loopStack[len(g.loopStack)-1].exit})
+			CirBuildBr(g.currentBlock, g.b.loc, g.loopStack[len(g.loopStack)-1].exit, nil)
 			g.hasTerminator = true
 		}
 	case ast.KindContinueStatement:
 		if len(g.loopStack) > 0 {
-			g.b.EmitBranch(g.currentBlock, "cir.br", nil, []MlirBlock{g.loopStack[len(g.loopStack)-1].header})
+			CirBuildBr(g.currentBlock, g.b.loc, g.loopStack[len(g.loopStack)-1].header, nil)
 			g.hasTerminator = true
 		}
 	case ast.KindBlock:
@@ -269,18 +269,16 @@ func (g *Gen) mapVarDecl(node *ast.Node) {
 		if ale.Elements != nil {
 			nElems = len(ale.Elements.Nodes)
 		}
-		typeStr := "!cir.array<" + strconv.Itoa(nElems) + " x i32>"
-		varType = g.b.ParseType(typeStr)
+		varType = CirArrayTypeGet(g.ctx, int64(nElems), g.b.IntType(32))
 	}
 
 	// Allocate on stack
-	addr := g.b.Emit(g.currentBlock, "cir.alloca", []MlirType{g.ptrType()}, nil,
-		[]MlirNamedAttr{g.b.NamedAttr("elem_type", g.b.TypeAttr(varType))})
+	addr := CirBuildAlloca(g.currentBlock, g.b.loc, varType)
 
 	// Store initializer if present
 	if vd.Initializer != nil {
 		val := g.mapExpr(g.currentBlock, vd.Initializer, varType)
-		g.b.Emit(g.currentBlock, "cir.store", nil, []MlirValue{val, addr}, nil)
+		CirBuildStore(g.currentBlock, g.b.loc, val, addr)
 	}
 
 	g.localNames = append(g.localNames, varName)
@@ -296,7 +294,7 @@ func (g *Gen) mapAssign(be *ast.BinaryExpression) {
 	for i, n := range g.localNames {
 		if n == name {
 			val := g.mapExpr(g.currentBlock, be.Right, g.localTypes[i])
-			g.b.Emit(g.currentBlock, "cir.store", nil, []MlirValue{val, g.localAddrs[i]}, nil)
+			CirBuildStore(g.currentBlock, g.b.loc, val, g.localAddrs[i])
 			return
 		}
 	}
@@ -309,13 +307,10 @@ func (g *Gen) mapCompoundAssign(be *ast.BinaryExpression) {
 	name := be.Left.AsIdentifier().Text
 	for i, n := range g.localNames {
 		if n == name {
-			current := g.b.Emit(g.currentBlock, "cir.load", []MlirType{g.localTypes[i]},
-				[]MlirValue{g.localAddrs[i]}, nil)
+			current := CirBuildLoad(g.currentBlock, g.b.loc, g.localTypes[i], g.localAddrs[i])
 			rhs := g.mapExpr(g.currentBlock, be.Right, g.localTypes[i])
-			opName := compoundAssignOp(be.OperatorToken.Kind)
-			result := g.b.Emit(g.currentBlock, opName, []MlirType{g.localTypes[i]},
-				[]MlirValue{current, rhs}, nil)
-			g.b.Emit(g.currentBlock, "cir.store", nil, []MlirValue{result, g.localAddrs[i]}, nil)
+			result := emitBinOp(g.currentBlock, g.b.loc, be.OperatorToken.Kind, g.localTypes[i], current, rhs)
+			CirBuildStore(g.currentBlock, g.b.loc, result, g.localAddrs[i])
 			return
 		}
 	}
@@ -329,7 +324,7 @@ func (g *Gen) mapIfStmt(node *ast.Node) {
 	elseBlock := g.b.AddBlock(g.currentFunc)
 	mergeBlock := g.b.AddBlock(g.currentFunc)
 
-	g.b.EmitBranch(g.currentBlock, "cir.condbr", []MlirValue{cond}, []MlirBlock{thenBlock, elseBlock})
+	CirBuildCondBr(g.currentBlock, g.b.loc, cond, thenBlock, elseBlock)
 
 	// Then
 	g.currentBlock = thenBlock
@@ -343,7 +338,7 @@ func (g *Gen) mapIfStmt(node *ast.Node) {
 	}
 	thenTerminated := g.hasTerminator
 	if !thenTerminated {
-		g.b.EmitBranch(g.currentBlock, "cir.br", nil, []MlirBlock{mergeBlock})
+		CirBuildBr(g.currentBlock, g.b.loc, mergeBlock, nil)
 	}
 
 	// Else
@@ -358,13 +353,13 @@ func (g *Gen) mapIfStmt(node *ast.Node) {
 	}
 	elseTerminated := g.hasTerminator
 	if !elseTerminated {
-		g.b.EmitBranch(g.currentBlock, "cir.br", nil, []MlirBlock{mergeBlock})
+		CirBuildBr(g.currentBlock, g.b.loc, mergeBlock, nil)
 	}
 
 	g.currentBlock = mergeBlock
 	// If both branches return, merge is unreachable — add trap terminator
 	if thenTerminated && elseTerminated {
-		g.b.Emit(mergeBlock, "cir.trap", nil, nil, nil)
+		CirBuildTrap(mergeBlock, g.b.loc)
 		g.hasTerminator = true
 	} else {
 		g.hasTerminator = false
@@ -377,12 +372,12 @@ func (g *Gen) mapWhileStmt(node *ast.Node) {
 	bodyBlock := g.b.AddBlock(g.currentFunc)
 	exitBlock := g.b.AddBlock(g.currentFunc)
 
-	g.b.EmitBranch(g.currentBlock, "cir.br", nil, []MlirBlock{headerBlock})
+	CirBuildBr(g.currentBlock, g.b.loc, headerBlock, nil)
 
 	// Header: evaluate condition
 	g.currentBlock = headerBlock
 	cond := g.mapExpr(headerBlock, ws.Expression, g.b.IntType(1))
-	g.b.EmitBranch(headerBlock, "cir.condbr", []MlirValue{cond}, []MlirBlock{bodyBlock, exitBlock})
+	CirBuildCondBr(headerBlock, g.b.loc, cond, bodyBlock, exitBlock)
 
 	// Body
 	g.loopStack = append(g.loopStack, LoopContext{header: headerBlock, exit: exitBlock})
@@ -395,7 +390,7 @@ func (g *Gen) mapWhileStmt(node *ast.Node) {
 	}
 	g.loopStack = g.loopStack[:len(g.loopStack)-1]
 	if !g.hasTerminator {
-		g.b.EmitBranch(g.currentBlock, "cir.br", nil, []MlirBlock{headerBlock})
+		CirBuildBr(g.currentBlock, g.b.loc, headerBlock, nil)
 	}
 
 	g.currentBlock = exitBlock
@@ -420,15 +415,15 @@ func (g *Gen) mapForStmt(node *ast.Node) {
 	bodyBlock := g.b.AddBlock(g.currentFunc)
 	exitBlock := g.b.AddBlock(g.currentFunc)
 
-	g.b.EmitBranch(g.currentBlock, "cir.br", nil, []MlirBlock{headerBlock})
+	CirBuildBr(g.currentBlock, g.b.loc, headerBlock, nil)
 
 	// Header: condition
 	g.currentBlock = headerBlock
 	if fs.Condition != nil {
 		cond := g.mapExpr(headerBlock, fs.Condition, g.b.IntType(1))
-		g.b.EmitBranch(headerBlock, "cir.condbr", []MlirValue{cond}, []MlirBlock{bodyBlock, exitBlock})
+		CirBuildCondBr(headerBlock, g.b.loc, cond, bodyBlock, exitBlock)
 	} else {
-		g.b.EmitBranch(headerBlock, "cir.br", nil, []MlirBlock{bodyBlock})
+		CirBuildBr(headerBlock, g.b.loc, bodyBlock, nil)
 	}
 
 	// Body
@@ -454,7 +449,7 @@ func (g *Gen) mapForStmt(node *ast.Node) {
 		}
 	}
 	if !g.hasTerminator {
-		g.b.EmitBranch(g.currentBlock, "cir.br", nil, []MlirBlock{headerBlock})
+		CirBuildBr(g.currentBlock, g.b.loc, headerBlock, nil)
 	}
 
 	g.currentBlock = exitBlock
@@ -490,39 +485,30 @@ func (g *Gen) mapExpr(block MlirBlock, node *ast.Node, resultType MlirType) Mlir
 	case ast.KindObjectLiteralExpression:
 		return g.mapObjectLiteral(block, node, resultType)
 	case ast.KindTrueKeyword:
-		boolType := g.b.IntType(1)
-		return g.b.Emit(block, "cir.constant", []MlirType{boolType}, nil,
-			[]MlirNamedAttr{g.b.NamedAttr("value", g.b.IntAttr(boolType, 1))})
+		return CirBuildConstantBool(block, g.b.loc, true)
 	case ast.KindFalseKeyword:
-		boolType := g.b.IntType(1)
-		return g.b.Emit(block, "cir.constant", []MlirType{boolType}, nil,
-			[]MlirNamedAttr{g.b.NamedAttr("value", g.b.IntAttr(boolType, 0))})
+		return CirBuildConstantBool(block, g.b.loc, false)
 	case ast.KindStringLiteral:
 		lit := node.AsStringLiteral()
 		// Strip surrounding quotes from text
 		text := lit.Text
-		sliceType := g.b.ParseType("!cir.slice<i8>")
-		return g.b.Emit(block, "cir.string_constant", []MlirType{sliceType}, nil,
-			[]MlirNamedAttr{g.b.NamedAttr("value", g.b.StrAttr(text))})
+		return CirBuildStringConstant(block, g.b.loc, text)
 	default:
-		return g.b.Emit(block, "cir.constant", []MlirType{resultType}, nil,
-			[]MlirNamedAttr{g.b.NamedAttr("value", g.b.IntAttr(resultType, 0))})
+		return CirBuildConstantInt(block, g.b.loc, resultType, 0)
 	}
 }
 
 func (g *Gen) mapNumericLiteral(block MlirBlock, node *ast.Node, resultType MlirType) MlirValue {
 	lit := node.AsNumericLiteral()
 	val, _ := strconv.ParseInt(lit.Text, 10, 64)
-	return g.b.Emit(block, "cir.constant", []MlirType{resultType}, nil,
-		[]MlirNamedAttr{g.b.NamedAttr("value", g.b.IntAttr(resultType, val))})
+	return CirBuildConstantInt(block, g.b.loc, resultType, val)
 }
 
 func (g *Gen) mapIdentifier(block MlirBlock, node *ast.Node) MlirValue {
 	name := node.AsIdentifier().Text
 	for i := len(g.localNames) - 1; i >= 0; i-- {
 		if g.localNames[i] == name {
-			return g.b.Emit(block, "cir.load", []MlirType{g.localTypes[i]},
-				[]MlirValue{g.localAddrs[i]}, nil)
+			return CirBuildLoad(block, g.b.loc, g.localTypes[i], g.localAddrs[i])
 		}
 	}
 	for i, n := range g.paramNames {
@@ -549,48 +535,41 @@ func (g *Gen) mapBinaryExpr(block MlirBlock, node *ast.Node, resultType MlirType
 	switch opKind {
 	// Arithmetic
 	case ast.KindPlusToken:
-		return g.b.Emit(block, "cir.add", []MlirType{opResultType}, []MlirValue{lhs, rhs}, nil)
+		return CirBuildAdd(block, g.b.loc, opResultType, lhs, rhs)
 	case ast.KindMinusToken:
-		return g.b.Emit(block, "cir.sub", []MlirType{opResultType}, []MlirValue{lhs, rhs}, nil)
+		return CirBuildSub(block, g.b.loc, opResultType, lhs, rhs)
 	case ast.KindAsteriskToken:
-		return g.b.Emit(block, "cir.mul", []MlirType{opResultType}, []MlirValue{lhs, rhs}, nil)
+		return CirBuildMul(block, g.b.loc, opResultType, lhs, rhs)
 	case ast.KindSlashToken:
-		return g.b.Emit(block, "cir.div", []MlirType{opResultType}, []MlirValue{lhs, rhs}, nil)
+		return CirBuildDiv(block, g.b.loc, opResultType, lhs, rhs)
 	case ast.KindPercentToken:
-		return g.b.Emit(block, "cir.rem", []MlirType{opResultType}, []MlirValue{lhs, rhs}, nil)
+		return CirBuildRem(block, g.b.loc, opResultType, lhs, rhs)
 	// Bitwise
 	case ast.KindAmpersandToken:
-		return g.b.Emit(block, "cir.bit_and", []MlirType{opResultType}, []MlirValue{lhs, rhs}, nil)
+		return CirBuildBitAnd(block, g.b.loc, opResultType, lhs, rhs)
 	case ast.KindBarToken:
-		return g.b.Emit(block, "cir.bit_or", []MlirType{opResultType}, []MlirValue{lhs, rhs}, nil)
+		return CirBuildBitOr(block, g.b.loc, opResultType, lhs, rhs)
 	case ast.KindCaretToken:
-		return g.b.Emit(block, "cir.bit_xor", []MlirType{opResultType}, []MlirValue{lhs, rhs}, nil)
+		return CirBuildBitXor(block, g.b.loc, opResultType, lhs, rhs)
 	case ast.KindLessThanLessThanToken:
-		return g.b.Emit(block, "cir.shl", []MlirType{opResultType}, []MlirValue{lhs, rhs}, nil)
+		return CirBuildShl(block, g.b.loc, opResultType, lhs, rhs)
 	case ast.KindGreaterThanGreaterThanToken:
-		return g.b.Emit(block, "cir.shr", []MlirType{opResultType}, []MlirValue{lhs, rhs}, nil)
+		return CirBuildShr(block, g.b.loc, opResultType, lhs, rhs)
 	// Comparisons
 	case ast.KindEqualsEqualsToken, ast.KindEqualsEqualsEqualsToken:
-		return g.emitCmp(block, lhs, rhs, 0)
+		return CirBuildCmp(block, g.b.loc, 0, lhs, rhs)
 	case ast.KindExclamationEqualsToken, ast.KindExclamationEqualsEqualsToken:
-		return g.emitCmp(block, lhs, rhs, 1)
+		return CirBuildCmp(block, g.b.loc, 1, lhs, rhs)
 	case ast.KindLessThanToken:
-		return g.emitCmp(block, lhs, rhs, 2)
+		return CirBuildCmp(block, g.b.loc, 2, lhs, rhs)
 	case ast.KindLessThanEqualsToken:
-		return g.emitCmp(block, lhs, rhs, 3)
+		return CirBuildCmp(block, g.b.loc, 3, lhs, rhs)
 	case ast.KindGreaterThanToken:
-		return g.emitCmp(block, lhs, rhs, 4)
+		return CirBuildCmp(block, g.b.loc, 4, lhs, rhs)
 	case ast.KindGreaterThanEqualsToken:
-		return g.emitCmp(block, lhs, rhs, 5)
+		return CirBuildCmp(block, g.b.loc, 5, lhs, rhs)
 	}
 	return MlirValue{}
-}
-
-func (g *Gen) emitCmp(block MlirBlock, lhs, rhs MlirValue, predicate int64) MlirValue {
-	boolType := g.b.IntType(1)
-	i64Type := g.b.IntType(64)
-	return g.b.Emit(block, "cir.cmp", []MlirType{boolType}, []MlirValue{lhs, rhs},
-		[]MlirNamedAttr{g.b.NamedAttr("predicate", g.b.IntAttr(i64Type, predicate))})
 }
 
 func (g *Gen) mapCallExpr(block MlirBlock, node *ast.Node, resultType MlirType) MlirValue {
@@ -624,13 +603,12 @@ func (g *Gen) mapPrefixUnary(block MlirBlock, node *ast.Node, resultType MlirTyp
 	operand := g.mapExpr(block, pu.Operand, resultType)
 	switch pu.Operator {
 	case ast.KindMinusToken:
-		return g.b.Emit(block, "cir.neg", []MlirType{resultType}, []MlirValue{operand}, nil)
+		return CirBuildNeg(block, g.b.loc, resultType, operand)
 	case ast.KindTildeToken:
-		return g.b.Emit(block, "cir.bit_not", []MlirType{resultType}, []MlirValue{operand}, nil)
+		return CirBuildBitNot(block, g.b.loc, resultType, operand)
 	case ast.KindExclamationToken:
-		one := g.b.Emit(block, "cir.constant", []MlirType{resultType}, nil,
-			[]MlirNamedAttr{g.b.NamedAttr("value", g.b.IntAttr(resultType, 1))})
-		return g.b.Emit(block, "cir.bit_xor", []MlirType{resultType}, []MlirValue{operand, one}, nil)
+		one := CirBuildConstantInt(block, g.b.loc, resultType, 1)
+		return CirBuildBitXor(block, g.b.loc, resultType, operand, one)
 	}
 	return operand
 }
@@ -645,10 +623,9 @@ func (g *Gen) mapArrayLiteral(block MlirBlock, node *ast.Node, resultType MlirTy
 			elemVals = append(elemVals, g.mapExpr(block, elem, elemType))
 		}
 	}
-	// Build array type string
-	typeStr := "!cir.array<" + strconv.Itoa(len(elemVals)) + " x i32>"
-	arrayType := g.b.ParseType(typeStr)
-	return g.b.Emit(block, "cir.array_init", []MlirType{arrayType}, elemVals, nil)
+	// Build array type via C API
+	arrayType := CirArrayTypeGet(g.ctx, int64(len(elemVals)), g.b.IntType(32))
+	return CirBuildArrayInit(block, g.b.loc, arrayType, elemVals)
 }
 
 // Element access: arr[i] → cir.elem_val
@@ -661,8 +638,7 @@ func (g *Gen) mapElementAccess(block MlirBlock, node *ast.Node, resultType MlirT
 		lit := ea.ArgumentExpression.AsNumericLiteral()
 		idxVal, _ = strconv.ParseInt(lit.Text, 10, 64)
 	}
-	return g.b.Emit(block, "cir.elem_val", []MlirType{resultType}, []MlirValue{arr},
-		[]MlirNamedAttr{g.b.NamedAttr("index", g.b.IntAttr(g.b.IntType(64), idxVal))})
+	return CirBuildElemVal(block, g.b.loc, resultType, arr, idxVal)
 }
 
 // Property access: p.x → cir.field_val
@@ -679,10 +655,7 @@ func (g *Gen) mapPropertyAccess(block MlirBlock, node *ast.Node, resultType Mlir
 		if TypeEqual(st, objType) {
 			for j, fn := range g.structFieldNames[i] {
 				if fn == fieldName {
-					return g.b.Emit(block, "cir.field_val",
-						[]MlirType{g.structFieldTypes[i][j]}, []MlirValue{obj},
-						[]MlirNamedAttr{g.b.NamedAttr("field_index",
-							g.b.IntAttr(g.b.IntType(64), int64(j)))})
+					return CirBuildFieldVal(block, g.b.loc, g.structFieldTypes[i][j], obj, int64(j))
 				}
 			}
 			break
@@ -705,8 +678,7 @@ func (g *Gen) mapObjectLiteral(block MlirBlock, node *ast.Node, resultType MlirT
 	}
 	if structIdx < 0 {
 		// Fallback: return zero constant
-		return g.b.Emit(block, "cir.constant", []MlirType{g.b.IntType(32)}, nil,
-			[]MlirNamedAttr{g.b.NamedAttr("value", g.b.IntAttr(g.b.IntType(32), 0))})
+		return CirBuildConstantInt(block, g.b.loc, g.b.IntType(32), 0)
 	}
 
 	fieldNames := g.structFieldNames[structIdx]
@@ -716,8 +688,7 @@ func (g *Gen) mapObjectLiteral(block MlirBlock, node *ast.Node, resultType MlirT
 	// Initialize all field values to zero
 	fieldVals := make([]MlirValue, nFields)
 	for i := 0; i < nFields; i++ {
-		fieldVals[i] = g.b.Emit(block, "cir.constant", []MlirType{fieldTypes[i]}, nil,
-			[]MlirNamedAttr{g.b.NamedAttr("value", g.b.IntAttr(fieldTypes[i], 0))})
+		fieldVals[i] = CirBuildConstantInt(block, g.b.loc, fieldTypes[i], 0)
 	}
 
 	// Fill in provided fields from the object literal
@@ -737,7 +708,7 @@ func (g *Gen) mapObjectLiteral(block MlirBlock, node *ast.Node, resultType MlirT
 		}
 	}
 
-	return g.b.Emit(block, "cir.struct_init", []MlirType{resultType}, fieldVals, nil)
+	return CirBuildStructInit(block, g.b.loc, resultType, fieldVals)
 }
 
 // cond ? thenVal : elseVal → cir.select
@@ -746,7 +717,7 @@ func (g *Gen) mapConditionalExpr(block MlirBlock, node *ast.Node, resultType Mli
 	cond := g.mapExpr(block, ce.Condition, g.b.IntType(1))
 	thenVal := g.mapExpr(block, ce.WhenTrue, resultType)
 	elseVal := g.mapExpr(block, ce.WhenFalse, resultType)
-	return g.b.Emit(block, "cir.select", []MlirType{resultType}, []MlirValue{cond, thenVal, elseVal}, nil)
+	return CirBuildSelect(block, g.b.loc, resultType, cond, thenVal, elseVal)
 }
 
 // ============================================================
@@ -814,20 +785,21 @@ func isCompoundAssign(kind ast.Kind) bool {
 		kind == ast.KindPercentEqualsToken
 }
 
-func compoundAssignOp(kind ast.Kind) string {
+// emitBinOp emits a CIR binary op for the given compound-assignment token kind.
+func emitBinOp(block MlirBlock, loc MlirLocation, kind ast.Kind, ty MlirType, lhs MlirValue, rhs MlirValue) MlirValue {
 	switch kind {
 	case ast.KindPlusEqualsToken:
-		return "cir.add"
+		return CirBuildAdd(block, loc, ty, lhs, rhs)
 	case ast.KindMinusEqualsToken:
-		return "cir.sub"
+		return CirBuildSub(block, loc, ty, lhs, rhs)
 	case ast.KindAsteriskEqualsToken:
-		return "cir.mul"
+		return CirBuildMul(block, loc, ty, lhs, rhs)
 	case ast.KindSlashEqualsToken:
-		return "cir.div"
+		return CirBuildDiv(block, loc, ty, lhs, rhs)
 	case ast.KindPercentEqualsToken:
-		return "cir.rem"
+		return CirBuildRem(block, loc, ty, lhs, rhs)
 	}
-	return "cir.add"
+	return CirBuildAdd(block, loc, ty, lhs, rhs)
 }
 
 func isI1Type(ty MlirType, b Builder) bool {

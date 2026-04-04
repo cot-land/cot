@@ -100,8 +100,91 @@ pub extern "c" fn mlirTypeIsAFloat(ty: Type) callconv(.c) bool;
 pub extern "c" fn mlirIntegerTypeGetWidth(ty: Type) callconv(.c) c_uint;
 pub extern "c" fn mlirFloatTypeGetWidth(ty: Type) callconv(.c) c_uint;
 
-// CIR dialect registration (from libcir/c-api/CIRCApi.h)
+// ============================================================
+// CIR C API (from libcir/c-api/CIRCApi.h)
+// ============================================================
+
+// Dialect
 pub extern "c" fn cirRegisterDialect(ctx: Context) callconv(.c) void;
+
+// Type constructors
+pub extern "c" fn cirPointerTypeGet(ctx: Context) callconv(.c) Type;
+pub extern "c" fn cirRefTypeGet(ctx: Context, pointee: Type) callconv(.c) Type;
+pub extern "c" fn cirStructTypeGet(ctx: Context, name: StringRef, n: isize, names: [*]const StringRef, types: [*]const Type) callconv(.c) Type;
+pub extern "c" fn cirArrayTypeGet(ctx: Context, size: i64, elem: Type) callconv(.c) Type;
+pub extern "c" fn cirSliceTypeGet(ctx: Context, elem: Type) callconv(.c) Type;
+
+// Type queries
+pub extern "c" fn cirTypeIsPointer(ty: Type) callconv(.c) bool;
+pub extern "c" fn cirTypeIsRef(ty: Type) callconv(.c) bool;
+pub extern "c" fn cirRefTypeGetPointee(ty: Type) callconv(.c) Type;
+pub extern "c" fn cirTypeIsStruct(ty: Type) callconv(.c) bool;
+pub extern "c" fn cirStructTypeGetNumFields(ty: Type) callconv(.c) isize;
+pub extern "c" fn cirStructTypeGetFieldIndex(ty: Type, name: StringRef) callconv(.c) c_int;
+pub extern "c" fn cirTypeIsArray(ty: Type) callconv(.c) bool;
+pub extern "c" fn cirArrayTypeGetSize(ty: Type) callconv(.c) i64;
+pub extern "c" fn cirArrayTypeGetElementType(ty: Type) callconv(.c) Type;
+pub extern "c" fn cirTypeIsSlice(ty: Type) callconv(.c) bool;
+pub extern "c" fn cirSliceTypeGetElementType(ty: Type) callconv(.c) Type;
+
+// Constants
+pub extern "c" fn cirBuildConstantInt(block: Block, loc: Location, ty: Type, value: i64) callconv(.c) Value;
+pub extern "c" fn cirBuildConstantFloat(block: Block, loc: Location, ty: Type, value: f64) callconv(.c) Value;
+pub extern "c" fn cirBuildConstantBool(block: Block, loc: Location, value: bool) callconv(.c) Value;
+pub extern "c" fn cirBuildStringConstant(block: Block, loc: Location, value: StringRef) callconv(.c) Value;
+
+// Arithmetic
+pub extern "c" fn cirBuildAdd(block: Block, loc: Location, ty: Type, lhs: Value, rhs: Value) callconv(.c) Value;
+pub extern "c" fn cirBuildSub(block: Block, loc: Location, ty: Type, lhs: Value, rhs: Value) callconv(.c) Value;
+pub extern "c" fn cirBuildMul(block: Block, loc: Location, ty: Type, lhs: Value, rhs: Value) callconv(.c) Value;
+pub extern "c" fn cirBuildDiv(block: Block, loc: Location, ty: Type, lhs: Value, rhs: Value) callconv(.c) Value;
+pub extern "c" fn cirBuildRem(block: Block, loc: Location, ty: Type, lhs: Value, rhs: Value) callconv(.c) Value;
+pub extern "c" fn cirBuildNeg(block: Block, loc: Location, ty: Type, operand: Value) callconv(.c) Value;
+
+// Bitwise
+pub extern "c" fn cirBuildBitAnd(block: Block, loc: Location, ty: Type, lhs: Value, rhs: Value) callconv(.c) Value;
+pub extern "c" fn cirBuildBitOr(block: Block, loc: Location, ty: Type, lhs: Value, rhs: Value) callconv(.c) Value;
+pub extern "c" fn cirBuildBitXor(block: Block, loc: Location, ty: Type, lhs: Value, rhs: Value) callconv(.c) Value;
+pub extern "c" fn cirBuildBitNot(block: Block, loc: Location, ty: Type, operand: Value) callconv(.c) Value;
+pub extern "c" fn cirBuildShl(block: Block, loc: Location, ty: Type, lhs: Value, rhs: Value) callconv(.c) Value;
+pub extern "c" fn cirBuildShr(block: Block, loc: Location, ty: Type, lhs: Value, rhs: Value) callconv(.c) Value;
+
+// Comparison
+pub extern "c" fn cirBuildCmp(block: Block, loc: Location, pred: c_int, lhs: Value, rhs: Value) callconv(.c) Value;
+pub extern "c" fn cirBuildSelect(block: Block, loc: Location, ty: Type, cond: Value, t: Value, f: Value) callconv(.c) Value;
+
+// Casts
+pub extern "c" fn cirBuildExtSI(block: Block, loc: Location, dst: Type, input: Value) callconv(.c) Value;
+pub extern "c" fn cirBuildExtUI(block: Block, loc: Location, dst: Type, input: Value) callconv(.c) Value;
+pub extern "c" fn cirBuildTruncI(block: Block, loc: Location, dst: Type, input: Value) callconv(.c) Value;
+pub extern "c" fn cirBuildSIToFP(block: Block, loc: Location, dst: Type, input: Value) callconv(.c) Value;
+pub extern "c" fn cirBuildFPToSI(block: Block, loc: Location, dst: Type, input: Value) callconv(.c) Value;
+pub extern "c" fn cirBuildExtF(block: Block, loc: Location, dst: Type, input: Value) callconv(.c) Value;
+pub extern "c" fn cirBuildTruncF(block: Block, loc: Location, dst: Type, input: Value) callconv(.c) Value;
+
+// Memory
+pub extern "c" fn cirBuildAlloca(block: Block, loc: Location, elem: Type) callconv(.c) Value;
+pub extern "c" fn cirBuildStore(block: Block, loc: Location, value: Value, addr: Value) callconv(.c) void;
+pub extern "c" fn cirBuildLoad(block: Block, loc: Location, result: Type, addr: Value) callconv(.c) Value;
+
+// References
+pub extern "c" fn cirBuildAddrOf(block: Block, loc: Location, refTy: Type, addr: Value) callconv(.c) Value;
+pub extern "c" fn cirBuildDeref(block: Block, loc: Location, result: Type, ref: Value) callconv(.c) Value;
+
+// Structs
+pub extern "c" fn cirBuildStructInit(block: Block, loc: Location, ty: Type, n: isize, fields: [*]const Value) callconv(.c) Value;
+pub extern "c" fn cirBuildFieldVal(block: Block, loc: Location, result: Type, input: Value, idx: i64) callconv(.c) Value;
+pub extern "c" fn cirBuildFieldPtr(block: Block, loc: Location, base: Value, idx: i64, elem: Type) callconv(.c) Value;
+
+// Arrays
+pub extern "c" fn cirBuildArrayInit(block: Block, loc: Location, ty: Type, n: isize, elems: [*]const Value) callconv(.c) Value;
+pub extern "c" fn cirBuildElemVal(block: Block, loc: Location, result: Type, input: Value, idx: i64) callconv(.c) Value;
+pub extern "c" fn cirBuildElemPtr(block: Block, loc: Location, base: Value, idx: Value, elem: Type) callconv(.c) Value;
+
+// Control flow
+pub extern "c" fn cirBuildBr(block: Block, loc: Location, dest: Block, n: isize, args: [*]const Value) callconv(.c) void;
+pub extern "c" fn cirBuildCondBr(block: Block, loc: Location, cond: Value, t: Block, f: Block) callconv(.c) void;
+pub extern "c" fn cirBuildTrap(block: Block, loc: Location) callconv(.c) void;
 
 // ============================================================
 // Convenience API (ported from cot-failed/libzc/mlir.zig)

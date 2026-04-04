@@ -69,6 +69,10 @@ const Gen = struct {
         field_types: []const mlir.Type,
     };
 
+    /// Function pointer types for mapBinOp/mapUnaryOp dispatch.
+    const BinOpFn = *const fn (mlir.Block, mlir.Location, mlir.Type, mlir.Value, mlir.Value) callconv(.c) mlir.Value;
+    const UnaryOpFn = *const fn (mlir.Block, mlir.Location, mlir.Type, mlir.Value) callconv(.c) mlir.Value;
+
     fn init(gpa: Allocator, tree: *const Ast) Gen {
         const ctx = mlir.createContext();
         return .{
@@ -467,10 +471,11 @@ const Gen = struct {
                 const cond = self.mapExpr(blk, cond_node, self.b.intType(1));
                 const then_block = self.addBlock();
                 const merge_block = self.addBlock();
-                self.b.emitBranch(blk, "cir.condbr", &.{cond}, &.{ then_block, merge_block });
+                mlir.cirBuildCondBr(blk, self.b.loc, cond, then_block, merge_block);
                 self.mapBlock(then_block, then_node, result_types);
                 if (!self.has_terminator) {
-                    self.b.emitBranch(self.current_block, "cir.br", &.{}, &.{merge_block});
+                    const empty_args: [0]mlir.Value = undefined;
+                    mlir.cirBuildBr(self.current_block, self.b.loc, merge_block, 0, &empty_args);
                 }
                 self.current_block = merge_block;
                 self.has_terminator = false;
@@ -483,15 +488,16 @@ const Gen = struct {
                 const body_block = self.addBlock();
                 const exit_block = self.addBlock();
                 // br to header
-                self.b.emitBranch(blk, "cir.br", &.{}, &.{header_block});
+                const empty_args: [0]mlir.Value = undefined;
+                mlir.cirBuildBr(blk, self.b.loc, header_block, 0, &empty_args);
                 // header: eval condition, condbr
                 self.current_block = header_block;
                 const cond = self.mapExpr(header_block, cond_node, self.b.intType(1));
-                self.b.emitBranch(header_block, "cir.condbr", &.{cond}, &.{ body_block, exit_block });
+                mlir.cirBuildCondBr(header_block, self.b.loc, cond, body_block, exit_block);
                 // body: statements + back-edge
                 self.mapBlock(body_block, body_node, result_types);
                 if (!self.has_terminator) {
-                    self.b.emitBranch(self.current_block, "cir.br", &.{}, &.{header_block});
+                    mlir.cirBuildBr(self.current_block, self.b.loc, header_block, 0, &empty_args);
                 }
                 self.current_block = exit_block;
                 self.has_terminator = false;
@@ -504,13 +510,10 @@ const Gen = struct {
                 if (type_node.unwrap()) |tn| {
                     var_type = self.resolveType(tn);
                 }
-                const ptr_ty = self.ptrType();
-                const addr = self.b.emit(blk, "cir.alloca", &.{ptr_ty}, &.{}, &.{
-                    self.b.attr("elem_type", self.b.typeAttr(var_type)),
-                });
+                const addr = mlir.cirBuildAlloca(blk, self.b.loc, var_type);
                 if (init_node.unwrap()) |init_expr| {
                     const val = self.mapExpr(blk, init_expr, var_type);
-                    _ = self.b.emit(blk, "cir.store", &.{}, &.{ val, addr }, &.{});
+                    mlir.cirBuildStore(blk, self.b.loc, val, addr);
                 }
                 const tok = self.tree.nodeMainToken(node);
                 const name = self.tree.tokenSlice(tok + 1);
@@ -525,7 +528,7 @@ const Gen = struct {
                 const name = self.tree.tokenSlice(self.tree.nodeMainToken(lhs_node));
                 if (self.resolveLocal(name)) |local| {
                     const val = self.mapExpr(blk, rhs_node, local.elem_type);
-                    _ = self.b.emit(blk, "cir.store", &.{}, &.{ val, local.addr }, &.{});
+                    mlir.cirBuildStore(blk, self.b.loc, val, local.addr);
                 }
             },
             .assign_add, .assign_sub, .assign_mul, .assign_div, .assign_mod => {
@@ -534,18 +537,18 @@ const Gen = struct {
                 const rhs_node = d[1];
                 const name = self.tree.tokenSlice(self.tree.nodeMainToken(lhs_node));
                 if (self.resolveLocal(name)) |local| {
-                    const current = self.b.emit(blk, "cir.load", &.{local.elem_type}, &.{local.addr}, &.{});
+                    const current = mlir.cirBuildLoad(blk, self.b.loc, local.elem_type, local.addr);
                     const rhs = self.mapExpr(blk, rhs_node, local.elem_type);
-                    const op_name: []const u8 = switch (tag) {
-                        .assign_add => "cir.add",
-                        .assign_sub => "cir.sub",
-                        .assign_mul => "cir.mul",
-                        .assign_div => "cir.div",
-                        .assign_mod => "cir.rem",
+                    const op_fn: BinOpFn = switch (tag) {
+                        .assign_add => mlir.cirBuildAdd,
+                        .assign_sub => mlir.cirBuildSub,
+                        .assign_mul => mlir.cirBuildMul,
+                        .assign_div => mlir.cirBuildDiv,
+                        .assign_mod => mlir.cirBuildRem,
                         else => unreachable,
                     };
-                    const result = self.b.emit(blk, op_name, &.{local.elem_type}, &.{ current, rhs }, &.{});
-                    _ = self.b.emit(blk, "cir.store", &.{}, &.{ result, local.addr }, &.{});
+                    const result = op_fn(blk, self.b.loc, local.elem_type, current, rhs);
+                    mlir.cirBuildStore(blk, self.b.loc, result, local.addr);
                 }
             },
             else => {
@@ -564,18 +567,18 @@ const Gen = struct {
         return switch (tag) {
             .number_literal => self.mapNumberLit(block, node, result_type),
             .identifier => self.mapIdentifier(block, node),
-            .negation => self.mapUnaryOp(block, node, "cir.neg", result_type),
-            .bit_not => self.mapUnaryOp(block, node, "cir.bit_not", result_type),
-            .bit_and => self.mapBinOp(block, node, "cir.bit_and", result_type),
-            .bit_or => self.mapBinOp(block, node, "cir.bit_or", result_type),
-            .bit_xor => self.mapBinOp(block, node, "cir.bit_xor", result_type),
-            .shl => self.mapBinOp(block, node, "cir.shl", result_type),
-            .shr => self.mapBinOp(block, node, "cir.shr", result_type),
-            .add => self.mapBinOp(block, node, "cir.add", result_type),
-            .sub => self.mapBinOp(block, node, "cir.sub", result_type),
-            .mul => self.mapBinOp(block, node, "cir.mul", result_type),
-            .div => self.mapBinOp(block, node, "cir.div", result_type),
-            .mod => self.mapBinOp(block, node, "cir.rem", result_type),
+            .negation => self.mapUnaryOp(block, node, mlir.cirBuildNeg, result_type),
+            .bit_not => self.mapUnaryOp(block, node, mlir.cirBuildBitNot, result_type),
+            .bit_and => self.mapBinOp(block, node, mlir.cirBuildBitAnd, result_type),
+            .bit_or => self.mapBinOp(block, node, mlir.cirBuildBitOr, result_type),
+            .bit_xor => self.mapBinOp(block, node, mlir.cirBuildBitXor, result_type),
+            .shl => self.mapBinOp(block, node, mlir.cirBuildShl, result_type),
+            .shr => self.mapBinOp(block, node, mlir.cirBuildShr, result_type),
+            .add => self.mapBinOp(block, node, mlir.cirBuildAdd, result_type),
+            .sub => self.mapBinOp(block, node, mlir.cirBuildSub, result_type),
+            .mul => self.mapBinOp(block, node, mlir.cirBuildMul, result_type),
+            .div => self.mapBinOp(block, node, mlir.cirBuildDiv, result_type),
+            .mod => self.mapBinOp(block, node, mlir.cirBuildRem, result_type),
             .equal_equal => self.mapCmp(block, node, 0),
             .bang_equal => self.mapCmp(block, node, 1),
             .less_than => self.mapCmp(block, node, 2),
@@ -589,10 +592,8 @@ const Gen = struct {
                 const d = tree.nodeData(node).node_and_node;
                 const cond = self.mapExpr(block, d[0], self.b.intType(1));
                 const then_val = self.mapExpr(block, d[1], result_type);
-                const zero = self.b.emit(block, "cir.constant", &.{result_type}, &.{}, &.{
-                    self.b.attr("value", self.b.intAttr(result_type, 0)),
-                });
-                break :blk2 self.b.emit(block, "cir.select", &.{result_type}, &.{ cond, then_val, zero }, &.{});
+                const zero = mlir.cirBuildConstantInt(block, self.b.loc, result_type, 0);
+                break :blk2 mlir.cirBuildSelect(block, self.b.loc, result_type, cond, then_val, zero);
             },
             .@"if" => blk2: {
                 // if (cond) then_val else else_val — full if expression
@@ -601,7 +602,7 @@ const Gen = struct {
                 const cond = self.mapExpr(block, cond_node, self.b.intType(1));
                 const then_val = self.mapExpr(block, extra.then_expr, result_type);
                 const else_val = self.mapExpr(block, extra.else_expr, result_type);
-                break :blk2 self.b.emit(block, "cir.select", &.{result_type}, &.{ cond, then_val, else_val }, &.{});
+                break :blk2 mlir.cirBuildSelect(block, self.b.loc, result_type, cond, then_val, else_val);
             },
             .grouped_expression => blk2: {
                 const inner = tree.nodeData(node).node_and_token[0];
@@ -621,7 +622,7 @@ const Gen = struct {
                     var buf3: [64]u8 = undefined;
                     const ref_type_str = std.fmt.bufPrint(&buf3, "!cir.ref<{s}>", .{self.resolveTypeName2(local.elem_type)}) catch break :blk2 mlir.Value{ .ptr = null };
                     const ref_type = self.b.parseType(ref_type_str);
-                    break :blk2 self.b.emit(block, "cir.addr_of", &.{ref_type}, &.{local.addr}, &.{});
+                    break :blk2 mlir.cirBuildAddrOf(block, self.b.loc, ref_type, local.addr);
                 }
                 break :blk2 mlir.Value{ .ptr = null };
             },
@@ -629,7 +630,7 @@ const Gen = struct {
             .deref => blk2: {
                 const operand_node = tree.nodeData(node).node;
                 const operand = self.mapExpr(block, operand_node, result_type);
-                break :blk2 self.b.emit(block, "cir.deref", &.{result_type}, &.{operand}, &.{});
+                break :blk2 mlir.cirBuildDeref(block, self.b.loc, result_type, operand);
             },
             // Field access: p.x → cir.field_val
             // Auto-deref: if p is *Point (!cir.ref<StructType>), insert implicit deref
@@ -645,14 +646,12 @@ const Gen = struct {
                 var field_idx = self.findFieldIndex(obj_type, field_name);
                 if (field_idx < 0) {
                     // Try deref — obj might be !cir.ref<StructType>
-                    obj = self.b.emit(block, "cir.deref", &.{result_type}, &.{obj}, &.{});
+                    obj = mlir.cirBuildDeref(block, self.b.loc, result_type, obj);
                     obj_type = mlir.mlirValueGetType(obj);
                     field_idx = self.findFieldIndex(obj_type, field_name);
                 }
                 if (field_idx < 0) break :blk2 mlir.Value{ .ptr = null };
-                break :blk2 self.b.emit(block, "cir.field_val", &.{result_type}, &.{obj}, &.{
-                    self.b.attr("field_index", self.b.intAttr(self.b.intType(64), field_idx)),
-                });
+                break :blk2 mlir.cirBuildFieldVal(block, self.b.loc, result_type, obj, field_idx);
             },
             // Struct init: Point{ .x = 1, .y = 2 }
             // Reference: ~/claude/references/zig/lib/std/zig/AstGen.zig structInitExpr
@@ -682,9 +681,7 @@ const Gen = struct {
             .string_literal => blk2: {
                 break :blk2 self.mapStringLit(block, node);
             },
-            else => self.b.emit(block, "cir.constant", &.{result_type}, &.{}, &.{
-                self.b.attr("value", self.b.intAttr(result_type, 0)),
-            }),
+            else => mlir.cirBuildConstantInt(block, self.b.loc, result_type, 0),
         };
     }
 
@@ -696,65 +693,50 @@ const Gen = struct {
             raw[1 .. raw.len - 1]
         else
             raw;
-        // Build !cir.slice<i8> type
-        const slice_type = self.b.parseType("!cir.slice<i8>");
-        return self.b.emit(block, "cir.string_constant", &.{slice_type}, &.{}, &.{
-            self.b.attr("value", self.b.strAttr(str_content)),
-        });
+        return mlir.cirBuildStringConstant(block, self.b.loc, mlir.StringRef.fromSlice(str_content));
     }
 
     fn mapNumberLit(self: *Gen, block: mlir.Block, node: Node.Index, result_type: mlir.Type) mlir.Value {
         const tok = self.tree.nodeMainToken(node);
         const text = self.tree.tokenSlice(tok);
         const val = std.fmt.parseInt(i64, text, 10) catch 0;
-        return self.b.emit(block, "cir.constant", &.{result_type}, &.{}, &.{
-            self.b.attr("value", self.b.intAttr(result_type, val)),
-        });
+        return mlir.cirBuildConstantInt(block, self.b.loc, result_type, val);
     }
 
     fn mapIdentifier(self: *Gen, block: mlir.Block, node: Node.Index) mlir.Value {
         const tok = self.tree.nodeMainToken(node);
         const name = self.tree.tokenSlice(tok);
         if (std.mem.eql(u8, name, "true")) {
-            const bool_type = self.b.intType(1);
-            return self.b.emit(block, "cir.constant", &.{bool_type}, &.{}, &.{
-                self.b.attr("value", self.b.intAttr(bool_type, 1)),
-            });
+            return mlir.cirBuildConstantBool(block, self.b.loc, true);
         }
         if (std.mem.eql(u8, name, "false")) {
-            const bool_type = self.b.intType(1);
-            return self.b.emit(block, "cir.constant", &.{bool_type}, &.{}, &.{
-                self.b.attr("value", self.b.intAttr(bool_type, 0)),
-            });
+            return mlir.cirBuildConstantBool(block, self.b.loc, false);
         }
         if (self.resolveLocal(name)) |local| {
-            return self.b.emit(block, "cir.load", &.{local.elem_type}, &.{local.addr}, &.{});
+            return mlir.cirBuildLoad(block, self.b.loc, local.elem_type, local.addr);
         }
         return self.resolve(name) orelse mlir.Value{ .ptr = null };
     }
 
-    fn mapUnaryOp(self: *Gen, block: mlir.Block, node: Node.Index, op_name: []const u8, result_type: mlir.Type) mlir.Value {
+    fn mapUnaryOp(self: *Gen, block: mlir.Block, node: Node.Index, op_fn: UnaryOpFn, result_type: mlir.Type) mlir.Value {
         const operand_node = self.tree.nodeData(node).node;
         const operand = self.mapExpr(block, operand_node, result_type);
-        return self.b.emit(block, op_name, &.{result_type}, &.{operand}, &.{});
+        return op_fn(block, self.b.loc, result_type, operand);
     }
 
-    fn mapBinOp(self: *Gen, block: mlir.Block, node: Node.Index, op_name: []const u8, result_type: mlir.Type) mlir.Value {
+    fn mapBinOp(self: *Gen, block: mlir.Block, node: Node.Index, op_fn: BinOpFn, result_type: mlir.Type) mlir.Value {
         const d = self.tree.nodeData(node).node_and_node;
         const lhs = self.mapExpr(block, d[0], result_type);
         const rhs = self.mapExpr(block, d[1], result_type);
-        return self.b.emit(block, op_name, &.{result_type}, &.{ lhs, rhs }, &.{});
+        return op_fn(block, self.b.loc, result_type, lhs, rhs);
     }
 
-    fn mapCmp(self: *Gen, block: mlir.Block, node: Node.Index, predicate: i64) mlir.Value {
+    fn mapCmp(self: *Gen, block: mlir.Block, node: Node.Index, predicate: c_int) mlir.Value {
         const d = self.tree.nodeData(node).node_and_node;
         const operand_type = self.i32Type();
         const lhs = self.mapExpr(block, d[0], operand_type);
         const rhs = self.mapExpr(block, d[1], operand_type);
-        const bool_type = self.b.intType(1);
-        return self.b.emit(block, "cir.cmp", &.{bool_type}, &.{ lhs, rhs }, &.{
-            self.b.attr("predicate", self.b.intAttr(self.b.intType(64), predicate)),
-        });
+        return mlir.cirBuildCmp(block, self.b.loc, predicate, lhs, rhs);
     }
 
     /// Handle Zig builtin calls: @intCast, @floatCast, @truncate, @floatFromInt.
@@ -814,24 +796,24 @@ const Gen = struct {
             const src_w = mlir.mlirIntegerTypeGetWidth(src_type);
             const dst_w = mlir.mlirIntegerTypeGetWidth(dst_type);
             if (dst_w > src_w) {
-                return self.b.emit(block, "cir.extsi", &.{dst_type}, &.{src}, &.{});
+                return mlir.cirBuildExtSI(block, self.b.loc, dst_type, src);
             }
             if (dst_w < src_w) {
-                return self.b.emit(block, "cir.trunci", &.{dst_type}, &.{src}, &.{});
+                return mlir.cirBuildTruncI(block, self.b.loc, dst_type, src);
             }
             return src;
         }
         if (src_int and dst_float)
-            return self.b.emit(block, "cir.sitofp", &.{dst_type}, &.{src}, &.{});
+            return mlir.cirBuildSIToFP(block, self.b.loc, dst_type, src);
         if (src_float and dst_int)
-            return self.b.emit(block, "cir.fptosi", &.{dst_type}, &.{src}, &.{});
+            return mlir.cirBuildFPToSI(block, self.b.loc, dst_type, src);
         if (src_float and dst_float) {
             const src_w = mlir.mlirFloatTypeGetWidth(src_type);
             const dst_w = mlir.mlirFloatTypeGetWidth(dst_type);
             if (dst_w > src_w)
-                return self.b.emit(block, "cir.extf", &.{dst_type}, &.{src}, &.{});
+                return mlir.cirBuildExtF(block, self.b.loc, dst_type, src);
             if (dst_w < src_w)
-                return self.b.emit(block, "cir.truncf", &.{dst_type}, &.{src}, &.{});
+                return mlir.cirBuildTruncF(block, self.b.loc, dst_type, src);
             return src;
         }
         return src; // unsupported — fallback
@@ -922,9 +904,7 @@ const Gen = struct {
         defer self.gpa.free(field_values);
         // Initialize all to zero (in case source doesn't provide all fields)
         for (0..n_fields) |i| {
-            field_values[i] = self.b.emit(block, "cir.constant", &.{si.field_types[i]}, &.{}, &.{
-                self.b.attr("value", self.b.intAttr(si.field_types[i], 0)),
-            });
+            field_values[i] = mlir.cirBuildConstantInt(block, self.b.loc, si.field_types[i], 0);
         }
         for (fields) |field_node| {
             // Field name is at firstToken(value_expr) - 2 (Zig AstGen pattern)
@@ -939,7 +919,7 @@ const Gen = struct {
             }
         }
 
-        return self.b.emitStructInit(block, struct_type, field_values[0..n_fields]);
+        return mlir.cirBuildStructInit(block, self.b.loc, struct_type, @intCast(n_fields), field_values[0..n_fields].ptr);
     }
 
     /// Handle array init: .{ 1, 2, 3 } → cir.array_init
@@ -986,7 +966,7 @@ const Gen = struct {
         for (elements, 0..) |elem_node, i| {
             elem_vals[i] = self.mapExpr(block, elem_node, self.i32Type());
         }
-        return self.b.emit(block, "cir.array_init", &.{array_type}, elem_vals, &.{});
+        return mlir.cirBuildArrayInit(block, self.b.loc, array_type, @intCast(elem_vals.len), elem_vals.ptr);
     }
 
     /// Handle array access: arr[i] → cir.elem_val for constant index
@@ -1004,9 +984,7 @@ const Gen = struct {
             const text = tree.tokenSlice(tok);
             idx_val = std.fmt.parseInt(i64, text, 10) catch 0;
         }
-        return self.b.emit(block, "cir.elem_val", &.{result_type}, &.{arr}, &.{
-            self.b.attr("index", self.b.intAttr(self.b.intType(64), idx_val)),
-        });
+        return mlir.cirBuildElemVal(block, self.b.loc, result_type, arr, idx_val);
     }
 
     fn mapCall(self: *Gen, block: mlir.Block, node: Node.Index, result_type: mlir.Type) mlir.Value {

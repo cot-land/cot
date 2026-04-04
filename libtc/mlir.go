@@ -287,6 +287,261 @@ func (b *Builder) AddBlock(funcOp MlirOperation) MlirBlock {
 }
 
 // ============================================================
+// CIR C API wrappers
+// ============================================================
+
+// --- Constants ---
+
+func CirBuildConstantInt(block MlirBlock, loc MlirLocation, ty MlirType, value int64) MlirValue {
+	return MlirValue{ptr: C.cirBuildConstantInt(block.ptr, loc.ptr, ty.ptr, C.int64_t(value))}
+}
+
+func CirBuildConstantFloat(block MlirBlock, loc MlirLocation, ty MlirType, value float64) MlirValue {
+	return MlirValue{ptr: C.cirBuildConstantFloat(block.ptr, loc.ptr, ty.ptr, C.double(value))}
+}
+
+func CirBuildConstantBool(block MlirBlock, loc MlirLocation, value bool) MlirValue {
+	return MlirValue{ptr: C.cirBuildConstantBool(block.ptr, loc.ptr, C.bool(value))}
+}
+
+func CirBuildStringConstant(block MlirBlock, loc MlirLocation, s string) MlirValue {
+	cs := C.CString(s)
+	defer C.free(unsafe.Pointer(cs))
+	ref := C.MlirStringRef{data: cs, length: C.size_t(len(s))}
+	return MlirValue{ptr: C.cirBuildStringConstant(block.ptr, loc.ptr, ref)}
+}
+
+// --- Arithmetic ---
+
+func CirBuildAdd(block MlirBlock, loc MlirLocation, ty MlirType, lhs MlirValue, rhs MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildAdd(block.ptr, loc.ptr, ty.ptr, lhs.ptr, rhs.ptr)}
+}
+
+func CirBuildSub(block MlirBlock, loc MlirLocation, ty MlirType, lhs MlirValue, rhs MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildSub(block.ptr, loc.ptr, ty.ptr, lhs.ptr, rhs.ptr)}
+}
+
+func CirBuildMul(block MlirBlock, loc MlirLocation, ty MlirType, lhs MlirValue, rhs MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildMul(block.ptr, loc.ptr, ty.ptr, lhs.ptr, rhs.ptr)}
+}
+
+func CirBuildDiv(block MlirBlock, loc MlirLocation, ty MlirType, lhs MlirValue, rhs MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildDiv(block.ptr, loc.ptr, ty.ptr, lhs.ptr, rhs.ptr)}
+}
+
+func CirBuildRem(block MlirBlock, loc MlirLocation, ty MlirType, lhs MlirValue, rhs MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildRem(block.ptr, loc.ptr, ty.ptr, lhs.ptr, rhs.ptr)}
+}
+
+func CirBuildNeg(block MlirBlock, loc MlirLocation, ty MlirType, operand MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildNeg(block.ptr, loc.ptr, ty.ptr, operand.ptr)}
+}
+
+// --- Bitwise ---
+
+func CirBuildBitAnd(block MlirBlock, loc MlirLocation, ty MlirType, lhs MlirValue, rhs MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildBitAnd(block.ptr, loc.ptr, ty.ptr, lhs.ptr, rhs.ptr)}
+}
+
+func CirBuildBitOr(block MlirBlock, loc MlirLocation, ty MlirType, lhs MlirValue, rhs MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildBitOr(block.ptr, loc.ptr, ty.ptr, lhs.ptr, rhs.ptr)}
+}
+
+func CirBuildBitXor(block MlirBlock, loc MlirLocation, ty MlirType, lhs MlirValue, rhs MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildBitXor(block.ptr, loc.ptr, ty.ptr, lhs.ptr, rhs.ptr)}
+}
+
+func CirBuildBitNot(block MlirBlock, loc MlirLocation, ty MlirType, operand MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildBitNot(block.ptr, loc.ptr, ty.ptr, operand.ptr)}
+}
+
+func CirBuildShl(block MlirBlock, loc MlirLocation, ty MlirType, lhs MlirValue, rhs MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildShl(block.ptr, loc.ptr, ty.ptr, lhs.ptr, rhs.ptr)}
+}
+
+func CirBuildShr(block MlirBlock, loc MlirLocation, ty MlirType, lhs MlirValue, rhs MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildShr(block.ptr, loc.ptr, ty.ptr, lhs.ptr, rhs.ptr)}
+}
+
+// --- Comparison ---
+
+func CirBuildCmp(block MlirBlock, loc MlirLocation, predicate int, lhs MlirValue, rhs MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildCmp(block.ptr, loc.ptr, C.enum_CirCmpPredicate(predicate), lhs.ptr, rhs.ptr)}
+}
+
+func CirBuildSelect(block MlirBlock, loc MlirLocation, ty MlirType, cond MlirValue, trueVal MlirValue, falseVal MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildSelect(block.ptr, loc.ptr, ty.ptr, cond.ptr, trueVal.ptr, falseVal.ptr)}
+}
+
+// --- Type Casts ---
+
+func CirBuildExtSI(block MlirBlock, loc MlirLocation, dstType MlirType, input MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildExtSI(block.ptr, loc.ptr, dstType.ptr, input.ptr)}
+}
+
+func CirBuildExtUI(block MlirBlock, loc MlirLocation, dstType MlirType, input MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildExtUI(block.ptr, loc.ptr, dstType.ptr, input.ptr)}
+}
+
+func CirBuildTruncI(block MlirBlock, loc MlirLocation, dstType MlirType, input MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildTruncI(block.ptr, loc.ptr, dstType.ptr, input.ptr)}
+}
+
+func CirBuildSIToFP(block MlirBlock, loc MlirLocation, dstType MlirType, input MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildSIToFP(block.ptr, loc.ptr, dstType.ptr, input.ptr)}
+}
+
+func CirBuildFPToSI(block MlirBlock, loc MlirLocation, dstType MlirType, input MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildFPToSI(block.ptr, loc.ptr, dstType.ptr, input.ptr)}
+}
+
+func CirBuildExtF(block MlirBlock, loc MlirLocation, dstType MlirType, input MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildExtF(block.ptr, loc.ptr, dstType.ptr, input.ptr)}
+}
+
+func CirBuildTruncF(block MlirBlock, loc MlirLocation, dstType MlirType, input MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildTruncF(block.ptr, loc.ptr, dstType.ptr, input.ptr)}
+}
+
+// --- Memory ---
+
+func CirBuildAlloca(block MlirBlock, loc MlirLocation, elemType MlirType) MlirValue {
+	return MlirValue{ptr: C.cirBuildAlloca(block.ptr, loc.ptr, elemType.ptr)}
+}
+
+func CirBuildStore(block MlirBlock, loc MlirLocation, value MlirValue, addr MlirValue) {
+	C.cirBuildStore(block.ptr, loc.ptr, value.ptr, addr.ptr)
+}
+
+func CirBuildLoad(block MlirBlock, loc MlirLocation, resultType MlirType, addr MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildLoad(block.ptr, loc.ptr, resultType.ptr, addr.ptr)}
+}
+
+// --- References ---
+
+func CirBuildAddrOf(block MlirBlock, loc MlirLocation, refType MlirType, addr MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildAddrOf(block.ptr, loc.ptr, refType.ptr, addr.ptr)}
+}
+
+func CirBuildDeref(block MlirBlock, loc MlirLocation, resultType MlirType, ref MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildDeref(block.ptr, loc.ptr, resultType.ptr, ref.ptr)}
+}
+
+// --- Aggregates: Structs ---
+
+func CirBuildStructInit(block MlirBlock, loc MlirLocation, ty MlirType, fields []MlirValue) MlirValue {
+	if len(fields) == 0 {
+		return MlirValue{ptr: C.cirBuildStructInit(block.ptr, loc.ptr, ty.ptr, 0, nil)}
+	}
+	return MlirValue{ptr: C.cirBuildStructInit(block.ptr, loc.ptr, ty.ptr, C.intptr_t(len(fields)), (*C.MlirValue)(unsafe.Pointer(&fields[0])))}
+}
+
+func CirBuildFieldVal(block MlirBlock, loc MlirLocation, resultType MlirType, input MlirValue, fieldIndex int64) MlirValue {
+	return MlirValue{ptr: C.cirBuildFieldVal(block.ptr, loc.ptr, resultType.ptr, input.ptr, C.int64_t(fieldIndex))}
+}
+
+func CirBuildFieldPtr(block MlirBlock, loc MlirLocation, base MlirValue, fieldIndex int64, elemType MlirType) MlirValue {
+	return MlirValue{ptr: C.cirBuildFieldPtr(block.ptr, loc.ptr, base.ptr, C.int64_t(fieldIndex), elemType.ptr)}
+}
+
+// --- Aggregates: Arrays ---
+
+func CirBuildArrayInit(block MlirBlock, loc MlirLocation, ty MlirType, elems []MlirValue) MlirValue {
+	if len(elems) == 0 {
+		return MlirValue{ptr: C.cirBuildArrayInit(block.ptr, loc.ptr, ty.ptr, 0, nil)}
+	}
+	return MlirValue{ptr: C.cirBuildArrayInit(block.ptr, loc.ptr, ty.ptr, C.intptr_t(len(elems)), (*C.MlirValue)(unsafe.Pointer(&elems[0])))}
+}
+
+func CirBuildElemVal(block MlirBlock, loc MlirLocation, resultType MlirType, input MlirValue, index int64) MlirValue {
+	return MlirValue{ptr: C.cirBuildElemVal(block.ptr, loc.ptr, resultType.ptr, input.ptr, C.int64_t(index))}
+}
+
+func CirBuildElemPtr(block MlirBlock, loc MlirLocation, base MlirValue, index MlirValue, elemType MlirType) MlirValue {
+	return MlirValue{ptr: C.cirBuildElemPtr(block.ptr, loc.ptr, base.ptr, index.ptr, elemType.ptr)}
+}
+
+// --- Control Flow ---
+
+func CirBuildBr(block MlirBlock, loc MlirLocation, dest MlirBlock, args []MlirValue) {
+	if len(args) == 0 {
+		C.cirBuildBr(block.ptr, loc.ptr, dest.ptr, 0, nil)
+	} else {
+		C.cirBuildBr(block.ptr, loc.ptr, dest.ptr, C.intptr_t(len(args)), (*C.MlirValue)(unsafe.Pointer(&args[0])))
+	}
+}
+
+func CirBuildCondBr(block MlirBlock, loc MlirLocation, cond MlirValue, trueDest MlirBlock, falseDest MlirBlock) {
+	C.cirBuildCondBr(block.ptr, loc.ptr, cond.ptr, trueDest.ptr, falseDest.ptr)
+}
+
+func CirBuildTrap(block MlirBlock, loc MlirLocation) {
+	C.cirBuildTrap(block.ptr, loc.ptr)
+}
+
+// --- Type Constructors ---
+
+func CirPointerTypeGet(ctx MlirContext) MlirType {
+	return MlirType{ptr: C.cirPointerTypeGet(ctx.ptr)}
+}
+
+func CirRefTypeGet(ctx MlirContext, pointeeType MlirType) MlirType {
+	return MlirType{ptr: C.cirRefTypeGet(ctx.ptr, pointeeType.ptr)}
+}
+
+func CirSliceTypeGet(ctx MlirContext, elementType MlirType) MlirType {
+	return MlirType{ptr: C.cirSliceTypeGet(ctx.ptr, elementType.ptr)}
+}
+
+func CirArrayTypeGet(ctx MlirContext, size int64, elementType MlirType) MlirType {
+	return MlirType{ptr: C.cirArrayTypeGet(ctx.ptr, C.int64_t(size), elementType.ptr)}
+}
+
+func CirStructTypeGet(ctx MlirContext, name string, fieldNames []string, fieldTypes []MlirType) MlirType {
+	cname := C.CString(name)
+	defer C.free(unsafe.Pointer(cname))
+	nameRef := C.MlirStringRef{data: cname, length: C.size_t(len(name))}
+
+	nFields := len(fieldNames)
+	cFieldNames := make([]C.MlirStringRef, nFields)
+	cFieldNamePtrs := make([]*C.char, nFields)
+	for i, fn := range fieldNames {
+		cFieldNamePtrs[i] = C.CString(fn)
+		cFieldNames[i] = C.MlirStringRef{data: cFieldNamePtrs[i], length: C.size_t(len(fn))}
+	}
+	defer func() {
+		for _, p := range cFieldNamePtrs {
+			C.free(unsafe.Pointer(p))
+		}
+	}()
+
+	var fnPtr *C.MlirStringRef
+	var ftPtr *C.MlirType
+	if nFields > 0 {
+		fnPtr = &cFieldNames[0]
+		ftPtr = (*C.MlirType)(unsafe.Pointer(&fieldTypes[0]))
+	}
+	return MlirType{ptr: C.cirStructTypeGet(ctx.ptr, nameRef, C.intptr_t(nFields), fnPtr, ftPtr)}
+}
+
+// --- Type Queries ---
+
+func CirTypeIsStruct(ty MlirType) bool {
+	return bool(C.cirTypeIsStruct(ty.ptr))
+}
+
+func CirStructTypeGetFieldIndex(structType MlirType, name string) int {
+	cs := C.CString(name)
+	defer C.free(unsafe.Pointer(cs))
+	ref := C.MlirStringRef{data: cs, length: C.size_t(len(name))}
+	return int(C.cirStructTypeGetFieldIndex(structType.ptr, ref))
+}
+
+func CirStructTypeGetNumFields(structType MlirType) int {
+	return int(C.cirStructTypeGetNumFields(structType.ptr))
+}
+
+// ============================================================
 // Bytecode serialization
 // ============================================================
 
