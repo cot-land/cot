@@ -86,7 +86,7 @@ Status: `-` not started, `~` in progress, `✓` done.
 
 | # | Feature | CIR Op(s) | ac Syntax | Zig Syntax | LLVM Lowering | Status |
 |---|---------|-----------|-----------|------------|---------------|--------|
-| 031 | Pointer type | `cir.ptr_type` | `*i32`, `*Point` | `*i32`, `*Point` | LLVM pointer type | - |
+| 031 | Pointer type | `!cir.ref<T>` | `*i32`, `*Point` | `*i32`, `*Point` | LLVM pointer type | ✓ |
 | 032 | Address-of | `cir.ref` | `&x` | `&x` | Alloca address | - |
 | 033 | Dereference | `cir.deref` | `*p` | `p.*` | `llvm.load` | - |
 | 034 | Pointer to struct field | `cir.field_ptr` | `&p.x` | `&p.x` | GEP | - |

@@ -103,6 +103,27 @@ const Gen = struct {
                     return s.mlir_type;
             }
         }
+        // Pointer type: *T → !cir.ref<T>
+        if (tag == .ptr_type or tag == .ptr_type_aligned or
+            tag == .ptr_type_sentinel or tag == .ptr_type_bit_range)
+        {
+            // Pointee type (child_type) location varies by variant:
+            //   .ptr_type:         extra_and_node — child is [1]
+            //   .ptr_type_bit_range: extra_and_node — child is [1]
+            //   .ptr_type_aligned: opt_node_and_node — child is [1]
+            //   .ptr_type_sentinel: node_and_node — child is [1]
+            const d = self.tree.nodeData(node);
+            const pointee_node: Node.Index = switch (tag) {
+                .ptr_type, .ptr_type_bit_range => d.extra_and_node[1],
+                .ptr_type_aligned => d.opt_node_and_node[1],
+                .ptr_type_sentinel => d.node_and_node[1],
+                else => unreachable,
+            };
+            const pointee_name = self.resolveTypeName(pointee_node);
+            var buf2: [64]u8 = undefined;
+            const ref_str = std.fmt.bufPrint(&buf2, "!cir.ref<{s}>", .{pointee_name}) catch return self.i32Type();
+            return self.b.parseType(ref_str);
+        }
         // Array type: [N]T
         if (tag == .array_type) {
             const d = self.tree.nodeData(node);

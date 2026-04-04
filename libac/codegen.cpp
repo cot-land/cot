@@ -41,6 +41,12 @@ class CodeGen {
   std::unordered_map<std::string_view, mlir::Type> structTypes;
 
   mlir::Type resolveType(const TypeRef &t) {
+    // Ref/pointer type: *T → !cir.ref<T>
+    if (t.isRef) {
+      TypeRef elemRef{t.name};
+      auto pointeeType = resolveType(elemRef);
+      return cir::RefType::get(b.getContext(), pointeeType);
+    }
     // Array type: [N]T
     if (t.arraySize > 0) {
       TypeRef elemRef{t.arrayElemType};

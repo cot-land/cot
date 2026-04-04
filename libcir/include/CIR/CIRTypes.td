@@ -26,6 +26,25 @@ def CIR_PointerType : CIR_Type<"Pointer", "ptr"> {
   }];
 }
 
+def CIR_RefType : CIR_Type<"Ref", "ref"> {
+  let summary = "typed safe reference (non-null pointer with known pointee type)";
+  let description = [{
+    A safe, non-null reference to a value of type T in memory.
+    Carries the pointee type for verification — load/deref result type must
+    match the ref's pointee type.
+    Lowers to !llvm.ptr (same as !cir.ptr) — zero runtime cost.
+
+    Use !cir.ref<T> for safe code (Zig *T, Rust &T, ac &x).
+    Use !cir.ptr for unsafe/C interop (raw pointers, malloc results).
+
+    Reference: fir.ref<T> in Flang — typed reference to memory entity.
+    Syntax: !cir.ref<i32>, !cir.ref<!cir.struct<"Point", x: i32, y: i32>>
+  }];
+
+  let parameters = (ins "mlir::Type":$pointeeType);
+  let assemblyFormat = "`<` $pointeeType `>`";
+}
+
 def CIR_StructType : CIR_Type<"Struct", "struct"> {
   let summary = "aggregate struct type with named fields";
   let description = [{

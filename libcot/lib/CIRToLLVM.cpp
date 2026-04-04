@@ -41,6 +41,10 @@ struct CIRToLLVMPass
     tc.addConversion([](cir::PointerType type) {
       return LLVM::LLVMPointerType::get(type.getContext());
     });
+    // !cir.ref<T> → !llvm.ptr (same as !cir.ptr — zero runtime cost)
+    tc.addConversion([](cir::RefType type) {
+      return LLVM::LLVMPointerType::get(type.getContext());
+    });
     tc.addConversion([&tc](cir::StructType type) -> mlir::Type {
       llvm::SmallVector<mlir::Type> fields;
       for (auto f : type.getFieldTypes())

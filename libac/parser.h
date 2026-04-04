@@ -22,6 +22,7 @@ struct TypeRef {
   std::string_view name; // "i32", "void", etc. — view into source
   int64_t arraySize = 0; // >0 for array types: [N]T
   std::string_view arrayElemType; // element type name for arrays
+  bool isRef = false; // true for pointer/ref types: *T
 };
 
 struct Param {

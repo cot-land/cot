@@ -1,0 +1,22 @@
+// RUN: %cot emit-cir %s | %FileCheck %s
+
+// Feature #031: Pointer/reference type — ac syntax
+
+fn takes_ref(p: *i32) -> i32 {
+    return 0
+}
+
+fn takes_struct_ref(p: *Point) -> i32 {
+    return 0
+}
+
+struct Point {
+    x: i32
+    y: i32
+}
+
+// CHECK-LABEL: func.func @takes_ref
+// CHECK-SAME: !cir.ref<i32>
+
+// CHECK-LABEL: func.func @takes_struct_ref
+// CHECK-SAME: !cir.ref<!cir.struct<"Point", x: i32, y: i32>>

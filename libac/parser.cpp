@@ -98,6 +98,15 @@ class Parser {
       auto elemType = tokenText(advance());
       return TypeRef{"", size, elemType};
     }
+    // Pointer/ref type: *T
+    if (check(Tag::star)) {
+      advance(); // consume '*'
+      auto pointee = tokenText(advance());
+      TypeRef t;
+      t.name = pointee;
+      t.isRef = true;
+      return t;
+    }
     auto &tok = advance();
     return TypeRef{tokenText(tok)};
   }
