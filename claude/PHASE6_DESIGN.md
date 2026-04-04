@@ -58,18 +58,25 @@ Swift SIL has dedicated enum instructions:
 
 ## CIR Design Decisions
 
-### Decision 1: Enum type — `!cir.enum<"Name", variants...>`
+### Decision 1: Enum type — `!cir.enum<"Name", tag_type, variants...>`
 
 New CIR type for named enumerations. Each variant has a name and an integer value.
-The underlying integer type is determined by the number of variants.
+The tag type is **explicit** — specified by the frontend, not inferred by CIR.
 
 ```mlir
-!cir.enum<"Color", Red: 0, Green: 1, Blue: 2>    // 3 variants → i2 (or i8)
-!cir.enum<"Status", Ok: 0, Error: 1>              // 2 variants → i1
+!cir.enum<"Color", i8, Red: 0, Green: 1, Blue: 2>      // Zig: enum(u8) { red, green, blue }
+!cir.enum<"Status", i32, Ok: 0, Error: 1>               // Zig: enum(u32) { ok, err }
+!cir.enum<"Small", i2, A: 0, B: 1, C: 2>                // Zig: enum(u2) { a, b, c }
+!cir.enum<"Default", i32, Red: 0, Green: 1, Blue: 2>    // TS: enum Color { Red, Green, Blue }
 ```
 
-**Lowering:** `!cir.enum<...>` → integer type (i8 for ≤256 variants, i16 for ≤65536).
-Variant names are dropped at LLVM level — only integer values remain.
+**Why explicit tag type:** Zig supports `enum(u8)`, `enum(u32)`, etc. — the backing
+integer type is part of the language semantics, not an optimization choice. TypeScript
+enums are always i32. The frontend decides the tag type based on its language rules.
+CIR stores it directly.
+
+**Lowering:** `!cir.enum<"Name", TagType, ...>` → `TagType` directly. The enum IS its
+tag integer at the LLVM level. Variant names are dropped.
 
 **Reference:** Zig `LoadedEnumType` with `int_tag_type` and `field_values`.
 
@@ -92,15 +99,15 @@ Rust's `Variants::Multiple` with `TagEncoding::Direct`.
 ### Decision 3: Enum ops
 
 ```
-cir.enum_constant "Red" : !cir.enum<"Color", ...>        // construct enum value
-cir.enum_value %e : !cir.enum<"Color", ...> to i32       // extract integer value
+cir.enum_constant "Red" : !cir.enum<"Color", i8, ...>        // construct enum value
+cir.enum_value %e : !cir.enum<"Color", i8, ...> to i8        // extract integer value
 ```
 
 **`cir.enum_constant`** — Creates an enum value by variant name. Pure constant.
-Lowers to `llvm.mlir.constant` with the variant's integer value.
+Lowers to `llvm.mlir.constant` with the variant's integer value and the tag type.
 
-**`cir.enum_value`** — Extracts the integer representation. Used in switch lowering.
-Identity lowering (enum IS the integer at LLVM level).
+**`cir.enum_value`** — Extracts the integer representation (tag type). Used in switch.
+Identity lowering (enum IS the integer at LLVM level). Result type must match tag type.
 
 ### Decision 4: Tagged union ops
 
@@ -148,7 +155,8 @@ Reference: LLVM `SwitchOp`, Rust `SwitchInt`.
 
 **ac:**
 ```
-enum Color { Red, Green, Blue }
+enum Color { Red, Green, Blue }              // default i32 backing
+enum SmallColor: u8 { Red, Green, Blue }     // explicit backing type
 
 fn describe(c: Color) -> i32 {
     match c {
@@ -175,7 +183,7 @@ fn area(s: Shape) -> f64 {
 
 **Zig:**
 ```zig
-const Color = enum { red, green, blue };
+const Color = enum(u8) { red, green, blue };  // explicit backing type
 
 pub fn describe(c: Color) i32 {
     return switch (c) {
@@ -238,15 +246,15 @@ function area(s: Shape): number {
 
 | Op | Description | LLVM Lowering |
 |----|-------------|---------------|
-| `cir.enum_constant` | construct enum value by variant name | `llvm.mlir.constant` (integer) |
-| `cir.enum_value` | extract integer from enum | identity (enum IS integer) |
+| `cir.enum_constant` | construct enum value by variant name | `llvm.mlir.constant` (tag type integer) |
+| `cir.enum_value` | extract tag-type integer from enum | identity (enum IS tag integer) |
 | `cir.union_init` | construct tagged union with variant + payload | undef + insertvalue(tag) + insertvalue(payload) |
 | `cir.union_tag` | extract tag (discriminant) from tagged union | `llvm.extractvalue [0]` |
 | `cir.union_payload` | extract payload from tagged union (unchecked) | `llvm.extractvalue [1]` + bitcast |
 | `cir.switch` | integer multi-way branch | `llvm.switch` |
 
 **New types:**
-- `!cir.enum<"Name", variant: value, ...>` — named enumeration → integer
+- `!cir.enum<"Name", TagType, variant: value, ...>` — named enumeration → TagType integer
 - `!cir.tagged_union<"Name", variant: type, ...>` — discriminated union → {tag, payload}
 
 ---
