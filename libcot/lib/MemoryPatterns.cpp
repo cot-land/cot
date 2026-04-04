@@ -46,6 +46,38 @@ struct LoadOpLowering : public OpConversionPattern<cir::LoadOp> {
   }
 };
 
+/// cir.field_val → llvm.extractvalue
+/// Reference: FIR ExtractValueOpConversion
+struct FieldValOpLowering : public OpConversionPattern<cir::FieldValOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::FieldValOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    auto resultType = getTypeConverter()->convertType(op.getType());
+    if (!resultType)
+      return rewriter.notifyMatchFailure(op, "failed to convert result type");
+    rewriter.replaceOpWithNewOp<LLVM::ExtractValueOp>(
+        op, adaptor.getInput(), op.getFieldIndex());
+    return success();
+  }
+};
+
+/// cir.field_ptr → llvm.getelementptr [0, field_index]
+/// Reference: FIR CoordinateOpConversion
+struct FieldPtrOpLowering : public OpConversionPattern<cir::FieldPtrOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::FieldPtrOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    auto structType = getTypeConverter()->convertType(op.getElemType());
+    if (!structType)
+      return rewriter.notifyMatchFailure(op, "failed to convert struct type");
+    auto ptrType = LLVM::LLVMPointerType::get(op.getContext());
+    rewriter.replaceOpWithNewOp<LLVM::GEPOp>(
+        op, ptrType, structType, adaptor.getBase(),
+        llvm::ArrayRef<LLVM::GEPArg>{0, static_cast<int32_t>(op.getFieldIndex())});
+    return success();
+  }
+};
+
 /// cir.struct_init → llvm.mlir.undef + llvm.insertvalue chain
 /// Reference: FIR UndefOpConversion + InsertValueOpConversion
 ///   ~/claude/references/flang-ref/flang/lib/Optimizer/CodeGen/CodeGen.cpp
@@ -75,6 +107,7 @@ void cot::populateMemoryPatterns(
     RewritePatternSet &patterns) {
   MLIRContext *ctx = patterns.getContext();
   patterns.add<AllocaOpLowering, StoreOpLowering, LoadOpLowering,
+               FieldValOpLowering, FieldPtrOpLowering,
                StructInitOpLowering>(
       converter, ctx);
 }

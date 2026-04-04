@@ -562,6 +562,23 @@ const Gen = struct {
                 const inner = tree.nodeData(node).node_and_token[0];
                 break :blk2 self.mapExpr(block, inner, result_type);
             },
+            // Field access: p.x → cir.field_val
+            // Reference: Zig AstGen fieldAccess — node_and_token[0] = object, [1] = field token
+            .field_access => blk2: {
+                const d = tree.nodeData(node).node_and_token;
+                const obj_node = d[0];
+                const field_tok = d[1];
+                const field_name = tree.tokenSlice(field_tok);
+                // Emit object expression (will resolve to struct value via load)
+                const obj = self.mapExpr(block, obj_node, result_type);
+                // Look up struct type and field index
+                const obj_type = mlir.mlirValueGetType(obj);
+                const field_idx = self.findFieldIndex(obj_type, field_name);
+                if (field_idx < 0) break :blk2 mlir.Value{ .ptr = null };
+                break :blk2 self.b.emit(block, "cir.field_val", &.{result_type}, &.{obj}, &.{
+                    self.b.attr("field_index", self.b.intAttr(self.b.intType(64), field_idx)),
+                });
+            },
             // Struct init: Point{ .x = 1, .y = 2 }
             // Reference: ~/claude/references/zig/lib/std/zig/AstGen.zig structInitExpr
             .struct_init_one, .struct_init_one_comma,
@@ -712,6 +729,20 @@ const Gen = struct {
             return src;
         }
         return src; // unsupported — fallback
+    }
+
+    /// Find field index by name in a struct type.
+    /// Matches against registered StructInfo entries.
+    fn findFieldIndex(self: *Gen, struct_type: mlir.Type, field_name: []const u8) i64 {
+        for (self.structs.items) |si| {
+            if (mlir.mlirTypeEqual(si.mlir_type, struct_type)) {
+                for (si.field_names, 0..) |fn_name, j| {
+                    if (std.mem.eql(u8, fn_name, field_name)) return @intCast(j);
+                }
+                return -1;
+            }
+        }
+        return -1;
     }
 
     /// Handle Zig struct init: Point{ .x = 1, .y = 2 }

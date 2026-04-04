@@ -28,11 +28,11 @@ make test         # Run all test layers (lit, gate, inline, build)
 ./cot test file.ac          # Run inline test blocks
 ```
 
-**Total: 55 lit + 30 inline + 1 gate + 4 build = 90 tests, all passing.**
+**Total: 59 lit + 30 inline + 1 gate + 4 build = 94 tests, all passing.**
 
 ---
 
-## CIR Ops (29 ops, 3 custom types)
+## CIR Ops (31 ops, 3 custom types)
 
 | Op | Description | LLVM Lowering |
 |----|-------------|---------------|
@@ -49,6 +49,8 @@ make test         # Run all test layers (lit, gate, inline, build)
 | `cir.alloca` | stack allocation → `!cir.ptr` | `llvm.alloca` |
 | `cir.store/load` | memory access | `llvm.store/load` |
 | `cir.struct_init` | construct struct from field values | `llvm.mlir.undef` + `llvm.insertvalue` chain |
+| `cir.field_val` | extract field value from struct | `llvm.extractvalue` |
+| `cir.field_ptr` | pointer to struct field | `llvm.getelementptr` |
 | `cir.br` | unconditional branch (with block args) | `llvm.br` |
 | `cir.condbr` | conditional branch | `llvm.cond_br` |
 | `cir.trap` | abort (assertion failure) | `llvm.trap + unreachable` |
@@ -118,12 +120,13 @@ claude/          Internal docs
 
 **Phase 2 (10/10):** Let/var bindings, assignment, compound assignment, if/else statement, if/else expression (select), while loop, break/continue, for loop, nested calls.
 
-**Phase 3 (5/10):**
+**Phase 3 (6/10):**
 - ✓ #021 Multiple int types (i8-i64, u8-u64) — all three frontends
 - ✓ #022 Float types (f32, f64) — all three frontends
 - ✓ #023 Type casts — ac `x as i64`, Zig `@intCast`/`@floatCast`/`@truncate`/`@floatFromInt`
 - ✓ #024 Struct declaration — ac `struct Point { x: i32, y: i32 }`, Zig `const Point = struct { ... }`, TS `interface Point { x: number; y: number; }`
 - ✓ #025 Struct construction — ac `Point { x: 1, y: 2 }`, Zig `Point{ .x = 1, .y = 2 }`, TS `{ x: 1, y: 2 }` → `cir.struct_init` → `llvm.insertvalue` chain
+- ✓ #026 Struct field access — `p.x` → `cir.field_val` → `llvm.extractvalue`. Also `cir.field_ptr` → `llvm.getelementptr` (for pointer-based access). Merged func-to-llvm into CIR lowering pass (shared type converter).
 - Infrastructure: Cast ops (7, CastOpInterface + verifiers), Sema pass, `!cir.struct` with field names, alloca type conversion fix
 
 ---
@@ -133,7 +136,6 @@ claude/          Internal docs
 ### Continue Phase 3
 
 **Next features in order:**
-- #026 Struct field access — `p.x`. Need `cir.field_val` / `cir.field_ptr` ops + `llvm.extractvalue`/GEP lowering. Sema needs struct field resolution (F1).
 - #027 Struct method syntax — `p.distance()`. Desugars to function call.
 - #028-030 Arrays — `[4]i32`, `[1,2,3,4]`, `arr[i]`. `!cir.array` type exists.
 

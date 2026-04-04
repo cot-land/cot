@@ -1,0 +1,16 @@
+// RUN: %cot emit-llvm %s | %FileCheck %s
+
+// Feature #026: Field access lowering — cir.field_val → llvm.extractvalue
+
+struct Point {
+    x: i32
+    y: i32
+}
+
+fn get_x(p: Point) -> i32 {
+    return p.x
+}
+
+// CHECK-LABEL: llvm.func @get_x
+// CHECK: llvm.extractvalue
+// CHECK-SAME: [0]

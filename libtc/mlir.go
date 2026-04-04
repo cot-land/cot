@@ -54,6 +54,11 @@ func TypeEqual(a, b MlirType) bool {
 	return bool(C.mlirTypeEqual(a.ptr, b.ptr))
 }
 
+// ValueGetType returns the MLIR type of a value.
+func ValueGetType(v MlirValue) MlirType {
+	return MlirType{ptr: C.mlirValueGetType(v.ptr)}
+}
+
 // ============================================================
 // Context and Module
 // ============================================================

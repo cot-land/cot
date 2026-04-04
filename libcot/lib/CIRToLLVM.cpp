@@ -18,6 +18,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h"
 #include "mlir/Transforms/DialectConversion.h"
 
 using namespace mlir;
@@ -34,7 +35,6 @@ struct CIRToLLVMPass
   void runOnOperation() override {
     LLVMConversionTarget target(getContext());
     target.addLegalOp<ModuleOp>();
-    target.addLegalDialect<func::FuncDialect>();
 
     LLVMTypeConverter tc(&getContext());
     // CIR type → LLVM type conversions
@@ -54,8 +54,11 @@ struct CIRToLLVMPass
 
     RewritePatternSet patterns(&getContext());
     cot::populateCIRToLLVMConversionPatterns(tc, patterns);
-    if (failed(applyPartialConversion(getOperation(), target,
-                                      std::move(patterns))))
+    // Also convert func ops in the same pass with shared type converter.
+    // This ensures CIR types in function signatures get converted.
+    mlir::populateFuncToLLVMConversionPatterns(tc, patterns);
+    if (failed(applyFullConversion(getOperation(), target,
+                                   std::move(patterns))))
       signalPassFailure();
   }
 };

@@ -174,6 +174,26 @@ class CodeGen {
       return emitCast(srcVal, srcType, dstType);
     }
 
+    case ExprKind::FieldAccess: {
+      // Field access: p.x → load struct, extract field
+      auto obj = emitExpr(*e.lhs, resultType);
+      auto objType = obj.getType();
+      auto structTy = llvm::dyn_cast<cir::StructType>(objType);
+      if (!structTy) {
+        llvm::errs() << "error: field access on non-struct type\n";
+        return {};
+      }
+      int idx = structTy.getFieldIndex(
+          llvm::StringRef(e.name.data(), e.name.size()));
+      if (idx < 0) {
+        llvm::errs() << "error: no field '" << e.name << "' in struct\n";
+        return {};
+      }
+      auto fieldType = structTy.getFieldTypes()[idx];
+      return b.create<cir::FieldValOp>(loc, fieldType, obj,
+          b.getI64IntegerAttr(idx));
+    }
+
     case ExprKind::StructInit: {
       // Struct construction: Point { x: 1, y: 2 }
       // Look up struct type, emit field values, create cir.struct_init.

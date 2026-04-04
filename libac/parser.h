@@ -28,7 +28,7 @@ struct Param {
 };
 
 // Expression kinds
-enum class ExprKind { IntLit, FloatLit, BoolLit, Ident, BinOp, UnaryOp, Call, IfExpr, Cast, StructInit };
+enum class ExprKind { IntLit, FloatLit, BoolLit, Ident, BinOp, UnaryOp, Call, IfExpr, Cast, StructInit, FieldAccess };
 
 struct Expr {
   ExprKind kind;

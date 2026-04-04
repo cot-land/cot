@@ -314,6 +314,54 @@ def CIR_StructInitOp : CIR_Op<"struct_init", [Pure]> {
   let hasVerifier = 1;
 }
 
+//===----------------------------------------------------------------------===//
+// Aggregate field access — extract/address struct fields
+// Reference: FIR fir.extract_value / fir.coordinate_of
+//            LLVM llvm.extractvalue / llvm.getelementptr
+//===----------------------------------------------------------------------===//
+
+def CIR_FieldValOp : CIR_Op<"field_val", [Pure]> {
+  let summary = "extract field value from struct";
+  let description = [{
+    Extracts a named field from a struct SSA value.
+    The field_index attribute specifies which field to extract (0-based).
+    Result type is the field's type.
+
+    Lowers to llvm.extractvalue (FIR extract_value pattern).
+
+    Example:
+      %x = cir.field_val %p, 0 : !cir.struct<"Point", x: i32, y: i32> -> i32
+  }];
+
+  let arguments = (ins AnyType:$input, I64Attr:$field_index);
+  let results = (outs AnyType:$result);
+  let assemblyFormat =
+      "$input `,` $field_index attr-dict `:` type($input) `->` type($result)";
+  let hasVerifier = 1;
+}
+
+def CIR_FieldPtrOp : CIR_Op<"field_ptr", [Pure]> {
+  let summary = "get pointer to struct field";
+  let description = [{
+    Given a pointer to a struct, returns a pointer to the named field.
+    The field_index attribute specifies which field (0-based).
+    Result type is !cir.ptr.
+
+    Lowers to llvm.getelementptr with struct indices [0, field_index].
+
+    Example:
+      %xp = cir.field_ptr %pp, 0 {elem_type = !cir.struct<"Point", x: i32, y: i32>}
+            : !cir.ptr -> !cir.ptr
+  }];
+
+  let arguments = (ins AnyType:$base, I64Attr:$field_index,
+                       TypeAttr:$elem_type);
+  let results = (outs AnyType:$result);
+  let assemblyFormat =
+      "$base `,` $field_index attr-dict `:` type($base) `->` type($result)";
+  let hasVerifier = 1;
+}
+
 def CIR_TrapOp : CIR_Op<"trap", [Terminator]> {
   let summary = "abort execution (assertion failure)";
   let description = [{

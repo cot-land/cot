@@ -20,10 +20,15 @@ include_directories(${PROJECT_SOURCE_DIR}/include)
 include_directories(${PROJECT_SOURCE_DIR}/../libcir/include)
 include_directories(${PROJECT_SOURCE_DIR}/../libcir/build/include)
 
+# libac headers (scanner.h, parser.h, codegen.h — needed by Compiler.cpp)
+include_directories(${PROJECT_SOURCE_DIR}/../libac)
+
 add_definitions(${LLVM_DEFINITIONS})
 
-# libcot static library — compiler passes
+# libcot static library — compiler passes + compiler library
 add_library(COT STATIC
+  # Compiler-as-library API
+  lib/Compiler.cpp
   # CIR → CIR transformation passes
   lib/Transforms/SemanticAnalysis.cpp
   # CIR → LLVM lowering
@@ -42,7 +47,13 @@ target_link_libraries(COT PUBLIC
   MLIRIR
   MLIRSupport
   MLIRPass
+  MLIRParser
+  MLIRAsmParser
   MLIRLLVMDialect
   MLIRLLVMCommonConversion
   MLIRFuncDialect
+  MLIRFuncToLLVM
+  MLIRTargetLLVMIRExport
+  MLIRBuiltinToLLVMIRTranslation
+  MLIRLLVMToLLVMIRTranslation
 )

@@ -470,6 +470,8 @@ func (g *Gen) mapExpr(block MlirBlock, node *ast.Node, resultType MlirType) Mlir
 		return g.mapPrefixUnary(block, node, resultType)
 	case ast.KindConditionalExpression:
 		return g.mapConditionalExpr(block, node, resultType)
+	case ast.KindPropertyAccessExpression:
+		return g.mapPropertyAccess(block, node, resultType)
 	case ast.KindObjectLiteralExpression:
 		return g.mapObjectLiteral(block, node, resultType)
 	case ast.KindTrueKeyword:
@@ -599,6 +601,32 @@ func (g *Gen) mapPrefixUnary(block MlirBlock, node *ast.Node, resultType MlirTyp
 		return g.b.Emit(block, "cir.bit_xor", []MlirType{resultType}, []MlirValue{operand, one}, nil)
 	}
 	return operand
+}
+
+// Property access: p.x → cir.field_val
+func (g *Gen) mapPropertyAccess(block MlirBlock, node *ast.Node, resultType MlirType) MlirValue {
+	pa := node.AsPropertyAccessExpression()
+	fieldName := pa.Name().AsIdentifier().Text
+
+	// Emit object expression
+	obj := g.mapExpr(block, pa.Expression, resultType)
+	objType := ValueGetType(obj)
+
+	// Find struct index and field index
+	for i, st := range g.structTypes {
+		if TypeEqual(st, objType) {
+			for j, fn := range g.structFieldNames[i] {
+				if fn == fieldName {
+					return g.b.Emit(block, "cir.field_val",
+						[]MlirType{g.structFieldTypes[i][j]}, []MlirValue{obj},
+						[]MlirNamedAttr{g.b.NamedAttr("field_index",
+							g.b.IntAttr(g.b.IntType(64), int64(j)))})
+				}
+			}
+			break
+		}
+	}
+	return MlirValue{}
 }
 
 // Object literal: { x: 1, y: 2 } → cir.struct_init (when resultType is a struct)

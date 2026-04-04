@@ -221,19 +221,31 @@ class Parser {
     return std::make_unique<Expr>();
   }
 
-  // Parse postfix 'as' cast: expr as type
-  // Highest precedence after primary — matches Rust's `as` cast.
+  // Parse postfix operations: 'as' cast and '.' field access.
   ExprPtr parsePostfix() {
     auto expr = parsePrimary();
-    while (check(Tag::kw_as)) {
-      size_t p = advance().start; // consume 'as'
-      auto type = parseType();
-      auto cast = std::make_unique<Expr>();
-      cast->kind = ExprKind::Cast;
-      cast->pos = p;
-      cast->lhs = std::move(expr);
-      cast->targetType = type;
-      expr = std::move(cast);
+    while (true) {
+      if (check(Tag::kw_as)) {
+        size_t p = advance().start; // consume 'as'
+        auto type = parseType();
+        auto cast = std::make_unique<Expr>();
+        cast->kind = ExprKind::Cast;
+        cast->pos = p;
+        cast->lhs = std::move(expr);
+        cast->targetType = type;
+        expr = std::move(cast);
+      } else if (check(Tag::dot)) {
+        size_t p = advance().start; // consume '.'
+        auto fieldName = tokenText(expect(Tag::identifier));
+        auto fa = std::make_unique<Expr>();
+        fa->kind = ExprKind::FieldAccess;
+        fa->pos = p;
+        fa->lhs = std::move(expr);
+        fa->name = fieldName;
+        expr = std::move(fa);
+      } else {
+        break;
+      }
     }
     return expr;
   }

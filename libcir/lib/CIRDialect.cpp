@@ -255,6 +255,43 @@ LogicalResult StructInitOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// cir.field_val — verifier
+//===----------------------------------------------------------------------===//
+
+LogicalResult FieldValOp::verify() {
+  auto structType = llvm::dyn_cast<cir::StructType>(getInput().getType());
+  if (!structType)
+    return emitOpError("input must be a !cir.struct type");
+  int64_t idx = getFieldIndex();
+  auto fieldTypes = structType.getFieldTypes();
+  if (idx < 0 || static_cast<size_t>(idx) >= fieldTypes.size())
+    return emitOpError("field index ") << idx << " out of range for struct with "
+        << fieldTypes.size() << " fields";
+  if (getResult().getType() != fieldTypes[idx])
+    return emitOpError("result type ") << getResult().getType()
+        << " does not match field type " << fieldTypes[idx];
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// cir.field_ptr — verifier
+//===----------------------------------------------------------------------===//
+
+LogicalResult FieldPtrOp::verify() {
+  if (!llvm::isa<cir::PointerType>(getBase().getType()))
+    return emitOpError("base must be !cir.ptr");
+  if (!llvm::isa<cir::PointerType>(getResult().getType()))
+    return emitOpError("result must be !cir.ptr");
+  auto structType = llvm::dyn_cast<cir::StructType>(getElemType());
+  if (!structType)
+    return emitOpError("elem_type must be a !cir.struct type");
+  int64_t idx = getFieldIndex();
+  if (idx < 0 || static_cast<size_t>(idx) >= structType.getFieldTypes().size())
+    return emitOpError("field index out of range");
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // Cast op verifiers — width constraints per Arith dialect pattern
 // Reference: mlir/lib/Dialect/Arith/IR/ArithOps.cpp verifyExtOp/verifyTruncateOp
 //===----------------------------------------------------------------------===//
