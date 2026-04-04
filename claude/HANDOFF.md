@@ -131,13 +131,17 @@ claude/          Internal docs
 ### Continue Phase 3
 
 **Next features in order:**
-- #024 Struct declaration — `struct Point { x: i32, y: i32 }`. `!cir.struct` type exists. Need parser + codegen + Sema field resolution.
-- #025 Struct construction — `Point { x: 1, y: 2 }`. Need `cir.struct_init` op.
-- #026 Struct field access — `p.x`. Need `cir.field_val` / `cir.field_ptr` ops.
+- #025 Struct construction — `Point { x: 1, y: 2 }`. Need `cir.struct_init` op + `llvm.insertvalue` lowering.
+- #026 Struct field access — `p.x`. Need `cir.field_val` / `cir.field_ptr` ops + `llvm.extractvalue`/GEP lowering.
 - #027 Struct method syntax — `p.distance()`. Desugars to function call.
 - #028-030 Arrays — `[4]i32`, `[1,2,3,4]`, `arr[i]`. `!cir.array` type exists.
 
-**For each feature, follow the 11-step checklist in CLAUDE.md. Study references first.**
+**For each feature, follow the 12-step checklist in CLAUDE.md. ALL THREE frontends (ac, Zig, TypeScript) must stay in sync.**
+
+### libtc Feature Parity Status
+libtc has Phase 1-2 features (arithmetic, comparisons, booleans, bitwise, shifts, variables, if/else, while, for, break/continue, nested calls). Still needs:
+- Phase 3: type casts (`as` in TS?), struct declarations (TS `interface`/`type`?)
+- TypeScript `number` maps to i32 for now. Phase 4+ will need f64 for correctness.
 
 ### Key Architecture Decisions Already Made
 
@@ -151,8 +155,9 @@ claude/          Internal docs
 
 ## Rules (from CLAUDE.md)
 
-1. **Study reference before writing.** Every component traces to Zig/Go/MLIR/FIR/Swift.
+1. **Study reference before writing.** Every component traces to Zig/Go/MLIR/FIR/Swift/TypeScript-Go.
 2. **Never hack features.** If infrastructure is missing, build it first.
-3. **Both frontends in sync.** Every feature works in ac AND Zig.
-4. **11-step feature checklist.** Study → ops → lowering → ac → zig → lit tests → lowering test → inline test → build → docs → audit.
+3. **All THREE frontends in sync.** Every feature works in ac AND Zig AND TypeScript.
+4. **12-step feature checklist.** Study → audit → ops → lowering → ac → zig → ts → lit tests (3 frontends) → lowering test → inline test → build → docs.
+5. **NEVER** git checkout/restore/reset. **NEVER** git add .
 5. **NEVER** git checkout/restore/reset. **NEVER** git add .
