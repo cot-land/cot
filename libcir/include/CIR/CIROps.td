@@ -200,7 +200,7 @@ def CIR_LoadOp : CIR_Op<"load"> {
 
   let arguments = (ins AnyType:$addr);
   let results = (outs AnyType:$result);
-  let assemblyFormat = "$addr attr-dict `:` type($addr) `->` type($result)";
+  let assemblyFormat = "$addr attr-dict `:` type($addr) `to` type($result)";
   let hasVerifier = 1;
 }
 
@@ -336,7 +336,7 @@ def CIR_FieldValOp : CIR_Op<"field_val", [Pure]> {
   let arguments = (ins AnyType:$input, I64Attr:$field_index);
   let results = (outs AnyType:$result);
   let assemblyFormat =
-      "$input `,` $field_index attr-dict `:` type($input) `->` type($result)";
+      "$input `,` $field_index attr-dict `:` type($input) `to` type($result)";
   let hasVerifier = 1;
 }
 
@@ -358,7 +358,7 @@ def CIR_FieldPtrOp : CIR_Op<"field_ptr", [Pure]> {
                        TypeAttr:$elem_type);
   let results = (outs AnyType:$result);
   let assemblyFormat =
-      "$base `,` $field_index attr-dict `:` type($base) `->` type($result)";
+      "$base `,` $field_index attr-dict `:` type($base) `to` type($result)";
   let hasVerifier = 1;
 }
 
@@ -400,7 +400,7 @@ def CIR_ElemValOp : CIR_Op<"elem_val", [Pure]> {
   let arguments = (ins AnyType:$input, I64Attr:$index);
   let results = (outs AnyType:$result);
   let assemblyFormat =
-      "$input `,` $index attr-dict `:` type($input) `->` type($result)";
+      "$input `,` $index attr-dict `:` type($input) `to` type($result)";
   let hasVerifier = 1;
 }
 

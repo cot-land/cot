@@ -11,4 +11,4 @@ pub fn get_second() i32 {
 // CHECK: cir.array_init
 // CHECK-SAME: !cir.array<3 x i32>
 // CHECK: cir.elem_val
-// CHECK-SAME: !cir.array<3 x i32> -> i32
+// CHECK-SAME: !cir.array<3 x i32> to i32

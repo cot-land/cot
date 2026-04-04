@@ -1,6 +1,6 @@
 # CIR Audit — MLIR/LLVM Standards Compliance
 
-**Last audit:** 2026-04-04 Round 4 (Phase 3 in progress — 29 CIR ops, 90 tests, 3 frontends)
+**Last audit:** 2026-04-04 Round 5 (Phase 3 complete — 34 CIR ops, 105 tests, 3 frontends)
 **Reference compilers:** Flang FIR, MLIR Arith/SCF, ArithToLLVM, Go parser, Zig AstGen, TypeScript-Go
 
 ---
@@ -87,6 +87,15 @@ CIR is audited against production MLIR references:
 | Lowering patterns crash on type conversion failure | Added notifyMatchFailure null checks | ArithmeticPatterns.cpp, MemoryPatterns.cpp |
 | Sema O(n) symbol lookup per call | Cached function signatures in DenseMap at pass start | SemanticAnalysis.cpp |
 
+### Round 5 — Phase 3 Complete Audit (2026-04-04)
+
+| Issue | Fix | Files |
+|-------|-----|-------|
+| 10 lowering patterns crash on null type conversion | Added `notifyMatchFailure` null checks to ALL binary arithmetic + bitwise patterns | ArithmeticPatterns.cpp, BitwisePatterns.cpp |
+| Assembly format inconsistency (`->` vs `to`) | Standardized to `to` across field_val, field_ptr, elem_val, load ops | CIROps.td, 10 test files |
+| `lowerToLLVM()` skipped verify after Sema | Added `verify(module)` between Sema and lowering | Compiler.cpp |
+| Helper function for safe type conversion | Added `convertOpType()` to reduce duplication in arithmetic patterns | ArithmeticPatterns.cpp |
+
 ---
 
 ## Known Issues — Open
@@ -101,8 +110,10 @@ CIR is audited against production MLIR references:
 | D7 | **No memory model distinction** | MEDIUM | OPEN | Stack (alloca) vs heap vs global all conflated. FIR has separate alloca/allocmem/global. |
 | D8 | **No constant folders** | MEDIUM | OPEN | Zero ops have `hasFolder=1`. `cir.add(const 1, const 2)` doesn't fold to `const 3`. Add when optimization passes exist. |
 | D9 | **No canonicalizers** | MEDIUM | OPEN | No `hasCanonicalizer=1`. x+0, x*1, x&x patterns not simplified. |
-| D10 | **No `NoMemoryEffect` interface** | LOW | OPEN | `Pure` trait is weaker than formal MLIR side-effect interface. Analysis passes check `NoMemoryEffect`. |
+| D10 | **Memory ops need MemoryEffect traits** | HIGH | OPEN | Alloca/Store/Load have no `MemAlloc`/`MemWrite`/`MemRead` declarations. MLIR analysis passes can't reason about memory. Add before optimization passes. |
 | D11 | **No `InferIntRangeInterface`** | LOW | OPEN | Arith integer ops have it. Add when integer range analysis needed. |
+| D12 | **TrapOp missing NoReturn** | LOW | OPEN | Should have `[Terminator, NoReturn]` for control flow analysis. |
+| D13 | **AllocaOp result type unconstrained** | MEDIUM | OPEN | Uses `AnyType` result but always returns `!cir.ptr`. Should use `CIR_PointerType`. Requires TableGen type constraint definition. |
 
 ### Frontend
 
@@ -123,8 +134,9 @@ CIR is audited against production MLIR references:
 | # | Issue | Severity | Status | Notes |
 |---|-------|----------|--------|-------|
 | T1 | **No negative tests** | HIGH | OPEN | No tests for type mismatch, undefined vars, bad casts. Sema error paths untested. |
-| T2 | **`extui`, `trap` ops untested** | HIGH | OPEN | Defined in CIROps.td but never exercised by any frontend or test. |
-| T3 | **15+ ops missing lowering tests** | MEDIUM | OPEN | Only 4 lowering tests (add, bitwise, casts, struct_init). Most ops uncovered. |
+| T2 | **4 ops with zero test coverage** | HIGH | OPEN | `extui`, `field_ptr`, `elem_ptr`, `trap` — defined but never exercised. |
+| T3 | **Zig/TS test parity gaps** | HIGH | OPEN | Zig missing: sub/mul/div/rem, negation tests. TS missing: 6 cast op tests (sitofp, fptosi, extf, truncf, extsi, trunci). |
+| T3a | **6 lowering tests only** | MEDIUM | OPEN | Missing lowering tests for: sub, mul, div, rem, cmp, select, memory ops. |
 | T4 | **No integration tests** | MEDIUM | OPEN | Nothing verifies 3 frontends produce identical binaries. Lit tests verify CIR text only. |
 | T5 | **No Sema-in-isolation tests** | MEDIUM | OPEN | Sema coverage is incidental. No dedicated test directory. |
 

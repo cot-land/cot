@@ -11,6 +11,6 @@ fn compute() -> i32 {
 // CHECK: cir.store %{{.*}}, %[[XADDR]] : i32, !cir.ptr
 // CHECK: %[[YADDR:.*]] = cir.alloca i32 : !cir.ptr
 // CHECK: cir.store %{{.*}}, %[[YADDR]] : i32, !cir.ptr
-// CHECK: %[[X:.*]] = cir.load %[[XADDR]] : !cir.ptr -> i32
-// CHECK: %[[Y:.*]] = cir.load %[[YADDR]] : !cir.ptr -> i32
+// CHECK: %[[X:.*]] = cir.load %[[XADDR]] : !cir.ptr to i32
+// CHECK: %[[Y:.*]] = cir.load %[[YADDR]] : !cir.ptr to i32
 // CHECK: cir.add %[[X]], %[[Y]] : i32

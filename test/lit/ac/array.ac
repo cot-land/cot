@@ -11,4 +11,4 @@ fn sum_first_two() -> i32 {
 // CHECK: cir.array_init
 // CHECK-SAME: !cir.array<4 x i32>
 // CHECK: cir.elem_val
-// CHECK-SAME: !cir.array<4 x i32> -> i32
+// CHECK-SAME: !cir.array<4 x i32> to i32

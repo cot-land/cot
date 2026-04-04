@@ -12,4 +12,4 @@ function counter(): number {
 // CHECK: %[[ADDR:.*]] = cir.alloca i32 : !cir.ptr
 // CHECK: cir.store %{{.*}}, %[[ADDR]] : i32, !cir.ptr
 // CHECK: cir.store %{{.*}}, %[[ADDR]] : i32, !cir.ptr
-// CHECK: cir.load %[[ADDR]] : !cir.ptr -> i32
+// CHECK: cir.load %[[ADDR]] : !cir.ptr to i32

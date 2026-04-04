@@ -8,12 +8,19 @@
 
 namespace {
 
+/// Helper: convert op type with null check.
+/// Reference: ArithToLLVM — all patterns check type conversion result.
+static Type convertOpType(const TypeConverter *tc, Operation *op) {
+  return tc->convertType(op->getResult(0).getType());
+}
+
 struct AddOpLowering : public OpConversionPattern<cir::AddOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(cir::AddOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<LLVM::AddOp>(op,
-        getTypeConverter()->convertType(op.getType()),
+    auto type = convertOpType(getTypeConverter(), op);
+    if (!type) return rewriter.notifyMatchFailure(op, "type conversion failed");
+    rewriter.replaceOpWithNewOp<LLVM::AddOp>(op, type,
         adaptor.getLhs(), adaptor.getRhs());
     return success();
   }
@@ -23,8 +30,9 @@ struct SubOpLowering : public OpConversionPattern<cir::SubOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(cir::SubOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<LLVM::SubOp>(op,
-        getTypeConverter()->convertType(op.getType()),
+    auto type = convertOpType(getTypeConverter(), op);
+    if (!type) return rewriter.notifyMatchFailure(op, "type conversion failed");
+    rewriter.replaceOpWithNewOp<LLVM::SubOp>(op, type,
         adaptor.getLhs(), adaptor.getRhs());
     return success();
   }
@@ -34,8 +42,9 @@ struct MulOpLowering : public OpConversionPattern<cir::MulOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(cir::MulOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<LLVM::MulOp>(op,
-        getTypeConverter()->convertType(op.getType()),
+    auto type = convertOpType(getTypeConverter(), op);
+    if (!type) return rewriter.notifyMatchFailure(op, "type conversion failed");
+    rewriter.replaceOpWithNewOp<LLVM::MulOp>(op, type,
         adaptor.getLhs(), adaptor.getRhs());
     return success();
   }
@@ -45,8 +54,9 @@ struct DivOpLowering : public OpConversionPattern<cir::DivOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(cir::DivOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<LLVM::SDivOp>(op,
-        getTypeConverter()->convertType(op.getType()),
+    auto type = convertOpType(getTypeConverter(), op);
+    if (!type) return rewriter.notifyMatchFailure(op, "type conversion failed");
+    rewriter.replaceOpWithNewOp<LLVM::SDivOp>(op, type,
         adaptor.getLhs(), adaptor.getRhs());
     return success();
   }
@@ -56,8 +66,9 @@ struct RemOpLowering : public OpConversionPattern<cir::RemOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(cir::RemOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<LLVM::SRemOp>(op,
-        getTypeConverter()->convertType(op.getType()),
+    auto type = convertOpType(getTypeConverter(), op);
+    if (!type) return rewriter.notifyMatchFailure(op, "type conversion failed");
+    rewriter.replaceOpWithNewOp<LLVM::SRemOp>(op, type,
         adaptor.getLhs(), adaptor.getRhs());
     return success();
   }
@@ -96,8 +107,10 @@ struct CmpOpLowering : public OpConversionPattern<cir::CmpOp> {
       ConversionPatternRewriter &rewriter) const override {
     auto pred = static_cast<LLVM::ICmpPredicate>(
         static_cast<uint64_t>(op.getPredicate()));
-    rewriter.replaceOpWithNewOp<LLVM::ICmpOp>(op,
-        getTypeConverter()->convertType(op.getResult().getType()),
+    auto resultType = getTypeConverter()->convertType(op.getResult().getType());
+    if (!resultType)
+      return rewriter.notifyMatchFailure(op, "type conversion failed");
+    rewriter.replaceOpWithNewOp<LLVM::ICmpOp>(op, resultType,
         pred, adaptor.getLhs(), adaptor.getRhs());
     return success();
   }

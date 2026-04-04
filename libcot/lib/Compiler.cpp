@@ -148,6 +148,10 @@ int cot::lowerToLLVM(ModuleOp module) {
       return 1;
     }
   }
+  if (failed(verify(module))) {
+    llvm::errs() << "error: verify failed after sema\n";
+    return 1;
+  }
   // CIR + func → LLVM (shared type converter)
   PassManager pm(ctx);
   pm.addPass(createCIRToLLVMPass());
