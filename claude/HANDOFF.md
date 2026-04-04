@@ -28,7 +28,7 @@ make test         # Run all test layers (lit, gate, inline, build)
 ./cot test file.ac          # Run inline test blocks
 ```
 
-**Total: 70 lit + 36 inline + 1 gate + 4 build = 111 tests, all passing.**
+**Total: 71 lit + 38 inline + 1 gate + 4 build = 114 tests, all passing.**
 
 ---
 
@@ -120,10 +120,11 @@ claude/          Internal docs
 
 **Phase 2 (10/10):** Let/var bindings, assignment, compound assignment, if/else statement, if/else expression (select), while loop, break/continue, for loop, nested calls.
 
-**Phase 4 (3/10):**
+**Phase 4 (4/10):**
 - ✓ #031 Pointer type — `!cir.ref<T>` typed safe reference (non-null, known pointee). Dual pointer design: `!cir.ref<T>` (safe) + `!cir.ptr` (raw). Both lower to `!llvm.ptr`. ac `*T`, Zig `*T`. See `claude/PHASE4_DESIGN.md`.
 - ✓ #032 Address-of — `&x` → `cir.addr_of` (alloca `!cir.ptr` → `!cir.ref<T>`). Identity lowering.
 - ✓ #033 Dereference — `*p` → `cir.deref` (`!cir.ref<T>` → T). Lowers to `llvm.load`.
+- ✓ #034 Pointer field access + auto-deref — `p.x` where `p: *Point` auto-inserts `cir.deref` before `cir.field_val`. Zig/Rust/Go pattern. Also works on method calls.
 
 **Phase 3 (10/10 — COMPLETE):**
 - ✓ #021 Multiple int types (i8-i64, u8-u64) — all three frontends

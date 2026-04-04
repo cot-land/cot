@@ -1,0 +1,23 @@
+struct Point {
+    x: i32
+    y: i32
+}
+
+fn get_x(p: *Point) -> i32 {
+    return p.x
+}
+
+fn get_y(p: *Point) -> i32 {
+    return p.y
+}
+
+test "auto-deref field access through pointer" {
+    let pt: Point = Point { x: 19, y: 23 }
+    assert(get_x(&pt) == 19)
+    assert(get_y(&pt) == 23)
+}
+
+test "auto-deref sum through pointer" {
+    let pt: Point = Point { x: 19, y: 23 }
+    assert(get_x(&pt) + get_y(&pt) == 42)
+}

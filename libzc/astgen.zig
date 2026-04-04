@@ -622,17 +622,23 @@ const Gen = struct {
                 break :blk2 self.b.emit(block, "cir.deref", &.{result_type}, &.{operand}, &.{});
             },
             // Field access: p.x → cir.field_val
-            // Reference: Zig AstGen fieldAccess — node_and_token[0] = object, [1] = field token
+            // Auto-deref: if p is *Point (!cir.ref<StructType>), insert implicit deref
+            // Reference: Zig/Rust/Go auto-deref through pointers on field access
             .field_access => blk2: {
                 const d = tree.nodeData(node).node_and_token;
                 const obj_node = d[0];
                 const field_tok = d[1];
                 const field_name = tree.tokenSlice(field_tok);
-                // Emit object expression (will resolve to struct value via load)
-                const obj = self.mapExpr(block, obj_node, result_type);
-                // Look up struct type and field index
-                const obj_type = mlir.mlirValueGetType(obj);
-                const field_idx = self.findFieldIndex(obj_type, field_name);
+                var obj = self.mapExpr(block, obj_node, result_type);
+                var obj_type = mlir.mlirValueGetType(obj);
+                // Auto-deref: if field lookup fails, try deref first (pointer to struct)
+                var field_idx = self.findFieldIndex(obj_type, field_name);
+                if (field_idx < 0) {
+                    // Try deref — obj might be !cir.ref<StructType>
+                    obj = self.b.emit(block, "cir.deref", &.{result_type}, &.{obj}, &.{});
+                    obj_type = mlir.mlirValueGetType(obj);
+                    field_idx = self.findFieldIndex(obj_type, field_name);
+                }
                 if (field_idx < 0) break :blk2 mlir.Value{ .ptr = null };
                 break :blk2 self.b.emit(block, "cir.field_val", &.{result_type}, &.{obj}, &.{
                     self.b.attr("field_index", self.b.intAttr(self.b.intType(64), field_idx)),

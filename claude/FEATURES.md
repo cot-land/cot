@@ -89,7 +89,7 @@ Status: `-` not started, `~` in progress, `✓` done.
 | 031 | Pointer type | `!cir.ref<T>` | `*i32`, `*Point` | `*i32`, `*Point` | LLVM pointer type | ✓ |
 | 032 | Address-of | `cir.addr_of` | `&x` | `&x` | Identity (ptr→ref) | ✓ |
 | 033 | Dereference | `cir.deref` | `*p` | `p.*` | `llvm.load` | ✓ |
-| 034 | Pointer to struct field | `cir.field_ptr` | `&p.x` | `&p.x` | GEP | - |
+| 034 | Pointer to struct field | auto-deref + `cir.field_ptr` | `p.x` (auto-deref) | `p.x` (auto-deref) | deref + extractvalue | ✓ |
 | 035 | String type | `cir.slice<u8>` | `string` | `[]const u8` | `{ptr, len}` struct | - |
 | 036 | String literal | `cir.constant` (global) | `"hello"` | `"hello"` | Global constant + slice | - |
 | 037 | Slice type | `cir.slice_type` | `[]i32` | `[]i32` | `{ptr, len}` struct | - |

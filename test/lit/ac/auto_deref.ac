@@ -1,0 +1,17 @@
+// RUN: %cot emit-cir %s | %FileCheck %s
+
+// Feature #034: Pointer to struct field + auto-deref — ac syntax
+
+struct Point {
+    x: i32
+    y: i32
+}
+
+fn get_x(p: *Point) -> i32 {
+    return p.x
+}
+
+// CHECK-LABEL: func.func @get_x
+// CHECK-SAME: !cir.ref<!cir.struct<"Point", x: i32, y: i32>>
+// CHECK: cir.deref
+// CHECK: cir.field_val

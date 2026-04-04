@@ -256,12 +256,18 @@ class CodeGen {
     case ExprKind::MethodCall: {
       // Method call: p.distance() → distance(p)
       // Desugar to function call with object as first argument.
+      // Auto-deref: if receiver is !cir.ref<T>, deref to match callee param type.
       // Reference: Zig AstGen — methods are functions, receiver is first param.
       std::string callee(e.name);
       auto funcOp = module_.lookupSymbol<mlir::func::FuncOp>(callee);
-      // Emit receiver (the object before the dot)
       mlir::Type selfType = funcOp ? funcOp.getArgumentTypes()[0] : resultType;
       auto self = emitExpr(*e.lhs, selfType);
+      // Auto-deref receiver if needed
+      if (auto refType = llvm::dyn_cast<cir::RefType>(self.getType())) {
+        if (selfType != self.getType()) {
+          self = b.create<cir::DerefOp>(loc, refType.getPointeeType(), self);
+        }
+      }
       llvm::SmallVector<mlir::Value> args;
       args.push_back(self);
       // Emit remaining arguments
@@ -278,9 +284,16 @@ class CodeGen {
     }
 
     case ExprKind::FieldAccess: {
-      // Field access: p.x → load struct, extract field
+      // Field access: p.x → extract field from struct value
+      // Auto-deref: if p is !cir.ref<StructType>, insert implicit deref first
+      // Reference: Zig/Rust/Go auto-deref through pointers on field access
       auto obj = emitExpr(*e.lhs, resultType);
       auto objType = obj.getType();
+      // Auto-deref: unwrap !cir.ref<T> → T
+      if (auto refType = llvm::dyn_cast<cir::RefType>(objType)) {
+        obj = b.create<cir::DerefOp>(loc, refType.getPointeeType(), obj);
+        objType = obj.getType();
+      }
       auto structTy = llvm::dyn_cast<cir::StructType>(objType);
       if (!structTy) {
         llvm::errs() << "error: field access on non-struct type\n";
