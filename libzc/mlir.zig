@@ -203,4 +203,9 @@ pub const Builder = struct {
         mlirBlockAppendOwnedOperation(mlirModuleGetBody(module), func_op);
         return .{ .func_op = func_op, .entry_block = entry_block };
     }
+
+    /// Emit cir.struct_init with variadic field operands and struct result type.
+    pub fn emitStructInit(self: Builder, block: Block, struct_type: Type, field_values: []const Value) Value {
+        return self.emit(block, "cir.struct_init", &.{struct_type}, field_values, &.{});
+    }
 };

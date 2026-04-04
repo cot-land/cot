@@ -102,7 +102,7 @@ class CodeGen {
         case Tag::percent: return b.create<cir::RemOp>(loc, operandType, lhs, rhs);
         case Tag::ampersand: return b.create<cir::BitAndOp>(loc, operandType, lhs, rhs);
         case Tag::pipe:      return b.create<cir::BitOrOp>(loc, operandType, lhs, rhs);
-        case Tag::caret:     return b.create<cir::XorOp>(loc, operandType, lhs, rhs);
+        case Tag::caret:     return b.create<cir::BitXorOp>(loc, operandType, lhs, rhs);
         case Tag::shl:       return b.create<cir::ShlOp>(loc, operandType, lhs, rhs);
         case Tag::shr:       return b.create<cir::ShrOp>(loc, operandType, lhs, rhs);
         // Comparisons: cir::CmpIPredicate enum
@@ -128,7 +128,7 @@ class CodeGen {
         // Logical NOT: xor with 1 (for booleans)
         auto one = b.create<cir::ConstantOp>(loc, resultType,
             b.getIntegerAttr(resultType, 1));
-        return b.create<cir::XorOp>(loc, resultType, operand, one);
+        return b.create<cir::BitXorOp>(loc, resultType, operand, one);
       }
       llvm::errs() << "error: unsupported unary op\n";
       return {};
@@ -172,6 +172,31 @@ class CodeGen {
       auto srcType = srcVal.getType();
       if (srcType == dstType) return srcVal; // no-op cast
       return emitCast(srcVal, srcType, dstType);
+    }
+
+    case ExprKind::StructInit: {
+      // Struct construction: Point { x: 1, y: 2 }
+      // Look up struct type, emit field values, create cir.struct_init.
+      auto sit = structTypes.find(e.name);
+      if (sit == structTypes.end()) {
+        llvm::errs() << "error: unknown struct '" << e.name << "'\n";
+        return {};
+      }
+      auto structTy = llvm::cast<cir::StructType>(sit->second);
+      auto fieldTypes = structTy.getFieldTypes();
+      // Emit field values in struct field order (match by name)
+      llvm::SmallVector<mlir::Value> fieldVals(fieldTypes.size());
+      for (size_t i = 0; i < e.fieldNames.size(); i++) {
+        int idx = structTy.getFieldIndex(
+            llvm::StringRef(e.fieldNames[i].data(), e.fieldNames[i].size()));
+        if (idx < 0) {
+          llvm::errs() << "error: unknown field '" << e.fieldNames[i]
+                       << "' in struct '" << e.name << "'\n";
+          return {};
+        }
+        fieldVals[idx] = emitExpr(*e.args[i], fieldTypes[idx]);
+      }
+      return b.create<cir::StructInitOp>(loc, structTy, fieldVals);
     }
     }
     return {};

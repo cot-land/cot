@@ -53,22 +53,32 @@ struct SemanticAnalysisPass
     auto moduleOp = funcOp->getParentOfType<ModuleOp>();
     if (!moduleOp) return;
 
+    // Build symbol table once per function (cached, not per-call O(n) lookup).
+    // Reference: Zig Sema builds symbol table in one pass, then resolves.
+    symbolTable.clear();
+    moduleOp.walk([&](func::FuncOp fn) {
+      symbolTable[fn.getName()] = fn;
+    });
+
     // Walk in forward order within each block.
     // Process calls to validate argument types and insert casts.
     funcOp.walk([&](func::CallOp callOp) {
-      if (failed(resolveCallTypes(moduleOp, callOp)))
+      if (failed(resolveCallTypes(callOp)))
         signalPassFailure();
     });
   }
 
 private:
+  /// Cached function signatures — built once per runOnOperation.
+  llvm::DenseMap<llvm::StringRef, func::FuncOp> symbolTable;
+
   /// Look up callee signature and insert casts for type mismatches.
   /// Returns failure() on semantic errors that should halt compilation.
   /// Reference: Zig Sema coerce() — inserts explicit casts at call boundaries.
-  LogicalResult resolveCallTypes(ModuleOp moduleOp, func::CallOp callOp) {
-    auto callee = moduleOp.lookupSymbol<func::FuncOp>(
-        callOp.getCallee());
-    if (!callee) return success(); // external function — skip
+  LogicalResult resolveCallTypes(func::CallOp callOp) {
+    auto it = symbolTable.find(callOp.getCallee());
+    if (it == symbolTable.end()) return success(); // external function — skip
+    auto callee = it->second;
 
     auto paramTypes = callee.getArgumentTypes();
     auto operands = callOp.getOperands();

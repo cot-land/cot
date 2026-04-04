@@ -1,7 +1,7 @@
 # CIR Audit — MLIR/LLVM Standards Compliance
 
-**Last audit:** 2026-04-04 (Phase 3 in progress — 28 CIR ops, 71 tests)
-**Reference compilers:** Flang FIR, MLIR Arith/SCF, ArithToLLVM, Go parser, Zig AstGen
+**Last audit:** 2026-04-04 Round 4 (Phase 3 in progress — 29 CIR ops, 90 tests, 3 frontends)
+**Reference compilers:** Flang FIR, MLIR Arith/SCF, ArithToLLVM, Go parser, Zig AstGen, TypeScript-Go
 
 ---
 
@@ -13,6 +13,7 @@ CIR is audited against production MLIR references:
 3. **ArithToLLVM** — canonical lowering patterns
 4. **Go parser** — reference for ac parser architecture
 5. **Zig AstGen** — reference for Zig frontend architecture
+6. **TypeScript-Go** — reference for TypeScript frontend
 
 ---
 
@@ -23,16 +24,16 @@ CIR is audited against production MLIR references:
 | MLIR lowering patterns | A | Matches ArithToLLVM/FIR: ConversionPattern per op, populatePatterns, LLVMTypeConverter |
 | Op base class hierarchy | A | CIR_BinaryOp/IntBinaryOp/IntUnaryOp/CastOp follows FIR/Arith pattern |
 | CmpIPredicate enum | A | Matches Arith I64EnumAttr exactly |
-| ConstantOp | B+ | ConstantLike + verifier. Missing folder (OK for now) |
-| Cast ops | B+ | 7 ops, Arith pattern, type constraints, width verifiers. Missing CastOpInterface. |
-| Type safety via traits | A- | Pure, SameOperandsAndResultType, AllTypesMatch on select, AnyInteger on bitwise |
+| CastOpInterface | A | All 7 cast ops implement DeclareOpInterfaceMethods<CastOpInterface> with areCastCompatible |
+| Cast width verifiers | A | verifyExtOp/verifyTruncOp per Arith pattern |
 | Swift type philosophy | A | MLIR primitives = CIR builtins. Passes never reference language names. Lattner pattern. |
-| Sema pass architecture | A- | Manual walk, per-function, symbol table from module, cast insertion. Minor issues. |
+| Pass pipeline ordering | A | Sema(verify=off) → verify → CIRToLLVM → FuncToLLVM. Correct progressive lowering. |
+| Frontend contract | A | All 3 frontends emit identical CIR for equivalent source. Language-agnostic IR proven. |
 | Reference-based development | A | Every component traces to Zig/Go/MLIR/FIR source |
-| Documentation | A | Internal docs self-sufficient for onboarding |
-| Test coverage | B+ | 71 tests. Per-test timeouts. Missing: integration, Sema-in-isolation tests. |
-| Multi-frontend validation | A | Both ac and Zig emit identical CIR — proves language-agnostic IR |
-| Test framework | A- | Auto-discovery, 10s timeouts, `llvm::sys::ExecuteAndWait`. No silent hangs. |
+| Struct type design | A- | StructType with getFieldIndex follows FIR RecordType pattern. Custom parse/print. |
+| Sema architecture | B+ | Manual walk, per-function, cast insertion. Correct pattern per Zig Sema. Needs caching. |
+| Test coverage | B+ | 90 tests (55 lit + 30 inline + 5 build). Missing: negative tests, Sema-in-isolation. |
+| Documentation | B+ | Internal docs self-sufficient. Op semantics need expansion. |
 
 ---
 
@@ -72,38 +73,67 @@ CIR is audited against production MLIR references:
 | Inline tests hardcoded in Makefile | Auto-discovery via `test/run_inline.sh` with per-test timeouts | Makefile, run_inline.sh |
 | No timeouts in test runners | Added 10s per-test timeout in run.sh and run_inline.sh | test/run.sh, test/run_inline.sh |
 
+### Round 4 — Post #025 Scaling Audit (2026-04-04)
+
+| Issue | Fix | Files |
+|-------|-----|-------|
+| Alloca didn't convert CIR element types | Added `getTypeConverter()->convertType()` on elem_type | MemoryPatterns.cpp |
+| `xor` mnemonic inconsistent with `bit_and`/`bit_or`/`bit_not` | Renamed to `bit_xor` | CIROps.td, all frontends, tests |
+| Commutative ops missing `Commutative` trait | Added to AddOp, MulOp, BitAndOp, BitOrOp, BitXorOp | CIROps.td |
+| CmpOp accepted float operands via AnyType | Constrained to AnyInteger | CIROps.td |
+| Store/Load had no pointer type verification | Added hasVerifier, verify addr is !cir.ptr | CIROps.td, CIRDialect.cpp |
+| BrOp/CondBrOp missing BranchOpInterface | Added DeclareOpInterfaceMethods<BranchOpInterface> | CIROps.td, CIRDialect.cpp |
+| Zig frontend fixed-size arrays (16 params, 32 locals) | Replaced with growable ArrayList | libzc/astgen.zig |
+| Lowering patterns crash on type conversion failure | Added notifyMatchFailure null checks | ArithmeticPatterns.cpp, MemoryPatterns.cpp |
+| Sema O(n) symbol lookup per call | Cached function signatures in DenseMap at pass start | SemanticAnalysis.cpp |
+
 ---
 
 ## Known Issues — Open
 
-### CIR Dialect (fix before #024 Structs)
+### CIR Dialect
 
 | # | Issue | Severity | Status | Notes |
 |---|-------|----------|--------|-------|
-| D1 | **Missing CastOpInterface** | HIGH | OPEN | Arith_CastOp declares `DeclareOpInterfaceMethods<CastOpInterface>`. CIR cast ops lack this. Without it, MLIR fold/verify infrastructure won't recognize cast ops. Fix: add to CIR_CastOp base class. |
-| D2 | **Sema result type mutation** | HIGH | OPEN | `callOp.getResult(0).setType()` directly mutates SSA types — fragile, breaks invariants if result is used. Replace with op rebuild or trust frontends to emit correct return types. |
-| D3 | **Sema silent failures** | HIGH | OPEN | Arg count mismatch returns silently (line 70). No `signalPassFailure()`. Should emit diagnostics and halt pipeline. |
 | D4 | **Type constraints too broad** | MEDIUM | OPEN | `AnyInteger` accepts i0, signed, and index types. Arith uses `SignlessFixedWidthIntegerLike`. Define CIR-specific constraint excluding i0. |
 | D5 | **`cir.shr` — no signed variant** | MEDIUM | OPEN | Only logical shift right. Need `cir.shr_s` for signed types. |
 | D6 | **No `hasConstantMaterializer`** | MEDIUM | OPEN | Needed for constant folding across passes. |
 | D7 | **No memory model distinction** | MEDIUM | OPEN | Stack (alloca) vs heap vs global all conflated. FIR has separate alloca/allocmem/global. |
+| D8 | **No constant folders** | MEDIUM | OPEN | Zero ops have `hasFolder=1`. `cir.add(const 1, const 2)` doesn't fold to `const 3`. Add when optimization passes exist. |
+| D9 | **No canonicalizers** | MEDIUM | OPEN | No `hasCanonicalizer=1`. x+0, x*1, x&x patterns not simplified. |
+| D10 | **No `NoMemoryEffect` interface** | LOW | OPEN | `Pure` trait is weaker than formal MLIR side-effect interface. Analysis passes check `NoMemoryEffect`. |
+| D11 | **No `InferIntRangeInterface`** | LOW | OPEN | Arith integer ops have it. Add when integer range analysis needed. |
 
-### Frontend (fix during Phase 3)
+### Frontend
 
 | # | Issue | Severity | Status | Notes |
 |---|-------|----------|--------|-------|
-| F1 | **No symbol table** | CRITICAL | PARTIAL | Sema resolves function sigs from MLIR module. Full symbol table (struct fields, type defs) needed for #024+. |
-| F2 | **Zig fixed-size arrays** | HIGH | OPEN | `param_names: [16]`, `local_names: [32]` — hard limits. Need HashMap migration before structs add more locals. |
+| F1 | **Sema symbol table partial** | HIGH | PARTIAL | Resolves function sigs. Needs struct field resolution for #026 field access. |
 | F3 | **No error recovery** | HIGH | OPEN | Parser reports first error, produces broken AST. |
 | F4 | **Operator duplication (C++)** | MEDIUM | OPEN | Operators in 3 places (scanner, precedence table, codegen switch). |
 | F5 | **No line/column in errors** | MEDIUM | OPEN | Reports "error at byte N" — not user-friendly. |
-| F6 | **emitCast in 3 places** | MEDIUM | OPEN | Cast logic duplicated in ac codegen, Zig astgen, and Sema pass. Explicit casts (frontend) vs implicit coercion (Sema) is correct separation. But direction-selection logic should be a shared utility when we add unsigned casts (extui). |
+| F6 | **emitCast in 3 places** | MEDIUM | OPEN | Cast direction logic duplicated in ac codegen, Zig astgen, Sema. |
+| F7 | **TypeScript 30% behind** | HIGH | OPEN | Missing: float types, if-expression, struct declaration, for loops, break/continue. |
+| F8 | **Type resolution duplicated 3x** | MEDIUM | OPEN | Each frontend independently maps i32→IntegerType(32). Should be shared C API. |
+| F9 | **Driver hardcoded frontend dispatch** | MEDIUM | OPEN | if/else on file extension. Need registry pattern for 10+ frontends. |
+| F10 | **Inconsistent C ABI for frontends** | MEDIUM | OPEN | zc: `const char**`, doesn't free. tc: `char**`, driver frees. Undocumented contract. |
+
+### Test Gaps
+
+| # | Issue | Severity | Status | Notes |
+|---|-------|----------|--------|-------|
+| T1 | **No negative tests** | HIGH | OPEN | No tests for type mismatch, undefined vars, bad casts. Sema error paths untested. |
+| T2 | **`extui`, `trap` ops untested** | HIGH | OPEN | Defined in CIROps.td but never exercised by any frontend or test. |
+| T3 | **15+ ops missing lowering tests** | MEDIUM | OPEN | Only 4 lowering tests (add, bitwise, casts, struct_init). Most ops uncovered. |
+| T4 | **No integration tests** | MEDIUM | OPEN | Nothing verifies 3 frontends produce identical binaries. Lit tests verify CIR text only. |
+| T5 | **No Sema-in-isolation tests** | MEDIUM | OPEN | Sema coverage is incidental. No dedicated test directory. |
 
 ### Infrastructure
 
 | # | Issue | Severity | Status | Notes |
 |---|-------|----------|--------|-------|
-| I5 | **No integration tests** | MEDIUM | OPEN | Nothing verifies ac and Zig produce identical binaries. Lit tests verify CIR text, not binary equivalence. |
+| I1 | **C API too minimal** | HIGH | OPEN | Only `cirRegisterDialect()`. No type builders, op builders, field accessors. Blocks 10+ frontends. |
+| I2 | **No frontend contract documentation** | HIGH | OPEN | New frontend authors must reverse-engineer existing code. Need FRONTEND.md. |
 
 ### Deferred (fix eventually)
 
@@ -112,9 +142,6 @@ CIR is audited against production MLIR references:
 | E1 | `std::string_view` → `llvm::StringRef` | LOW | Throughout libac. Large migration, do incrementally. |
 | E2 | `std::unordered_map` → `llvm::StringMap` | LOW | codegen.cpp namedValues. |
 | E3 | Generated pass from .td | LOW | Manual PassWrapper. Migrate when pass pipeline grows. |
-| E4 | Op folders/canonicalizers | LOW | No ops define `hasFolder=1`. Add when optimization passes exist. |
-| E5 | Driver command splitting | LOW | main.cpp OK now. Split at 500+ LOC. |
-| E6 | Missing InferIntRangeInterface | LOW | Arith integer ops have it. Add when integer range analysis needed. |
 | E7 | Missing SameOperandsAndResultShape on casts | LOW | For tensor/vector support. Add when those types exist. |
 | E8 | No float-specific binary ops | LOW | Arith has Arith_FloatBinaryOp with FastMath flags. Add when optimization passes need fastmath. |
 
@@ -132,62 +159,42 @@ Pipeline: Frontend → CIR (unresolved at boundaries) → Sema → CIR (typed) �
 
 ### Frontend Contract — CORRECT
 
-Frontends emit CIR ops with MLIR types. Explicit casts emitted by frontend; implicit coercion by Sema. Both frontends produce identical CIR for equivalent source. Division of labor matches Zig (AstGen for explicit casts, Sema for coercion).
-
----
-
-## Feature Implementation Workflow
-
-Every feature follows this refined checklist. Step 2 (audit check) was added after Round 3 audit.
-
-```
- 1. Study reference (Zig/MLIR/FIR/Swift source)
- 2. Check AUDIT.md — fix related open issues NOW, not later
- 3. CIR ops: base class, type constraints, traits, verifiers
- 4. Lowering: ConversionPattern, register in populatePatterns
- 5. ac frontend: scanner → parser → codegen (emit CIR only)
- 6. Zig frontend: AST dispatch → CIR emission (match ac output)
- 7. Sema: add implicit resolution if feature needs it
- 8. Lit tests: BOTH frontends + lowering test
- 9. Inline test: runtime correctness
-10. Build + full test suite (make test)
-11. Docs: FEATURES.md ✓, AC_SYNTAX.md, HANDOFF.md, AUDIT.md
-```
+All three frontends (ac, Zig, TypeScript) emit CIR ops with MLIR types. Explicit casts emitted by frontend; implicit coercion by Sema. All produce identical CIR for equivalent source. Division of labor matches Zig (AstGen for explicit casts, Sema for coercion).
 
 ---
 
 ## Scaling Plan
 
-### Before 10K LOC (Phase 3-4)
+### Before 10K LOC (Phase 3-4) — Current
 
 | Action | Fixes | Priority |
 |--------|-------|----------|
-| Add CastOpInterface to cast ops | D1 | **NOW** |
-| Fix Sema result type mutation | D2 | **NOW** |
-| Add Sema diagnostics | D3 | **NOW** |
-| Add integration test harness | I5 | Phase 3 |
-| Design symbol table for structs | F1 | Before #024 |
-| Zig HashMap migration | F2 | Before #024 |
+| Struct field resolution in Sema | F1 | Before #026 |
+| TypeScript feature parity | F7 | During Phase 3 |
+| Negative tests for Sema | T1 | Phase 3 |
+| Test `extui` and `trap` ops | T2 | Phase 3 |
 | Error recovery in parser | F3 | Before Phase 4 |
+| Frontend contract documentation | I2 | Phase 3 |
 
-### Before 100K LOC (Phase 1-6 done)
+### Before 100K LOC (Phase 5-6)
 
 | Action | Notes |
 |--------|-------|
-| Compiler-as-library API (`libCOT.h`) | Language servers, debuggers need library API, not CLI |
-| Unified build (Bazel/CMake `add_subdirectory`) | Can't manage 5+ sub-builds manually |
-| Comprehensive diagnostics engine | Clang-quality error messages with source context |
-| Per-pass test infrastructure | Verify intermediate IR transformations |
-| Public C API for CIR dialect | External tools, Python bindings |
+| Expand CIR C API (type/op builders) | I1 — blocks 10+ frontend integration |
+| Shared type resolution library | F8 — eliminate 3x duplication |
+| Frontend registry in driver | F9 — replace hardcoded if/else |
+| Type system expansion (optional, slice, func types) | D7 — needed for Rust/Swift/Go |
+| Constant folders for arithmetic ops | D8 |
+| Compiler-as-library API (`libCOT.h`) | Language servers, debuggers need library API |
 
 ### Before 500K LOC (Phase 7-11)
 
 | Action | Notes |
 |--------|-------|
-| Stable ABI | External consumers depend on CIR types |
+| Canonicalizers for all ops | D9 |
+| Pass pipeline extraction (`libcot/Pipeline.h`) | Configurable pass ordering |
+| Stable ABI for CIR types | External consumers depend on CIR types |
 | Distributed testing | Run test suite across targets in parallel |
-| Per-component design docs | Break ARCHITECTURE.md into CIR_DIALECT.md, PASSES.md, etc. |
-| Pass pipeline extraction | `libcot/Pipeline.h` — configurable pass ordering |
 
 ---
 
@@ -196,50 +203,32 @@ Every feature follows this refined checklist. Step 2 (audit check) was added aft
 | Reference | Fidelity | Gap |
 |-----------|----------|-----|
 | MLIR/Lattner (progressive lowering) | HIGH | Pipeline correct. Need multi-stage lowering at Phase 5+. |
-| FIR/Flang (dialect design) | MEDIUM | 3 types vs FIR's 15. Missing CastOpInterface. Verifiers correct. |
-| ArithToLLVM (lowering patterns) | HIGH | Exact match. Cast ops follow Arith CastOp hierarchy. |
-| Arith (cast op design) | HIGH | 7 ops, typed base classes, width verifiers. Missing CastOpInterface + InferIntRange. |
-| Go parser (precedence climbing) | HIGH | Correct pattern. Need operator table to avoid 3-place duplication. |
-| Zig AstGen (recursive dispatch) | HIGH | Correct dispatch. Builtin cast handling added. Fixed arrays still deviate. |
+| FIR/Flang (dialect design) | MEDIUM | 3 types vs FIR's 15. Missing InferIntRange. Verifiers correct. |
+| ArithToLLVM (lowering patterns) | HIGH | Exact match. Patterns need notifyMatchFailure. |
+| Arith (op design) | HIGH | 7 cast ops, typed base classes, CastOpInterface, width verifiers. Need folders/canonicalizers. |
+| Go parser (precedence climbing) | HIGH | Correct pattern. Struct init disambiguated via lookahead. |
+| Zig AstGen (recursive dispatch) | HIGH | Correct dispatch. Growable containers needed. |
 | Swift (type philosophy) | HIGH | MLIR types = builtins. Passes never reference language names. |
 | LLVM coding standards | MEDIUM | Correct formatting. Still using std containers (should be LLVM types). |
 
 ---
 
-## Reference Patterns
-
-### Adding a new binary integer op
-```tablegen
-def CIR_NewOp : CIR_IntBinaryOp<"new_op"> { let summary = "description"; }
-```
-Then add lowering pattern in CIRToLLVM.cpp and register in `populateCIRToLLVMConversionPatterns()`.
-
-### Adding a new CIR type
-Reference: `~/claude/references/flang-ref/flang/include/flang/Optimizer/Dialect/FIRTypes.td`
-1. Add type definition to `libcir/include/CIR/CIRTypes.td`
-2. Generated files already wired (CIRTypes.h.inc/cpp.inc via CMake)
-3. Register in `CIRDialect::initialize()`
-
-### Adding a new pass
-Reference: `~/claude/references/flang-ref/flang/lib/Optimizer/CodeGen/CodeGen.cpp`
-1. Add `createXxxPass()` to `libcot/include/COT/Passes.h`
-2. Implement in `libcot/lib/Xxx.cpp`
-3. Add `populateXxxPatterns()` if conversion-based
-
----
-
 ## Audit Checklist (run before major milestones)
 
-- [ ] All ops use appropriate base class
-- [ ] All ops have correct type constraints
-- [ ] Cast ops have CastOpInterface (D1)
-- [ ] All lowering patterns registered in `populateCIRToLLVMConversionPatterns()`
-- [ ] `dependentDialects` up to date
-- [ ] No frontend code emitting LLVM dialect ops
-- [ ] No `std::system()`, `std::ifstream`, or hardcoded paths in driver
-- [ ] All tests pass: lit, gate, inline, build
-- [ ] CIR text output is readable
-- [ ] Sema pass emits diagnostics, not silent failures
-- [ ] Codegen functions under 60 lines each (excluding dispatch switches)
-- [ ] New types have verifiers
-- [ ] Both frontends produce identical CIR for equivalent source
+- [x] All ops use appropriate base class
+- [x] All ops have correct type constraints
+- [x] Cast ops have CastOpInterface
+- [x] Commutative ops have Commutative trait
+- [x] Branch ops have BranchOpInterface
+- [x] Memory ops verify pointer types
+- [x] All lowering patterns registered in `populateCIRToLLVMConversionPatterns()`
+- [x] `dependentDialects` up to date
+- [x] No frontend code emitting LLVM dialect ops
+- [x] No `std::system()`, `std::ifstream`, or hardcoded paths in driver
+- [x] All tests pass: lit, gate, inline, build
+- [x] CIR text output is readable
+- [x] Sema pass emits diagnostics and signals failure
+- [x] All 3 frontends produce identical CIR for equivalent source
+- [ ] Negative tests for Sema error paths
+- [ ] All CIR ops tested in all 3 frontends
+- [ ] Constant folders on arithmetic ops

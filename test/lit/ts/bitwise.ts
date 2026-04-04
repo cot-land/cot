@@ -25,7 +25,7 @@ function bnot(x: number): number {
 // CHECK: cir.bit_or
 
 // CHECK-LABEL: func.func @bxor
-// CHECK: cir.xor
+// CHECK: cir.bit_xor
 
 // CHECK-LABEL: func.func @bnot
 // CHECK: cir.bit_not

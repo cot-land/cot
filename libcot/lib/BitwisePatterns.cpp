@@ -1,6 +1,6 @@
 //===- BitwisePatterns.cpp - Bitwise/shift CIR → LLVM lowering --------===//
 //
-// Patterns: bit_and, bit_or, xor, bit_not, shl, shr
+// Patterns: bit_and, bit_or, bit_xor, bit_not, shl, shr
 //
 //===----------------------------------------------------------------===//
 
@@ -30,9 +30,9 @@ struct BitOrOpLowering : public OpConversionPattern<cir::BitOrOp> {
   }
 };
 
-struct XorOpLowering : public OpConversionPattern<cir::XorOp> {
+struct BitXorOpLowering : public OpConversionPattern<cir::BitXorOp> {
   using OpConversionPattern::OpConversionPattern;
-  LogicalResult matchAndRewrite(cir::XorOp op, OpAdaptor adaptor,
+  LogicalResult matchAndRewrite(cir::BitXorOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
     rewriter.replaceOpWithNewOp<LLVM::XOrOp>(op,
         getTypeConverter()->convertType(op.getType()),
@@ -46,6 +46,8 @@ struct BitNotOpLowering : public OpConversionPattern<cir::BitNotOp> {
   LogicalResult matchAndRewrite(cir::BitNotOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
     auto type = getTypeConverter()->convertType(op.getType());
+    if (!type)
+      return rewriter.notifyMatchFailure(op, "failed to convert type");
     auto allOnes = rewriter.create<LLVM::ConstantOp>(op.getLoc(), type,
         rewriter.getIntegerAttr(type, -1));
     rewriter.replaceOpWithNewOp<LLVM::XOrOp>(op, type,
@@ -83,7 +85,7 @@ void cot::populateBitwisePatterns(
     RewritePatternSet &patterns) {
   MLIRContext *ctx = patterns.getContext();
   patterns.add<
-      BitAndOpLowering, BitOrOpLowering, XorOpLowering,
+      BitAndOpLowering, BitOrOpLowering, BitXorOpLowering,
       BitNotOpLowering, ShlOpLowering, ShrOpLowering
   >(converter, ctx);
 }

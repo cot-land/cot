@@ -14,7 +14,7 @@ fn shifts(a: i32, b: i32) -> i32 {
 
 // CHECK-LABEL: func.func @bitops
 // CHECK: cir.bit_and
-// CHECK: cir.xor
+// CHECK: cir.bit_xor
 // CHECK: cir.bit_or
 
 // CHECK-LABEL: func.func @bitnot

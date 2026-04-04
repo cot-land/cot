@@ -71,6 +71,22 @@ class Parser {
   // Go pattern: skip semicolons (synthetic newlines).
   void skipSemis() { while (check(Tag::semicolon)) advance(); }
 
+  // Lookahead: is this '{' the start of a struct init (Name { field: val })?
+  // Returns true if tokens after '{' match: [semis] identifier ':'.
+  bool isStructInitLookahead() {
+    size_t saved = pos_;
+    // pos_ is on '{', look past it
+    size_t look = pos_ + 1;
+    // Skip semicolons (synthetic newlines)
+    while (look < tokens_.size() && tokens_[look].tag == Tag::semicolon)
+      look++;
+    // Must see identifier followed by ':'
+    bool result = look + 1 < tokens_.size() &&
+        tokens_[look].tag == Tag::identifier &&
+        tokens_[look + 1].tag == Tag::colon;
+    return result;
+  }
+
   // ---- Type reference ----
   TypeRef parseType() {
     auto &tok = advance();
@@ -125,6 +141,28 @@ class Parser {
             e->args.push_back(parseExpr());
         }
         expect(Tag::r_paren);
+        return e;
+      }
+
+      // Struct init: Name { field: expr, ... }
+      // Disambiguate from blocks: require ident ':' pattern inside braces.
+      // Look ahead: '{' [semi*] identifier ':' means struct init.
+      if (check(Tag::l_brace) && isStructInitLookahead()) {
+        advance(); // consume '{'
+        skipSemis();
+        auto e = std::make_unique<Expr>();
+        e->kind = ExprKind::StructInit;
+        e->name = name; // struct type name
+        e->pos = p;
+        while (!check(Tag::r_brace) && !check(Tag::eof)) {
+          auto fieldName = tokenText(expect(Tag::identifier));
+          expect(Tag::colon);
+          e->fieldNames.push_back(fieldName);
+          e->args.push_back(parseExpr());
+          match(Tag::comma);
+          skipSemis();
+        }
+        expect(Tag::r_brace);
         return e;
       }
 

@@ -1,6 +1,6 @@
 # Handoff — COT Compiler Toolkit
 
-**Date:** 2026-04-04
+**Date:** 2026-04-04 (updated)
 
 ---
 
@@ -28,11 +28,11 @@ make test         # Run all test layers (lit, gate, inline, build)
 ./cot test file.ac          # Run inline test blocks
 ```
 
-**Total: 51 lit + 30 inline + 1 gate + 4 build = 86 tests, all passing.**
+**Total: 55 lit + 30 inline + 1 gate + 4 build = 90 tests, all passing.**
 
 ---
 
-## CIR Ops (28 ops, 3 custom types)
+## CIR Ops (29 ops, 3 custom types)
 
 | Op | Description | LLVM Lowering |
 |----|-------------|---------------|
@@ -48,6 +48,7 @@ make test         # Run all test layers (lit, gate, inline, build)
 | `cir.extf/truncf` | float casts | `llvm.fpext/fptrunc` |
 | `cir.alloca` | stack allocation → `!cir.ptr` | `llvm.alloca` |
 | `cir.store/load` | memory access | `llvm.store/load` |
+| `cir.struct_init` | construct struct from field values | `llvm.mlir.undef` + `llvm.insertvalue` chain |
 | `cir.br` | unconditional branch (with block args) | `llvm.br` |
 | `cir.condbr` | conditional branch | `llvm.cond_br` |
 | `cir.trap` | abort (assertion failure) | `llvm.trap + unreachable` |
@@ -59,7 +60,7 @@ make test         # Run all test layers (lit, gate, inline, build)
 ## Project Structure
 
 ```
-libcir/          CIR MLIR dialect (C++/TableGen) — 28 ops, 3 types
+libcir/          CIR MLIR dialect (C++/TableGen) — 29 ops, 3 types
   include/CIR/   CIRDialect.td, CIROps.td, CIRTypes.td, CIROps.h
   lib/           CIRDialect.cpp (types, verifiers, custom parsing)
 
@@ -84,10 +85,10 @@ cot/             CLI driver (C++)
                  Pipeline: Sema → verify → CIRToLLVM → func-to-llvm → LLVM IR → native
 
 test/            Test suite
-  lit/ac/        ac frontend lit tests (18)
-  lit/zig/       Zig frontend lit tests (13)
-  lit/ts/        TypeScript frontend lit tests (13)
-  lit/lowering/  CIR→LLVM lowering tests (3)
+  lit/ac/        ac frontend lit tests (19)
+  lit/zig/       Zig frontend lit tests (14)
+  lit/ts/        TypeScript frontend lit tests (14)
+  lit/lowering/  CIR→LLVM lowering tests (4)
   inline/        Runtime correctness tests (10 files, 30 tests)
   *.ac           Build tests (exit code 42 = pass)
 
@@ -117,12 +118,13 @@ claude/          Internal docs
 
 **Phase 2 (10/10):** Let/var bindings, assignment, compound assignment, if/else statement, if/else expression (select), while loop, break/continue, for loop, nested calls.
 
-**Phase 3 (4/10):**
-- ✓ #021 Multiple int types (i8-i64, u8-u64) — both frontends
-- ✓ #022 Float types (f32, f64) — both frontends
+**Phase 3 (5/10):**
+- ✓ #021 Multiple int types (i8-i64, u8-u64) — all three frontends
+- ✓ #022 Float types (f32, f64) — all three frontends
 - ✓ #023 Type casts — ac `x as i64`, Zig `@intCast`/`@floatCast`/`@truncate`/`@floatFromInt`
-- ✓ #024 Struct declaration — ac `struct Point { x: i32, y: i32 }`, Zig `const Point = struct { ... }`
-- Infrastructure: Cast ops (7, CastOpInterface + verifiers), Sema pass, `!cir.struct` with field names
+- ✓ #024 Struct declaration — ac `struct Point { x: i32, y: i32 }`, Zig `const Point = struct { ... }`, TS `interface Point { x: number; y: number; }`
+- ✓ #025 Struct construction — ac `Point { x: 1, y: 2 }`, Zig `Point{ .x = 1, .y = 2 }`, TS `{ x: 1, y: 2 }` → `cir.struct_init` → `llvm.insertvalue` chain
+- Infrastructure: Cast ops (7, CastOpInterface + verifiers), Sema pass, `!cir.struct` with field names, alloca type conversion fix
 
 ---
 
@@ -131,8 +133,7 @@ claude/          Internal docs
 ### Continue Phase 3
 
 **Next features in order:**
-- #025 Struct construction — `Point { x: 1, y: 2 }`. Need `cir.struct_init` op + `llvm.insertvalue` lowering.
-- #026 Struct field access — `p.x`. Need `cir.field_val` / `cir.field_ptr` ops + `llvm.extractvalue`/GEP lowering.
+- #026 Struct field access — `p.x`. Need `cir.field_val` / `cir.field_ptr` ops + `llvm.extractvalue`/GEP lowering. Sema needs struct field resolution (F1).
 - #027 Struct method syntax — `p.distance()`. Desugars to function call.
 - #028-030 Arrays — `[4]i32`, `[1,2,3,4]`, `arr[i]`. `!cir.array` type exists.
 

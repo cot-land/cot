@@ -13,6 +13,7 @@ include "CIR/CIRDialect.td"
 include "mlir/IR/OpBase.td"
 include "mlir/IR/EnumAttr.td"
 include "mlir/Interfaces/CastInterfaces.td"
+include "mlir/Interfaces/ControlFlowInterfaces.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
@@ -72,9 +73,9 @@ def CIR_ConstantOp : CIR_Op<"constant", [Pure, ConstantLike]> {
 // Arithmetic — present in every reference IR
 //===----------------------------------------------------------------------===//
 
-def CIR_AddOp : CIR_BinaryOp<"add"> { let summary = "integer/float addition"; }
+def CIR_AddOp : CIR_BinaryOp<"add", [Commutative]> { let summary = "integer/float addition"; }
 def CIR_SubOp : CIR_BinaryOp<"sub"> { let summary = "integer/float subtraction"; }
-def CIR_MulOp : CIR_BinaryOp<"mul"> { let summary = "integer/float multiplication"; }
+def CIR_MulOp : CIR_BinaryOp<"mul", [Commutative]> { let summary = "integer/float multiplication"; }
 def CIR_DivOp : CIR_BinaryOp<"div"> { let summary = "signed integer / float division"; }
 def CIR_RemOp : CIR_BinaryOp<"rem"> { let summary = "signed integer remainder"; }
 def CIR_NegOp : CIR_IntUnaryOp<"neg"> { let summary = "integer negation"; }
@@ -84,9 +85,9 @@ def CIR_NegOp : CIR_IntUnaryOp<"neg"> { let summary = "integer negation"; }
 // Reference: ArithToLLVM AndI/OrI/XOrI lowering patterns
 //===----------------------------------------------------------------------===//
 
-def CIR_BitAndOp : CIR_IntBinaryOp<"bit_and"> { let summary = "bitwise AND"; }
-def CIR_BitOrOp  : CIR_IntBinaryOp<"bit_or">  { let summary = "bitwise OR"; }
-def CIR_XorOp    : CIR_IntBinaryOp<"xor">     { let summary = "bitwise XOR"; }
+def CIR_BitAndOp : CIR_IntBinaryOp<"bit_and", [Commutative]> { let summary = "bitwise AND"; }
+def CIR_BitOrOp  : CIR_IntBinaryOp<"bit_or", [Commutative]>  { let summary = "bitwise OR"; }
+def CIR_BitXorOp : CIR_IntBinaryOp<"bit_xor", [Commutative]> { let summary = "bitwise XOR"; }
 def CIR_BitNotOp : CIR_IntUnaryOp<"bit_not">   { let summary = "bitwise NOT"; }
 
 //===----------------------------------------------------------------------===//
@@ -182,21 +183,25 @@ def CIR_StoreOp : CIR_Op<"store"> {
   let summary = "store value to memory";
   let description = [{
     Stores a value to the address produced by cir.alloca.
+    Address must be !cir.ptr.
   }];
 
   let arguments = (ins AnyType:$value, AnyType:$addr);
   let assemblyFormat = "$value `,` $addr attr-dict `:` type($value) `,` type($addr)";
+  let hasVerifier = 1;
 }
 
 def CIR_LoadOp : CIR_Op<"load"> {
   let summary = "load value from memory";
   let description = [{
     Loads a value from the address produced by cir.alloca.
+    Address must be !cir.ptr.
   }];
 
   let arguments = (ins AnyType:$addr);
   let results = (outs AnyType:$result);
   let assemblyFormat = "$addr attr-dict `:` type($addr) `->` type($result)";
+  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -232,7 +237,7 @@ def CIR_CmpOp : CIR_Op<"cmp", [Pure, SameTypeOperands]> {
   }];
 
   let arguments = (ins CIR_CmpIPredicateAttr:$predicate,
-                       AnyType:$lhs, AnyType:$rhs);
+                       AnyInteger:$lhs, AnyInteger:$rhs);
   let results = (outs I1:$result);
   let assemblyFormat = "$predicate `,` $lhs `,` $rhs attr-dict `:` type($lhs)";
 }
@@ -242,7 +247,9 @@ def CIR_CmpOp : CIR_Op<"cmp", [Pure, SameTypeOperands]> {
 // Reference: mlir/Dialect/ControlFlow/IR/ControlFlowOps.td
 //===----------------------------------------------------------------------===//
 
-def CIR_BrOp : CIR_Op<"br", [Pure, Terminator]> {
+def CIR_BrOp : CIR_Op<"br",
+    [Pure, Terminator,
+     DeclareOpInterfaceMethods<BranchOpInterface>]> {
   let summary = "unconditional branch";
   let arguments = (ins Variadic<AnyType>:$destOperands);
   let successors = (successor AnySuccessor:$dest);
@@ -251,7 +258,9 @@ def CIR_BrOp : CIR_Op<"br", [Pure, Terminator]> {
   }];
 }
 
-def CIR_CondBrOp : CIR_Op<"condbr", [Pure, Terminator]> {
+def CIR_CondBrOp : CIR_Op<"condbr",
+    [Pure, Terminator,
+     DeclareOpInterfaceMethods<BranchOpInterface>]> {
   let summary = "conditional branch";
   let arguments = (ins I1:$condition);
   let successors = (successor AnySuccessor:$trueDest,
@@ -278,6 +287,31 @@ def CIR_SelectOp : CIR_Op<"select", [Pure,
   let results = (outs AnyType:$result);
   let assemblyFormat =
       "$condition `,` $trueValue `,` $falseValue attr-dict `:` type($result)";
+}
+
+//===----------------------------------------------------------------------===//
+// Aggregate construction — struct values from fields
+// Reference: FIR fir.undefined + fir.insert_value chain
+//            LLVM llvm.mlir.undef + llvm.insertvalue chain
+//===----------------------------------------------------------------------===//
+
+def CIR_StructInitOp : CIR_Op<"struct_init", [Pure]> {
+  let summary = "construct aggregate struct value from field values";
+  let description = [{
+    Constructs a struct value from individual field values in order.
+    Operands are positional — operand 0 is field 0, operand 1 is field 1, etc.
+    Result type is a !cir.struct.
+
+    Lowers to llvm.mlir.undef + llvm.insertvalue chain (FIR pattern).
+
+    Example:
+      %p = cir.struct_init(%x, %y) : !cir.struct<"Point", x: i32, y: i32>
+  }];
+
+  let arguments = (ins Variadic<AnyType>:$fields);
+  let results = (outs AnyType:$result);
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
 }
 
 def CIR_TrapOp : CIR_Op<"trap", [Terminator]> {

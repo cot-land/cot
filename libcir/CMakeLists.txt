@@ -58,4 +58,5 @@ target_link_libraries(CIR PUBLIC
   MLIRSupport
   MLIRFuncDialect
   MLIRCastInterfaces
+  MLIRControlFlowInterfaces
 )

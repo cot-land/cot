@@ -41,6 +41,12 @@ type Gen struct {
 
 	// Loop stack for break/continue
 	loopStack []LoopContext
+
+	// Struct (interface) type registry
+	structNames      []string
+	structTypes      []MlirType
+	structFieldNames [][]string
+	structFieldTypes [][]MlirType
 }
 
 // NewGen creates a new code generator with MLIR context and module.
@@ -79,7 +85,43 @@ func (g *Gen) mapDecl(node *ast.Node) {
 	switch node.Kind {
 	case ast.KindFunctionDeclaration:
 		g.mapFuncDecl(node)
+	case ast.KindInterfaceDeclaration:
+		g.mapInterfaceDecl(node)
 	}
+}
+
+func (g *Gen) mapInterfaceDecl(node *ast.Node) {
+	id := node.AsInterfaceDeclaration()
+	name := id.Name().AsIdentifier().Text
+
+	var fieldNames []string
+	var fieldTypes []MlirType
+	typeStr := "!cir.struct<\"" + name + "\""
+
+	if id.Members != nil {
+		for _, member := range id.Members.Nodes {
+			if member.Kind == ast.KindPropertySignature {
+				ps := member.AsPropertySignatureDeclaration()
+				fname := ps.Name().AsIdentifier().Text
+				fieldNames = append(fieldNames, fname)
+				ftype := g.b.IntType(32) // default i32
+				ftypeName := "i32"
+				if ps.Type != nil {
+					ftype = g.resolveType(ps.Type)
+					ftypeName = g.resolveTypeName(ps.Type)
+				}
+				fieldTypes = append(fieldTypes, ftype)
+				typeStr += ", " + fname + ": " + ftypeName
+			}
+		}
+	}
+	typeStr += ">"
+
+	structType := g.b.ParseType(typeStr)
+	g.structNames = append(g.structNames, name)
+	g.structTypes = append(g.structTypes, structType)
+	g.structFieldNames = append(g.structFieldNames, fieldNames)
+	g.structFieldTypes = append(g.structFieldTypes, fieldTypes)
 }
 
 func (g *Gen) mapFuncDecl(node *ast.Node) {
@@ -428,6 +470,8 @@ func (g *Gen) mapExpr(block MlirBlock, node *ast.Node, resultType MlirType) Mlir
 		return g.mapPrefixUnary(block, node, resultType)
 	case ast.KindConditionalExpression:
 		return g.mapConditionalExpr(block, node, resultType)
+	case ast.KindObjectLiteralExpression:
+		return g.mapObjectLiteral(block, node, resultType)
 	case ast.KindTrueKeyword:
 		boolType := g.b.IntType(1)
 		return g.b.Emit(block, "cir.constant", []MlirType{boolType}, nil,
@@ -496,7 +540,7 @@ func (g *Gen) mapBinaryExpr(block MlirBlock, node *ast.Node, resultType MlirType
 	case ast.KindBarToken:
 		return g.b.Emit(block, "cir.bit_or", []MlirType{opResultType}, []MlirValue{lhs, rhs}, nil)
 	case ast.KindCaretToken:
-		return g.b.Emit(block, "cir.xor", []MlirType{opResultType}, []MlirValue{lhs, rhs}, nil)
+		return g.b.Emit(block, "cir.bit_xor", []MlirType{opResultType}, []MlirValue{lhs, rhs}, nil)
 	case ast.KindLessThanLessThanToken:
 		return g.b.Emit(block, "cir.shl", []MlirType{opResultType}, []MlirValue{lhs, rhs}, nil)
 	case ast.KindGreaterThanGreaterThanToken:
@@ -552,9 +596,58 @@ func (g *Gen) mapPrefixUnary(block MlirBlock, node *ast.Node, resultType MlirTyp
 	case ast.KindExclamationToken:
 		one := g.b.Emit(block, "cir.constant", []MlirType{resultType}, nil,
 			[]MlirNamedAttr{g.b.NamedAttr("value", g.b.IntAttr(resultType, 1))})
-		return g.b.Emit(block, "cir.xor", []MlirType{resultType}, []MlirValue{operand, one}, nil)
+		return g.b.Emit(block, "cir.bit_xor", []MlirType{resultType}, []MlirValue{operand, one}, nil)
 	}
 	return operand
+}
+
+// Object literal: { x: 1, y: 2 } → cir.struct_init (when resultType is a struct)
+func (g *Gen) mapObjectLiteral(block MlirBlock, node *ast.Node, resultType MlirType) MlirValue {
+	ole := node.AsObjectLiteralExpression()
+
+	// Find struct index from resultType
+	structIdx := -1
+	for i, st := range g.structTypes {
+		if TypeEqual(st, resultType) {
+			structIdx = i
+			break
+		}
+	}
+	if structIdx < 0 {
+		// Fallback: return zero constant
+		return g.b.Emit(block, "cir.constant", []MlirType{g.b.IntType(32)}, nil,
+			[]MlirNamedAttr{g.b.NamedAttr("value", g.b.IntAttr(g.b.IntType(32), 0))})
+	}
+
+	fieldNames := g.structFieldNames[structIdx]
+	fieldTypes := g.structFieldTypes[structIdx]
+	nFields := len(fieldNames)
+
+	// Initialize all field values to zero
+	fieldVals := make([]MlirValue, nFields)
+	for i := 0; i < nFields; i++ {
+		fieldVals[i] = g.b.Emit(block, "cir.constant", []MlirType{fieldTypes[i]}, nil,
+			[]MlirNamedAttr{g.b.NamedAttr("value", g.b.IntAttr(fieldTypes[i], 0))})
+	}
+
+	// Fill in provided fields from the object literal
+	if ole.Properties != nil {
+		for _, prop := range ole.Properties.Nodes {
+			if prop.Kind == ast.KindPropertyAssignment {
+				pa := prop.AsPropertyAssignment()
+				propName := pa.Name().AsIdentifier().Text
+				// Find field index
+				for j, fn := range fieldNames {
+					if fn == propName {
+						fieldVals[j] = g.mapExpr(block, pa.Initializer, fieldTypes[j])
+						break
+					}
+				}
+			}
+		}
+	}
+
+	return g.b.Emit(block, "cir.struct_init", []MlirType{resultType}, fieldVals, nil)
 }
 
 // cond ? thenVal : elseVal → cir.select
@@ -578,8 +671,30 @@ func (g *Gen) resolveType(node *ast.Node) MlirType {
 		return g.b.IntType(1)
 	case ast.KindVoidKeyword:
 		return g.b.IntType(0)
+	case ast.KindTypeReference:
+		tr := node.AsTypeReference()
+		if tr.TypeName != nil && tr.TypeName.Kind == ast.KindIdentifier {
+			name := tr.TypeName.AsIdentifier().Text
+			for i, sn := range g.structNames {
+				if sn == name {
+					return g.structTypes[i]
+				}
+			}
+		}
 	}
 	return g.b.IntType(32)
+}
+
+func (g *Gen) resolveTypeName(node *ast.Node) string {
+	switch node.Kind {
+	case ast.KindNumberKeyword:
+		return "i32"
+	case ast.KindBooleanKeyword:
+		return "i1"
+	case ast.KindVoidKeyword:
+		return "i0"
+	}
+	return "i32"
 }
 
 // ============================================================

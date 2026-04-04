@@ -27,7 +27,7 @@ pub fn shifts(a: i32, b: i32) i32 {
 // CHECK: cir.bit_or
 
 // CHECK-LABEL: func.func @bitxor
-// CHECK: cir.xor
+// CHECK: cir.bit_xor
 
 // CHECK-LABEL: func.func @bitnot
 // CHECK: cir.bit_not

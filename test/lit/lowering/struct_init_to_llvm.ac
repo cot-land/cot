@@ -1,0 +1,20 @@
+// RUN: %cot emit-llvm %s | %FileCheck %s
+
+// Feature #025: Struct init lowering — cir.struct_init → llvm.undef + llvm.insertvalue
+
+struct Point {
+    x: i32
+    y: i32
+}
+
+fn make_point() -> i32 {
+    let p: Point = Point { x: 19, y: 23 }
+    return 42
+}
+
+// CHECK-LABEL: llvm.func @make_point
+// CHECK: llvm.mlir.undef : !llvm.struct<(i32, i32)>
+// CHECK: llvm.insertvalue
+// CHECK-SAME: [0]
+// CHECK: llvm.insertvalue
+// CHECK-SAME: [1]

@@ -47,24 +47,27 @@ const Gen = struct {
     ctx: mlir.Context,
     module: mlir.Module,
     b: mlir.Builder,
-    // Current scope: function params by name
-    param_names: [16][]const u8 = undefined,
-    param_values: [16]mlir.Value = undefined,
-    param_count: usize = 0,
-    // Local variables: addresses from cir.alloca
-    local_names: [32][]const u8 = undefined,
-    local_addrs: [32]mlir.Value = undefined,
-    local_types: [32]mlir.Type = undefined,
-    local_count: usize = 0,
-    // Struct types registered by name
-    struct_names: [16][]const u8 = undefined,
-    struct_types: [16]mlir.Type = undefined,
-    struct_count: usize = 0,
+    // Current scope: function params by name (growable)
+    param_names: std.ArrayList([]const u8) = .empty,
+    param_values: std.ArrayList(mlir.Value) = .empty,
+    // Local variables: addresses from cir.alloca (growable)
+    local_names: std.ArrayList([]const u8) = .empty,
+    local_addrs: std.ArrayList(mlir.Value) = .empty,
+    local_types: std.ArrayList(mlir.Type) = .empty,
+    // Struct types registered by name (growable)
+    structs: std.ArrayList(StructInfo) = .empty,
     // Current function's region (for adding blocks)
     current_func: mlir.Operation = .{ .ptr = null },
     // Current insertion block (changes after control flow)
     current_block: mlir.Block = .{ .ptr = null },
     has_terminator: bool = false,
+
+    const StructInfo = struct {
+        name: []const u8,
+        mlir_type: mlir.Type,
+        field_names: []const []const u8,
+        field_types: []const mlir.Type,
+    };
 
     fn init(gpa: Allocator, tree: *const Ast) Gen {
         const ctx = mlir.createContext();
@@ -95,25 +98,25 @@ const Gen = struct {
             if (std.mem.eql(u8, name, "f64")) return mlir.mlirF64TypeGet(self.ctx);
             if (std.mem.eql(u8, name, "void")) return self.b.intType(0);
             // Check struct types
-            for (0..self.struct_count) |i| {
-                if (std.mem.eql(u8, self.struct_names[i], name))
-                    return self.struct_types[i];
+            for (self.structs.items) |s| {
+                if (std.mem.eql(u8, s.name, name))
+                    return s.mlir_type;
             }
         }
         return self.i32Type();
     }
 
     fn resolve(self: *Gen, name: []const u8) ?mlir.Value {
-        for (0..self.param_count) |i| {
-            if (std.mem.eql(u8, self.param_names[i], name)) return self.param_values[i];
+        for (self.param_names.items, 0..) |pname, i| {
+            if (std.mem.eql(u8, pname, name)) return self.param_values.items[i];
         }
         return null;
     }
 
     fn resolveLocal(self: *Gen, name: []const u8) ?struct { addr: mlir.Value, elem_type: mlir.Type } {
-        for (0..self.local_count) |i| {
-            if (std.mem.eql(u8, self.local_names[i], name)) {
-                return .{ .addr = self.local_addrs[i], .elem_type = self.local_types[i] };
+        for (self.local_names.items, 0..) |lname, i| {
+            if (std.mem.eql(u8, lname, name)) {
+                return .{ .addr = self.local_addrs.items[i], .elem_type = self.local_types.items[i] };
             }
         }
         return null;
@@ -224,9 +227,47 @@ const Gen = struct {
         const type_str = buf[0..pos];
         const struct_type = self.b.parseType(type_str);
         if (struct_type.ptr == null) return; // parse failed
-        self.struct_names[self.struct_count] = name;
-        self.struct_types[self.struct_count] = struct_type;
-        self.struct_count += 1;
+
+        // Also store field names and types for struct init
+        // Count fields first
+        var field_count: usize = 0;
+        for (members) |member| {
+            const field_tag = tree.nodeTag(member);
+            if (field_tag == .container_field_init or
+                field_tag == .container_field or
+                field_tag == .container_field_align)
+            {
+                field_count += 1;
+            }
+        }
+        // Allocate slices for field names and types
+        const f_names = self.gpa.alloc([]const u8, field_count) catch return;
+        const f_types = self.gpa.alloc(mlir.Type, field_count) catch return;
+        var fi: usize = 0;
+        for (members) |member| {
+            const field_tag = tree.nodeTag(member);
+            if (field_tag == .container_field_init or
+                field_tag == .container_field or
+                field_tag == .container_field_align)
+            {
+                const field_main_token = tree.nodeMainToken(member);
+                f_names[fi] = tree.tokenSlice(field_main_token);
+                const type_node = switch (field_tag) {
+                    .container_field_init => tree.nodeData(member).node_and_opt_node[0],
+                    .container_field_align => tree.nodeData(member).node_and_node[0],
+                    .container_field => tree.nodeData(member).node_and_extra[0],
+                    else => unreachable,
+                };
+                f_types[fi] = self.resolveType(type_node);
+                fi += 1;
+            }
+        }
+        self.structs.append(self.gpa, .{
+            .name = name,
+            .mlir_type = struct_type,
+            .field_names = f_names,
+            .field_types = f_types,
+        }) catch return;
     }
 
     /// Return MLIR type name string for a Zig type identifier node.
@@ -287,16 +328,18 @@ const Gen = struct {
         );
         self.current_func = func.func_op;
 
-        self.param_count = 0;
-        self.local_count = 0;
+        self.param_names.clearRetainingCapacity();
+        self.param_values.clearRetainingCapacity();
+        self.local_names.clearRetainingCapacity();
+        self.local_addrs.clearRetainingCapacity();
+        self.local_types.clearRetainingCapacity();
         {
             var it = proto.iterate(tree);
             var i: usize = 0;
             while (it.next()) |param| : (i += 1) {
                 if (param.name_token) |name_tok| {
-                    self.param_names[self.param_count] = tree.tokenSlice(name_tok);
-                    self.param_values[self.param_count] = mlir.mlirBlockGetArgument(func.entry_block, @intCast(i));
-                    self.param_count += 1;
+                    self.param_names.append(self.gpa, tree.tokenSlice(name_tok)) catch @panic("OOM");
+                    self.param_values.append(self.gpa, mlir.mlirBlockGetArgument(func.entry_block, @intCast(i))) catch @panic("OOM");
                 }
             }
         }
@@ -314,8 +357,11 @@ const Gen = struct {
 
         const func = self.b.createFunc(self.module, name, &.{}, &.{});
         self.current_func = func.func_op;
-        self.param_count = 0;
-        self.local_count = 0;
+        self.param_names.clearRetainingCapacity();
+        self.param_values.clearRetainingCapacity();
+        self.local_names.clearRetainingCapacity();
+        self.local_addrs.clearRetainingCapacity();
+        self.local_types.clearRetainingCapacity();
         self.mapBody(func.entry_block, body_node, &.{});
     }
 
@@ -423,10 +469,9 @@ const Gen = struct {
                 }
                 const tok = self.tree.nodeMainToken(node);
                 const name = self.tree.tokenSlice(tok + 1);
-                self.local_names[self.local_count] = name;
-                self.local_addrs[self.local_count] = addr;
-                self.local_types[self.local_count] = var_type;
-                self.local_count += 1;
+                self.local_names.append(self.gpa, name) catch @panic("OOM");
+                self.local_addrs.append(self.gpa, addr) catch @panic("OOM");
+                self.local_types.append(self.gpa, var_type) catch @panic("OOM");
             },
             .assign => {
                 const d = self.tree.nodeData(node).node_and_node;
@@ -478,7 +523,7 @@ const Gen = struct {
             .bit_not => self.mapUnaryOp(block, node, "cir.bit_not", result_type),
             .bit_and => self.mapBinOp(block, node, "cir.bit_and", result_type),
             .bit_or => self.mapBinOp(block, node, "cir.bit_or", result_type),
-            .bit_xor => self.mapBinOp(block, node, "cir.xor", result_type),
+            .bit_xor => self.mapBinOp(block, node, "cir.bit_xor", result_type),
             .shl => self.mapBinOp(block, node, "cir.shl", result_type),
             .shr => self.mapBinOp(block, node, "cir.shr", result_type),
             .add => self.mapBinOp(block, node, "cir.add", result_type),
@@ -516,6 +561,13 @@ const Gen = struct {
             .grouped_expression => blk2: {
                 const inner = tree.nodeData(node).node_and_token[0];
                 break :blk2 self.mapExpr(block, inner, result_type);
+            },
+            // Struct init: Point{ .x = 1, .y = 2 }
+            // Reference: ~/claude/references/zig/lib/std/zig/AstGen.zig structInitExpr
+            .struct_init_one, .struct_init_one_comma,
+            .struct_init, .struct_init_comma,
+            => blk2: {
+                break :blk2 self.mapStructInit(block, node, result_type);
             },
             // Zig builtins: @intCast, @floatCast, @truncate, @floatFromInt
             // Reference: ~/claude/references/zig/lib/std/zig/AstGen.zig typeCast
@@ -660,6 +712,76 @@ const Gen = struct {
             return src;
         }
         return src; // unsupported — fallback
+    }
+
+    /// Handle Zig struct init: Point{ .x = 1, .y = 2 }
+    /// Reference: Zig AstGen structInitExprTyped — field name at firstToken(field) - 2
+    fn mapStructInit(self: *Gen, block: mlir.Block, node: Node.Index, _: mlir.Type) mlir.Value {
+        const tree = self.tree;
+        const tag = tree.nodeTag(node);
+
+        // Get type expression and field nodes (handle one-field and multi-field variants)
+        var fields_buf: [1]Node.Index = undefined;
+        var type_expr_node: Node.Index = undefined;
+        var fields: []const Node.Index = undefined;
+
+        switch (tag) {
+            .struct_init_one, .struct_init_one_comma => {
+                const d = tree.nodeData(node).node_and_opt_node;
+                type_expr_node = d[0];
+                if (d[1].unwrap()) |f| {
+                    fields_buf[0] = f;
+                    fields = fields_buf[0..1];
+                } else {
+                    fields = fields_buf[0..0];
+                }
+            },
+            .struct_init, .struct_init_comma => {
+                const d = tree.nodeData(node).node_and_extra;
+                type_expr_node = d[0];
+                const sub_range = tree.extraData(d[1], Node.SubRange);
+                fields = tree.extraDataSlice(sub_range, Node.Index);
+            },
+            else => return mlir.Value{ .ptr = null },
+        }
+
+        // Resolve struct type from the type expression identifier
+        const type_name = tree.tokenSlice(tree.nodeMainToken(type_expr_node));
+        var found_struct: ?StructInfo = null;
+        for (self.structs.items) |s| {
+            if (std.mem.eql(u8, s.name, type_name)) {
+                found_struct = s;
+                break;
+            }
+        }
+        const si = found_struct orelse return mlir.Value{ .ptr = null };
+        const struct_type = si.mlir_type;
+        const n_fields = si.field_types.len;
+
+        // Build field values in struct declaration order.
+        // For each source field (.name = val), find its position in the struct.
+        const field_values = self.gpa.alloc(mlir.Value, n_fields) catch return mlir.Value{ .ptr = null };
+        defer self.gpa.free(field_values);
+        // Initialize all to zero (in case source doesn't provide all fields)
+        for (0..n_fields) |i| {
+            field_values[i] = self.b.emit(block, "cir.constant", &.{si.field_types[i]}, &.{}, &.{
+                self.b.attr("value", self.b.intAttr(si.field_types[i], 0)),
+            });
+        }
+        for (fields) |field_node| {
+            // Field name is at firstToken(value_expr) - 2 (Zig AstGen pattern)
+            const first_tok = tree.firstToken(field_node);
+            const field_name = tree.tokenSlice(first_tok - 2);
+            // Find index in struct declaration
+            for (0..n_fields) |j| {
+                if (std.mem.eql(u8, si.field_names[j], field_name)) {
+                    field_values[j] = self.mapExpr(block, field_node, si.field_types[j]);
+                    break;
+                }
+            }
+        }
+
+        return self.b.emitStructInit(block, struct_type, field_values[0..n_fields]);
     }
 
     fn mapCall(self: *Gen, block: mlir.Block, node: Node.Index, result_type: mlir.Type) mlir.Value {

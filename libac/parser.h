@@ -28,7 +28,7 @@ struct Param {
 };
 
 // Expression kinds
-enum class ExprKind { IntLit, FloatLit, BoolLit, Ident, BinOp, UnaryOp, Call, IfExpr, Cast };
+enum class ExprKind { IntLit, FloatLit, BoolLit, Ident, BinOp, UnaryOp, Call, IfExpr, Cast, StructInit };
 
 struct Expr {
   ExprKind kind;
@@ -42,6 +42,7 @@ struct Expr {
   ExprPtr lhs, rhs;              // BinOp (lhs, rhs), UnaryOp (rhs only)
   std::vector<ExprPtr> args;     // Call
   TypeRef targetType;             // Cast: target type (x as i64)
+  std::vector<std::string_view> fieldNames; // StructInit: field names
 };
 
 // Statement kinds

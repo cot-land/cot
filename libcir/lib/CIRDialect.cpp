@@ -4,6 +4,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Interfaces/CastInterfaces.h"
+#include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
@@ -155,6 +156,101 @@ LogicalResult ConstantOp::verify() {
     return success();
   }
 
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// cir.store / cir.load — verifiers (addr must be !cir.ptr)
+//===----------------------------------------------------------------------===//
+
+LogicalResult StoreOp::verify() {
+  if (!llvm::isa<cir::PointerType>(getAddr().getType()))
+    return emitOpError("address must be !cir.ptr, got ") << getAddr().getType();
+  return success();
+}
+
+LogicalResult LoadOp::verify() {
+  if (!llvm::isa<cir::PointerType>(getAddr().getType()))
+    return emitOpError("address must be !cir.ptr, got ") << getAddr().getType();
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// BranchOpInterface — getSuccessorOperands
+// Reference: mlir/Dialect/ControlFlow/IR/ControlFlowOps.cpp
+//===----------------------------------------------------------------------===//
+
+SuccessorOperands BrOp::getSuccessorOperands(unsigned index) {
+  assert(index == 0 && "invalid successor index");
+  return SuccessorOperands(getDestOperandsMutable());
+}
+
+SuccessorOperands CondBrOp::getSuccessorOperands(unsigned index) {
+  assert(index < 2 && "invalid successor index");
+  // CondBrOp has no block arguments — return empty operands
+  return SuccessorOperands(MutableOperandRange(getOperation(), 0, 0));
+}
+
+//===----------------------------------------------------------------------===//
+// cir.struct_init — custom print/parse + verifier
+// Reference: FIR fir.insert_value — aggregate construction from fields
+//===----------------------------------------------------------------------===//
+
+/// Parse: cir.struct_init(%a, %b) : !cir.struct<"Point", x: i32, y: i32>
+ParseResult StructInitOp::parse(OpAsmParser &parser, OperationState &result) {
+  llvm::SmallVector<OpAsmParser::UnresolvedOperand> operands;
+  if (parser.parseLParen())
+    return failure();
+  if (failed(parser.parseOptionalRParen())) {
+    do {
+      OpAsmParser::UnresolvedOperand operand;
+      if (parser.parseOperand(operand))
+        return failure();
+      operands.push_back(operand);
+    } while (succeeded(parser.parseOptionalComma()));
+    if (parser.parseRParen())
+      return failure();
+  }
+  Type resultType;
+  if (parser.parseColonType(resultType))
+    return failure();
+  result.addTypes(resultType);
+  // Resolve operands using field types from struct type
+  auto structType = llvm::dyn_cast<cir::StructType>(resultType);
+  if (!structType)
+    return parser.emitError(parser.getNameLoc(), "expected !cir.struct type");
+  auto fieldTypes = structType.getFieldTypes();
+  if (operands.size() != fieldTypes.size())
+    return parser.emitError(parser.getNameLoc(),
+        "operand count does not match struct field count");
+  for (unsigned i = 0; i < operands.size(); i++) {
+    if (parser.resolveOperand(operands[i], fieldTypes[i], result.operands))
+      return failure();
+  }
+  return success();
+}
+
+/// Print: cir.struct_init(%a, %b) : !cir.struct<"Point", x: i32, y: i32>
+void StructInitOp::print(OpAsmPrinter &p) {
+  p << "(";
+  p.printOperands(getFields());
+  p << ") : " << getResult().getType();
+}
+
+/// Verify: field count matches struct type, field types match.
+LogicalResult StructInitOp::verify() {
+  auto structType = llvm::dyn_cast<cir::StructType>(getResult().getType());
+  if (!structType)
+    return emitOpError("result must be a !cir.struct type");
+  auto fieldTypes = structType.getFieldTypes();
+  if (getFields().size() != fieldTypes.size())
+    return emitOpError("expected ") << fieldTypes.size()
+        << " fields, got " << getFields().size();
+  for (unsigned i = 0; i < fieldTypes.size(); i++) {
+    if (getFields()[i].getType() != fieldTypes[i])
+      return emitOpError("field ") << i << " type mismatch: expected "
+          << fieldTypes[i] << ", got " << getFields()[i].getType();
+  }
   return success();
 }
 

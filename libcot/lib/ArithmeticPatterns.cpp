@@ -68,6 +68,8 @@ struct NegOpLowering : public OpConversionPattern<cir::NegOp> {
   LogicalResult matchAndRewrite(cir::NegOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
     auto type = getTypeConverter()->convertType(op.getType());
+    if (!type)
+      return rewriter.notifyMatchFailure(op, "failed to convert type");
     auto zero = rewriter.create<LLVM::ConstantOp>(op.getLoc(), type,
         rewriter.getIntegerAttr(type, 0));
     rewriter.replaceOpWithNewOp<LLVM::SubOp>(op, type, zero,
@@ -80,8 +82,10 @@ struct ConstantOpLowering : public OpConversionPattern<cir::ConstantOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(cir::ConstantOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<LLVM::ConstantOp>(op,
-        getTypeConverter()->convertType(op.getType()), op.getValue());
+    auto type = getTypeConverter()->convertType(op.getType());
+    if (!type)
+      return rewriter.notifyMatchFailure(op, "failed to convert type");
+    rewriter.replaceOpWithNewOp<LLVM::ConstantOp>(op, type, op.getValue());
     return success();
   }
 };
