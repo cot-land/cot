@@ -238,7 +238,8 @@ class Parser {
     }
 
     // Unary prefix: - !
-    if (tok.tag == Tag::minus || tok.tag == Tag::bang || tok.tag == Tag::tilde) {
+    if (tok.tag == Tag::minus || tok.tag == Tag::bang || tok.tag == Tag::tilde ||
+        tok.tag == Tag::ampersand || tok.tag == Tag::star) {
       auto op = advance().tag;
       auto operand = parsePrimary();
       auto e = std::make_unique<Expr>();

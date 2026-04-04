@@ -1,0 +1,14 @@
+fn deref_ref(p: *i32) -> i32 {
+    return *p
+}
+
+test "address-of and dereference" {
+    var x: i32 = 42
+    let p: *i32 = &x
+    assert(*p == 42)
+}
+
+test "pass ref to function" {
+    var x: i32 = 19
+    assert(deref_ref(&x) == 19)
+}

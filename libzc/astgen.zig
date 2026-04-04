@@ -597,6 +597,30 @@ const Gen = struct {
                 const inner = tree.nodeData(node).node_and_token[0];
                 break :blk2 self.mapExpr(block, inner, result_type);
             },
+            // Address-of: &x → cir.addr_of
+            .address_of => blk2: {
+                const operand_node = tree.nodeData(node).node;
+                // Get the alloca address for the local
+                const operand_tok = tree.nodeMainToken(operand_node);
+                const name = tree.tokenSlice(operand_tok);
+                if (self.resolveLocal(name)) |local| {
+                    // Build !cir.ref<T> type string
+                    const elem_name = self.resolveTypeName(tree.nodeData(operand_node).opt_node_and_opt_node[0].unwrap() orelse operand_node);
+                    _ = elem_name;
+                    // Use parseType to build the ref type
+                    var buf3: [64]u8 = undefined;
+                    const ref_type_str = std.fmt.bufPrint(&buf3, "!cir.ref<{s}>", .{self.resolveTypeName2(local.elem_type)}) catch break :blk2 mlir.Value{ .ptr = null };
+                    const ref_type = self.b.parseType(ref_type_str);
+                    break :blk2 self.b.emit(block, "cir.addr_of", &.{ref_type}, &.{local.addr}, &.{});
+                }
+                break :blk2 mlir.Value{ .ptr = null };
+            },
+            // Dereference: p.* → cir.deref
+            .deref => blk2: {
+                const operand_node = tree.nodeData(node).node;
+                const operand = self.mapExpr(block, operand_node, result_type);
+                break :blk2 self.b.emit(block, "cir.deref", &.{result_type}, &.{operand}, &.{});
+            },
             // Field access: p.x → cir.field_val
             // Reference: Zig AstGen fieldAccess — node_and_token[0] = object, [1] = field token
             .field_access => blk2: {
@@ -776,6 +800,27 @@ const Gen = struct {
             return src;
         }
         return src; // unsupported — fallback
+    }
+
+    /// Get MLIR type name string from an MLIR Type value.
+    /// Used to construct composite type strings like !cir.ref<i32>.
+    fn resolveTypeName2(_: *Gen, ty: mlir.Type) []const u8 {
+        if (mlir.mlirTypeIsAInteger(ty)) {
+            const w = mlir.mlirIntegerTypeGetWidth(ty);
+            return switch (w) {
+                1 => "i1",
+                8 => "i8",
+                16 => "i16",
+                32 => "i32",
+                64 => "i64",
+                else => "i32",
+            };
+        }
+        if (mlir.mlirTypeIsAFloat(ty)) {
+            const w = mlir.mlirFloatTypeGetWidth(ty);
+            return if (w == 32) "f32" else "f64";
+        }
+        return "i32";
     }
 
     /// Find field index by name in a struct type.

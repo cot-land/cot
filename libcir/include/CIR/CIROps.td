@@ -205,6 +205,49 @@ def CIR_LoadOp : CIR_Op<"load"> {
 }
 
 //===----------------------------------------------------------------------===//
+// Address-of and dereference — typed reference operations
+// Reference: FIR fir.ref / Zig &x / Rust &x
+//===----------------------------------------------------------------------===//
+
+def CIR_AddrOfOp : CIR_Op<"addr_of", [Pure]> {
+  let summary = "take address of a local (alloca ptr → typed ref)";
+  let description = [{
+    Converts a raw alloca pointer (!cir.ptr) into a typed safe reference
+    (!cir.ref<T>). This is the address-of operation (&x).
+    The pointee type is specified in the result ref type.
+
+    Lowering: identity — both !cir.ptr and !cir.ref<T> lower to !llvm.ptr.
+
+    Example:
+      %r = cir.addr_of %alloca : !cir.ptr to !cir.ref<i32>
+  }];
+
+  let arguments = (ins AnyType:$addr);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$addr attr-dict `:` type($addr) `to` type($result)";
+  let hasVerifier = 1;
+}
+
+def CIR_DerefOp : CIR_Op<"deref", [Pure]> {
+  let summary = "dereference a typed reference (load through ref)";
+  let description = [{
+    Loads the value pointed to by a typed reference (!cir.ref<T>).
+    Result type must match the ref's pointee type.
+    This is the dereference operation (*p or p.*).
+
+    Lowering: llvm.load (same as cir.load but type-safe).
+
+    Example:
+      %v = cir.deref %r : !cir.ref<i32> to i32
+  }];
+
+  let arguments = (ins AnyType:$ref);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$ref attr-dict `:` type($ref) `to` type($result)";
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
 // Comparison predicate enum
 // Reference: mlir/include/mlir/Dialect/Arith/IR/ArithBase.td CmpIPredicate
 //===----------------------------------------------------------------------===//

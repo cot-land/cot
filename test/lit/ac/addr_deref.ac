@@ -1,0 +1,13 @@
+// RUN: %cot emit-cir %s | %FileCheck %s
+
+// Feature #032-033: Address-of and dereference — ac syntax
+
+fn main() -> i32 {
+    var x: i32 = 42
+    let p: *i32 = &x
+    return *p
+}
+
+// CHECK-LABEL: func.func @main
+// CHECK: cir.addr_of %{{.*}} : !cir.ptr to !cir.ref<i32>
+// CHECK: cir.deref %{{.*}} : !cir.ref<i32> to i32

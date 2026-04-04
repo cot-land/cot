@@ -131,13 +131,36 @@ class CodeGen {
     }
 
     case ExprKind::UnaryOp: {
+      // Address-of: &x → cir.addr_of (alloca ptr → !cir.ref<T>)
+      if (e.op == Tag::ampersand) {
+        // The operand must be an identifier (local variable)
+        if (e.rhs->kind == ExprKind::Ident) {
+          auto lit = localAddrs.find(e.rhs->name);
+          if (lit != localAddrs.end()) {
+            auto [addr, elemType] = lit->second;
+            auto refType = cir::RefType::get(b.getContext(), elemType);
+            return b.create<cir::AddrOfOp>(loc, refType, addr);
+          }
+        }
+        llvm::errs() << "error: can only take address of local variables\n";
+        return {};
+      }
+      // Dereference: *p → cir.deref (!cir.ref<T> → T)
+      if (e.op == Tag::star) {
+        auto operand = emitExpr(*e.rhs, resultType);
+        auto refType = llvm::dyn_cast<cir::RefType>(operand.getType());
+        if (refType) {
+          return b.create<cir::DerefOp>(loc, refType.getPointeeType(), operand);
+        }
+        llvm::errs() << "error: dereference of non-reference type\n";
+        return {};
+      }
       auto operand = emitExpr(*e.rhs, resultType);
       if (e.op == Tag::minus)
         return b.create<cir::NegOp>(loc, resultType, operand);
       if (e.op == Tag::tilde)
         return b.create<cir::BitNotOp>(loc, resultType, operand);
       if (e.op == Tag::bang) {
-        // Logical NOT: xor with 1 (for booleans)
         auto one = b.create<cir::ConstantOp>(loc, resultType,
             b.getIntegerAttr(resultType, 1));
         return b.create<cir::BitXorOp>(loc, resultType, operand, one);

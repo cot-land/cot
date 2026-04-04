@@ -46,6 +46,29 @@ struct LoadOpLowering : public OpConversionPattern<cir::LoadOp> {
   }
 };
 
+/// cir.addr_of → identity (both !cir.ptr and !cir.ref<T> lower to !llvm.ptr)
+struct AddrOfOpLowering : public OpConversionPattern<cir::AddrOfOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::AddrOfOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOp(op, adaptor.getAddr());
+    return success();
+  }
+};
+
+/// cir.deref → llvm.load (type-safe load through !cir.ref<T>)
+struct DerefOpLowering : public OpConversionPattern<cir::DerefOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::DerefOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    auto resultType = getTypeConverter()->convertType(op.getType());
+    if (!resultType)
+      return rewriter.notifyMatchFailure(op, "type conversion failed");
+    rewriter.replaceOpWithNewOp<LLVM::LoadOp>(op, resultType, adaptor.getRef());
+    return success();
+  }
+};
+
 /// cir.field_val → llvm.extractvalue
 /// Reference: FIR ExtractValueOpConversion
 struct FieldValOpLowering : public OpConversionPattern<cir::FieldValOp> {
@@ -152,6 +175,7 @@ void cot::populateMemoryPatterns(
     RewritePatternSet &patterns) {
   MLIRContext *ctx = patterns.getContext();
   patterns.add<AllocaOpLowering, StoreOpLowering, LoadOpLowering,
+               AddrOfOpLowering, DerefOpLowering,
                FieldValOpLowering, FieldPtrOpLowering,
                StructInitOpLowering,
                ArrayInitOpLowering, ElemValOpLowering, ElemPtrOpLowering>(

@@ -192,6 +192,32 @@ SuccessorOperands CondBrOp::getSuccessorOperands(unsigned index) {
 }
 
 //===----------------------------------------------------------------------===//
+// cir.addr_of — verifier
+//===----------------------------------------------------------------------===//
+
+LogicalResult AddrOfOp::verify() {
+  if (!llvm::isa<cir::PointerType>(getAddr().getType()))
+    return emitOpError("input must be !cir.ptr");
+  if (!llvm::isa<cir::RefType>(getResult().getType()))
+    return emitOpError("result must be !cir.ref<T>");
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// cir.deref — verifier
+//===----------------------------------------------------------------------===//
+
+LogicalResult DerefOp::verify() {
+  auto refType = llvm::dyn_cast<cir::RefType>(getRef().getType());
+  if (!refType)
+    return emitOpError("input must be !cir.ref<T>");
+  if (getResult().getType() != refType.getPointeeType())
+    return emitOpError("result type must match ref pointee type: expected ")
+        << refType.getPointeeType() << ", got " << getResult().getType();
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // cir.struct_init — custom print/parse + verifier
 // Reference: FIR fir.insert_value — aggregate construction from fields
 //===----------------------------------------------------------------------===//
