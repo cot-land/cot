@@ -475,4 +475,30 @@ def CIR_TrapOp : CIR_Op<"trap", [Terminator]> {
   let assemblyFormat = "attr-dict";
 }
 
+//===----------------------------------------------------------------------===//
+// String/Slice operations
+// Reference: Zig slice fat pointer, FIR fir.boxchar, llvm.mlir.global
+//===----------------------------------------------------------------------===//
+
+def CIR_StringConstantOp : CIR_Op<"string_constant", [Pure]> {
+  let summary = "string literal → slice<i8> constant";
+  let description = [{
+    Materializes a string literal as a global constant array and returns
+    a !cir.slice<i8> fat pointer {ptr, len}.
+
+    Lowers to: llvm.mlir.global + llvm.mlir.addressof + undef/insertvalue.
+
+    Reference: Zig string literals become []const u8 slices. FIR boxchar
+    wraps character data with a descriptor.
+
+    Example:
+      %s = cir.string_constant "hello" : !cir.slice<i8>
+  }];
+
+  let arguments = (ins StrAttr:$value);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$value attr-dict `:` type($result)";
+  let hasVerifier = 1;
+}
+
 #endif // CIR_OPS

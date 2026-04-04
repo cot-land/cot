@@ -55,6 +55,15 @@ struct CIRToLLVMPass
       return LLVM::LLVMArrayType::get(
           tc.convertType(type.getElementType()), type.getSize());
     });
+    // !cir.slice<T> → !llvm.struct<(!llvm.ptr, i64)>
+    // Fat pointer: {pointer to data, length}
+    // Reference: Zig []T, FIR fir.boxchar
+    tc.addConversion([](cir::SliceType type) -> mlir::Type {
+      auto ctx = type.getContext();
+      auto ptrType = LLVM::LLVMPointerType::get(ctx);
+      auto lenType = IntegerType::get(ctx, 64);
+      return LLVM::LLVMStructType::getLiteral(ctx, {ptrType, lenType});
+    });
 
     RewritePatternSet patterns(&getContext());
     cot::populateCIRToLLVMConversionPatterns(tc, patterns);

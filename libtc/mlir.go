@@ -4,8 +4,8 @@ package main
 // Reference: ~/claude/references/llvm-project/mlir/include/mlir-c/IR.h
 
 /*
-#cgo CFLAGS: -I/opt/homebrew/Cellar/llvm@20/20.1.8/include -I../libcir/include -I../libcir/c-api -I../libcir/build/include
-#cgo LDFLAGS: -L../libcir/build -lCIR -L/opt/homebrew/Cellar/llvm@20/20.1.8/lib -lMLIRCAPIIR -lMLIRIR -lMLIRSupport -lMLIRDialect -lMLIRBytecodeWriter -lMLIRBytecodeReader -lMLIRBytecodeOpInterface -lMLIRPass -lMLIRAsmParser -lMLIRParser -lMLIRFuncDialect -lMLIRCastInterfaces -lLLVMSupport -lLLVMDemangle -lc++ -lz -lcurses
+#cgo CFLAGS: -I/opt/homebrew/Cellar/llvm@20/20.1.8/include -I../libcir/include -I../libcir/c-api -I../build/libcir/include
+#cgo LDFLAGS: -L../build/libcir -lCIR -L/opt/homebrew/Cellar/llvm@20/20.1.8/lib -lMLIRCAPIIR -lMLIRIR -lMLIRSupport -lMLIRDialect -lMLIRBytecodeWriter -lMLIRBytecodeReader -lMLIRBytecodeOpInterface -lMLIRPass -lMLIRAsmParser -lMLIRParser -lMLIRFuncDialect -lMLIRCastInterfaces -lLLVMSupport -lLLVMDemangle -lc++ -lz -lcurses
 
 #include <stdlib.h>
 #include <string.h>

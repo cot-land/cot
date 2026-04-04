@@ -1,26 +1,20 @@
-cmake_minimum_required(VERSION 3.20.0)
-project(libcir LANGUAGES CXX C)
+#===----------------------------------------------------------------------===#
+# libcir — CIR MLIR dialect (TableGen + static library)
+#
+# Produces: libCIR.a
+# Exports:  CIR target (with transitive MLIR deps)
+# Install:  lib/libCIR.a, include/CIR/*.h, include/CIR/*.inc
+#
+# Reference: Flang FIR dialect CMakeLists.txt
+#===----------------------------------------------------------------------===#
 
-set(CMAKE_CXX_STANDARD 17 CACHE STRING "")
+# TableGen include path — so CIRTypes.td can find CIR/CIRDialect.td
+set(LLVM_TABLEGEN_FLAGS "-I${CMAKE_CURRENT_SOURCE_DIR}/include")
 
-find_package(MLIR REQUIRED CONFIG)
+# Ensure output directory exists for generated .inc files
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/include/CIR")
 
-list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
-list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
-
-include(TableGen)
-include(AddLLVM)
-include(AddMLIR)
-include(HandleLLVMOptions)
-
-include_directories(${LLVM_INCLUDE_DIRS})
-include_directories(${MLIR_INCLUDE_DIRS})
-include_directories(${PROJECT_SOURCE_DIR}/include)
-include_directories(${PROJECT_BINARY_DIR}/include)
-
-add_definitions(${LLVM_DEFINITIONS})
-
-# Generate dialect + op declarations/definitions from TableGen
+# TableGen — generate dialect, type, and op declarations from .td files
 set(LLVM_TARGET_DEFINITIONS include/CIR/CIRDialect.td)
 mlir_tablegen(include/CIR/CIRDialect.h.inc -gen-dialect-decls)
 mlir_tablegen(include/CIR/CIRDialect.cpp.inc -gen-dialect-defs)
@@ -38,25 +32,51 @@ mlir_tablegen(include/CIR/CIREnums.h.inc -gen-enum-decls)
 mlir_tablegen(include/CIR/CIREnums.cpp.inc -gen-enum-defs)
 add_public_tablegen_target(CIROpsIncGen)
 
-# libcir static library
+# Static library
 add_library(CIR STATIC
   lib/CIRDialect.cpp
   c-api/CIRCApi.cpp
 )
 
-include_directories(${PROJECT_SOURCE_DIR}/c-api)
-
-target_include_directories(CIR PUBLIC
-  ${PROJECT_SOURCE_DIR}/include
-  ${PROJECT_BINARY_DIR}/include
-)
-
 add_dependencies(CIR CIRDialectIncGen CIRTypesIncGen CIROpsIncGen)
 
+# Include directories — use generator expressions for build/install tree
+target_include_directories(CIR PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/c-api>
+  $<INSTALL_INTERFACE:include>
+)
+
+# MLIR dependencies (PUBLIC so downstream targets inherit them)
 target_link_libraries(CIR PUBLIC
   MLIRIR
   MLIRSupport
   MLIRFuncDialect
   MLIRCastInterfaces
   MLIRControlFlowInterfaces
+  MLIRSideEffectInterfaces
+  MLIRInferTypeOpInterface
 )
+
+#===----------------------------------------------------------------------===#
+# Install
+#===----------------------------------------------------------------------===#
+
+install(TARGETS CIR EXPORT CIRTargets
+  ARCHIVE DESTINATION lib)
+
+# Source headers
+install(DIRECTORY include/CIR
+  DESTINATION include
+  FILES_MATCHING PATTERN "*.h" PATTERN "*.td")
+
+# Generated .inc headers
+install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/include/CIR
+  DESTINATION include
+  FILES_MATCHING PATTERN "*.inc")
+
+# C API header
+install(FILES c-api/CIRCApi.h
+  DESTINATION include/cir-c
+  RENAME CIR.h)

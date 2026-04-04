@@ -103,7 +103,7 @@ const Gen = struct {
                     return s.mlir_type;
             }
         }
-        // Pointer type: *T → !cir.ref<T>
+        // Pointer type: *T → !cir.ref<T>, []T → !cir.slice<T>
         if (tag == .ptr_type or tag == .ptr_type_aligned or
             tag == .ptr_type_sentinel or tag == .ptr_type_bit_range)
         {
@@ -120,6 +120,16 @@ const Gen = struct {
                 else => unreachable,
             };
             const pointee_name = self.resolveTypeName(pointee_node);
+            // Detect slice types: []T vs *T
+            // The main token for [] is l_bracket, for * it's asterisk
+            const main_tok = self.tree.nodeMainToken(node);
+            const tok_tag = self.tree.tokens.items(.tag)[main_tok];
+            if (tok_tag == .l_bracket) {
+                // Slice type: []T → !cir.slice<T>
+                var buf2: [64]u8 = undefined;
+                const slice_str = std.fmt.bufPrint(&buf2, "!cir.slice<{s}>", .{pointee_name}) catch return self.i32Type();
+                return self.b.parseType(slice_str);
+            }
             var buf2: [64]u8 = undefined;
             const ref_str = std.fmt.bufPrint(&buf2, "!cir.ref<{s}>", .{pointee_name}) catch return self.i32Type();
             return self.b.parseType(ref_str);
@@ -668,10 +678,29 @@ const Gen = struct {
             .builtin_call_two, .builtin_call_two_comma => blk2: {
                 break :blk2 self.mapBuiltinCall(block, node, result_type);
             },
+            // String literal: "hello" → cir.string_constant
+            .string_literal => blk2: {
+                break :blk2 self.mapStringLit(block, node);
+            },
             else => self.b.emit(block, "cir.constant", &.{result_type}, &.{}, &.{
                 self.b.attr("value", self.b.intAttr(result_type, 0)),
             }),
         };
+    }
+
+    fn mapStringLit(self: *Gen, block: mlir.Block, node: Node.Index) mlir.Value {
+        const tok = self.tree.nodeMainToken(node);
+        const raw = self.tree.tokenSlice(tok);
+        // Strip surrounding quotes: "hello" → hello
+        const str_content = if (raw.len >= 2 and raw[0] == '"' and raw[raw.len - 1] == '"')
+            raw[1 .. raw.len - 1]
+        else
+            raw;
+        // Build !cir.slice<i8> type
+        const slice_type = self.b.parseType("!cir.slice<i8>");
+        return self.b.emit(block, "cir.string_constant", &.{slice_type}, &.{}, &.{
+            self.b.attr("value", self.b.strAttr(str_content)),
+        });
     }
 
     fn mapNumberLit(self: *Gen, block: mlir.Block, node: Node.Index, result_type: mlir.Type) mlir.Value {

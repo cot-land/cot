@@ -1,74 +1,77 @@
-cmake_minimum_required(VERSION 3.20.0)
-project(cot-driver LANGUAGES CXX C)
-
-set(CMAKE_CXX_STANDARD 17 CACHE STRING "")
-
-find_package(MLIR REQUIRED CONFIG)
-
-list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
-list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
-
-include(TableGen)
-include(AddLLVM)
-include(AddMLIR)
-include(HandleLLVMOptions)
-
-include_directories(${LLVM_INCLUDE_DIRS})
-include_directories(${MLIR_INCLUDE_DIRS})
-include_directories(${PROJECT_SOURCE_DIR}/../libcir/include)
-include_directories(${PROJECT_SOURCE_DIR}/../libcir/build/include)
-include_directories(${PROJECT_SOURCE_DIR}/../libcot/include)
-include_directories(${PROJECT_SOURCE_DIR}/../libac)
-
-link_directories(${LLVM_BUILD_LIBRARY_DIR})
-add_definitions(${LLVM_DEFINITIONS})
+#===----------------------------------------------------------------------===#
+# cot — CLI driver executable
+#
+# Links: COT (passes), CIR (dialect), libac (C++ sources compiled in),
+#        libzc (Zig frontend .a), libtc (TypeScript frontend .a)
+#
+# libzc and libtc are pre-built by Zig/Go toolchains (not CMake).
+# The Makefile ensures they are built before this target.
+#===----------------------------------------------------------------------===#
 
 add_executable(cot
   main.cpp
+  # libac sources compiled directly into the driver
   ../libac/scanner.cpp
   ../libac/parser.cpp
   ../libac/codegen.cpp
 )
 
+# libac headers
+target_include_directories(cot PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../libac
+)
+
+# COT and CIR (CMake targets — transitive deps handled automatically)
 target_link_libraries(cot PRIVATE
-  # libtc — TypeScript frontend (Go, C ABI)
-  ${PROJECT_SOURCE_DIR}/../libtc/libtc.a
+  COT
+  CIR
+)
 
-  # libzc — Zig frontend (C ABI)
-  ${PROJECT_SOURCE_DIR}/../libzc/zig-out/lib/libzc.a
+# External frontends (pre-built archives, non-CMake)
+# libtc — TypeScript frontend (Go, C ABI)
+target_link_libraries(cot PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../libtc/libtc.a
+)
+# libzc — Zig frontend (C ABI)
+target_link_libraries(cot PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../libzc/zig-out/lib/libzc.a
+)
 
-  # libcot — compiler passes
-  ${PROJECT_SOURCE_DIR}/../libcot/build/libCOT.a
-
-  # libcir
-  ${PROJECT_SOURCE_DIR}/../libcir/build/libCIR.a
-
-  # MLIR core
-  MLIRIR MLIRSupport MLIRDialect MLIRPass MLIRFuncDialect
-  MLIRParser MLIRAsmParser MLIRBytecodeReader MLIRBytecodeWriter MLIRBytecodeOpInterface
-
-  # MLIR LLVM lowering
-  MLIRLLVMDialect MLIRLLVMCommonConversion MLIRFuncToLLVM MLIRArithToLLVM
-  MLIRTargetLLVMIRExport MLIRBuiltinToLLVMIRTranslation MLIRLLVMToLLVMIRTranslation
-
-  # MLIR C API
+# MLIR libraries needed by the driver but not transitively from COT
+target_link_libraries(cot PRIVATE
+  MLIRDialect
+  MLIRBytecodeReader
+  MLIRBytecodeWriter
+  MLIRBytecodeOpInterface
+  MLIRArithToLLVM
   MLIRCAPIIR
+)
 
-  # LLVM core
-  LLVMCore LLVMSupport LLVMDemangle LLVMTarget LLVMMCParser LLVMMC LLVMTargetParser
-
-  # LLVM ARM64
-  LLVMAArch64CodeGen LLVMAArch64Desc LLVMAArch64Info LLVMAArch64AsmParser LLVMAArch64Utils
-
-  # LLVM codegen
+# LLVM backend libraries
+target_link_libraries(cot PRIVATE
+  LLVMCore LLVMSupport LLVMDemangle LLVMTarget LLVMMCParser LLVMMC
+  LLVMTargetParser
+  # ARM64
+  LLVMAArch64CodeGen LLVMAArch64Desc LLVMAArch64Info
+  LLVMAArch64AsmParser LLVMAArch64Utils
+  # Codegen pipeline
   LLVMCodeGen LLVMCodeGenTypes LLVMScalarOpts LLVMAnalysis LLVMTransformUtils
-  LLVMInstCombine LLVMipo LLVMBitWriter LLVMObjCARCOpts LLVMAggressiveInstCombine
-  LLVMCoroutines LLVMVectorize LLVMGlobalISel LLVMSelectionDAG LLVMAsmPrinter
-  LLVMCFGuard LLVMBinaryFormat LLVMObject LLVMIRReader LLVMBitReader LLVMAsmParser
-  LLVMProfileData LLVMInstrumentation LLVMPasses LLVMRemarks LLVMBitstreamReader
+  LLVMInstCombine LLVMipo LLVMBitWriter LLVMObjCARCOpts
+  LLVMAggressiveInstCombine LLVMCoroutines LLVMVectorize LLVMGlobalISel
+  LLVMSelectionDAG LLVMAsmPrinter LLVMCFGuard LLVMBinaryFormat LLVMObject
+  LLVMIRReader LLVMBitReader LLVMAsmParser LLVMProfileData
+  LLVMInstrumentation LLVMPasses LLVMRemarks LLVMBitstreamReader
   LLVMDebugInfoDWARF LLVMDebugInfoCodeView LLVMTextAPI
 )
 
+# Platform libraries
 if(APPLE)
-  target_link_libraries(cot PRIVATE "-framework CoreFoundation" "-framework Security" "-lz" "-lcurses" "-lresolv" "-lpthread")
+  target_link_libraries(cot PRIVATE
+    "-framework CoreFoundation"
+    "-framework Security"
+    "-lz" "-lcurses" "-lresolv" "-lpthread"
+  )
 endif()
+
+# Install
+install(TARGETS cot RUNTIME DESTINATION bin)

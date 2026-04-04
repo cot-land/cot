@@ -132,6 +132,38 @@ class Parser {
       return e;
     }
 
+    if (tok.tag == Tag::string_literal) {
+      advance();
+      auto e = std::make_unique<Expr>();
+      e->kind = ExprKind::StringLit;
+      e->pos = tok.start;
+      // Extract string contents (strip quotes, process escapes)
+      auto text = tokenText(tok);
+      // Remove surrounding quotes
+      if (text.size() >= 2 && text.front() == '"' && text.back() == '"')
+        text = text.substr(1, text.size() - 2);
+      // Process escape sequences
+      std::string result;
+      for (size_t i = 0; i < text.size(); i++) {
+        if (text[i] == '\\' && i + 1 < text.size()) {
+          switch (text[i + 1]) {
+            case 'n': result += '\n'; break;
+            case 't': result += '\t'; break;
+            case 'r': result += '\r'; break;
+            case '\\': result += '\\'; break;
+            case '"': result += '"'; break;
+            case '0': result += '\0'; break;
+            default: result += text[i + 1]; break;
+          }
+          i++;
+        } else {
+          result += text[i];
+        }
+      }
+      e->strVal = std::move(result);
+      return e;
+    }
+
     if (tok.tag == Tag::kw_true || tok.tag == Tag::kw_false) {
       advance();
       auto e = std::make_unique<Expr>();

@@ -404,6 +404,22 @@ LogicalResult ElemPtrOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// cir.string_constant — verifier
+//===----------------------------------------------------------------------===//
+
+LogicalResult StringConstantOp::verify() {
+  auto sliceType = llvm::dyn_cast<cir::SliceType>(getResult().getType());
+  if (!sliceType)
+    return emitOpError("result must be !cir.slice<T>");
+  // String constants produce slice<i8>
+  auto elemType = sliceType.getElementType();
+  if (!elemType.isInteger(8))
+    return emitOpError("string constant must produce !cir.slice<i8>, got ")
+        << getResult().getType();
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // Cast op verifiers — width constraints per Arith dialect pattern
 // Reference: mlir/lib/Dialect/Arith/IR/ArithOps.cpp verifyExtOp/verifyTruncateOp
 //===----------------------------------------------------------------------===//

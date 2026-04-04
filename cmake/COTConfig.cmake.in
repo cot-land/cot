@@ -1,0 +1,21 @@
+@PACKAGE_INIT@
+
+# COTConfig.cmake — find_package(COT) entry point
+#
+# Provides:
+#   COT::COT — COT compiler passes (Sema, CIR→LLVM lowering, pipeline)
+#   COT_INCLUDE_DIRS — path to COT headers
+#
+# Usage:
+#   find_package(COT REQUIRED CONFIG)
+#   target_link_libraries(my_compiler COT::COT)
+
+# COT requires CIR and MLIR
+find_package(CIR REQUIRED CONFIG)
+find_package(MLIR REQUIRED CONFIG)
+
+set(COT_INCLUDE_DIRS "${PACKAGE_PREFIX_DIR}/include")
+
+if(NOT TARGET COT::COT)
+  include("${CMAKE_CURRENT_LIST_DIR}/COTTargets.cmake")
+endif()

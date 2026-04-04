@@ -1,0 +1,29 @@
+// RUN: %cot emit-llvm %s | %FileCheck %s
+
+// Feature #035-036: String constant lowering
+// cir.string_constant → llvm.mlir.global + llvm.mlir.addressof + struct init
+
+fn get_hello() -> string {
+    return "hello"
+}
+
+fn get_world() -> string {
+    return "world"
+}
+
+// CHECK-DAG: llvm.mlir.global internal constant @".str.{{[0-9]+}}"("hello")
+// CHECK-DAG: llvm.mlir.global internal constant @".str.{{[0-9]+}}"("world")
+
+// CHECK-LABEL: llvm.func @get_hello
+// CHECK: llvm.mlir.addressof @".str.{{[0-9]+}}" : !llvm.ptr
+// CHECK: llvm.mlir.constant(5 : i64)
+// CHECK: llvm.mlir.undef : !llvm.struct<(ptr, i64)>
+// CHECK: llvm.insertvalue
+// CHECK-SAME: [0]
+// CHECK: llvm.insertvalue
+// CHECK-SAME: [1]
+// CHECK: llvm.return
+
+// CHECK-LABEL: llvm.func @get_world
+// CHECK: llvm.mlir.addressof @".str.{{[0-9]+}}" : !llvm.ptr
+// CHECK: llvm.mlir.constant(5 : i64)

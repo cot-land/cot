@@ -1,34 +1,20 @@
-cmake_minimum_required(VERSION 3.20.0)
-project(libcot LANGUAGES CXX C)
+#===----------------------------------------------------------------------===#
+# libcot — COT compiler passes (Sema, CIR→LLVM lowering, pipeline)
+#
+# Produces: libCOT.a
+# Exports:  COT target (depends on CIR + MLIR)
+# Install:  lib/libCOT.a, include/COT/*.h
+#
+# Reference: Flang FIRTransforms/FIRCodeGen CMakeLists.txt
+#===----------------------------------------------------------------------===#
 
-set(CMAKE_CXX_STANDARD 17 CACHE STRING "")
-
-find_package(MLIR REQUIRED CONFIG)
-
-list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
-list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
-
-include(AddLLVM)
-include(AddMLIR)
-include(HandleLLVMOptions)
-
-include_directories(${LLVM_INCLUDE_DIRS})
-include_directories(${MLIR_INCLUDE_DIRS})
-include_directories(${PROJECT_SOURCE_DIR}/include)
-
-# libcir headers (CIROps.h, generated .inc files)
-include_directories(${PROJECT_SOURCE_DIR}/../libcir/include)
-include_directories(${PROJECT_SOURCE_DIR}/../libcir/build/include)
-
-# libac headers (scanner.h, parser.h, codegen.h — needed by Compiler.cpp)
-include_directories(${PROJECT_SOURCE_DIR}/../libac)
-
-add_definitions(${LLVM_DEFINITIONS})
-
-# libcot static library — compiler passes + compiler library
 add_library(COT STATIC
   # Compiler-as-library API
   lib/Compiler.cpp
+  # Configurable pass pipeline with extension points
+  lib/Pipeline.cpp
+  # C API
+  c-api/COTCApi.cpp
   # CIR → CIR transformation passes
   lib/Transforms/SemanticAnalysis.cpp
   # CIR → LLVM lowering
@@ -39,11 +25,21 @@ add_library(COT STATIC
   lib/ControlFlowPatterns.cpp
 )
 
+# Include directories
 target_include_directories(COT PUBLIC
-  ${PROJECT_SOURCE_DIR}/include
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/c-api>
+  $<INSTALL_INTERFACE:include>
 )
 
+# libac headers needed by Compiler.cpp (frontend dispatch)
+target_include_directories(COT PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../libac
+)
+
+# CIR dialect (CMake target — transitive includes propagate)
 target_link_libraries(COT PUBLIC
+  CIR
   MLIRIR
   MLIRSupport
   MLIRPass
@@ -57,3 +53,19 @@ target_link_libraries(COT PUBLIC
   MLIRBuiltinToLLVMIRTranslation
   MLIRLLVMToLLVMIRTranslation
 )
+
+#===----------------------------------------------------------------------===#
+# Install
+#===----------------------------------------------------------------------===#
+
+install(TARGETS COT EXPORT COTTargets
+  ARCHIVE DESTINATION lib)
+
+install(DIRECTORY include/COT
+  DESTINATION include
+  FILES_MATCHING PATTERN "*.h")
+
+# C API header
+install(FILES c-api/COTCApi.h
+  DESTINATION include/cot-c
+  RENAME COT.h)

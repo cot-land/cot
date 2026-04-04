@@ -1,0 +1,27 @@
+// RUN: %cot emit-cir %s | %FileCheck %s
+
+// Feature #035-036: String type + literal — ac syntax
+
+fn get_hello() -> string {
+    return "hello"
+}
+
+fn get_empty() -> string {
+    return ""
+}
+
+fn get_with_spaces() -> string {
+    return "hello world"
+}
+
+// CHECK-LABEL: func.func @get_hello
+// CHECK: cir.string_constant "hello" : !cir.slice<i8>
+// CHECK: return
+
+// CHECK-LABEL: func.func @get_empty
+// CHECK: cir.string_constant "" : !cir.slice<i8>
+// CHECK: return
+
+// CHECK-LABEL: func.func @get_with_spaces
+// CHECK: cir.string_constant "hello world" : !cir.slice<i8>
+// CHECK: return

@@ -86,4 +86,25 @@ def CIR_ArrayType : CIR_Type<"Array", "array"> {
   let hasCustomAssemblyFormat = 1;
 }
 
+def CIR_SliceType : CIR_Type<"Slice", "slice"> {
+  let summary = "fat pointer slice type ({pointer, length})";
+  let description = [{
+    A slice is a {pointer, length} pair referencing a contiguous region of
+    elements of type T. This is universal across languages:
+    - Zig: []T = {ptr: [*]T, len: usize}
+    - Rust: &[T] = {ptr: *const T, len: usize}
+    - Go: []T = {ptr, len, cap} (CIR omits cap — that's a growable array)
+
+    string = !cir.slice<i8>. No separate string type.
+
+    Lowers to !llvm.struct<(!llvm.ptr, i64)> — zero-cost at runtime.
+
+    Reference: Zig slice fat pointer, FIR fir.boxchar (string descriptor).
+    Syntax: !cir.slice<i32>, !cir.slice<i8>
+  }];
+
+  let parameters = (ins "mlir::Type":$elementType);
+  let assemblyFormat = "`<` $elementType `>`";
+}
+
 #endif // CIR_TYPES

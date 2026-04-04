@@ -497,6 +497,13 @@ func (g *Gen) mapExpr(block MlirBlock, node *ast.Node, resultType MlirType) Mlir
 		boolType := g.b.IntType(1)
 		return g.b.Emit(block, "cir.constant", []MlirType{boolType}, nil,
 			[]MlirNamedAttr{g.b.NamedAttr("value", g.b.IntAttr(boolType, 0))})
+	case ast.KindStringLiteral:
+		lit := node.AsStringLiteral()
+		// Strip surrounding quotes from text
+		text := lit.Text
+		sliceType := g.b.ParseType("!cir.slice<i8>")
+		return g.b.Emit(block, "cir.string_constant", []MlirType{sliceType}, nil,
+			[]MlirNamedAttr{g.b.NamedAttr("value", g.b.StrAttr(text))})
 	default:
 		return g.b.Emit(block, "cir.constant", []MlirType{resultType}, nil,
 			[]MlirNamedAttr{g.b.NamedAttr("value", g.b.IntAttr(resultType, 0))})
@@ -754,6 +761,8 @@ func (g *Gen) resolveType(node *ast.Node) MlirType {
 		return g.b.IntType(1)
 	case ast.KindVoidKeyword:
 		return g.b.IntType(0)
+	case ast.KindStringKeyword:
+		return g.b.ParseType("!cir.slice<i8>")
 	case ast.KindTypeReference:
 		tr := node.AsTypeReference()
 		if tr.TypeName != nil && tr.TypeName.Kind == ast.KindIdentifier {
@@ -776,6 +785,8 @@ func (g *Gen) resolveTypeName(node *ast.Node) string {
 		return "i1"
 	case ast.KindVoidKeyword:
 		return "i0"
+	case ast.KindStringKeyword:
+		return "!cir.slice<i8>"
 	}
 	return "i32"
 }

@@ -31,7 +31,7 @@ struct Param {
 };
 
 // Expression kinds
-enum class ExprKind { IntLit, FloatLit, BoolLit, Ident, BinOp, UnaryOp, Call, IfExpr, Cast, StructInit, FieldAccess, MethodCall, ArrayLit, IndexAccess };
+enum class ExprKind { IntLit, FloatLit, BoolLit, StringLit, Ident, BinOp, UnaryOp, Call, IfExpr, Cast, StructInit, FieldAccess, MethodCall, ArrayLit, IndexAccess };
 
 struct Expr {
   ExprKind kind;
@@ -40,6 +40,7 @@ struct Expr {
   int64_t intVal = 0;            // IntLit
   double floatVal = 0.0;         // FloatLit
   bool boolVal = false;           // BoolLit
+  std::string strVal;             // StringLit: contents (without quotes)
   std::string_view name;          // Ident, Call (callee)
   Tag op = Tag::invalid;          // BinOp, UnaryOp
   ExprPtr lhs, rhs;              // BinOp (lhs, rhs), UnaryOp (rhs only)

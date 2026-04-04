@@ -32,7 +32,7 @@ pub fn build(b: *std.Build) void {
 
 fn linkMlir(module: *std.Build.Module) void {
     // libcir (CIR dialect + C API)
-    module.addObjectFile(.{ .cwd_relative = "../libcir/build/libCIR.a" });
+    module.addObjectFile(.{ .cwd_relative = "../build/libcir/libCIR.a" });
 
     // MLIR libraries
     const p = "/opt/homebrew/Cellar/llvm@20/20.1.8/lib/";

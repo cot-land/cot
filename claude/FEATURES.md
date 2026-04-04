@@ -90,8 +90,8 @@ Status: `-` not started, `~` in progress, `✓` done.
 | 032 | Address-of | `cir.addr_of` | `&x` | `&x` | Identity (ptr→ref) | ✓ |
 | 033 | Dereference | `cir.deref` | `*p` | `p.*` | `llvm.load` | ✓ |
 | 034 | Pointer to struct field | auto-deref + `cir.field_ptr` | `p.x` (auto-deref) | `p.x` (auto-deref) | deref + extractvalue | ✓ |
-| 035 | String type | `cir.slice<u8>` | `string` | `[]const u8` | `{ptr, len}` struct | - |
-| 036 | String literal | `cir.constant` (global) | `"hello"` | `"hello"` | Global constant + slice | - |
+| 035 | String type | `!cir.slice<i8>` | `string` | `[]const u8` | `!llvm.struct<(ptr, i64)>` | ✓ |
+| 036 | String literal | `cir.string_constant` | `"hello"` | `"hello"` | `llvm.mlir.global` + addressof + struct | ✓ |
 | 037 | Slice type | `cir.slice_type` | `[]i32` | `[]i32` | `{ptr, len}` struct | - |
 | 038 | Slice indexing | `cir.slice_elem` | `s[i]` | `s[i]` | GEP on ptr field | - |
 | 039 | Slice from array | `cir.array_to_slice` | `arr[1..3]` | `arr[1..3]` | Build `{ptr+off, len}` | - |

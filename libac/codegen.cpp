@@ -62,6 +62,9 @@ class CodeGen {
     // Float types
     if (t.name == "f32") return b.getF32Type();
     if (t.name == "f64") return b.getF64Type();
+    // String type → !cir.slice<i8>
+    if (t.name == "string")
+      return cir::SliceType::get(b.getContext(), b.getIntegerType(8));
     // Struct types
     auto sit = structTypes.find(t.name);
     if (sit != structTypes.end()) return sit->second;
@@ -78,6 +81,12 @@ class CodeGen {
     case ExprKind::BoolLit:
       return b.create<cir::ConstantOp>(loc, resultType,
           b.getIntegerAttr(resultType, e.boolVal ? 1 : 0));
+
+    case ExprKind::StringLit: {
+      auto sliceType = cir::SliceType::get(b.getContext(), b.getIntegerType(8));
+      return b.create<cir::StringConstantOp>(loc, sliceType,
+          b.getStringAttr(e.strVal));
+    }
 
     case ExprKind::Ident: {
       // Check locals first (let bindings — stored as addresses, need load)

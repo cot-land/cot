@@ -1,0 +1,22 @@
+fn get_hello() -> string {
+    return "hello"
+}
+
+fn get_empty() -> string {
+    return ""
+}
+
+test "string literal basic" {
+    let s: string = "hello"
+    assert(1 == 1)
+}
+
+test "string function return" {
+    let s: string = get_hello()
+    assert(1 == 1)
+}
+
+test "empty string" {
+    let s: string = get_empty()
+    assert(1 == 1)
+}

@@ -146,6 +146,66 @@ struct ElemPtrOpLowering : public OpConversionPattern<cir::ElemPtrOp> {
   }
 };
 
+/// cir.string_constant → llvm.mlir.global + llvm.mlir.addressof + struct init
+/// Reference: Zig string literals → []const u8, FIR fir.boxchar lowering
+struct StringConstantOpLowering
+    : public OpConversionPattern<cir::StringConstantOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::StringConstantOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto module = op->getParentOfType<ModuleOp>();
+    if (!module)
+      return rewriter.notifyMatchFailure(op, "no parent module");
+
+    llvm::StringRef strValue = op.getValue();
+    auto strLen = static_cast<int64_t>(strValue.size());
+
+    // Create a unique global name for this string constant
+    // Use a counter based on existing globals to avoid collisions
+    unsigned globalIndex = 0;
+    for (auto &op2 : module.getBody()->getOperations()) {
+      if (llvm::isa<LLVM::GlobalOp>(op2))
+        globalIndex++;
+    }
+    std::string globalName = ".str." + std::to_string(globalIndex);
+
+    // Create llvm.mlir.global constant @.str.N("hello")
+    auto i8Type = rewriter.getIntegerType(8);
+    auto arrayType = LLVM::LLVMArrayType::get(i8Type, strLen);
+
+    // Insert global at module level (before current function)
+    {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(module.getBody());
+      rewriter.create<LLVM::GlobalOp>(
+          loc, arrayType, /*isConstant=*/true,
+          LLVM::Linkage::Internal, globalName,
+          rewriter.getStringAttr(strValue));
+    } // guard restores insertion point
+
+    // %ptr = llvm.mlir.addressof @.str.N : !llvm.ptr
+    auto ptrType = LLVM::LLVMPointerType::get(op.getContext());
+    auto addr = rewriter.create<LLVM::AddressOfOp>(
+        loc, ptrType, globalName);
+
+    // %len = llvm.mlir.constant(N : i64)
+    auto i64Type = rewriter.getI64Type();
+    auto len = rewriter.create<LLVM::ConstantOp>(
+        loc, i64Type, rewriter.getI64IntegerAttr(strLen));
+
+    // Construct the fat pointer struct: {ptr, len}
+    auto sliceType = getTypeConverter()->convertType(op.getType());
+    if (!sliceType)
+      return rewriter.notifyMatchFailure(op, "type conversion failed");
+    Value result = rewriter.create<LLVM::UndefOp>(loc, sliceType);
+    result = rewriter.create<LLVM::InsertValueOp>(loc, result, addr, 0);
+    result = rewriter.create<LLVM::InsertValueOp>(loc, result, len, 1);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
 /// cir.struct_init → llvm.mlir.undef + llvm.insertvalue chain
 /// Reference: FIR UndefOpConversion + InsertValueOpConversion
 ///   ~/claude/references/flang-ref/flang/lib/Optimizer/CodeGen/CodeGen.cpp
@@ -177,7 +237,7 @@ void cot::populateMemoryPatterns(
   patterns.add<AllocaOpLowering, StoreOpLowering, LoadOpLowering,
                AddrOfOpLowering, DerefOpLowering,
                FieldValOpLowering, FieldPtrOpLowering,
-               StructInitOpLowering,
+               StructInitOpLowering, StringConstantOpLowering,
                ArrayInitOpLowering, ElemValOpLowering, ElemPtrOpLowering>(
       converter, ctx);
 }
