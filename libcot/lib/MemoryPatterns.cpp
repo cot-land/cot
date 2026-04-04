@@ -404,6 +404,102 @@ struct OptionalPayloadOpLowering
   }
 };
 
+/// cir.wrap_result → wrap T in E!T (success, error_code=0)
+/// undef struct + insertvalue(payload, [0]) + insertvalue(i16 0, [1])
+/// Reference: Zig wrap_errunion_payload AIR instruction
+struct WrapResultOpLowering
+    : public OpConversionPattern<cir::WrapResultOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::WrapResultOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto llvmType = getTypeConverter()->convertType(op.getType());
+    if (!llvmType)
+      return rewriter.notifyMatchFailure(op, "type conversion failed");
+    // {payload, error_code=0}
+    Value result = rewriter.create<LLVM::UndefOp>(loc, llvmType);
+    result = rewriter.create<LLVM::InsertValueOp>(
+        loc, result, adaptor.getInput(), 0);
+    auto zero = rewriter.create<LLVM::ConstantOp>(
+        loc, rewriter.getIntegerType(16),
+        rewriter.getIntegerAttr(rewriter.getIntegerType(16), 0));
+    result = rewriter.create<LLVM::InsertValueOp>(loc, result, zero, 1);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+/// cir.wrap_error → wrap error code in E!T (error, payload=undef)
+/// undef struct + insertvalue(error_code, [1])
+/// Reference: Zig wrap_errunion_err AIR instruction
+struct WrapErrorOpLowering
+    : public OpConversionPattern<cir::WrapErrorOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::WrapErrorOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto llvmType = getTypeConverter()->convertType(op.getType());
+    if (!llvmType)
+      return rewriter.notifyMatchFailure(op, "type conversion failed");
+    // {undef_payload, error_code}
+    Value result = rewriter.create<LLVM::UndefOp>(loc, llvmType);
+    result = rewriter.create<LLVM::InsertValueOp>(
+        loc, result, adaptor.getInput(), 1);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+/// cir.is_error → test error union for error
+/// extractvalue [1] (error code) + icmp ne i16, 0
+/// Reference: Zig is_err AIR instruction
+struct IsErrorOpLowering
+    : public OpConversionPattern<cir::IsErrorOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::IsErrorOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    // Extract error code (field [1])
+    auto errorCode = rewriter.create<LLVM::ExtractValueOp>(
+        loc, adaptor.getInput(), 1);
+    // Compare: error_code != 0
+    auto zero = rewriter.create<LLVM::ConstantOp>(
+        loc, rewriter.getIntegerType(16),
+        rewriter.getIntegerAttr(rewriter.getIntegerType(16), 0));
+    rewriter.replaceOpWithNewOp<LLVM::ICmpOp>(
+        op, LLVM::ICmpPredicate::ne, errorCode, zero);
+    return success();
+  }
+};
+
+/// cir.error_payload → extract payload from error union (unchecked)
+/// extractvalue [0]
+/// Reference: Zig unwrap_errunion_payload AIR instruction
+struct ErrorPayloadOpLowering
+    : public OpConversionPattern<cir::ErrorPayloadOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::ErrorPayloadOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<LLVM::ExtractValueOp>(
+        op, adaptor.getInput(), 0);
+    return success();
+  }
+};
+
+/// cir.error_code → extract error code from error union
+/// extractvalue [1]
+/// Reference: Zig unwrap_errunion_err AIR instruction
+struct ErrorCodeOpLowering
+    : public OpConversionPattern<cir::ErrorCodeOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::ErrorCodeOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<LLVM::ExtractValueOp>(
+        op, adaptor.getInput(), 1);
+    return success();
+  }
+};
+
 /// cir.struct_init → llvm.mlir.undef + llvm.insertvalue chain
 /// Reference: FIR UndefOpConversion + InsertValueOpConversion
 ///   ~/claude/references/flang-ref/flang/lib/Optimizer/CodeGen/CodeGen.cpp
@@ -440,6 +536,9 @@ void cot::populateMemoryPatterns(
                ArrayToSliceOpLowering,
                NoneOpLowering, WrapOptionalOpLowering,
                IsNonNullOpLowering, OptionalPayloadOpLowering,
+               WrapResultOpLowering, WrapErrorOpLowering,
+               IsErrorOpLowering, ErrorPayloadOpLowering,
+               ErrorCodeOpLowering,
                ArrayInitOpLowering, ElemValOpLowering, ElemPtrOpLowering>(
       converter, ctx);
 }

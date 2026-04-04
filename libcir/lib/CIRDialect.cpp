@@ -521,6 +521,62 @@ LogicalResult OptionalPayloadOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// Error union verifiers
+// Reference: Zig E!T — wrap_errunion_payload, wrap_errunion_err, is_err,
+//            unwrap_errunion_payload, unwrap_errunion_err
+//===----------------------------------------------------------------------===//
+
+LogicalResult WrapResultOp::verify() {
+  auto euType = llvm::dyn_cast<cir::ErrorUnionType>(getResult().getType());
+  if (!euType)
+    return emitOpError("result must be !cir.error_union<T>");
+  if (getInput().getType() != euType.getPayloadType())
+    return emitOpError("input type must match error union payload type");
+  return success();
+}
+
+LogicalResult WrapErrorOp::verify() {
+  auto euType = llvm::dyn_cast<cir::ErrorUnionType>(getResult().getType());
+  if (!euType)
+    return emitOpError("result must be !cir.error_union<T>");
+  if (!getInput().getType().isInteger(16))
+    return emitOpError("input must be i16 error code");
+  return success();
+}
+
+LogicalResult IsErrorOp::verify() {
+  if (!llvm::isa<cir::ErrorUnionType>(getInput().getType()))
+    return emitOpError("input must be !cir.error_union<T>");
+  return success();
+}
+
+LogicalResult ErrorPayloadOp::verify() {
+  auto euType = llvm::dyn_cast<cir::ErrorUnionType>(getInput().getType());
+  if (!euType)
+    return emitOpError("input must be !cir.error_union<T>");
+  if (getResult().getType() != euType.getPayloadType())
+    return emitOpError("result type must match error union payload type");
+  return success();
+}
+
+LogicalResult ErrorCodeOp::verify() {
+  if (!llvm::isa<cir::ErrorUnionType>(getInput().getType()))
+    return emitOpError("input must be !cir.error_union<T>");
+  if (!getResult().getType().isInteger(16))
+    return emitOpError("result must be i16");
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// cir.invoke — BranchOpInterface
+//===----------------------------------------------------------------------===//
+
+SuccessorOperands InvokeOp::getSuccessorOperands(unsigned index) {
+  assert(index < 2 && "invalid successor index");
+  return SuccessorOperands(MutableOperandRange(getOperation(), 0, 0));
+}
+
+//===----------------------------------------------------------------------===//
 // cir.array_to_slice — verifier
 //===----------------------------------------------------------------------===//
 

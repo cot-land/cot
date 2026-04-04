@@ -40,7 +40,11 @@ cot: libzc libtc
 	@cmake --build build --parallel
 
 # Tests
-test: test-lit test-gate test-inline test-build
+test: cot
+	@bin/lit test/lit/ -v
+	@./build/cot/cot test
+	@cd test && bash run_inline.sh ../build/cot/cot
+	@cd test && bash run.sh ../build/cot/cot
 
 test-lit: cot
 	@bin/lit test/lit/ -v

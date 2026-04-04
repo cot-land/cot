@@ -490,3 +490,101 @@ MlirValue cirBuildArrayToSlice(MlirBlock block, MlirLocation loc,
       TypeAttr::get(unwrap(arrayType)));
   return wrap(op.getResult());
 }
+
+//===----------------------------------------------------------------------===//
+// Error Union Type + Operations
+// Reference: Zig E!T — wrap_errunion_payload, wrap_errunion_err, is_err,
+//            unwrap_errunion_payload, unwrap_errunion_err
+//===----------------------------------------------------------------------===//
+
+MlirType cirErrorUnionTypeGet(MlirContext ctx, MlirType payloadType) {
+  return wrap(cir::ErrorUnionType::get(unwrap(ctx), unwrap(payloadType)));
+}
+
+bool cirTypeIsErrorUnion(MlirType type) {
+  return llvm::isa<cir::ErrorUnionType>(unwrap(type));
+}
+
+MlirType cirErrorUnionTypeGetPayload(MlirType euType) {
+  return wrap(
+      llvm::cast<cir::ErrorUnionType>(unwrap(euType)).getPayloadType());
+}
+
+MlirValue cirBuildWrapResult(MlirBlock block, MlirLocation loc,
+                             MlirType errorUnionType, MlirValue value) {
+  auto b = builderAtEnd(block, loc);
+  auto op = b.create<cir::WrapResultOp>(unwrap(loc), unwrap(errorUnionType),
+                                         unwrap(value));
+  return wrap(op.getResult());
+}
+
+MlirValue cirBuildWrapError(MlirBlock block, MlirLocation loc,
+                            MlirType errorUnionType, MlirValue errorCode) {
+  auto b = builderAtEnd(block, loc);
+  auto op = b.create<cir::WrapErrorOp>(unwrap(loc), unwrap(errorUnionType),
+                                        unwrap(errorCode));
+  return wrap(op.getResult());
+}
+
+MlirValue cirBuildIsError(MlirBlock block, MlirLocation loc,
+                          MlirValue errorUnion) {
+  auto b = builderAtEnd(block, loc);
+  auto op = b.create<cir::IsErrorOp>(unwrap(loc), b.getI1Type(),
+                                      unwrap(errorUnion));
+  return wrap(op.getResult());
+}
+
+MlirValue cirBuildErrorPayload(MlirBlock block, MlirLocation loc,
+                               MlirType payloadType, MlirValue errorUnion) {
+  auto b = builderAtEnd(block, loc);
+  auto op = b.create<cir::ErrorPayloadOp>(unwrap(loc), unwrap(payloadType),
+                                           unwrap(errorUnion));
+  return wrap(op.getResult());
+}
+
+MlirValue cirBuildErrorCode(MlirBlock block, MlirLocation loc,
+                            MlirValue errorUnion) {
+  auto b = builderAtEnd(block, loc);
+  auto i16Type = b.getIntegerType(16);
+  auto op = b.create<cir::ErrorCodeOp>(unwrap(loc), i16Type,
+                                        unwrap(errorUnion));
+  return wrap(op.getResult());
+}
+
+//===----------------------------------------------------------------------===//
+// Exception-Based Error Handling
+// Reference: LLVM InvokeOp/LandingpadOp, C++ ABI
+//===----------------------------------------------------------------------===//
+
+void cirBuildThrow(MlirBlock block, MlirLocation loc, MlirValue value) {
+  auto b = builderAtEnd(block, loc);
+  b.create<cir::ThrowOp>(unwrap(loc), unwrap(value));
+}
+
+MlirValue cirBuildInvoke(MlirBlock block, MlirLocation loc,
+                         MlirStringRef callee,
+                         intptr_t nOperands, MlirValue *operands,
+                         MlirType resultType,
+                         MlirBlock normalDest, MlirBlock unwindDest) {
+  auto b = builderAtEnd(block, loc);
+  llvm::SmallVector<Value> opVals;
+  for (intptr_t i = 0; i < nOperands; i++)
+    opVals.push_back(unwrap(operands[i]));
+  auto calleeRef = mlir::FlatSymbolRefAttr::get(
+      b.getContext(), llvm::StringRef(callee.data, callee.length));
+  llvm::SmallVector<mlir::Type> resultTypes;
+  if (unwrap(resultType))
+    resultTypes.push_back(unwrap(resultType));
+  auto op = b.create<cir::InvokeOp>(unwrap(loc), resultTypes, calleeRef,
+      opVals, unwrap(normalDest), unwrap(unwindDest));
+  if (op.getResult())
+    return wrap(op.getResult());
+  return {nullptr};
+}
+
+MlirValue cirBuildLandingPad(MlirBlock block, MlirLocation loc,
+                             MlirType resultType) {
+  auto b = builderAtEnd(block, loc);
+  auto op = b.create<cir::LandingPadOp>(unwrap(loc), unwrap(resultType));
+  return wrap(op.getResult());
+}

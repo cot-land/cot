@@ -1,0 +1,12 @@
+// RUN: %cot emit-llvm %s | %FileCheck %s
+
+// Phase 5c: Exception lowering
+// cir.throw → llvm.trap + llvm.unreachable (Phase 1 — crash on throw)
+
+fn may_throw() -> i32 {
+    throw 42
+}
+
+// CHECK-LABEL: llvm.func @may_throw
+// CHECK: llvm.intr.trap
+// CHECK: llvm.unreachable

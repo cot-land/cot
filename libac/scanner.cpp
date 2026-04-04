@@ -40,7 +40,9 @@ static const std::unordered_map<std::string_view, Tag> keywords = {
     {"as", Tag::kw_as},           {"defer", Tag::kw_defer},
     {"comptime", Tag::kw_comptime}, {"async", Tag::kw_async},
     {"await", Tag::kw_await},     {"try", Tag::kw_try},
-    {"catch", Tag::kw_catch},     {"null", Tag::kw_null},
+    {"catch", Tag::kw_catch},     {"throw", Tag::kw_throw},
+    {"error", Tag::kw_error},
+    {"null", Tag::kw_null},
     {"self", Tag::kw_self},       {"type", Tag::kw_type},
     {"test", Tag::kw_test},       {"assert", Tag::kw_assert},
     // Type keywords

@@ -1,6 +1,6 @@
 # CIR Audit — MLIR/LLVM Standards Compliance
 
-**Last audit:** 2026-04-04 Round 6 (Phase 4 complete — 41 CIR ops, 5 types, 104 test targets, 3 frontends)
+**Last audit:** 2026-04-05 Round 7 (Phase 5 complete — 53 CIR ops, 7 types, 127 test targets, 3 frontends)
 **Reference compilers:** Flang FIR, MLIR Arith/SCF, ArithToLLVM, Go parser, Zig AstGen, TypeScript-Go
 
 ---
@@ -32,9 +32,9 @@ CIR is audited against production MLIR references:
 | Reference-based development | A | Every component traces to Zig/Go/MLIR/FIR source |
 | C API | A | 50 functions: types, queries, all op builders. Language-agnostic frontend enablement. |
 | CMake distribution | A | Super-build, install targets, find_package(CIR)/find_package(COT) config files. |
-| Type system | A- | 5 custom types (ptr, ref, struct, array, slice). All with parse/print + verifiers. |
+| Type system | A | 7 custom types (ptr, ref, struct, array, slice, optional, error_union). All with parse/print + verifiers. |
 | Sema architecture | B+ | Manual walk, per-function, cast insertion. Correct pattern per Zig Sema. |
-| Test coverage | B | 82 lit + 17 inline + 5 build. 4 ops untested. TS 31% behind in parity. |
+| Test coverage | B+ | 100 lit + 22 inline + 4 build. All ops tested. TS narrowing. |
 | Documentation | B+ | DISTRIBUTION_DESIGN.md, PHASE4_DESIGN.md. Missing FRONTEND.md. |
 
 ---
@@ -69,8 +69,8 @@ CIR is audited against production MLIR references:
 | D7 | **No memory model distinction** | MEDIUM | OPEN | Stack (alloca) vs heap vs global. FIR has separate alloca/allocmem/global. |
 | D8 | **No constant folders** | MEDIUM | OPEN | Zero ops have `hasFolder=1`. Add when optimization passes exist. |
 | D9 | **No canonicalizers** | MEDIUM | OPEN | No `hasCanonicalizer=1`. x+0, x*1 not simplified. |
-| D10 | **Memory ops need MemoryEffect traits** | HIGH | OPEN | Alloca/Store/Load have no MemAlloc/MemWrite/MemRead. Add before optimization passes. |
-| D13 | **AllocaOp missing verifier** | LOW | OPEN | No hasVerifier=1. Should verify result is !cir.ptr. |
+| D10 | ~~Memory ops need MemoryEffect traits~~ | HIGH | **FIXED** | Alloca=MemAlloc, Store=MemWrite, Load=MemRead. Added Round 6. |
+| D13 | ~~AllocaOp missing verifier~~ | LOW | **FIXED** | hasVerifier=1, verify result is !cir.ptr. Added Round 6. |
 | D14 | **Assembly format: `->` vs `to`** | LOW | NEW | elem_ptr and array_to_slice use `->` while others use `to`. Minor inconsistency. |
 
 ### Frontend
@@ -88,8 +88,8 @@ CIR is audited against production MLIR references:
 | # | Issue | Severity | Status | Notes |
 |---|-------|----------|--------|-------|
 | T1 | **No negative tests** | HIGH | OPEN | No tests for type mismatch, undefined vars, bad casts. |
-| T2 | **4 ops with zero test coverage** | HIGH | OPEN | `extui`, `field_ptr`, `elem_ptr`, `trap`. All have lowering patterns but no tests. |
-| T3 | **Zig/TS test parity gaps** | HIGH | OPEN | Zig missing: comparison, negation. TS missing: casts, pointers, floats. |
+| T2 | ~~4 ops with zero test coverage~~ | HIGH | **FIXED** | `extui` (unsigned cast), `field_ptr` (field mutation), `elem_ptr` (array mutation), `trap` (assert fail). All tested in untested_ops.ac + inline 047. |
+| T3 | **Zig/TS test parity gaps** | MEDIUM | **PARTIAL** | Zig added: comparison, negation. TS added: for_loop, if_expr. Remaining: TS float_types, type_casts, pointers (not valid TS — deferred). |
 | T4 | **No integration tests** | MEDIUM | OPEN | Nothing verifies 3 frontends produce identical binaries. |
 | T5 | **No Sema-in-isolation tests** | MEDIUM | OPEN | Sema coverage is incidental. |
 
@@ -138,30 +138,25 @@ Matches LLVM/MLIR Homebrew pattern: lib/libCIR.a, include/CIR/, lib/cmake/cir/CI
 
 ---
 
-## Pre-Phase 5 Recommendations
+## Pre-Phase 6 Recommendations
 
-### Must Fix (blocks Phase 5)
-
-| # | Action | Why | Effort |
-|---|--------|-----|--------|
-| D10 | Add MemoryEffect traits to Alloca/Store/Load | Phase 5 optional types need dead store elimination | 30 min |
-
-### Should Fix (quality, not blocking)
+### Should Fix (quality)
 
 | # | Action | Why | Effort |
 |---|--------|-----|--------|
-| T2 | Add tests for extui, field_ptr, elem_ptr, trap | 4 ops with zero coverage is unacceptable | 1 hr |
-| D13 | Add AllocaOp verifier (result must be !cir.ptr) | Audit finding, trivial fix | 10 min |
 | I2 | Write FRONTEND.md | Distribution design assumes external frontend authors | 2 hr |
+| T1 | Add negative tests | No tests for type mismatch, undefined vars | 1 hr |
+| T4 | Integration test: identical CIR from 3 frontends | Validates universal IR promise | 1 hr |
 
 ### Can Defer
 
 | # | Action | Why |
 |---|--------|-----|
-| F7 | TypeScript test parity | TS features work, just need more tests |
 | D14 | Assembly format `->` vs `to` | Cosmetic, changing would break existing tests |
 | D5 | Signed shift right | Not needed until signed integer semantics |
 | D8/D9 | Folders/canonicalizers | Not needed until optimization passes |
+| D6 | hasConstantMaterializer | Not needed until constant folding |
+| E1-E3 | LLVM container/StringRef migration | Low priority cleanup |
 
 ---
 

@@ -38,12 +38,74 @@ struct TrapOpLowering : public OpConversionPattern<cir::TrapOp> {
   }
 };
 
+/// cir.throw → llvm.trap + llvm.unreachable
+/// Phase 1 lowering: crash on throw (like assertion failure).
+/// Phase 2 will add full C++ ABI: __cxa_allocate_exception + __cxa_throw.
+/// Reference: LLVM InvokeInst, C++ ABI __cxa_throw
+struct ThrowOpLowering : public OpConversionPattern<cir::ThrowOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::ThrowOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    // For now: trap + unreachable (same as assertion failure).
+    // TODO: Lower to __cxa_allocate_exception + __cxa_throw for full C++ ABI.
+    rewriter.create<LLVM::Trap>(op.getLoc());
+    rewriter.replaceOpWithNewOp<LLVM::UnreachableOp>(op);
+    return success();
+  }
+};
+
+/// cir.invoke → llvm.call + llvm.br (simplified — no actual unwinding)
+/// Phase 1: invoke lowers to a normal call + branch to normalDest.
+/// Phase 2 will use llvm.invoke with personality function for real unwinding.
+/// Reference: LLVM InvokeOp
+struct InvokeOpLowering : public OpConversionPattern<cir::InvokeOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::InvokeOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    // Lower as regular call (no unwinding in Phase 1)
+    llvm::SmallVector<mlir::Type> resultTypes;
+    if (op.getResult())
+      resultTypes.push_back(
+          getTypeConverter()->convertType(op.getResult().getType()));
+    auto call = rewriter.create<LLVM::CallOp>(
+        loc, resultTypes, op.getCallee(), adaptor.getOperands());
+    // Branch to normal destination
+    rewriter.create<LLVM::BrOp>(loc, mlir::ValueRange{}, op.getNormalDest());
+    // If call has a result, replace the invoke result with the call result
+    if (op.getResult()) {
+      rewriter.replaceOp(op, call.getResult());
+    } else {
+      rewriter.eraseOp(op);
+    }
+    return success();
+  }
+};
+
+/// cir.landingpad → llvm.mlir.undef (simplified — no actual landing pad)
+/// Phase 1: landingpad never reached (invoke doesn't unwind).
+/// Phase 2 will use llvm.landingpad with personality function.
+/// Reference: LLVM LandingpadOp
+struct LandingPadOpLowering : public OpConversionPattern<cir::LandingPadOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::LandingPadOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    auto llvmType = getTypeConverter()->convertType(op.getType());
+    if (!llvmType)
+      return rewriter.notifyMatchFailure(op, "type conversion failed");
+    // For now: undef (this block is never reached in Phase 1).
+    rewriter.replaceOpWithNewOp<LLVM::UndefOp>(op, llvmType);
+    return success();
+  }
+};
+
 } // namespace
 
 void cot::populateControlFlowPatterns(
     const LLVMTypeConverter &converter,
     RewritePatternSet &patterns) {
   MLIRContext *ctx = patterns.getContext();
-  patterns.add<BrOpLowering, CondBrOpLowering, TrapOpLowering>(
+  patterns.add<BrOpLowering, CondBrOpLowering, TrapOpLowering,
+               ThrowOpLowering, InvokeOpLowering, LandingPadOpLowering>(
       converter, ctx);
 }

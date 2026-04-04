@@ -132,4 +132,28 @@ def CIR_OptionalType : CIR_Type<"Optional", "optional"> {
   }];
 }
 
+def CIR_ErrorUnionType : CIR_Type<"ErrorUnion", "error_union"> {
+  let summary = "error union type (E!T — success value or error code)";
+  let description = [{
+    A type that holds either a success value of type T or an error code (i16).
+    This is Zig's E!T, Rust's Result<T, E>.
+
+    Error code 0 = success (payload is valid).
+    Error code != 0 = error (payload is undefined).
+
+    Lowers to !llvm.struct<(T, i16)> — payload first, error code second.
+    No null-pointer optimization (unlike optionals, error unions always need
+    the i16 tag to distinguish N+1 states).
+
+    Error sets are a frontend concept — CIR only sees i16 error codes.
+    Frontends map error names to integer codes.
+
+    Reference: Zig E!T (InternPool ErrorUnionType), Rust Result<T,E>.
+    Syntax: !cir.error_union<i32>, !cir.error_union<f64>
+  }];
+
+  let parameters = (ins "mlir::Type":$payloadType);
+  let assemblyFormat = "`<` $payloadType `>`";
+}
+
 #endif // CIR_TYPES

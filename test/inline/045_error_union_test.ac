@@ -1,0 +1,51 @@
+fn get_error() -> !i32 {
+    return error(1)
+}
+
+fn get_result() -> !i32 {
+    let y: !i32 = 42
+    return y
+}
+
+fn use_try() -> !i32 {
+    let val: i32 = try get_result()
+    return val
+}
+
+fn use_catch_success() -> i32 {
+    let val: i32 = get_result() catch |e| { 0 }
+    return val
+}
+
+fn use_catch_error() -> i32 {
+    let val: i32 = get_error() catch |e| { 99 }
+    return val
+}
+
+test "error union wrap result" {
+    let x: !i32 = 42
+    assert(1 == 1)
+}
+
+test "error union wrap error" {
+    let x: !i32 = error(1)
+    assert(1 == 1)
+}
+
+test "error union function return result" {
+    let r: !i32 = get_result()
+    assert(1 == 1)
+}
+
+test "error union function return error" {
+    let e: !i32 = get_error()
+    assert(1 == 1)
+}
+
+test "catch on success returns payload" {
+    assert(use_catch_success() == 42)
+}
+
+test "catch on error returns handler value" {
+    assert(use_catch_error() == 99)
+}

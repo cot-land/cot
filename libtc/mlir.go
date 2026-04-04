@@ -107,6 +107,14 @@ func (b *Builder) IntType(bits int) MlirType {
 	return MlirType{C.mlirIntegerTypeGet(b.ctx.ptr, C.uint(bits))}
 }
 
+// MlirIntegerTypeGetWidth returns the bit width of an integer type, or 0 if not integer.
+func MlirIntegerTypeGetWidth(ty MlirType) uint {
+	if !bool(C.mlirTypeIsAInteger(ty.ptr)) {
+		return 0
+	}
+	return uint(C.mlirIntegerTypeGetWidth(ty.ptr))
+}
+
 // F32Type creates an MLIR f32 type.
 func (b *Builder) F32Type() MlirType {
 	return MlirType{C.mlirF32TypeGet(b.ctx.ptr)}
@@ -566,6 +574,61 @@ func CirBuildOptionalPayload(block MlirBlock, loc MlirLocation, payloadType Mlir
 
 func CirTypeIsSlice(ty MlirType) bool {
 	return bool(C.cirTypeIsSlice(ty.ptr))
+}
+
+// --- Error Union Operations ---
+
+func CirErrorUnionTypeGet(ctx MlirContext, payloadType MlirType) MlirType {
+	return MlirType{ptr: C.cirErrorUnionTypeGet(ctx.ptr, payloadType.ptr)}
+}
+
+func CirTypeIsErrorUnion(ty MlirType) bool {
+	return bool(C.cirTypeIsErrorUnion(ty.ptr))
+}
+
+func CirErrorUnionTypeGetPayload(ty MlirType) MlirType {
+	return MlirType{ptr: C.cirErrorUnionTypeGetPayload(ty.ptr)}
+}
+
+func CirBuildWrapResult(block MlirBlock, loc MlirLocation, euType MlirType, value MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildWrapResult(block.ptr, loc.ptr, euType.ptr, value.ptr)}
+}
+
+func CirBuildWrapError(block MlirBlock, loc MlirLocation, euType MlirType, errorCode MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildWrapError(block.ptr, loc.ptr, euType.ptr, errorCode.ptr)}
+}
+
+func CirBuildIsError(block MlirBlock, loc MlirLocation, errorUnion MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildIsError(block.ptr, loc.ptr, errorUnion.ptr)}
+}
+
+func CirBuildErrorPayload(block MlirBlock, loc MlirLocation, payloadType MlirType, errorUnion MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildErrorPayload(block.ptr, loc.ptr, payloadType.ptr, errorUnion.ptr)}
+}
+
+func CirBuildErrorCode(block MlirBlock, loc MlirLocation, errorUnion MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildErrorCode(block.ptr, loc.ptr, errorUnion.ptr)}
+}
+
+// --- Exception-Based Error Handling ---
+
+func CirBuildThrow(block MlirBlock, loc MlirLocation, value MlirValue) {
+	C.cirBuildThrow(block.ptr, loc.ptr, value.ptr)
+}
+
+func CirBuildInvoke(block MlirBlock, loc MlirLocation, callee string, operands []MlirValue, resultType MlirType, normalDest MlirBlock, unwindDest MlirBlock) MlirValue {
+	cs := C.CString(callee)
+	defer C.free(unsafe.Pointer(cs))
+	ref := C.MlirStringRef{data: cs, length: C.size_t(len(callee))}
+	var opsPtr *C.MlirValue
+	if len(operands) > 0 {
+		opsPtr = (*C.MlirValue)(unsafe.Pointer(&operands[0]))
+	}
+	return MlirValue{ptr: C.cirBuildInvoke(block.ptr, loc.ptr, ref, C.intptr_t(len(operands)), opsPtr, resultType.ptr, normalDest.ptr, unwindDest.ptr)}
+}
+
+func CirBuildLandingPad(block MlirBlock, loc MlirLocation, resultType MlirType) MlirValue {
+	return MlirValue{ptr: C.cirBuildLandingPad(block.ptr, loc.ptr, resultType.ptr)}
 }
 
 // --- Type Queries ---

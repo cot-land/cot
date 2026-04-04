@@ -117,6 +117,15 @@ class Parser {
       t.isOptional = true;
       return t;
     }
+    // Error union type: !T
+    if (check(Tag::bang)) {
+      advance(); // consume '!'
+      auto inner = tokenText(advance());
+      TypeRef t;
+      t.name = inner;
+      t.isErrorUnion = true;
+      return t;
+    }
     // Pointer/ref type: *T
     if (check(Tag::star)) {
       advance(); // consume '*'
@@ -188,6 +197,28 @@ class Parser {
       auto e = std::make_unique<Expr>();
       e->kind = ExprKind::NullLit;
       e->pos = tok.start;
+      return e;
+    }
+
+    // error(N) literal — construct error value
+    if (tok.tag == Tag::kw_error) {
+      advance();
+      auto e = std::make_unique<Expr>();
+      e->kind = ExprKind::ErrorLit;
+      e->pos = tok.start;
+      expect(Tag::l_paren);
+      e->intVal = std::stoll(std::string(tokenText(expect(Tag::int_literal))));
+      expect(Tag::r_paren);
+      return e;
+    }
+
+    // try expr — unwrap error union or propagate error
+    if (tok.tag == Tag::kw_try) {
+      advance();
+      auto e = std::make_unique<Expr>();
+      e->kind = ExprKind::TryExpr;
+      e->pos = tok.start;
+      e->lhs = parsePrimary(); // parse the error-union-producing expression
       return e;
     }
 
@@ -379,6 +410,25 @@ class Parser {
           ia->rhs = std::move(first);
           expr = std::move(ia);
         }
+      } else if (check(Tag::kw_catch)) {
+        // catch: expr catch |e| { handler }
+        size_t p = advance().start; // consume 'catch'
+        auto ce = std::make_unique<Expr>();
+        ce->kind = ExprKind::CatchExpr;
+        ce->pos = p;
+        ce->lhs = std::move(expr);
+        // Parse capture: |e|
+        expect(Tag::pipe);
+        ce->name = tokenText(expect(Tag::identifier));
+        expect(Tag::pipe);
+        // Parse handler block { ... } as a single expression
+        // For now, parse as: catch |e| { returnExpr }
+        expect(Tag::l_brace);
+        skipSemis();
+        ce->rhs = parseExpr();
+        skipSemis();
+        expect(Tag::r_brace);
+        expr = std::move(ce);
       } else {
         break;
       }
@@ -419,6 +469,49 @@ class Parser {
       s->pos = p;
       if (!check(Tag::semicolon) && !check(Tag::r_brace) && !check(Tag::eof))
         s->expr = parseExpr();
+      match(Tag::semicolon);
+      return s;
+    }
+
+    // Throw statement: throw expr
+    if (check(Tag::kw_throw)) {
+      size_t p = advance().start;
+      auto s = std::make_unique<Stmt>();
+      s->kind = StmtKind::Throw;
+      s->pos = p;
+      s->expr = parseExpr();
+      match(Tag::semicolon);
+      return s;
+    }
+
+    // Try/catch statement (exception-style): try { body } catch |e| { handler }
+    // Distinct from error-union try (which is an expression: try expr)
+    if (check(Tag::kw_try) && pos_ + 1 < tokens_.size() &&
+        tokens_[pos_ + 1].tag == Tag::l_brace) {
+      size_t p = advance().start; // consume 'try'
+      auto s = std::make_unique<Stmt>();
+      s->kind = StmtKind::TryCatch;
+      s->pos = p;
+      // Parse try body
+      expect(Tag::l_brace);
+      skipSemis();
+      while (!check(Tag::r_brace) && !check(Tag::eof)) {
+        s->thenBody.push_back(parseStmt());
+        skipSemis();
+      }
+      expect(Tag::r_brace);
+      // Parse catch clause
+      expect(Tag::kw_catch);
+      expect(Tag::pipe);
+      s->varName = tokenText(expect(Tag::identifier));
+      expect(Tag::pipe);
+      expect(Tag::l_brace);
+      skipSemis();
+      while (!check(Tag::r_brace) && !check(Tag::eof)) {
+        s->elseBody.push_back(parseStmt());
+        skipSemis();
+      }
+      expect(Tag::r_brace);
       match(Tag::semicolon);
       return s;
     }
@@ -566,8 +659,66 @@ class Parser {
     }
 
     // Assignment / compound assignment: ident = expr, ident += expr, etc.
+    // Also field assignment: ident.field = expr
+    // Also index assignment: ident[index] = expr
     if (check(Tag::identifier) && pos_ + 1 < tokens_.size()) {
       auto nextTag = tokens_[pos_ + 1].tag;
+
+      // Field assignment: p.x = expr (ident.ident = expr)
+      if (nextTag == Tag::dot && pos_ + 3 < tokens_.size() &&
+          tokens_[pos_ + 2].tag == Tag::identifier &&
+          tokens_[pos_ + 3].tag == Tag::equal) {
+        size_t p = peek().start;
+        auto objName = tokenText(advance()); // consume ident
+        advance(); // consume '.'
+        auto fieldName = tokenText(advance()); // consume field
+        advance(); // consume '='
+        auto s = std::make_unique<Stmt>();
+        s->kind = StmtKind::Assign;
+        s->pos = p;
+        s->varName = objName;
+        // Store field name in the expr's name field (reuse Expr for field info)
+        auto fieldExpr = std::make_unique<Expr>();
+        fieldExpr->kind = ExprKind::FieldAccess;
+        fieldExpr->name = fieldName;
+        fieldExpr->lhs = std::make_unique<Expr>();
+        fieldExpr->lhs->kind = ExprKind::Ident;
+        fieldExpr->lhs->name = objName;
+        fieldExpr->pos = p;
+        s->expr = parseExpr();
+        // Pack field info into rangeEnd for codegen to detect
+        s->rangeEnd = std::move(fieldExpr);
+        match(Tag::semicolon);
+        return s;
+      }
+
+      // Index assignment: arr[i] = expr (ident[expr] = expr)
+      if (nextTag == Tag::l_bracket) {
+        // Save position, try to parse as index assignment
+        size_t saved = pos_;
+        size_t p = peek().start;
+        auto name = tokenText(advance()); // consume ident
+        advance(); // consume '['
+        auto indexExpr = parseExpr();
+        if (check(Tag::r_bracket) && pos_ + 1 < tokens_.size() &&
+            tokens_[pos_ + 1].tag == Tag::equal) {
+          advance(); // consume ']'
+          advance(); // consume '='
+          auto s = std::make_unique<Stmt>();
+          s->kind = StmtKind::Assign;
+          s->pos = p;
+          s->varName = name;
+          s->expr = parseExpr();
+          s->rangeEnd = std::move(indexExpr); // store index in rangeEnd
+          // Mark as index assignment by setting op to l_bracket
+          s->op = Tag::l_bracket;
+          match(Tag::semicolon);
+          return s;
+        }
+        // Not an index assignment — restore and fall through
+        pos_ = saved;
+      }
+
       // Simple assignment: x = expr
       if (nextTag == Tag::equal) {
         size_t p = peek().start;

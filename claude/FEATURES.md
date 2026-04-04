@@ -105,10 +105,10 @@ Status: `-` not started, `~` in progress, `✓` done.
 | 042 | Optional wrap | `cir.wrap_optional` | `let x: ?i32 = 42` | implicit | insertvalue {val, true} | ✓ |
 | 043 | Null literal | `cir.none` | `null` | `null` | undef + insertvalue {_, false} | ✓ |
 | 044 | is_non_null + payload | `cir.is_non_null`, `cir.optional_payload` | — | — | extractvalue [1], extractvalue [0] | ✓ |
-| 045 | Error union type | `cir.error_union_type` | `!i32` or `Error!i32` | `Error!i32` or `anyerror!i32` | `{error_code, payload}` | - |
-| 046 | Try expression | `cir.try` | `try foo()` | `try foo()` | Branch on error code | - |
-| 047 | Catch expression | `cir.catch` | `foo() catch \|e\| { }` | `foo() catch \|e\| { }` | Branch + error handler | - |
-| 048 | Error set declaration | `cir.error_set` | `error { OutOfMemory, NotFound }` | `const E = error { OutOfMemory, NotFound };` | Integer enum | - |
+| 045 | Error union type | `!cir.error_union<T>`, `cir.wrap_result`, `cir.wrap_error` | `!i32` | `E!i32` | `!llvm.struct<(T, i16)>` | ✓ |
+| 046 | Try expression | `cir.is_error` + `cir.error_payload` + `cir.error_code` | `try foo()` | `try foo()` | Branch on error code | ✓ |
+| 047 | Catch expression | `cir.is_error` + `cir.error_payload` + handler | `foo() catch \|e\| { }` | `foo() catch \|e\| { }` | Branch + error handler | ✓ |
+| 048 | Error set declaration | Frontend assigns i16 codes | `error(1)` | `error { OutOfMemory, NotFound }` | Integer constants | ✓ |
 
 ### Phase 6 — Enums, Unions, Match
 

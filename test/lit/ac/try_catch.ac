@@ -1,0 +1,36 @@
+// RUN: %cot emit-cir %s | %FileCheck %s
+
+// Features #046-047: Try and catch expressions — ac syntax
+
+fn may_fail() -> !i32 {
+    return error(1)
+}
+
+fn use_try() -> !i32 {
+    let val: i32 = try may_fail()
+    return val
+}
+
+fn use_catch() -> i32 {
+    let val: i32 = may_fail() catch |e| { 0 }
+    return val
+}
+
+// CHECK-LABEL: func.func @use_try
+// CHECK: call @may_fail
+// CHECK: cir.is_error
+// CHECK-SAME: !cir.error_union<i32> to i1
+// CHECK: cir.condbr
+// CHECK: cir.error_code
+// CHECK: cir.wrap_error
+// CHECK: return
+// CHECK: cir.error_payload
+// CHECK-SAME: !cir.error_union<i32> to i32
+
+// CHECK-LABEL: func.func @use_catch
+// CHECK: call @may_fail
+// CHECK: cir.is_error
+// CHECK-SAME: !cir.error_union<i32> to i1
+// CHECK: cir.condbr
+// CHECK: cir.error_payload
+// CHECK-SAME: !cir.error_union<i32> to i32

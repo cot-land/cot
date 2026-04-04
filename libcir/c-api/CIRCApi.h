@@ -321,6 +321,58 @@ MlirValue cirBuildArrayToSlice(MlirBlock block, MlirLocation loc,
                                MlirValue start, MlirValue end,
                                MlirType arrayType);
 
+//===----------------------------------------------------------------------===//
+// Error Union Type + Operations
+//===----------------------------------------------------------------------===//
+
+/// Get !cir.error_union<T> type.
+MlirType cirErrorUnionTypeGet(MlirContext ctx, MlirType payloadType);
+
+/// Check if a type is !cir.error_union<T>.
+bool cirTypeIsErrorUnion(MlirType type);
+
+/// Get payload type from !cir.error_union<T>.
+MlirType cirErrorUnionTypeGetPayload(MlirType euType);
+
+/// Create cir.wrap_result (T → E!T, success case).
+MlirValue cirBuildWrapResult(MlirBlock block, MlirLocation loc,
+                             MlirType errorUnionType, MlirValue value);
+
+/// Create cir.wrap_error (i16 → E!T, error case).
+MlirValue cirBuildWrapError(MlirBlock block, MlirLocation loc,
+                            MlirType errorUnionType, MlirValue errorCode);
+
+/// Create cir.is_error (E!T → i1).
+MlirValue cirBuildIsError(MlirBlock block, MlirLocation loc,
+                          MlirValue errorUnion);
+
+/// Create cir.error_payload (E!T → T, unchecked).
+MlirValue cirBuildErrorPayload(MlirBlock block, MlirLocation loc,
+                               MlirType payloadType, MlirValue errorUnion);
+
+/// Create cir.error_code (E!T → i16).
+MlirValue cirBuildErrorCode(MlirBlock block, MlirLocation loc,
+                            MlirValue errorUnion);
+
+//===----------------------------------------------------------------------===//
+// Exception-Based Error Handling
+//===----------------------------------------------------------------------===//
+
+/// Create cir.throw (throw exception value).
+void cirBuildThrow(MlirBlock block, MlirLocation loc, MlirValue value);
+
+/// Create cir.invoke (call with normal/unwind successors).
+/// Returns the call result (or null if void).
+MlirValue cirBuildInvoke(MlirBlock block, MlirLocation loc,
+                         MlirStringRef callee,
+                         intptr_t nOperands, MlirValue *operands,
+                         MlirType resultType,
+                         MlirBlock normalDest, MlirBlock unwindDest);
+
+/// Create cir.landingpad (catch exception value).
+MlirValue cirBuildLandingPad(MlirBlock block, MlirLocation loc,
+                             MlirType resultType);
+
 #ifdef __cplusplus
 }
 #endif

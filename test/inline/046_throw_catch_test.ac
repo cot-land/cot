@@ -1,0 +1,35 @@
+fn no_throw() -> i32 {
+    return 42
+}
+
+fn add(a: i32, b: i32) -> i32 {
+    return a + b
+}
+
+test "non-throwing function works" {
+    assert(no_throw() == 42)
+}
+
+test "regular calls unaffected" {
+    assert(add(19, 23) == 42)
+}
+
+test "try block body executes" {
+    var result: i32 = 0
+    try {
+        result = 42
+    } catch |e| {
+        result = 0
+    }
+    assert(result == 42)
+}
+
+test "try block with function call" {
+    var result: i32 = 0
+    try {
+        result = no_throw()
+    } catch |e| {
+        result = -1
+    }
+    assert(result == 42)
+}

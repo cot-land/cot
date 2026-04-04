@@ -312,3 +312,234 @@ With optionals complete, CIR can express:
 - All optional ops have verifiers that check input/output types
 - `cir.optional_payload` is unchecked — safety is a separate pass concern
 - Frontend if-unwrap desugars to `is_non_null` + `condbr` + `optional_payload`
+
+---
+
+## Phase 5b — Error Unions (#045-048)
+
+### Reference Study
+
+**Zig (primary):** `Sema.zig` — `zirTry`, `zirCatch`, `analyzeErrUnionPayload`, `analyzeErrUnionCode`.
+`InternPool.zig` — `ErrorUnionType { error_set_type, payload_type }`.
+`Air.zig` — `unwrap_errunion_payload`, `unwrap_errunion_err`, `is_non_err`, `is_err`,
+`wrap_errunion_payload`, `wrap_errunion_err`.
+
+**Rust (layout):** `rustc_abi/src/lib.rs` — `Variants::Multiple` with `TagEncoding::Direct`.
+`Result<T,E>` as enum with discriminant. `?` operator desugars to `SwitchInt` on discriminant.
+
+**Key Zig patterns to port:**
+- Error code 0 = success (no error), nonzero = error value
+- `try expr` desugars to: `is_non_err` + branch + `unwrap_errunion_payload` (success) /
+  `unwrap_errunion_err` + return (error propagation)
+- `expr catch |e| handler` desugars to: `is_non_err` + branch + `unwrap_errunion_payload`
+  (success) / `unwrap_errunion_err` + handler (error path)
+- Error sets are integer enums — each error name maps to a unique i16
+
+### Decision 5: Error union type — `!cir.error_union<T>`
+
+New CIR type parameterized by the payload type. Error code is always i16 (Zig uses u16,
+matching for simplicity). Error code 0 = success.
+
+```
+!cir.error_union<i32>         →  !llvm.struct<(i32, i16)>     // {payload, error_code}
+!cir.error_union<f64>         →  !llvm.struct<(f64, i16)>
+!cir.error_union<!cir.ptr>    →  !llvm.struct<(ptr, i16)>     // no NPO for error unions
+```
+
+**Why no null-pointer optimization:** Unlike optionals (2 states: some/none), error unions
+have N+1 states (success + N error codes). Can't encode in a single pointer.
+
+**Why i16 for error codes:** Zig uses u16, supporting up to 65535 unique error values
+across a compilation. Sufficient for any realistic error set. Keeps the struct compact.
+
+**Layout:** Payload first, error code second. Follows Zig's alignment-ordered layout.
+If payload is smaller than i16, padding may be inserted (LLVM handles this).
+
+### Decision 6: CIR ops for error unions
+
+Port the Zig AIR instruction set. Error union ops parallel the optional ops:
+
+```
+cir.wrap_result %val          wrap T → E!T (success, error_code = 0)
+cir.wrap_error %code          wrap i16 → E!T (error, payload = undef)
+cir.is_error %eu              test E!T has error → i1
+cir.error_payload %eu         extract T from E!T (unchecked, post-branch)
+cir.error_code %eu            extract i16 error code from E!T
+```
+
+**Why these specific ops:**
+- `cir.wrap_result` — Zig `wrap_errunion_payload`. Constructs success case.
+- `cir.wrap_error` — Zig `wrap_errunion_err`. Constructs error case.
+- `cir.is_error` — Zig `is_err`. Branch condition for try/catch.
+- `cir.error_payload` — Zig `unwrap_errunion_payload`. Extracts value after success branch.
+- `cir.error_code` — Zig `unwrap_errunion_err`. Extracts error code after error branch.
+
+**Why NO dedicated `cir.try` or `cir.catch` ops:** Try and catch are control flow sugar.
+They desugar to `is_error` + `condbr` + `error_payload`/`error_code` at the frontend level.
+This is the same pattern as optional if-unwrap (which desugars to `is_non_null` + `condbr` +
+`optional_payload`). Keeping CIR ops primitive makes the dialect simpler and more composable.
+
+**Error sets** are a frontend concern, not a CIR concept. Frontends assign integer codes
+to error names. CIR just sees i16 constants. This follows the "CIR builtins = MLIR types,
+language types resolved by frontends" principle.
+
+### Decision 7: Lowering strategy
+
+```
+!cir.error_union<T> → !llvm.struct<(T, i16)>
+
+cir.wrap_result %val  → undef + insertvalue(val, 0) + insertvalue(i16 0, 1)
+cir.wrap_error %code  → undef + insertvalue(i16 %code, 1)  // payload undef
+cir.is_error %eu      → extractvalue [1] → icmp ne i16 0
+cir.error_payload %eu → extractvalue [0]
+cir.error_code %eu    → extractvalue [1]
+```
+
+All patterns match the optional lowering approach (struct with tag), but the tag is i16
+instead of i1, and the test is `icmp ne 0` instead of direct boolean.
+
+### Frontend Syntax
+
+**ac:**
+```
+error { OutOfMemory, NotFound }           // error set declaration
+
+fn read() -> !i32 {                       // !T = error union (any error)
+    return error(1)                       // return error code
+}
+
+fn safe_read() -> !i32 {
+    let val: i32 = try read()             // unwrap or propagate
+    return val + 1
+}
+
+fn handle() -> i32 {
+    let val: i32 = read() catch |e| {     // handle error
+        return -1
+    }
+    return val
+}
+```
+
+**Zig:**
+```zig
+const ReadError = error { OutOfMemory, NotFound };
+
+fn read() ReadError!i32 {
+    return error.OutOfMemory;
+}
+
+fn safe_read() ReadError!i32 {
+    const val = try read();
+    return val + 1;
+}
+
+fn handle() i32 {
+    const val = read() catch |e| {
+        return -1;
+    };
+    return val;
+}
+```
+
+**TypeScript:**
+```typescript
+type ReadError = "OutOfMemory" | "NotFound";
+
+function read(): i32 | ReadError {
+    return "OutOfMemory";
+}
+
+function safe_read(): i32 | ReadError {
+    const val: i32 = try read();
+    return val + 1;
+}
+
+function handle(): i32 {
+    const val: i32 = read() catch (e) {
+        return -1;
+    };
+    return val;
+}
+```
+
+### Reference Code to Port
+
+| What | Port from | Source |
+|------|-----------|--------|
+| ErrorUnionType definition | OptionalType pattern + Zig ErrorUnionType | CIRTypes.td + `~/claude/references/zig/src/InternPool.zig` |
+| Type converter | Zig error union layout | Same struct pattern as optional, i16 tag |
+| `cir.wrap_result` lowering | Same pattern as `cir.wrap_optional` | MemoryPatterns.cpp |
+| `cir.wrap_error` lowering | Zig `wrap_errunion_err` | undef + insertvalue for error code |
+| `cir.is_error` lowering | Zig `is_err` | extractvalue [1] + icmp ne 0 |
+| `cir.error_payload` lowering | Zig `unwrap_errunion_payload` | extractvalue [0] |
+| `cir.error_code` lowering | Zig `unwrap_errunion_err` | extractvalue [1] |
+| Try syntax (ac) | Zig `zirTry` control flow | `is_error` + `condbr` + propagation |
+| Catch syntax (ac) | Zig `zirCatch` control flow | `is_error` + `condbr` + handler |
+
+---
+
+## Phase 5c — Exception-Based Error Handling (throw/catch)
+
+### Why Both Models
+
+CIR is a universal IR. Languages handle errors differently:
+- **Error unions (Phase 5a-b, done):** Zig, Rust. Errors in the type system, zero-cost.
+- **Exceptions (Phase 5c):** TypeScript, Java, C#, C++, Python, Swift. Stack unwinding.
+
+Both coexist in CIR. A frontend chooses which model fits. Some (Swift) may use both.
+
+### Reference Study
+
+**LLVM (primary):** `mlir/include/mlir/Dialect/LLVMIR/LLVMOps.td` — InvokeOp, LandingpadOp.
+**Swift:** `SILInstruction.h` — `try_apply` (two-successor call, typed error).
+**C++ ABI:** `__cxa_allocate_exception`, `__cxa_throw`, `__cxa_begin_catch`, `__cxa_end_catch`.
+
+### Decision 8: Exception CIR ops
+
+Three ops, matching the LLVM pattern:
+
+```
+cir.throw %val           throw exception value → stack unwind
+cir.invoke @f(%arg)      call with normal/unwind successors
+  normal ^ok unwind ^err
+cir.landingpad           catch exception in unwind block → value
+```
+
+**`cir.throw`** — Terminator. Throws a value and transfers control via stack unwinding.
+Lowers to: `__cxa_allocate_exception` + memcpy + `__cxa_throw`. For simple i32 exceptions
+(TS throw N), this is a call to a runtime function.
+
+**`cir.invoke`** — Terminator with 2 successors. Like `func.call` but can unwind.
+Normal path: call returns, control goes to `normalDest`.
+Unwind path: call throws, control goes to `unwindDest` (must start with `cir.landingpad`).
+Lowers to: `llvm.invoke` with personality function on parent `llvm.func`.
+
+**`cir.landingpad`** — First op in an unwind block. Catches the thrown value.
+Returns the caught exception value (i32 for simple exceptions).
+Lowers to: `llvm.landingpad { catch null }` + `__cxa_begin_catch` + extract.
+
+### Decision 9: Lowering strategy
+
+```
+cir.throw %val          → call @__cxa_allocate_exception(sizeof(val))
+                          + store val to allocated memory
+                          + call @__cxa_throw(ptr, typeinfo, null)
+                          + unreachable
+
+cir.invoke @f(%args)    → llvm.invoke @f(%args)
+  normal ^ok              normal ^ok
+  unwind ^catch           unwind ^catch
+                          (parent func gets personality = @__gxx_personality_v0)
+
+cir.landingpad : i32    → %lp = llvm.landingpad { catch null }  // catch-all
+                          %exc = call @__cxa_begin_catch(%lp[0])
+                          %val = load i32, %exc
+                          (+ call @__cxa_end_catch at end of handler)
+```
+
+### Frontend Syntax
+
+**ac:** `throw expr`, `try { body } catch |e| { handler }` (exception-style, distinct from error union try)
+**TypeScript:** `throw expr`, `try { body } catch (e) { handler }` (native TS syntax)
+**Zig:** N/A — Zig uses error unions exclusively. Bindings available but not used.

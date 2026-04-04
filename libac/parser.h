@@ -25,6 +25,7 @@ struct TypeRef {
   bool isRef = false; // true for pointer/ref types: *T
   bool isSlice = false; // true for slice types: []T
   bool isOptional = false; // true for optional types: ?T
+  bool isErrorUnion = false; // true for error union types: !T
 };
 
 struct Param {
@@ -33,7 +34,7 @@ struct Param {
 };
 
 // Expression kinds
-enum class ExprKind { IntLit, FloatLit, BoolLit, StringLit, NullLit, Ident, BinOp, UnaryOp, Call, IfExpr, Cast, StructInit, FieldAccess, MethodCall, ArrayLit, IndexAccess, SliceExpr };
+enum class ExprKind { IntLit, FloatLit, BoolLit, StringLit, NullLit, ErrorLit, Ident, BinOp, UnaryOp, Call, IfExpr, Cast, StructInit, FieldAccess, MethodCall, ArrayLit, IndexAccess, SliceExpr, TryExpr, CatchExpr };
 
 struct Expr {
   ExprKind kind;
@@ -52,7 +53,7 @@ struct Expr {
 };
 
 // Statement kinds
-enum class StmtKind { Return, ExprStmt, If, IfUnwrap, While, For, Break, Continue, Assert, Let, Var, Assign, CompoundAssign };
+enum class StmtKind { Return, ExprStmt, If, IfUnwrap, While, For, Break, Continue, Assert, Let, Var, Assign, CompoundAssign, Throw, TryCatch };
 
 struct Stmt {
   StmtKind kind;

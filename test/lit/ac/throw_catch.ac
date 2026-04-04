@@ -1,0 +1,42 @@
+// RUN: %cot emit-cir %s | %FileCheck %s
+
+// Phase 5c: Exception-based error handling — ac syntax
+
+fn may_throw() -> i32 {
+    throw 42
+}
+
+fn handle_throw() -> i32 {
+    try {
+        return may_throw()
+    } catch |e| {
+        return 0
+    }
+    return 0
+}
+
+fn safe_call() -> i32 {
+    var result: i32 = 0
+    try {
+        result = 10
+    } catch |e| {
+        result = 0
+    }
+    return result
+}
+
+// CHECK-LABEL: func.func @may_throw
+// CHECK: cir.throw
+// CHECK-SAME: i32
+
+// CHECK-LABEL: func.func @handle_throw
+// CHECK: call @may_throw
+// CHECK: return
+// CHECK: cir.landingpad : i32
+// CHECK: return
+
+// CHECK-LABEL: func.func @safe_call
+// CHECK: cir.constant 10
+// CHECK: cir.br
+// CHECK: cir.landingpad : i32
+// CHECK: return

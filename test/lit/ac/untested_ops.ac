@@ -7,7 +7,42 @@ fn test_assert_fail() -> i32 {
     return 0
 }
 
+fn widen_unsigned(x: u8) -> u32 {
+    return x as u32
+}
+
+struct Point {
+    x: i32,
+    y: i32
+}
+
+fn mutate_field() -> i32 {
+    var p: Point = Point { x: 1, y: 2 }
+    p.x = 10
+    return p.x
+}
+
+fn mutate_array() -> i32 {
+    var arr: [4]i32 = [1, 2, 3, 4]
+    arr[2] = 99
+    return arr[2]
+}
+
 // CHECK-LABEL: func.func @test_assert_fail
 // CHECK: cir.cmp
 // CHECK: cir.condbr
 // CHECK: cir.trap
+
+// CHECK-LABEL: func.func @widen_unsigned
+// CHECK: cir.extui
+// CHECK-SAME: i8 to i32
+
+// CHECK-LABEL: func.func @mutate_field
+// CHECK: cir.field_ptr
+// CHECK-SAME: !cir.ptr to !cir.ptr
+// CHECK: cir.store
+
+// CHECK-LABEL: func.func @mutate_array
+// CHECK: cir.elem_ptr
+// CHECK-SAME: (!cir.ptr, i64) -> !cir.ptr
+// CHECK: cir.store

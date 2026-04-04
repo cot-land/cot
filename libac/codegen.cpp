@@ -53,6 +53,12 @@ class CodeGen {
       auto innerType = resolveType(innerRef);
       return cir::OptionalType::get(b.getContext(), innerType);
     }
+    // Error union type: !T
+    if (t.isErrorUnion) {
+      TypeRef innerRef{t.name};
+      auto innerType = resolveType(innerRef);
+      return cir::ErrorUnionType::get(b.getContext(), innerType);
+    }
     // Slice type: []T
     if (t.isSlice) {
       TypeRef elemRef{t.arrayElemType};
@@ -107,6 +113,82 @@ class CodeGen {
         return {};
       }
       return b.create<cir::NoneOp>(loc, resultType);
+    }
+
+    case ExprKind::ErrorLit: {
+      // error(N) — resultType must be an error union type
+      if (!llvm::isa<cir::ErrorUnionType>(resultType)) {
+        llvm::errs() << "error: error() used in non-error-union context\n";
+        return {};
+      }
+      auto i16Type = b.getIntegerType(16);
+      auto code = b.create<cir::ConstantOp>(loc, i16Type,
+          b.getIntegerAttr(i16Type, e.intVal));
+      return b.create<cir::WrapErrorOp>(loc, resultType, code);
+    }
+
+    case ExprKind::TryExpr: {
+      // try expr — unwrap error union or propagate error
+      // Desugar: is_error → condbr → error path (return error) / success path (payload)
+      auto euVal = emitExpr(*e.lhs, resultType);
+      auto euType = llvm::dyn_cast<cir::ErrorUnionType>(euVal.getType());
+      if (!euType) {
+        llvm::errs() << "error: try requires error union type\n";
+        return {};
+      }
+      auto cond = b.create<cir::IsErrorOp>(loc, b.getI1Type(), euVal);
+      auto parentFunc = b.getInsertionBlock()->getParentOp();
+      auto funcOp = llvm::cast<mlir::func::FuncOp>(parentFunc);
+      auto *errorBlock = addBlock(funcOp);
+      auto *successBlock = addBlock(funcOp);
+      b.create<cir::CondBrOp>(loc, cond, errorBlock, successBlock);
+      // Error path: extract error code, wrap in function's return EU type, return
+      b.setInsertionPointToStart(errorBlock);
+      auto errCode = b.create<cir::ErrorCodeOp>(loc, b.getIntegerType(16), euVal);
+      auto retType = funcOp.getResultTypes()[0];
+      auto retEU = b.create<cir::WrapErrorOp>(loc, retType, errCode);
+      b.create<mlir::func::ReturnOp>(loc, mlir::ValueRange{retEU});
+      // Success path: extract payload
+      b.setInsertionPointToStart(successBlock);
+      return b.create<cir::ErrorPayloadOp>(loc, euType.getPayloadType(), euVal);
+    }
+
+    case ExprKind::CatchExpr: {
+      // expr catch |e| { handler } — unwrap error union or evaluate handler
+      auto euVal = emitExpr(*e.lhs, resultType);
+      auto euType = llvm::dyn_cast<cir::ErrorUnionType>(euVal.getType());
+      if (!euType) {
+        llvm::errs() << "error: catch requires error union type\n";
+        return {};
+      }
+      auto cond = b.create<cir::IsErrorOp>(loc, b.getI1Type(), euVal);
+      auto parentFunc = b.getInsertionBlock()->getParentOp();
+      auto funcOp = llvm::cast<mlir::func::FuncOp>(parentFunc);
+      auto *errorBlock = addBlock(funcOp);
+      auto *successBlock = addBlock(funcOp);
+      auto *mergeBlock = addBlock(funcOp);
+      auto payloadType = euType.getPayloadType();
+      // Add block argument to merge block to carry the result
+      mergeBlock->addArgument(payloadType, loc);
+      b.create<cir::CondBrOp>(loc, cond, errorBlock, successBlock);
+      // Error path: bind error code to capture var, evaluate handler
+      b.setInsertionPointToStart(errorBlock);
+      auto errCode = b.create<cir::ErrorCodeOp>(loc, b.getIntegerType(16), euVal);
+      auto ptrType = cir::PointerType::get(b.getContext());
+      auto errAddr = b.create<cir::AllocaOp>(loc, ptrType,
+          mlir::TypeAttr::get(b.getIntegerType(16)));
+      b.create<cir::StoreOp>(loc, errCode, errAddr);
+      localAddrs[e.name] = {errAddr, b.getIntegerType(16)};
+      auto handlerVal = emitExpr(*e.rhs, payloadType);
+      localAddrs.erase(e.name);
+      b.create<cir::BrOp>(loc, mlir::ValueRange{handlerVal}, mergeBlock);
+      // Success path: extract payload
+      b.setInsertionPointToStart(successBlock);
+      auto payload = b.create<cir::ErrorPayloadOp>(loc, payloadType, euVal);
+      b.create<cir::BrOp>(loc, mlir::ValueRange{payload}, mergeBlock);
+      // Merge: result is block argument
+      b.setInsertionPointToStart(mergeBlock);
+      return mergeBlock->getArgument(0);
     }
 
     case ExprKind::Ident: {
@@ -230,13 +312,15 @@ class CodeGen {
           b.getFloatAttr(resultType, e.floatVal));
 
     case ExprKind::Cast: {
-      // Explicit cast: x as i64
+      // Explicit cast: x as i64 / x as u64
       // Emit operand with its own type, then insert the correct cast op.
+      // If target type name starts with 'u', use unsigned extension.
       auto dstType = resolveType(e.targetType);
       auto srcVal = emitExpr(*e.lhs, resultType);
       auto srcType = srcVal.getType();
       if (srcType == dstType) return srcVal; // no-op cast
-      return emitCast(srcVal, srcType, dstType);
+      bool isUnsigned = !e.targetType.name.empty() && e.targetType.name[0] == 'u';
+      return emitCast(srcVal, srcType, dstType, isUnsigned);
     }
 
     case ExprKind::ArrayLit: {
@@ -410,7 +494,7 @@ class CodeGen {
   /// Emit the correct CIR cast op based on source and destination types.
   /// Reference: Arith dialect — one op per direction, no mega-cast.
   mlir::Value emitCast(mlir::Value input, mlir::Type srcType,
-                       mlir::Type dstType) {
+                       mlir::Type dstType, bool isUnsigned = false) {
     bool srcInt = llvm::isa<mlir::IntegerType>(srcType);
     bool dstInt = llvm::isa<mlir::IntegerType>(dstType);
     bool srcFloat = llvm::isa<mlir::FloatType>(srcType);
@@ -419,8 +503,11 @@ class CodeGen {
     if (srcInt && dstInt) {
       unsigned srcW = srcType.getIntOrFloatBitWidth();
       unsigned dstW = dstType.getIntOrFloatBitWidth();
-      if (dstW > srcW)
+      if (dstW > srcW) {
+        if (isUnsigned)
+          return b.create<cir::ExtUIOp>(loc, dstType, input);
         return b.create<cir::ExtSIOp>(loc, dstType, input);
+      }
       if (dstW < srcW)
         return b.create<cir::TruncIOp>(loc, dstType, input);
       return input;
@@ -465,6 +552,14 @@ class CodeGen {
     return b.create<cir::WrapOptionalOp>(loc, optType, val);
   }
 
+  /// If target is error union but value is T, auto-wrap with cir.wrap_result.
+  mlir::Value maybeWrapErrorUnion(mlir::Value val, mlir::Type targetType) {
+    auto euType = llvm::dyn_cast<cir::ErrorUnionType>(targetType);
+    if (!euType) return val;
+    if (llvm::isa<cir::ErrorUnionType>(val.getType())) return val;
+    return b.create<cir::WrapResultOp>(loc, euType, val);
+  }
+
   void emitLetVar(const Stmt &s) {
     auto varType = resolveType(s.varType);
     auto ptrType = cir::PointerType::get(b.getContext());
@@ -473,18 +568,84 @@ class CodeGen {
     // For optional vars with non-null initializer, pass the payload type
     // to emitExpr so it produces T, then auto-wrap to ?T.
     // For null initializer, pass the full optional type.
+    // Same pattern for error union vars with non-error initializers.
     mlir::Type exprType = varType;
     if (auto optType = llvm::dyn_cast<cir::OptionalType>(varType)) {
       if (s.expr->kind != ExprKind::NullLit)
         exprType = optType.getPayloadType();
     }
+    if (auto euType = llvm::dyn_cast<cir::ErrorUnionType>(varType)) {
+      if (s.expr->kind != ExprKind::ErrorLit &&
+          s.expr->kind != ExprKind::TryExpr &&
+          s.expr->kind != ExprKind::CatchExpr)
+        exprType = euType.getPayloadType();
+    }
     auto val = emitExpr(*s.expr, exprType);
     val = maybeWrapOptional(val, varType);
+    val = maybeWrapErrorUnion(val, varType);
     b.create<cir::StoreOp>(loc, val, addr);
     localAddrs[s.varName] = {addr, varType};
   }
 
   void emitAssign(const Stmt &s) {
+    // Field assignment: p.x = expr (rangeEnd holds field info)
+    if (s.rangeEnd && s.rangeEnd->kind == ExprKind::FieldAccess) {
+      auto lit = localAddrs.find(s.varName);
+      if (lit == localAddrs.end()) {
+        llvm::errs() << "error: undefined variable '" << s.varName << "'\n";
+        return;
+      }
+      auto [addr, elemType] = lit->second;
+      // Get struct type — may be direct struct or ref to struct
+      auto structType = elemType;
+      if (auto refType = llvm::dyn_cast<cir::RefType>(elemType))
+        structType = refType.getPointeeType();
+      auto cirStruct = llvm::dyn_cast<cir::StructType>(structType);
+      if (!cirStruct) {
+        llvm::errs() << "error: field assignment requires struct type\n";
+        return;
+      }
+      auto fieldName = llvm::StringRef(s.rangeEnd->name.data(),
+                                        s.rangeEnd->name.size());
+      int fieldIdx = cirStruct.getFieldIndex(fieldName);
+      if (fieldIdx < 0) {
+        llvm::errs() << "error: no field '" << fieldName << "'\n";
+        return;
+      }
+      auto fieldType = cirStruct.getFieldTypes()[fieldIdx];
+      auto val = emitExpr(*s.expr, fieldType);
+      // Use field_ptr to get pointer to the field, then store
+      auto fieldPtr = b.create<cir::FieldPtrOp>(loc,
+          cir::PointerType::get(b.getContext()),
+          addr, b.getI64IntegerAttr(fieldIdx),
+          mlir::TypeAttr::get(cirStruct));
+      b.create<cir::StoreOp>(loc, val, fieldPtr);
+      return;
+    }
+    // Index assignment: arr[i] = expr (op == l_bracket, rangeEnd = index)
+    if (s.op == Tag::l_bracket && s.rangeEnd) {
+      auto lit = localAddrs.find(s.varName);
+      if (lit == localAddrs.end()) {
+        llvm::errs() << "error: undefined variable '" << s.varName << "'\n";
+        return;
+      }
+      auto [addr, elemType] = lit->second;
+      auto arrType = llvm::dyn_cast<cir::ArrayType>(elemType);
+      if (!arrType) {
+        llvm::errs() << "error: index assignment requires array type\n";
+        return;
+      }
+      auto arrElemType = arrType.getElementType();
+      auto val = emitExpr(*s.expr, arrElemType);
+      auto idx = emitExpr(*s.rangeEnd, b.getI64Type());
+      // Use elem_ptr to get pointer to array element, then store
+      auto elemPtr = b.create<cir::ElemPtrOp>(loc,
+          cir::PointerType::get(b.getContext()),
+          addr, idx, mlir::TypeAttr::get(elemType));
+      b.create<cir::StoreOp>(loc, val, elemPtr);
+      return;
+    }
+    // Simple assignment: x = expr
     auto lit = localAddrs.find(s.varName);
     if (lit == localAddrs.end()) {
       llvm::errs() << "error: undefined variable '" << s.varName << "'\n";
@@ -614,7 +775,20 @@ class CodeGen {
     switch (s.kind) {
     case StmtKind::Return:
       if (s.expr) {
-        auto val = emitExpr(*s.expr, returnType);
+        // For error union return types with non-error initializer, emit the
+        // payload type then auto-wrap. Same pattern as optional/let.
+        mlir::Type exprType = returnType;
+        if (auto euType = llvm::dyn_cast<cir::ErrorUnionType>(returnType)) {
+          if (s.expr->kind != ExprKind::ErrorLit)
+            exprType = euType.getPayloadType();
+        }
+        if (auto optType = llvm::dyn_cast<cir::OptionalType>(returnType)) {
+          if (s.expr->kind != ExprKind::NullLit)
+            exprType = optType.getPayloadType();
+        }
+        auto val = emitExpr(*s.expr, exprType);
+        val = maybeWrapOptional(val, returnType);
+        val = maybeWrapErrorUnion(val, returnType);
         b.create<mlir::func::ReturnOp>(loc, mlir::ValueRange{val});
       } else {
         b.create<mlir::func::ReturnOp>(loc, mlir::ValueRange{});
@@ -648,7 +822,68 @@ class CodeGen {
       emitIfStmt(s, returnType, parentFunc); break;
     case StmtKind::IfUnwrap:
       emitIfUnwrapStmt(s, returnType, parentFunc); break;
+    case StmtKind::Throw:
+      emitThrowStmt(s); break;
+    case StmtKind::TryCatch:
+      emitTryCatchStmt(s, returnType, parentFunc); break;
     }
+  }
+
+  void emitThrowStmt(const Stmt &s) {
+    // throw expr → cir.throw %val
+    auto val = emitExpr(*s.expr, b.getI32Type());
+    b.create<cir::ThrowOp>(loc, val);
+  }
+
+  void emitTryCatchStmt(const Stmt &s, mlir::Type returnType,
+                          mlir::func::FuncOp parentFunc) {
+    // try { body } catch |e| { handler }
+    // Proper block structure (same pattern as emitIfStmt):
+    //   current block → br ^tryBody
+    //   ^tryBody:  <body stmts>  br ^merge (if not terminated)
+    //   ^catchBody: landingpad, bind e, <handler stmts>, br ^merge
+    //   ^merge: <continue>
+
+    auto *tryBlock = addBlock(parentFunc);
+    auto *catchBlock = addBlock(parentFunc);
+    auto *mergeBlock = addBlock(parentFunc);
+
+    // Connect catch block: use condbr with always-false condition.
+    // This makes the catch block reachable in the CFG (required for MLIR
+    // full conversion), but never taken at runtime. Phase 2 will replace
+    // this with cir.invoke which naturally connects the unwind path.
+    // condbr true → tryBlock, false → catchBlock (catch never taken)
+    auto trueCond = b.create<cir::ConstantOp>(loc, b.getI1Type(),
+        b.getIntegerAttr(b.getI1Type(), 1));
+    b.create<cir::CondBrOp>(loc, trueCond, tryBlock, catchBlock);
+
+    // Try body
+    b.setInsertionPointToStart(tryBlock);
+    for (auto &st : s.thenBody) emitStmt(*st, returnType, parentFunc);
+    bool tryReturns = !tryBlock->empty() &&
+        tryBlock->back().hasTrait<mlir::OpTrait::IsTerminator>();
+    if (!tryReturns)
+      b.create<cir::BrOp>(loc, mlir::ValueRange{}, mergeBlock);
+
+    // Catch block: landingpad + bind error + handler
+    b.setInsertionPointToStart(catchBlock);
+    auto excVal = b.create<cir::LandingPadOp>(loc, b.getI32Type());
+    auto ptrType = cir::PointerType::get(b.getContext());
+    auto errAddr = b.create<cir::AllocaOp>(loc, ptrType,
+        mlir::TypeAttr::get(b.getI32Type()));
+    b.create<cir::StoreOp>(loc, excVal, errAddr);
+    localAddrs[s.varName] = {errAddr, b.getI32Type()};
+    for (auto &st : s.elseBody) emitStmt(*st, returnType, parentFunc);
+    localAddrs.erase(s.varName);
+    bool catchReturns = !catchBlock->empty() &&
+        catchBlock->back().hasTrait<mlir::OpTrait::IsTerminator>();
+    if (!catchReturns)
+      b.create<cir::BrOp>(loc, mlir::ValueRange{}, mergeBlock);
+
+    // Merge block
+    b.setInsertionPointToStart(mergeBlock);
+    if (tryReturns && catchReturns)
+      b.create<cir::TrapOp>(loc);
   }
 
   void emitIfUnwrapStmt(const Stmt &s, mlir::Type returnType,
@@ -738,8 +973,10 @@ class CodeGen {
       namedValues[fn.params[i].name] = entry->getArgument(i);
 
     mlir::Type retType = resultTypes.empty() ? b.getNoneType() : resultTypes[0];
-    for (auto &stmt : fn.body)
+    for (auto &stmt : fn.body) {
+      if (blockTerminated()) break;
       emitStmt(*stmt, retType, funcOp);
+    }
 
     module.push_back(funcOp);
   }
@@ -757,8 +994,10 @@ class CodeGen {
     b.setInsertionPointToStart(entry);
     namedValues.clear();
 
-    for (auto &stmt : td.body)
+    for (auto &stmt : td.body) {
+      if (blockTerminated()) break;
       emitStmt(*stmt, b.getNoneType(), funcOp);
+    }
 
     // Implicit void return if not terminated
     auto &lastBlock = funcOp.getBody().back();

@@ -61,6 +61,8 @@ enum class Tag {
   kw_await,
   kw_try,
   kw_catch,
+  kw_throw,
+  kw_error,
   kw_null,
   kw_self,
   kw_type,

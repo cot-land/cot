@@ -158,6 +158,16 @@ const Gen = struct {
             const child_type = self.resolveType(child_node);
             return mlir.cirOptionalTypeGet(self.ctx, child_type);
         }
+        // Error union type: E!T → !cir.error_union<T>
+        // Reference: Zig AstGen — error_union node has node_and_node data
+        // [0] = error set type (ignored for now — CIR uses generic i16 error code)
+        // [1] = payload type
+        if (tag == .error_union) {
+            const d = self.tree.nodeData(node).node_and_node;
+            const payload_node = d[1];
+            const payload_type = self.resolveType(payload_node);
+            return mlir.cirErrorUnionTypeGet(self.ctx, payload_type);
+        }
         return self.i32Type();
     }
 
@@ -460,7 +470,22 @@ const Gen = struct {
                 const ret_opt = self.tree.nodeData(node).opt_node;
                 if (ret_opt.unwrap()) |ret_expr| {
                     if (result_types.len > 0) {
-                        const val = self.mapExpr(blk, ret_expr, result_types[0]);
+                        const ret_type = result_types[0];
+                        // If return type is error union and the return expr
+                        // is NOT an error value, emit with payload type then
+                        // auto-wrap. Error values need the full EU type.
+                        var emit_type = ret_type;
+                        if (mlir.cirTypeIsErrorUnion(ret_type)) {
+                            const ret_tag = self.tree.nodeTag(ret_expr);
+                            if (ret_tag != .error_value) {
+                                emit_type = mlir.cirErrorUnionTypeGetPayload(ret_type);
+                            }
+                        }
+                        var val = self.mapExpr(blk, ret_expr, emit_type);
+                        // Auto-wrap into error union if needed
+                        if (mlir.cirTypeIsErrorUnion(ret_type) and !mlir.cirTypeIsErrorUnion(mlir.mlirValueGetType(val))) {
+                            val = mlir.cirBuildWrapResult(blk, self.b.loc, ret_type, val);
+                        }
                         _ = self.b.emit(blk, "func.return", &.{}, &.{val}, &.{});
                     } else {
                         _ = self.b.emit(blk, "func.return", &.{}, &.{}, &.{});
@@ -474,17 +499,78 @@ const Gen = struct {
                 const d = self.tree.nodeData(node).node_and_node;
                 const cond_node = d[0];
                 const then_node = d[1];
-                const cond = self.mapExpr(blk, cond_node, self.b.intType(1));
-                const then_block = self.addBlock();
-                const merge_block = self.addBlock();
-                mlir.cirBuildCondBr(blk, self.b.loc, cond, then_block, merge_block);
-                self.mapBlock(then_block, then_node, result_types);
-                if (!self.has_terminator) {
-                    const empty_args: [0]mlir.Value = undefined;
-                    mlir.cirBuildBr(self.current_block, self.b.loc, merge_block, 0, &empty_args);
+
+                // Detect if-unwrap: if (opt) |val| { ... }
+                // Payload capture is indicated by pipe token after condition
+                const payload_pipe = self.tree.lastToken(cond_node) + 2;
+                const has_payload = self.tree.tokenTag(payload_pipe) == .pipe;
+
+                if (has_payload) {
+                    // If-unwrap: emit is_non_null + condbr + optional_payload in then block
+                    // First emit the optional value (not as bool)
+                    const opt_val = self.mapExpr(blk, cond_node, self.i32Type());
+                    const opt_type = mlir.mlirValueGetType(opt_val);
+
+                    if (mlir.cirTypeIsOptional(opt_type)) {
+                        const cond = mlir.cirBuildIsNonNull(blk, self.b.loc, opt_val);
+                        const then_block = self.addBlock();
+                        const merge_block = self.addBlock();
+                        mlir.cirBuildCondBr(blk, self.b.loc, cond, then_block, merge_block);
+
+                        // Then block: extract payload, bind as parameter
+                        const payload_type = mlir.cirOptionalTypeGetPayload(opt_type);
+                        const payload = mlir.cirBuildOptionalPayload(then_block, self.b.loc, payload_type, opt_val);
+
+                        // Bind captured variable: payload_token is the name
+                        const capture_name = self.tree.tokenSlice(payload_pipe + 1);
+                        // Store payload in alloca so it's accessible by name
+                        const alloca = mlir.cirBuildAlloca(then_block, self.b.loc, payload_type);
+                        mlir.cirBuildStore(then_block, self.b.loc, payload, alloca);
+                        self.local_names.append(self.gpa, capture_name) catch @panic("OOM");
+                        self.local_addrs.append(self.gpa, alloca) catch @panic("OOM");
+                        self.local_types.append(self.gpa, payload_type) catch @panic("OOM");
+
+                        self.mapBlock(then_block, then_node, result_types);
+                        if (!self.has_terminator) {
+                            const empty_args: [0]mlir.Value = undefined;
+                            mlir.cirBuildBr(self.current_block, self.b.loc, merge_block, 0, &empty_args);
+                        }
+
+                        // Remove captured variable from scope
+                        _ = self.local_names.pop();
+                        _ = self.local_addrs.pop();
+                        _ = self.local_types.pop();
+
+                        self.current_block = merge_block;
+                        self.has_terminator = false;
+                    } else {
+                        // Fallback: treat as regular bool if
+                        const cond = self.mapExpr(blk, cond_node, self.b.intType(1));
+                        const then_block = self.addBlock();
+                        const merge_block = self.addBlock();
+                        mlir.cirBuildCondBr(blk, self.b.loc, cond, then_block, merge_block);
+                        self.mapBlock(then_block, then_node, result_types);
+                        if (!self.has_terminator) {
+                            const empty_args: [0]mlir.Value = undefined;
+                            mlir.cirBuildBr(self.current_block, self.b.loc, merge_block, 0, &empty_args);
+                        }
+                        self.current_block = merge_block;
+                        self.has_terminator = false;
+                    }
+                } else {
+                    // Regular if: evaluate condition as bool
+                    const cond = self.mapExpr(blk, cond_node, self.b.intType(1));
+                    const then_block = self.addBlock();
+                    const merge_block = self.addBlock();
+                    mlir.cirBuildCondBr(blk, self.b.loc, cond, then_block, merge_block);
+                    self.mapBlock(then_block, then_node, result_types);
+                    if (!self.has_terminator) {
+                        const empty_args: [0]mlir.Value = undefined;
+                        mlir.cirBuildBr(self.current_block, self.b.loc, merge_block, 0, &empty_args);
+                    }
+                    self.current_block = merge_block;
+                    self.has_terminator = false;
                 }
-                self.current_block = merge_block;
-                self.has_terminator = false;
             },
             .while_simple => {
                 const d = self.tree.nodeData(node).node_and_node;
@@ -695,6 +781,21 @@ const Gen = struct {
             .string_literal => blk2: {
                 break :blk2 self.mapStringLit(block, node);
             },
+            // try expr — error union unwrap with error propagation
+            // Reference: Zig AstGen — try node has data.node (the operand)
+            .@"try" => blk2: {
+                break :blk2 self.mapTryExpr(block, node, result_type);
+            },
+            // catch expr — error union unwrap with fallback
+            // Reference: Zig AstGen — catch node has data.node_and_node
+            .@"catch" => blk2: {
+                break :blk2 self.mapCatchExpr(block, node, result_type);
+            },
+            // error.Name — error set value → i16 constant
+            // Reference: Zig AstGen — error_value main_token is `error`, name at main_token + 2
+            .error_value => blk2: {
+                break :blk2 self.mapErrorValue(block, node, result_type);
+            },
             else => mlir.cirBuildConstantInt(block, self.b.loc, result_type, 0),
         };
     }
@@ -714,6 +815,12 @@ const Gen = struct {
         const tok = self.tree.nodeMainToken(node);
         const text = self.tree.tokenSlice(tok);
         const val = std.fmt.parseInt(i64, text, 10) catch 0;
+        // If result type is error union, emit constant with payload type then wrap
+        if (mlir.cirTypeIsErrorUnion(result_type)) {
+            const payload_type = mlir.cirErrorUnionTypeGetPayload(result_type);
+            const payload_val = mlir.cirBuildConstantInt(block, self.b.loc, payload_type, val);
+            return mlir.cirBuildWrapResult(block, self.b.loc, result_type, payload_val);
+        }
         return mlir.cirBuildConstantInt(block, self.b.loc, result_type, val);
     }
 
@@ -795,6 +902,20 @@ const Gen = struct {
             // @intFromFloat: float → integer
             const src = self.mapExpr(block, arg_node, mlir.mlirF64TypeGet(self.ctx));
             return self.emitCast(block, src, result_type);
+        }
+        if (std.mem.eql(u8, builtin_name, "@divTrunc")) {
+            // @divTrunc(a, b): signed integer division → cir.div
+            const arg2_node = d[1].unwrap() orelse return mlir.Value{ .ptr = null };
+            const lhs = self.mapExpr(block, arg_node, result_type);
+            const rhs = self.mapExpr(block, arg2_node, result_type);
+            return mlir.cirBuildDiv(block, self.b.loc, result_type, lhs, rhs);
+        }
+        if (std.mem.eql(u8, builtin_name, "@mod")) {
+            // @mod(a, b): signed integer remainder → cir.rem
+            const arg2_node = d[1].unwrap() orelse return mlir.Value{ .ptr = null };
+            const lhs = self.mapExpr(block, arg_node, result_type);
+            const rhs = self.mapExpr(block, arg2_node, result_type);
+            return mlir.cirBuildRem(block, self.b.loc, result_type, lhs, rhs);
         }
         // Unknown builtin — fallback
         return self.mapExpr(block, arg_node, result_type);
@@ -1050,5 +1171,108 @@ const Gen = struct {
         return self.b.emit(block, "func.call", &.{result_type}, args, &.{
             self.b.attr("callee", mlir.mlirFlatSymbolRefAttrGet(self.ctx, mlir.StringRef.fromSlice(callee_name))),
         });
+    }
+
+    // ============================================================
+    // Error union handling — try/catch/error.Name
+    // Reference: Zig AstGen — try unwraps error union, propagates on error
+    // ============================================================
+
+    /// `try expr` — evaluate expr, if error propagate it (return error),
+    /// otherwise unwrap to payload.
+    /// Emits: is_error check → condbr → error path (return error code) / success path (payload)
+    fn mapTryExpr(self: *Gen, block: mlir.Block, node: Node.Index, result_type: mlir.Type) mlir.Value {
+        const operand_node = self.tree.nodeData(node).node;
+        // Build the error union type from the expected payload (result_type)
+        const eu_type = mlir.cirErrorUnionTypeGet(self.ctx, result_type);
+        const eu_val = self.mapExpr(block, operand_node, eu_type);
+
+        // Check if the value is an error
+        const is_err = mlir.cirBuildIsError(block, self.b.loc, eu_val);
+
+        // Create blocks: error path and success path
+        const err_block = self.addBlock();
+        const ok_block = self.addBlock();
+        mlir.cirBuildCondBr(block, self.b.loc, is_err, err_block, ok_block);
+
+        // Error path: extract error code, wrap in function's return EU type, return it
+        const err_code = mlir.cirBuildErrorCode(err_block, self.b.loc, eu_val);
+        // Propagate: wrap error code in the function's return error union type and return
+        // For now, return the error code as i16 via func.return
+        // (The caller's return type should be an error union — the verifier will catch mismatches)
+        const ret_eu_type = mlir.cirErrorUnionTypeGet(self.ctx, result_type);
+        const wrapped_err = mlir.cirBuildWrapError(err_block, self.b.loc, ret_eu_type, err_code);
+        _ = self.b.emit(err_block, "func.return", &.{}, &.{wrapped_err}, &.{});
+
+        // Success path: extract payload — this becomes our current insertion block
+        const payload = mlir.cirBuildErrorPayload(ok_block, self.b.loc, result_type, eu_val);
+        self.current_block = ok_block;
+        return payload;
+    }
+
+    /// `expr catch fallback` — evaluate expr, if error use fallback, otherwise payload.
+    /// Emits: is_error check → condbr → error path (eval fallback) / success path (payload)
+    /// Both paths branch to a merge block with a block argument for the result.
+    fn mapCatchExpr(self: *Gen, block: mlir.Block, node: Node.Index, result_type: mlir.Type) mlir.Value {
+        const d = self.tree.nodeData(node).node_and_node;
+        const lhs_node = d[0]; // error union expression
+        const rhs_node = d[1]; // fallback expression
+
+        // Build the error union type from the expected payload (result_type)
+        const eu_type = mlir.cirErrorUnionTypeGet(self.ctx, result_type);
+        const eu_val = self.mapExpr(block, lhs_node, eu_type);
+
+        // Check if the value is an error
+        const is_err = mlir.cirBuildIsError(block, self.b.loc, eu_val);
+
+        // Create blocks: error (fallback) path, success (payload) path, merge
+        const err_block = self.addBlock();
+        const ok_block = self.addBlock();
+        const merge_block = self.b.createBlock(&.{result_type});
+        // Add merge block to function region
+        const region = mlir.mlirOperationGetRegion(self.current_func, 0);
+        mlir.mlirRegionAppendOwnedBlock(region, merge_block);
+
+        mlir.cirBuildCondBr(block, self.b.loc, is_err, err_block, ok_block);
+
+        // Error path: evaluate fallback, branch to merge with fallback value
+        const fallback_val = self.mapExpr(err_block, rhs_node, result_type);
+        mlir.cirBuildBr(err_block, self.b.loc, merge_block, 1, &[_]mlir.Value{fallback_val});
+
+        // Success path: extract payload, branch to merge with payload value
+        const payload = mlir.cirBuildErrorPayload(ok_block, self.b.loc, result_type, eu_val);
+        mlir.cirBuildBr(ok_block, self.b.loc, merge_block, 1, &[_]mlir.Value{payload});
+
+        // Continue in merge block — result is the block argument
+        self.current_block = merge_block;
+        return mlir.mlirBlockGetArgument(merge_block, 0);
+    }
+
+    /// `error.Name` — Zig error set literal → i16 constant.
+    /// Maps error names to unique i16 codes via simple hashing.
+    /// Reference: Zig AstGen — error_value main_token is `error`, name at main_token + 2
+    fn mapErrorValue(self: *Gen, block: mlir.Block, node: Node.Index, result_type: mlir.Type) mlir.Value {
+        const main_tok = self.tree.nodeMainToken(node);
+        // error.Name — the name token is at main_token + 2 (skip `error` and `.`)
+        const name_tok = main_tok + 2;
+        const name = self.tree.tokenSlice(name_tok);
+
+        // Map error name to a stable i16 code via simple hash.
+        // Code 0 is reserved for "no error" (success), so start from 1.
+        var hash: u16 = 0;
+        for (name) |c| {
+            hash = hash *% 31 +% @as(u16, c);
+        }
+        if (hash == 0) hash = 1; // avoid 0 (success sentinel)
+        const code: i64 = @intCast(hash);
+
+        // If result_type is an error union, wrap the code
+        if (mlir.cirTypeIsErrorUnion(result_type)) {
+            const err_code = mlir.cirBuildConstantInt(block, self.b.loc, self.b.intType(16), code);
+            return mlir.cirBuildWrapError(block, self.b.loc, result_type, err_code);
+        }
+
+        // Otherwise return raw i16 error code
+        return mlir.cirBuildConstantInt(block, self.b.loc, self.b.intType(16), code);
     }
 };

@@ -644,4 +644,158 @@ def CIR_OptionalPayloadOp : CIR_Op<"optional_payload", [Pure]> {
   let hasVerifier = 1;
 }
 
+//===----------------------------------------------------------------------===//
+// Error union operations
+// Reference: Zig E!T — wrap_errunion_payload, wrap_errunion_err, is_err,
+//            unwrap_errunion_payload, unwrap_errunion_err
+//===----------------------------------------------------------------------===//
+
+def CIR_WrapResultOp : CIR_Op<"wrap_result", [Pure]> {
+  let summary = "wrap success value in error union (T → E!T)";
+  let description = [{
+    Wraps a non-error value into an error union (the success case).
+    Sets error_code = 0 (no error).
+    Reference: Zig wrap_errunion_payload AIR instruction.
+    Example:
+      %eu = cir.wrap_result %val : i32 to !cir.error_union<i32>
+  }];
+  let arguments = (ins AnyType:$input);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$input attr-dict `:` type($input) `to` type($result)";
+  let hasVerifier = 1;
+}
+
+def CIR_WrapErrorOp : CIR_Op<"wrap_error", [Pure]> {
+  let summary = "wrap error code in error union (i16 → E!T)";
+  let description = [{
+    Wraps an error code into an error union (the error case).
+    Payload is undefined. Error code must be nonzero.
+    Reference: Zig wrap_errunion_err AIR instruction.
+    Example:
+      %eu = cir.wrap_error %code : i16 to !cir.error_union<i32>
+  }];
+  let arguments = (ins AnyInteger:$input);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$input attr-dict `:` type($input) `to` type($result)";
+  let hasVerifier = 1;
+}
+
+def CIR_IsErrorOp : CIR_Op<"is_error", [Pure]> {
+  let summary = "test error union for error → i1";
+  let description = [{
+    Returns true (i1) if the error union contains an error, false if success.
+    Reference: Zig is_err AIR instruction.
+    Example:
+      %b = cir.is_error %eu : !cir.error_union<i32> to i1
+  }];
+  let arguments = (ins AnyType:$input);
+  let results = (outs I1:$result);
+  let assemblyFormat = "$input attr-dict `:` type($input) `to` type($result)";
+  let hasVerifier = 1;
+}
+
+def CIR_ErrorPayloadOp : CIR_Op<"error_payload", [Pure]> {
+  let summary = "extract success value from error union (unchecked)";
+  let description = [{
+    Extracts the payload from an error union. Unchecked — caller must have
+    already branched on cir.is_error. Safety passes can add checks.
+    Reference: Zig unwrap_errunion_payload AIR instruction.
+    Example:
+      %val = cir.error_payload %eu : !cir.error_union<i32> to i32
+  }];
+  let arguments = (ins AnyType:$input);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$input attr-dict `:` type($input) `to` type($result)";
+  let hasVerifier = 1;
+}
+
+def CIR_ErrorCodeOp : CIR_Op<"error_code", [Pure]> {
+  let summary = "extract error code from error union";
+  let description = [{
+    Extracts the i16 error code from an error union. Returns 0 if the
+    error union holds a success value.
+    Reference: Zig unwrap_errunion_err AIR instruction.
+    Example:
+      %code = cir.error_code %eu : !cir.error_union<i32> to i16
+  }];
+  let arguments = (ins AnyType:$input);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$input attr-dict `:` type($input) `to` type($result)";
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Exception-based error handling
+// Reference: LLVM InvokeOp/LandingpadOp, Swift try_apply
+// Alternative to error unions — frontends choose which model fits.
+// TS/Java/C#/C++ use exceptions. Zig/Rust use error unions. Both in CIR.
+//===----------------------------------------------------------------------===//
+
+def CIR_ThrowOp : CIR_Op<"throw", [Terminator]> {
+  let summary = "throw an exception value";
+  let description = [{
+    Throws an exception value. Transfers control to the nearest enclosing
+    catch handler via stack unwinding.
+
+    Lowers to: __cxa_allocate_exception + __cxa_throw (C++ ABI), or
+    a simpler runtime call for languages without C++ interop.
+
+    Reference: LLVM resume instruction, C++ throw expression.
+
+    Example:
+      cir.throw %val : i32
+  }];
+  let arguments = (ins AnyType:$value);
+  let assemblyFormat = "$value attr-dict `:` type($value)";
+}
+
+def CIR_InvokeOp : CIR_Op<"invoke",
+    [Terminator, DeclareOpInterfaceMethods<BranchOpInterface>]> {
+  let summary = "call that may throw — normal/unwind successors";
+  let description = [{
+    Calls a function that may throw an exception. If the call returns
+    normally, control transfers to normalDest. If it throws, control
+    transfers to unwindDest (which must begin with cir.landingpad).
+
+    This is LLVM's invoke instruction. Used by languages with exception-
+    based error handling (TypeScript, Java, C#, C++, Python).
+
+    Reference: LLVM InvokeOp, Swift try_apply.
+
+    Example:
+      %r = cir.invoke @may_throw(%arg) : (i32) -> i32
+            normal ^ok unwind ^catch
+  }];
+  let arguments = (ins FlatSymbolRefAttr:$callee,
+                       Variadic<AnyType>:$operands);
+  let results = (outs Optional<AnyType>:$result);
+  let successors = (successor AnySuccessor:$normalDest,
+                              AnySuccessor:$unwindDest);
+  let assemblyFormat = [{
+    $callee `(` $operands `)` attr-dict `:` functional-type($operands, results)
+    `normal` $normalDest `unwind` $unwindDest
+  }];
+}
+
+def CIR_LandingPadOp : CIR_Op<"landingpad", [Pure]> {
+  let summary = "catch thrown exception value";
+  let description = [{
+    Catches an exception at the start of an unwind block. Returns the
+    caught exception value. Must be the first op in a block that is
+    the unwind destination of a cir.invoke.
+
+    For simplicity, CIR's landingpad catches all exceptions (catch-all).
+    Type-specific catching can be added later via catch clause attributes.
+
+    Lowers to: llvm.landingpad (catch null) + __cxa_begin_catch.
+
+    Reference: LLVM LandingpadOp, C++ catch(...).
+
+    Example:
+      %exc = cir.landingpad : i32
+  }];
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "attr-dict `:` type($result)";
+}
+
 #endif // CIR_OPS

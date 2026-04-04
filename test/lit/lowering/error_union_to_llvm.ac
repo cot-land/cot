@@ -1,0 +1,29 @@
+// RUN: %cot emit-llvm %s | %FileCheck %s
+
+// Features #045-048: Error union lowering
+// !cir.error_union<i32> → !llvm.struct<(i32, i16)>
+// wrap_result → undef + insertvalue(payload, [0]) + insertvalue(i16 0, [1])
+// wrap_error → undef + insertvalue(error_code, [1])
+// is_error → extractvalue [1] + icmp ne 0
+// error_payload → extractvalue [0]
+// error_code → extractvalue [1]
+
+fn get_error() -> !i32 {
+    return error(1)
+}
+
+fn get_result() -> !i32 {
+    let y: !i32 = 42
+    return y
+}
+
+// CHECK-LABEL: llvm.func @get_error
+// CHECK: llvm.mlir.undef : !llvm.struct<(i32, i16)>
+// CHECK: llvm.insertvalue {{.*}}[1] : !llvm.struct<(i32, i16)>
+// CHECK: llvm.return
+
+// CHECK-LABEL: llvm.func @get_result
+// CHECK: llvm.mlir.undef : !llvm.struct<(i32, i16)>
+// CHECK: llvm.insertvalue {{.*}}[0] : !llvm.struct<(i32, i16)>
+// CHECK: llvm.insertvalue {{.*}}[1] : !llvm.struct<(i32, i16)>
+// CHECK: llvm.return

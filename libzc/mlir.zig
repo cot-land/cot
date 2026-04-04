@@ -200,6 +200,21 @@ pub extern "c" fn cirBuildSlicePtr(block: Block, loc: Location, slice: Value) ca
 pub extern "c" fn cirBuildSliceLen(block: Block, loc: Location, slice: Value) callconv(.c) Value;
 pub extern "c" fn cirBuildSliceElem(block: Block, loc: Location, elem: Type, slice: Value, idx: Value) callconv(.c) Value;
 
+// Error union type + ops
+pub extern "c" fn cirErrorUnionTypeGet(ctx: Context, payload: Type) callconv(.c) Type;
+pub extern "c" fn cirTypeIsErrorUnion(ty: Type) callconv(.c) bool;
+pub extern "c" fn cirErrorUnionTypeGetPayload(ty: Type) callconv(.c) Type;
+pub extern "c" fn cirBuildWrapResult(block: Block, loc: Location, euType: Type, value: Value) callconv(.c) Value;
+pub extern "c" fn cirBuildWrapError(block: Block, loc: Location, euType: Type, errorCode: Value) callconv(.c) Value;
+pub extern "c" fn cirBuildIsError(block: Block, loc: Location, errorUnion: Value) callconv(.c) Value;
+pub extern "c" fn cirBuildErrorPayload(block: Block, loc: Location, payloadType: Type, errorUnion: Value) callconv(.c) Value;
+pub extern "c" fn cirBuildErrorCode(block: Block, loc: Location, errorUnion: Value) callconv(.c) Value;
+
+// Exception-based error handling
+pub extern "c" fn cirBuildThrow(block: Block, loc: Location, value: Value) callconv(.c) void;
+pub extern "c" fn cirBuildInvoke(block: Block, loc: Location, callee: StringRef, nOperands: isize, operands: [*]const Value, resultType: Type, normalDest: Block, unwindDest: Block) callconv(.c) Value;
+pub extern "c" fn cirBuildLandingPad(block: Block, loc: Location, resultType: Type) callconv(.c) Value;
+
 // ============================================================
 // Convenience API (ported from cot-failed/libzc/mlir.zig)
 // ============================================================

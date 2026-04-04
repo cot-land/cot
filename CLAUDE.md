@@ -45,6 +45,18 @@ ac exists to dogfood the compiler toolkit. It is not the product. CIR is the pro
 
 The LLM bias lands on: Rust syntax + Go cleanliness. `fn`, `let`/`var`, `-> type`, `name: type`, `{}` blocks, no semicolons, no parens on conditions.
 
+### 3. CIR supports alternative constructs. Frontends choose.
+
+CIR is a universal IR — it must express what every language needs, even when languages solve the same problem differently. When multiple approaches exist for the same concept, CIR provides ops for **all of them**. A frontend decides which to use (or both).
+
+**Example: Error handling**
+- **Error unions** (`cir.wrap_result`, `cir.is_error`, etc.) — Zig `E!T`, Rust `Result<T,E>`. Errors as values, zero-cost, compile-time enforced.
+- **Exceptions** (`cir.throw`, `cir.invoke`, `cir.landingpad`) — TypeScript, Java, C#, C++, Python. Stack unwinding, runtime cost, not in the type system.
+
+Both coexist in CIR. A Zig frontend uses error unions. A TypeScript frontend uses exceptions. A language like Swift that has both (`throws` + `Result<T,E>`) can use both. CIR doesn't pick winners — it provides building blocks.
+
+This applies broadly: multiple memory models (ARC, GC, manual), multiple dispatch styles (static, vtable, existential), multiple concurrency models (async/await, actors, goroutines). CIR ops exist for each.
+
 ---
 
 ## Rules
@@ -79,6 +91,15 @@ Every feature from `claude/FEATURES.md` follows this checklist. Do ALL steps —
 10. **Inline tests.** Add or extend `test/inline/<NNN>_<name>_test.ac` with `test "name" { assert(...) }` blocks to verify runtime correctness.
 11. **Build + test ALL.** Run `make all && make test`. All tests must pass.
 12. **Update docs.** Mark feature ✓ in `claude/FEATURES.md`. Update `claude/HANDOFF.md` (op count, test count, next features).
+
+**Test-first rule:** Write correct tests FIRST. If a test fails, the test is correct — fix the implementation, not the test. Never modify, simplify, or remove a test to make it pass. The test defines the contract.
+
+**Frontend fidelity rules (until cot 1.0):**
+- **libzc must be 1:1 compatible with Zig.** Every Zig test must compile with `zig build`. No new features added to Zig syntax.
+- **libtc must be 1:1 compatible with TypeScript.** Every TS test must compile with `tsc`. No new features added to TS syntax.
+- **libac (ac) is the kitchen sink.** All CIR features are exercised via ac. New syntax, combined features, experimental constructs — all go in ac.
+- **Validate against reference compilers.** Zig tests verified with zig. TS tests verified with tsc/typescript. This guarantees we stay true to the reference languages.
+- If a CIR feature has no equivalent in Zig or TS, the Zig/TS test is omitted — only ac tests that feature.
 
 Build order: `make all` (libcir → libcot → libzc → libtc → cot)
 

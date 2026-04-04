@@ -1,6 +1,6 @@
 # Handoff — COT Compiler Toolkit
 
-**Date:** 2026-04-04 (Phase 5 in progress — optionals done, error unions next)
+**Date:** 2026-04-05 (Phase 5 COMPLETE — optionals + error unions)
 
 ---
 
@@ -28,11 +28,11 @@ make test         # Run all test layers (lit, gate, inline, build)
 ./cot test file.ac          # Run inline test blocks
 ```
 
-**Total: 86 lit + 18 inline files + 1 gate + 4 build = 109 test targets, all passing.**
+**Total: 96 lit + 21 inline files + 1 gate + 4 build = 122 test targets, all passing.**
 
 ---
 
-## CIR Ops (45 ops, 6 custom types)
+## CIR Ops (53 ops, 7 custom types)
 
 | Op | Description | LLVM Lowering |
 |----|-------------|---------------|
@@ -64,7 +64,13 @@ make test         # Run all test layers (lit, gate, inline, build)
 | `cir.is_non_null` | test ?T → i1 | extractvalue [1] or icmp ne null |
 | `cir.optional_payload` | extract T from ?T | extractvalue [0] or identity |
 
-**Types:** `!cir.ptr` (opaque pointer), `!cir.ref<T>` (typed safe reference), `!cir.struct<"Name", fields...>`, `!cir.array<N x T>`, `!cir.slice<T>` (fat pointer {ptr, len}), `!cir.optional<T>` (nullable value)
+| `cir.wrap_result` | wrap T → E!T (success, error_code=0) | undef + insertvalue {val, i16 0} |
+| `cir.wrap_error` | wrap i16 → E!T (error, payload=undef) | undef + insertvalue {code} |
+| `cir.is_error` | test E!T → i1 | extractvalue [1] + icmp ne 0 |
+| `cir.error_payload` | extract T from E!T (unchecked) | extractvalue [0] |
+| `cir.error_code` | extract i16 error code from E!T | extractvalue [1] |
+
+**Types:** `!cir.ptr` (opaque pointer), `!cir.ref<T>` (typed safe reference), `!cir.struct<"Name", fields...>`, `!cir.array<N x T>`, `!cir.slice<T>` (fat pointer {ptr, len}), `!cir.optional<T>` (nullable value), `!cir.error_union<T>` (success value or error code)
 
 ---
 
@@ -152,27 +158,37 @@ claude/          Internal docs
 - ✓ #028-030 Arrays — `[4]i32` type, `[1,2,3,4]` literal → `cir.array_init`, `arr[i]` → `cir.elem_val`/`cir.elem_ptr`. All 3 frontends: ac `[1,2,3]`, Zig `.{1,2,3}`, TS `[1,2,3]`.
 - Infrastructure: Cast ops (7, CastOpInterface + verifiers), Sema pass, `!cir.struct` with field names, alloca type conversion fix
 
-**Phase 5 (4/8 — in progress):**
+**Phase 5 (8/8 — COMPLETE):**
 - ✓ #041 Optional type — `!cir.optional<T>` with null-pointer optimization for `?*T`. Non-pointer: `!llvm.struct<(T, i1)>`. Pointer: `!llvm.ptr` (null = none).
 - ✓ #042 Optional wrap — `cir.wrap_optional` (T → ?T). Auto-wrap on assignment to optional vars.
 - ✓ #043 Null literal — `cir.none`. ac `null`, Zig `null`, TS `null`.
 - ✓ #044 If-unwrap — `if x |val| { use(val) }`. Desugars to `cir.is_non_null` + `cir.condbr` + `cir.optional_payload` in then-block. Captured variable scoped to then-block. Runtime verified: unwrap Some, unwrap None, if-else both branches.
+- ✓ #045 Error union type — `!cir.error_union<T>` with i16 error code. Lowers to `!llvm.struct<(T, i16)>`. Error code 0 = success. All 3 frontends: ac `!i32`, Zig `E!i32`, TS `number | Error`.
+- ✓ #046 Try expression — `try foo()` unwraps or propagates. Desugars to `cir.is_error` + `cir.condbr` + `cir.error_payload` (success) / `cir.error_code` + `cir.wrap_error` + return (error). ac and Zig `try`, TS via try/catch blocks.
+- ✓ #047 Catch expression — `foo() catch |e| { handler }`. Desugars to `cir.is_error` + `cir.condbr` + handler (error) / `cir.error_payload` (success). Merge via block argument (phi). ac and Zig `catch`, TS via catch clause.
+- ✓ #048 Error set declaration — Frontend assigns i16 codes. ac `error(N)`, Zig `error { Name }` + `error.Name`, TS `throw N`.
+
+**Phase 5c — Exception-Based Error Handling (3 ops):**
+- ✓ `cir.throw` — throw exception value. ac `throw expr`, TS `throw expr`. Phase 1 lowers to trap+unreachable.
+- ✓ `cir.invoke` — call with normal/unwind successors. Phase 1 lowers to regular call+br.
+- ✓ `cir.landingpad` — catch exception in unwind block. Phase 1 lowers to undef (unreachable).
+- Phase 2 will add full C++ ABI: `__cxa_throw`/`__cxa_begin_catch`, personality functions, real stack unwinding.
 
 ---
 
 ## What To Do Next
 
-### Continue Phase 5 — Error Unions (#045-048)
+### Phase 5 COMPLETE — Start Phase 6 (Enums, Unions, Match)
 
-**Read `claude/PHASE5_DESIGN.md` first** — it has the full architectural plan. Error unions are "Phase 5b" — they build on the optional infrastructure.
+**Phase 5 delivered 8 features, 5 new CIR ops, 1 new type, 7 new tests (93→118 total).**
 
-**Next features in order:**
-- #045 Error union type — `!cir.error_union<T>` or `E!T`. Needs error set types, error code as integer.
-- #046 Try expression — `try foo()`. Unwrap error union or propagate error.
-- #047 Catch expression — `foo() catch |e| {}`. Handle error case.
-- #048 Error set declaration — `error { OutOfMemory, NotFound }`. Integer enum for error codes.
-
-**Reference:** Zig `E!T` (Sema.zig), Rust `Result<T,E>` (MIR). See PHASE5_DESIGN.md for detailed reference-to-port mapping.
+**Next features in order (Phase 6):**
+- #049 Enum declaration — `cir.enum_type`. ac `enum Color { Red, Green, Blue }`, Zig `const Color = enum { red, green, blue };`
+- #050 Enum value — `cir.enum_literal`. ac `Color.Red`, Zig `.red`
+- #051 Match/switch statement — `cir.switch_br`. ac `match x { ... }`, Zig `switch (x) { ... }`
+- #052 Match/switch expression — value-producing switch
+- #053 Tagged union — `cir.union_type`. ac `union { i32, f64, string }`
+- #054 Union match + payload — `cir.get_union_tag`, `cir.union_payload`
 
 **For each feature, follow the 12-step checklist in CLAUDE.md. ALL THREE frontends must stay in sync.**
 

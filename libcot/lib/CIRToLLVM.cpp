@@ -68,6 +68,16 @@ struct CIRToLLVMPass
       auto tagType = IntegerType::get(ctx, 1);
       return LLVM::LLVMStructType::getLiteral(ctx, {payloadType, tagType});
     });
+    // !cir.error_union<T> → !llvm.struct<(T, i16)>
+    // Layout: {payload, error_code}. error_code=0 means success.
+    // Reference: Zig E!T layout (InternPool ErrorUnionType)
+    tc.addConversion([&tc](cir::ErrorUnionType type) -> mlir::Type {
+      auto ctx = type.getContext();
+      auto payloadType = tc.convertType(type.getPayloadType());
+      auto errorCodeType = IntegerType::get(ctx, 16);
+      return LLVM::LLVMStructType::getLiteral(ctx,
+                                               {payloadType, errorCodeType});
+    });
     // !cir.slice<T> → !llvm.struct<(!llvm.ptr, i64)>
     // Fat pointer: {pointer to data, length}
     // Reference: Zig []T, FIR fir.boxchar

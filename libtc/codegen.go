@@ -11,9 +11,25 @@ package main
 
 import (
 	"strconv"
+	"unsafe"
 
 	"github.com/microsoft/typescript-go/internal/ast"
 )
+
+// isNullBlock checks if an MlirBlock wrapper holds a null pointer.
+func isNullBlock(b MlirBlock) bool {
+	return unsafe.Pointer(b.ptr.ptr) == nil
+}
+
+// isNullValue checks if an MlirValue wrapper holds a null pointer.
+func isNullValue(v MlirValue) bool {
+	return unsafe.Pointer(v.ptr.ptr) == nil
+}
+
+// isNullType checks if an MlirType wrapper holds a null pointer.
+func isNullType(t MlirType) bool {
+	return unsafe.Pointer(t.ptr.ptr) == nil
+}
 
 // LoopContext tracks header/exit blocks for break/continue.
 type LoopContext struct {
@@ -35,9 +51,10 @@ type Gen struct {
 	localTypes  []MlirType
 
 	// Current function state
-	currentFunc   MlirOperation
-	currentBlock  MlirBlock
-	hasTerminator bool
+	currentFunc    MlirOperation
+	currentBlock   MlirBlock
+	hasTerminator  bool
+	currentRetType MlirType // return type of current function (for try propagation)
 
 	// Loop stack for break/continue
 	loopStack []LoopContext
@@ -47,6 +64,14 @@ type Gen struct {
 	structTypes      []MlirType
 	structFieldNames [][]string
 	structFieldTypes [][]MlirType
+
+	// Type alias registry (e.g. type Result = number | Error)
+	typeAliasNames []string
+	typeAliasTypes []MlirType
+
+	// Try/catch state: pending catch block for exception unwinding
+	pendingCatchBlock MlirBlock
+	pendingCatchVar   string
 }
 
 // NewGen creates a new code generator with MLIR context and module.
@@ -87,7 +112,19 @@ func (g *Gen) mapDecl(node *ast.Node) {
 		g.mapFuncDecl(node)
 	case ast.KindInterfaceDeclaration:
 		g.mapInterfaceDecl(node)
+	case ast.KindTypeAliasDeclaration:
+		g.mapTypeAliasDecl(node)
 	}
+}
+
+// mapTypeAliasDecl handles type alias declarations.
+// Recognizes patterns like: type Result = number | Error → !cir.error_union<i32>
+func (g *Gen) mapTypeAliasDecl(node *ast.Node) {
+	ta := node.AsTypeAliasDeclaration()
+	name := ta.Name().AsIdentifier().Text
+	ty := g.resolveType(ta.Type)
+	g.typeAliasNames = append(g.typeAliasNames, name)
+	g.typeAliasTypes = append(g.typeAliasTypes, ty)
 }
 
 func (g *Gen) mapInterfaceDecl(node *ast.Node) {
@@ -149,6 +186,11 @@ func (g *Gen) mapFuncDecl(node *ast.Node) {
 
 	funcOp, entryBlock := g.b.CreateFunc(g.module, name, paramTypes, resultTypes)
 	g.currentFunc = funcOp
+	if len(resultTypes) > 0 {
+		g.currentRetType = resultTypes[0]
+	} else {
+		g.currentRetType = MlirType{}
+	}
 	g.paramNames = pNames
 	g.paramValues = nil
 	for i := range paramTypes {
@@ -213,13 +255,37 @@ func (g *Gen) mapStmt(node *ast.Node) {
 		}
 	case ast.KindBlock:
 		g.mapBlock(g.currentBlock, node)
+	case ast.KindTryStatement:
+		g.mapTryStmt(node)
+	case ast.KindThrowStatement:
+		g.mapThrowStmt(node)
 	}
 }
 
 func (g *Gen) mapReturn(node *ast.Node) {
 	rs := node.AsReturnStatement()
 	if rs.Expression != nil {
-		val := g.mapExpr(g.currentBlock, rs.Expression, g.b.IntType(32))
+		val := g.mapExpr(g.currentBlock, rs.Expression, g.currentRetType)
+		// If function returns error union and value is the payload type,
+		// wrap it with wrap_result
+		if CirTypeIsErrorUnion(g.currentRetType) {
+			valType := ValueGetType(val)
+			if !CirTypeIsErrorUnion(valType) {
+				val = CirBuildWrapResult(g.currentBlock, g.b.loc, g.currentRetType, val)
+			}
+		}
+		// Auto-cast integer width mismatches (e.g., i64 slice_len → i32 number)
+		valType := ValueGetType(val)
+		retType := g.currentRetType
+		valWidth := MlirIntegerTypeGetWidth(valType)
+		retWidth := MlirIntegerTypeGetWidth(retType)
+		if valWidth > 0 && retWidth > 0 && valWidth != retWidth {
+			if valWidth > retWidth {
+				val = CirBuildTruncI(g.currentBlock, g.b.loc, retType, val)
+			} else {
+				val = CirBuildExtSI(g.currentBlock, g.b.loc, retType, val)
+			}
+		}
 		g.b.Emit(g.currentBlock, "func.return", nil, []MlirValue{val}, nil)
 	} else {
 		g.b.Emit(g.currentBlock, "func.return", nil, nil, nil)
@@ -457,6 +523,94 @@ func (g *Gen) mapForStmt(node *ast.Node) {
 }
 
 // ============================================================
+// Error union: try/catch/throw
+// ============================================================
+
+// mapThrowStmt handles: throw expr
+// Emits cir.throw — exception-based error handling.
+// TypeScript uses throw/try/catch natively, so we emit exception ops directly.
+func (g *Gen) mapThrowStmt(node *ast.Node) {
+	ts := node.AsThrowStatement()
+	// Evaluate the throw expression as an i32 exception value
+	throwVal := g.mapExpr(g.currentBlock, ts.Expression, g.b.IntType(32))
+	CirBuildThrow(g.currentBlock, g.b.loc, throwVal)
+	g.hasTerminator = true
+}
+
+// mapTryStmt handles TypeScript try/catch using exception-based error handling:
+//
+//	try { body } catch (e) { handler }
+//
+// Calls inside the try body are emitted as cir.invoke (with normal/unwind
+// successors). The catch block begins with cir.landingpad to receive the
+// exception value.
+//
+// Pattern:
+//   try block → calls become cir.invoke with unwind to catch block
+//   catch (e) { ... } → cir.landingpad, e is bound to caught value (i32)
+func (g *Gen) mapTryStmt(node *ast.Node) {
+	ts := node.AsTryStatement()
+
+	catchBlock := g.b.AddBlock(g.currentFunc)
+	mergeBlock := g.b.AddBlock(g.currentFunc)
+
+	// Save scope state
+	savedCatchBlock := g.pendingCatchBlock
+	savedCatchVar := g.pendingCatchVar
+	g.pendingCatchBlock = catchBlock
+
+	// Emit try body — calls will use cir.invoke with unwind to catchBlock
+	if ts.TryBlock != nil {
+		g.mapBlock(g.currentBlock, ts.TryBlock)
+	}
+	tryTerminated := g.hasTerminator
+	if !tryTerminated {
+		CirBuildBr(g.currentBlock, g.b.loc, mergeBlock, nil)
+	}
+
+	// Restore catch context
+	g.pendingCatchBlock = savedCatchBlock
+	g.pendingCatchVar = savedCatchVar
+
+	// Emit catch clause with landingpad
+	g.currentBlock = catchBlock
+	g.hasTerminator = false
+
+	// Emit cir.landingpad at the start of catch block to receive exception value
+	exnType := g.b.IntType(32)
+	exnVal := CirBuildLandingPad(catchBlock, g.b.loc, exnType)
+
+	if ts.CatchClause != nil {
+		cc := ts.CatchClause.AsCatchClause()
+		// Bind the catch variable to the landingpad result
+		if cc.VariableDeclaration != nil {
+			vd := cc.VariableDeclaration.AsVariableDeclaration()
+			varName := vd.Name().AsIdentifier().Text
+			addr := CirBuildAlloca(g.currentBlock, g.b.loc, exnType)
+			CirBuildStore(g.currentBlock, g.b.loc, exnVal, addr)
+			g.localNames = append(g.localNames, varName)
+			g.localAddrs = append(g.localAddrs, addr)
+			g.localTypes = append(g.localTypes, exnType)
+		}
+		if cc.Block != nil {
+			g.mapBlock(g.currentBlock, cc.Block)
+		}
+	}
+	catchTerminated := g.hasTerminator
+	if !catchTerminated {
+		CirBuildBr(g.currentBlock, g.b.loc, mergeBlock, nil)
+	}
+
+	g.currentBlock = mergeBlock
+	if tryTerminated && catchTerminated {
+		CirBuildTrap(mergeBlock, g.b.loc)
+		g.hasTerminator = true
+	} else {
+		g.hasTerminator = false
+	}
+}
+
+// ============================================================
 // Expression mapping
 // ============================================================
 
@@ -493,6 +647,11 @@ func (g *Gen) mapExpr(block MlirBlock, node *ast.Node, resultType MlirType) Mlir
 		if CirTypeIsOptional(resultType) {
 			return CirBuildNone(block, g.b.loc, resultType)
 		}
+		// null in error union context → wrap_error with code 0
+		if CirTypeIsErrorUnion(resultType) {
+			errCode := CirBuildConstantInt(block, g.b.loc, g.b.IntType(16), 0)
+			return CirBuildWrapError(block, g.b.loc, resultType, errCode)
+		}
 		return CirBuildConstantInt(block, g.b.loc, resultType, 0)
 	case ast.KindStringLiteral:
 		lit := node.AsStringLiteral()
@@ -507,6 +666,11 @@ func (g *Gen) mapExpr(block MlirBlock, node *ast.Node, resultType MlirType) Mlir
 func (g *Gen) mapNumericLiteral(block MlirBlock, node *ast.Node, resultType MlirType) MlirValue {
 	lit := node.AsNumericLiteral()
 	val, _ := strconv.ParseInt(lit.Text, 10, 64)
+	// If result type is error union, the literal is the payload type
+	if CirTypeIsErrorUnion(resultType) {
+		payloadType := CirErrorUnionTypeGetPayload(resultType)
+		return CirBuildConstantInt(block, g.b.loc, payloadType, val)
+	}
 	return CirBuildConstantInt(block, g.b.loc, resultType, val)
 }
 
@@ -600,8 +764,22 @@ func (g *Gen) mapCallExpr(block MlirBlock, node *ast.Node, resultType MlirType) 
 			args = append(args, g.mapExpr(block, arg, resultType))
 		}
 	}
-	return g.b.Emit(block, "func.call", []MlirType{resultType}, args,
+
+	// If inside a try block, emit cir.invoke with normal/unwind successors
+	// instead of a plain func.call.
+	if !isNullBlock(g.pendingCatchBlock) {
+		normalBlock := g.b.AddBlock(g.currentFunc)
+		callResult := CirBuildInvoke(block, g.b.loc, calleeName, args, resultType, normalBlock, g.pendingCatchBlock)
+		// Continue codegen in the normal successor block
+		g.currentBlock = normalBlock
+		_ = callResult
+		return callResult
+	}
+
+	callResult := g.b.Emit(block, "func.call", []MlirType{resultType}, args,
 		[]MlirNamedAttr{g.b.NamedAttr("callee", g.b.FlatSymbolRefAttr(calleeName))})
+
+	return callResult
 }
 
 func (g *Gen) mapPrefixUnary(block MlirBlock, node *ast.Node, resultType MlirType) MlirValue {
@@ -758,14 +936,62 @@ func (g *Gen) resolveType(node *ast.Node) MlirType {
 		tr := node.AsTypeReference()
 		if tr.TypeName != nil && tr.TypeName.Kind == ast.KindIdentifier {
 			name := tr.TypeName.AsIdentifier().Text
+			// Check type aliases first (e.g. Result → !cir.error_union<i32>)
+			for i, an := range g.typeAliasNames {
+				if an == name {
+					return g.typeAliasTypes[i]
+				}
+			}
+			// Check struct types
 			for i, sn := range g.structNames {
 				if sn == name {
 					return g.structTypes[i]
 				}
 			}
+			// "Error" by itself → i16 error code type
+			if name == "Error" {
+				return g.b.IntType(16)
+			}
 		}
+	case ast.KindUnionType:
+		return g.resolveUnionType(node)
 	}
 	return g.b.IntType(32)
+}
+
+// resolveUnionType handles TypeScript union types like `number | Error`.
+// If one arm is "Error", produces !cir.error_union<T> where T is the other arm.
+// Otherwise falls back to the first type in the union.
+func (g *Gen) resolveUnionType(node *ast.Node) MlirType {
+	ut := node.AsUnionTypeNode()
+	if ut.Types == nil || len(ut.Types.Nodes) == 0 {
+		return g.b.IntType(32)
+	}
+
+	// Scan for "Error" type in the union arms
+	var payloadType MlirType
+	hasError := false
+	for _, tn := range ut.Types.Nodes {
+		if tn.Kind == ast.KindTypeReference {
+			tr := tn.AsTypeReference()
+			if tr.TypeName != nil && tr.TypeName.Kind == ast.KindIdentifier {
+				name := tr.TypeName.AsIdentifier().Text
+				if name == "Error" {
+					hasError = true
+					continue
+				}
+			}
+		}
+		// This arm is the payload type
+		payloadType = g.resolveType(tn)
+	}
+
+	if hasError && !isNullType(payloadType) {
+		return CirErrorUnionTypeGet(g.ctx, payloadType)
+	}
+
+	// Not an error union — fall back to first type
+	return g.resolveType(ut.Types.Nodes[0])
 }
 
 func (g *Gen) resolveTypeName(node *ast.Node) string {
@@ -778,6 +1004,28 @@ func (g *Gen) resolveTypeName(node *ast.Node) string {
 		return "i0"
 	case ast.KindStringKeyword:
 		return "!cir.slice<i8>"
+	case ast.KindUnionType:
+		// Check if it's T | Error → !cir.error_union<T>
+		ut := node.AsUnionTypeNode()
+		if ut.Types != nil {
+			hasError := false
+			payloadName := "i32"
+			for _, tn := range ut.Types.Nodes {
+				if tn.Kind == ast.KindTypeReference {
+					tr := tn.AsTypeReference()
+					if tr.TypeName != nil && tr.TypeName.Kind == ast.KindIdentifier {
+						if tr.TypeName.AsIdentifier().Text == "Error" {
+							hasError = true
+							continue
+						}
+					}
+				}
+				payloadName = g.resolveTypeName(tn)
+			}
+			if hasError {
+				return "!cir.error_union<" + payloadName + ">"
+			}
+		}
 	}
 	return "i32"
 }
