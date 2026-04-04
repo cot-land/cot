@@ -1,0 +1,16 @@
+// RUN: %cot emit-cir %s | %FileCheck %s
+
+// Feature #039: Array to slice — ac syntax
+
+fn slice_it() -> []i32 {
+    let a: [4]i32 = [10, 20, 30, 40]
+    let lo: i64 = 1
+    let hi: i64 = 3
+    return a[lo..hi]
+}
+
+// CHECK-LABEL: func.func @slice_it
+// CHECK: cir.array_init
+// CHECK: cir.array_to_slice
+// CHECK-SAME: !cir.slice<i32>
+// CHECK: return

@@ -23,6 +23,7 @@ struct TypeRef {
   int64_t arraySize = 0; // >0 for array types: [N]T
   std::string_view arrayElemType; // element type name for arrays
   bool isRef = false; // true for pointer/ref types: *T
+  bool isSlice = false; // true for slice types: []T
 };
 
 struct Param {
@@ -31,7 +32,7 @@ struct Param {
 };
 
 // Expression kinds
-enum class ExprKind { IntLit, FloatLit, BoolLit, StringLit, Ident, BinOp, UnaryOp, Call, IfExpr, Cast, StructInit, FieldAccess, MethodCall, ArrayLit, IndexAccess };
+enum class ExprKind { IntLit, FloatLit, BoolLit, StringLit, Ident, BinOp, UnaryOp, Call, IfExpr, Cast, StructInit, FieldAccess, MethodCall, ArrayLit, IndexAccess, SliceExpr };
 
 struct Expr {
   ExprKind kind;

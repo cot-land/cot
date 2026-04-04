@@ -47,6 +47,12 @@ class CodeGen {
       auto pointeeType = resolveType(elemRef);
       return cir::RefType::get(b.getContext(), pointeeType);
     }
+    // Slice type: []T
+    if (t.isSlice) {
+      TypeRef elemRef{t.arrayElemType};
+      auto elemType = resolveType(elemRef);
+      return cir::SliceType::get(b.getContext(), elemType);
+    }
     // Array type: [N]T
     if (t.arraySize > 0) {
       TypeRef elemRef{t.arrayElemType};
@@ -265,6 +271,29 @@ class CodeGen {
       auto elemPtr = b.create<cir::ElemPtrOp>(loc, ptrType, addr, idx,
           mlir::TypeAttr::get(arrayTy));
       return b.create<cir::LoadOp>(loc, elemType, elemPtr);
+    }
+
+    case ExprKind::SliceExpr: {
+      // Range slice: arr[lo..hi] → cir.array_to_slice
+      // lhs = array, rhs = lo, args[0] = hi
+      auto arr = emitExpr(*e.lhs, resultType);
+      auto arrType = arr.getType();
+      auto arrayTy = llvm::dyn_cast<cir::ArrayType>(arrType);
+      if (!arrayTy) {
+        llvm::errs() << "error: slicing non-array type\n";
+        return {};
+      }
+      auto lo = emitExpr(*e.rhs, b.getI64Type());
+      auto hi = emitExpr(*e.args[0], b.getI64Type());
+      // Need a pointer to the array — alloca + store
+      auto ptrType = cir::PointerType::get(b.getContext());
+      auto addr = b.create<cir::AllocaOp>(loc, ptrType,
+          mlir::TypeAttr::get(arrayTy));
+      b.create<cir::StoreOp>(loc, arr, addr);
+      auto sliceType = cir::SliceType::get(b.getContext(),
+          arrayTy.getElementType());
+      return b.create<cir::ArrayToSliceOp>(loc, sliceType, addr, lo, hi,
+          mlir::TypeAttr::get(arrayTy));
     }
 
     case ExprKind::MethodCall: {

@@ -1,0 +1,20 @@
+// RUN: %cot emit-llvm %s | %FileCheck %s
+
+// Feature #039: array_to_slice lowering
+// → GEP for start pointer + sub for length + struct {ptr, len}
+
+fn slice_it() -> []i32 {
+    let a: [4]i32 = [10, 20, 30, 40]
+    let lo: i64 = 1
+    let hi: i64 = 3
+    return a[lo..hi]
+}
+
+// CHECK-LABEL: llvm.func @slice_it
+// CHECK: llvm.getelementptr
+// CHECK: llvm.sub
+// CHECK: llvm.insertvalue
+// CHECK-SAME: [0]
+// CHECK: llvm.insertvalue
+// CHECK-SAME: [1]
+// CHECK: llvm.return

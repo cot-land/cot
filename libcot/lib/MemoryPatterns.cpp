@@ -254,6 +254,48 @@ struct SliceElemOpLowering : public OpConversionPattern<cir::SliceElemOp> {
   }
 };
 
+/// cir.array_to_slice → GEP(start) + sub(end-start) + {ptr, len}
+/// Reference: Zig arr[lo..hi] slicing
+struct ArrayToSliceOpLowering
+    : public OpConversionPattern<cir::ArrayToSliceOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::ArrayToSliceOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto sliceType = getTypeConverter()->convertType(op.getType());
+    if (!sliceType)
+      return rewriter.notifyMatchFailure(op, "type conversion failed");
+
+    auto arrayType = getTypeConverter()->convertType(op.getElemType());
+    if (!arrayType)
+      return rewriter.notifyMatchFailure(op, "array type conversion failed");
+
+    // GEP to arr[start] — pointer to first element of slice
+    auto ptrType = LLVM::LLVMPointerType::get(op.getContext());
+
+    // Get element type from the LLVM array type
+    auto llvmArrayType = llvm::dyn_cast<LLVM::LLVMArrayType>(arrayType);
+    if (!llvmArrayType)
+      return rewriter.notifyMatchFailure(op, "expected LLVM array type");
+    auto elemType = llvmArrayType.getElementType();
+
+    auto startPtr = rewriter.create<LLVM::GEPOp>(
+        loc, ptrType, arrayType, adaptor.getBase(),
+        llvm::ArrayRef<LLVM::GEPArg>{0, adaptor.getStart()});
+
+    // Length = end - start
+    auto len = rewriter.create<LLVM::SubOp>(
+        loc, adaptor.getEnd(), adaptor.getStart());
+
+    // Build {ptr, len} struct
+    Value result = rewriter.create<LLVM::UndefOp>(loc, sliceType);
+    result = rewriter.create<LLVM::InsertValueOp>(loc, result, startPtr, 0);
+    result = rewriter.create<LLVM::InsertValueOp>(loc, result, len, 1);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
 /// cir.struct_init → llvm.mlir.undef + llvm.insertvalue chain
 /// Reference: FIR UndefOpConversion + InsertValueOpConversion
 ///   ~/claude/references/flang-ref/flang/lib/Optimizer/CodeGen/CodeGen.cpp
@@ -287,6 +329,7 @@ void cot::populateMemoryPatterns(
                FieldValOpLowering, FieldPtrOpLowering,
                StructInitOpLowering, StringConstantOpLowering,
                SlicePtrOpLowering, SliceLenOpLowering, SliceElemOpLowering,
+               ArrayToSliceOpLowering,
                ArrayInitOpLowering, ElemValOpLowering, ElemPtrOpLowering>(
       converter, ctx);
 }

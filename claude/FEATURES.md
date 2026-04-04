@@ -94,8 +94,8 @@ Status: `-` not started, `~` in progress, `✓` done.
 | 036 | String literal | `cir.string_constant` | `"hello"` | `"hello"` | `llvm.mlir.global` + addressof + struct | ✓ |
 | 037 | Slice ptr/len | `cir.slice_ptr`, `cir.slice_len` | `s.ptr`, `s.len` | `s.ptr`, `s.len` | `llvm.extractvalue [0]/[1]` | ✓ |
 | 038 | Slice indexing | `cir.slice_elem` | `s[i]` | `s[i]` | extractvalue + GEP + load | ✓ |
-| 039 | Slice from array | `cir.array_to_slice` | `arr[1..3]` | `arr[1..3]` | Build `{ptr+off, len}` | - |
-| 040 | Slice type syntax | — | `[]i32` | `[]i32` | — (type already exists) | - |
+| 039 | Slice from array | `cir.array_to_slice` | `arr[lo..hi]` | — | GEP + sub + struct | ✓ |
+| 040 | Slice type syntax | — | `[]i32` param/return | `[]const u8` | — (type exists) | ✓ |
 
 ### Phase 5 — Error Handling and Optionals
 

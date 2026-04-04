@@ -556,4 +556,30 @@ def CIR_SliceElemOp : CIR_Op<"slice_elem", [Pure]> {
   let hasVerifier = 1;
 }
 
+def CIR_ArrayToSliceOp : CIR_Op<"array_to_slice", [Pure]> {
+  let summary = "create slice from array pointer + range";
+  let description = [{
+    Constructs a !cir.slice<T> from a pointer to an array and a start/end
+    index pair. The result slice points to arr[start] with length (end - start).
+
+    The base must be !cir.ptr (pointer to an array on the stack).
+    start and end are i64 indices.
+
+    Lowers to: GEP for start pointer + sub for length + struct construction.
+
+    Example:
+      %s = cir.array_to_slice %arr_ptr, %lo, %hi
+            {elem_type = !cir.array<4 x i32>}
+            : (!cir.ptr, i64, i64) -> !cir.slice<i32>
+  }];
+
+  let arguments = (ins AnyType:$base, AnyInteger:$start, AnyInteger:$end,
+                       TypeAttr:$elem_type);
+  let results = (outs AnyType:$result);
+  let assemblyFormat =
+      "$base `,` $start `,` $end attr-dict `:`"
+      " `(` type($base) `,` type($start) `,` type($end) `)` `->` type($result)";
+  let hasVerifier = 1;
+}
+
 #endif // CIR_OPS

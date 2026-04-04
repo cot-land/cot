@@ -1,0 +1,12 @@
+// RUN: %cot emit-cir %s | %FileCheck %s
+
+// Feature #040: Slice type syntax — ac []T
+
+fn pass_slice(s: []i32) -> i64 {
+    return s.len
+}
+
+// CHECK-LABEL: func.func @pass_slice
+// CHECK-SAME: !cir.slice<i32>
+// CHECK: cir.slice_len
+// CHECK: return

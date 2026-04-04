@@ -427,3 +427,14 @@ MlirValue cirBuildSliceElem(MlirBlock block, MlirLocation loc,
                                         unwrap(slice), unwrap(index));
   return wrap(op.getResult());
 }
+
+MlirValue cirBuildArrayToSlice(MlirBlock block, MlirLocation loc,
+                               MlirType sliceType, MlirValue base,
+                               MlirValue start, MlirValue end,
+                               MlirType arrayType) {
+  auto b = builderAtEnd(block, loc);
+  auto op = b.create<cir::ArrayToSliceOp>(unwrap(loc), unwrap(sliceType),
+      unwrap(base), unwrap(start), unwrap(end),
+      TypeAttr::get(unwrap(arrayType)));
+  return wrap(op.getResult());
+}

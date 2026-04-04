@@ -457,6 +457,18 @@ LogicalResult SliceElemOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// cir.array_to_slice — verifier
+//===----------------------------------------------------------------------===//
+
+LogicalResult ArrayToSliceOp::verify() {
+  if (!llvm::isa<cir::PointerType>(getBase().getType()))
+    return emitOpError("base must be !cir.ptr");
+  if (!llvm::isa<cir::SliceType>(getResult().getType()))
+    return emitOpError("result must be !cir.slice<T>");
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // Cast op verifiers — width constraints per Arith dialect pattern
 // Reference: mlir/lib/Dialect/Arith/IR/ArithOps.cpp verifyExtOp/verifyTruncateOp
 //===----------------------------------------------------------------------===//

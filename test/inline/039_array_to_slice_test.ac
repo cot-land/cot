@@ -1,0 +1,36 @@
+fn slice_len(s: []i32) -> i64 {
+    return s.len
+}
+
+test "array to slice basic" {
+    let a: [4]i32 = [10, 20, 30, 40]
+    let lo: i64 = 1
+    let hi: i64 = 3
+    let s: []i32 = a[lo..hi]
+    assert(s.len == 2)
+}
+
+test "array to slice element access" {
+    let a: [4]i32 = [10, 20, 30, 40]
+    let lo: i64 = 1
+    let hi: i64 = 3
+    let s: []i32 = a[lo..hi]
+    let idx: i64 = 0
+    assert(s[idx] == 20)
+}
+
+test "array to slice full range" {
+    let a: [3]i32 = [5, 10, 15]
+    let lo: i64 = 0
+    let hi: i64 = 3
+    let s: []i32 = a[lo..hi]
+    assert(s.len == 3)
+}
+
+test "slice type parameter" {
+    let a: [2]i32 = [42, 99]
+    let lo: i64 = 0
+    let hi: i64 = 2
+    let s: []i32 = a[lo..hi]
+    assert(slice_len(s) == 2)
+}

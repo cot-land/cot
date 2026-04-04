@@ -28,11 +28,11 @@ make test         # Run all test layers (lit, gate, inline, build)
 ./cot test file.ac          # Run inline test blocks
 ```
 
-**Total: 79 lit + 16 inline files + 1 gate + 4 build = 100 test targets, all passing.**
+**Total: 82 lit + 17 inline files + 1 gate + 4 build = 104 test targets, all passing.**
 
 ---
 
-## CIR Ops (40 ops, 5 custom types)
+## CIR Ops (41 ops, 5 custom types)
 
 | Op | Description | LLVM Lowering |
 |----|-------------|---------------|
@@ -58,6 +58,7 @@ make test         # Run all test layers (lit, gate, inline, build)
 | `cir.slice_ptr` | extract pointer from slice | `llvm.extractvalue [0]` |
 | `cir.slice_len` | extract length from slice | `llvm.extractvalue [1]` |
 | `cir.slice_elem` | index into slice (unchecked) | extractvalue + GEP + load |
+| `cir.array_to_slice` | array range → slice | GEP + sub + struct |
 
 **Types:** `!cir.ptr` (opaque pointer), `!cir.ref<T>` (typed safe reference), `!cir.struct<"Name", fields...>`, `!cir.array<N x T>`, `!cir.slice<T>` (fat pointer {ptr, len})
 
@@ -124,13 +125,15 @@ claude/          Internal docs
 
 **Phase 2 (10/10):** Let/var bindings, assignment, compound assignment, if/else statement, if/else expression (select), while loop, break/continue, for loop, nested calls.
 
-**Phase 4 (8/10):**
+**Phase 4 (10/10 — COMPLETE):**
 - ✓ #031 Pointer type — `!cir.ref<T>` typed safe reference (non-null, known pointee). Dual pointer design: `!cir.ref<T>` (safe) + `!cir.ptr` (raw). Both lower to `!llvm.ptr`. ac `*T`, Zig `*T`. See `claude/PHASE4_DESIGN.md`.
 - ✓ #032 Address-of — `&x` → `cir.addr_of` (alloca `!cir.ptr` → `!cir.ref<T>`). Identity lowering.
 - ✓ #033 Dereference — `*p` → `cir.deref` (`!cir.ref<T>` → T). Lowers to `llvm.load`.
 - ✓ #034 Pointer field access + auto-deref — `p.x` where `p: *Point` auto-inserts `cir.deref` before `cir.field_val`. Zig/Rust/Go pattern. Also works on method calls.
 - ✓ #035-036 String type + literal — `!cir.slice<T>` fat pointer type `{ptr, len}`. `string` = `!cir.slice<i8>`. `"hello"` → `cir.string_constant` → `llvm.mlir.global` + `llvm.mlir.addressof` + `{ptr, len}` struct. All 3 frontends: ac `string`/"hello", Zig `[]const u8`/"hello", TS `string`/"hello".
 - ✓ #037-038 Slice ops — `cir.slice_len` (extractvalue [1]), `cir.slice_ptr` (extractvalue [0]), `cir.slice_elem` (extractvalue + GEP + load). All 3 frontends: `s.len`, `s.ptr`, `s[i]`. Runtime verified: string length, element access.
+- ✓ #039 Array-to-slice — `cir.array_to_slice` (`arr[lo..hi]`). Lowers to GEP(start) + sub(len) + struct. ac syntax with `..` range. Runtime verified: length, element access, function params.
+- ✓ #040 Slice type syntax — ac `[]T` in params/returns/locals. Zig `[]const u8` already handled. `!cir.slice<T>` type resolves from frontend syntax.
 
 **Phase 3 (10/10 — COMPLETE):**
 - ✓ #021 Multiple int types (i8-i64, u8-u64) — all three frontends

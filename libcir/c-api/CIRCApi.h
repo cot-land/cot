@@ -283,6 +283,12 @@ MlirValue cirBuildSliceElem(MlirBlock block, MlirLocation loc,
                             MlirType elemType, MlirValue slice,
                             MlirValue index);
 
+/// Create cir.array_to_slice (array pointer + range → slice).
+MlirValue cirBuildArrayToSlice(MlirBlock block, MlirLocation loc,
+                               MlirType sliceType, MlirValue base,
+                               MlirValue start, MlirValue end,
+                               MlirType arrayType);
+
 #ifdef __cplusplus
 }
 #endif

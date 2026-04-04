@@ -89,9 +89,19 @@ class Parser {
 
   // ---- Type reference ----
   TypeRef parseType() {
-    // Array type: [N]T
+    // Array type [N]T or slice type []T
     if (check(Tag::l_bracket)) {
       advance(); // consume '['
+      // Slice type: []T (no size)
+      if (check(Tag::r_bracket)) {
+        advance(); // consume ']'
+        auto elemType = tokenText(advance());
+        TypeRef t;
+        t.arrayElemType = elemType;
+        t.isSlice = true;
+        return t;
+      }
+      // Array type: [N]T
       auto sizeText = tokenText(expect(Tag::int_literal));
       int64_t size = std::stoll(std::string(sizeText));
       expect(Tag::r_bracket);
@@ -328,16 +338,30 @@ class Parser {
           expr = std::move(fa);
         }
       } else if (check(Tag::l_bracket)) {
-        // Array indexing: expr[index]
+        // Array/slice indexing: expr[index] or expr[lo..hi]
         size_t p = advance().start; // consume '['
-        auto idx = parseExpr();
-        expect(Tag::r_bracket);
-        auto ia = std::make_unique<Expr>();
-        ia->kind = ExprKind::IndexAccess;
-        ia->pos = p;
-        ia->lhs = std::move(expr);
-        ia->rhs = std::move(idx);
-        expr = std::move(ia);
+        auto first = parseExpr();
+        if (match(Tag::dot_dot)) {
+          // Range/slice: expr[lo..hi] → SliceExpr
+          auto hi = parseExpr();
+          expect(Tag::r_bracket);
+          auto se = std::make_unique<Expr>();
+          se->kind = ExprKind::SliceExpr;
+          se->pos = p;
+          se->lhs = std::move(expr);    // array
+          se->rhs = std::move(first);   // lo (reuse rhs for first index)
+          se->args.push_back(std::move(hi)); // hi
+          expr = std::move(se);
+        } else {
+          // Normal index: expr[index]
+          expect(Tag::r_bracket);
+          auto ia = std::make_unique<Expr>();
+          ia->kind = ExprKind::IndexAccess;
+          ia->pos = p;
+          ia->lhs = std::move(expr);
+          ia->rhs = std::move(first);
+          expr = std::move(ia);
+        }
       } else {
         break;
       }
