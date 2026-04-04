@@ -1,6 +1,6 @@
 # Handoff — COT Compiler Toolkit
 
-**Date:** 2026-04-04 (updated)
+**Date:** 2026-04-04 (session handoff)
 
 ---
 
@@ -141,25 +141,36 @@ claude/          Internal docs
 
 ## What To Do Next
 
-### Continue Phase 3
+### Continue Phase 4 — Strings and Slices (#035-040)
+
+**Read `claude/PHASE4_DESIGN.md` first** — it has the full architectural plan.
 
 **Next features in order:**
-- #028-030 Arrays — `[4]i32`, `[1,2,3,4]`, `arr[i]`. `!cir.array` type exists.
+- #035-036 String type + literal — `!cir.slice<i8>` fat pointer `{ptr, len}`. `"hello"` → global constant + slice. Needs `!cir.slice<T>` type in CIRTypes.td, `llvm.mlir.global` for string data, `cir.slice_init` op.
+- #037-040 Slice ops — `cir.slice_ptr`, `cir.slice_len`, `cir.slice_elem`, `cir.array_to_slice`.
 
-**For each feature, follow the 12-step checklist in CLAUDE.md. ALL THREE frontends (ac, Zig, TypeScript) must stay in sync.**
-
-### libtc Feature Parity Status
-libtc has Phase 1-2 features (arithmetic, comparisons, booleans, bitwise, shifts, variables, if/else, while, for, break/continue, nested calls). Still needs:
-- Phase 3: type casts (`as` in TS?), struct declarations (TS `interface`/`type`?)
-- TypeScript `number` maps to i32 for now. Phase 4+ will need f64 for correctness.
+**For each feature, follow the 12-step checklist in CLAUDE.md. ALL THREE frontends must stay in sync.**
 
 ### Key Architecture Decisions Already Made
 
-1. **Cast ops:** 7 separate ops following Arith pattern (NOT a single mega-op). Each maps 1:1 to LLVM.
-2. **Sema pass:** Manual walk pass in libcot/lib/Transforms/. Runs before lowering. Inserts casts at call boundaries.
-3. **Type philosophy:** CIR builtins = MLIR types. Language names resolved by frontends. Passes never reference language-specific types (Swift Builtin pattern).
-4. **Progressive lowering:** Frontend → CIR (unresolved) → Sema → CIR (typed) → verify → LLVM.
-5. **Verification:** Sema runs with verification disabled (frontend may emit type mismatches). Verification happens after Sema.
+1. **Dual pointer types:** `!cir.ref<T>` (safe, typed, non-null) + `!cir.ptr` (raw, opaque). Both lower to `!llvm.ptr`. FIR/Zig/Rust pattern.
+2. **Auto-deref:** `p.x` where `p: *Struct` auto-inserts `cir.deref`. Frontends handle this, not CIR.
+3. **Compiler-as-library:** All pipeline logic in `libcot/lib/Compiler.cpp` (`COT/Compiler.h`). CLI (`cot/main.cpp`) is thin arg parsing only.
+4. **Merged lowering pass:** `CIRToLLVM` includes `FuncToLLVM` patterns with shared `LLVMTypeConverter`. Single `applyFullConversion`.
+5. **Cast ops:** 7 separate ops following Arith pattern. CastOpInterface on all.
+6. **Sema pass:** Manual walk, cached symbol table (DenseMap), cast insertion at call boundaries.
+7. **Type philosophy:** CIR builtins = MLIR types. Language names resolved by frontends. Swift Builtin pattern.
+8. **Progressive lowering:** Frontend → CIR → Sema(verify=off) → verify → CIRToLLVM → LLVM IR → native.
+
+### Audit Status
+
+5 audit rounds completed. See `claude/AUDIT.md` for full findings. Key open issues:
+- **D10:** Memory effect traits on Alloca/Store/Load (before optimization passes)
+- **D12:** TrapOp NoReturn trait
+- **T2:** 4 ops with zero test coverage (extui, field_ptr, elem_ptr, trap)
+- **T3:** Zig/TS test parity gaps (Zig missing arithmetic, TS missing casts)
+
+**Rule: After every substantial feature, run a full audit against MLIR/LLVM standards.**
 
 ---
 
