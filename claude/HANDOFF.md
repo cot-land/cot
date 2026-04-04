@@ -1,6 +1,6 @@
 # Handoff — COT Compiler Toolkit
 
-**Date:** 2026-04-04 (session handoff)
+**Date:** 2026-04-04 (Phase 5 in progress — optionals done, error unions next)
 
 ---
 
@@ -115,11 +115,13 @@ claude/          Internal docs
 
 ## Key Documents — Read Order
 
-1. **CLAUDE.md** — Rules + feature checklist (11 steps). READ THIS FIRST.
-2. **claude/ARCHITECTURE.md** — Design, CIR ops, Sema pass, Swift type philosophy, pass pipeline.
-3. **claude/REFERENCES.md** — Which reference to study for each component.
-4. **claude/FEATURES.md** — 80 features with Zig syntax column. Implementation order.
-5. **claude/AUDIT.md** — Compliance findings, open issues, scaling plan.
+1. **CLAUDE.md** — Rules + 12-step feature checklist. READ THIS FIRST.
+2. **claude/PHASE5_DESIGN.md** — Current phase: optionals + error unions design, reference-to-port mapping.
+3. **claude/ARCHITECTURE.md** — Design, CIR ops, Sema pass, Swift type philosophy, pass pipeline.
+4. **claude/REFERENCES.md** — Which reference to study for each component.
+5. **claude/FEATURES.md** — 80 features with Zig syntax column. Implementation order.
+6. **claude/DISTRIBUTION_DESIGN.md** — CMake super-build, C API, pass plugin design (Phase A+B done).
+7. **claude/AUDIT.md** — Round 6 compliance findings, open issues.
 
 ---
 
@@ -150,25 +152,33 @@ claude/          Internal docs
 - ✓ #028-030 Arrays — `[4]i32` type, `[1,2,3,4]` literal → `cir.array_init`, `arr[i]` → `cir.elem_val`/`cir.elem_ptr`. All 3 frontends: ac `[1,2,3]`, Zig `.{1,2,3}`, TS `[1,2,3]`.
 - Infrastructure: Cast ops (7, CastOpInterface + verifiers), Sema pass, `!cir.struct` with field names, alloca type conversion fix
 
+**Phase 5 (4/8 — in progress):**
+- ✓ #041 Optional type — `!cir.optional<T>` with null-pointer optimization for `?*T`. Non-pointer: `!llvm.struct<(T, i1)>`. Pointer: `!llvm.ptr` (null = none).
+- ✓ #042 Optional wrap — `cir.wrap_optional` (T → ?T). Auto-wrap on assignment to optional vars.
+- ✓ #043 Null literal — `cir.none`. ac `null`, Zig `null`, TS `null`.
+- ✓ #044 If-unwrap — `if x |val| { use(val) }`. Desugars to `cir.is_non_null` + `cir.condbr` + `cir.optional_payload` in then-block. Captured variable scoped to then-block. Runtime verified: unwrap Some, unwrap None, if-else both branches.
+
 ---
 
 ## What To Do Next
 
-### Continue Phase 4 — Slice Operations (#037-040)
+### Continue Phase 5 — Error Unions (#045-048)
 
-**Read `claude/PHASE4_DESIGN.md` first** — it has the full architectural plan.
+**Read `claude/PHASE5_DESIGN.md` first** — it has the full architectural plan. Error unions are "Phase 5b" — they build on the optional infrastructure.
 
 **Next features in order:**
-- #037 Slice type — `[]i32` generic slice syntax in all 3 frontends. Already have `!cir.slice<T>` type.
-- #038 Slice indexing — `s[i]` → GEP on ptr field + load. Needs `cir.slice_elem` op.
-- #039 Slice from array — `arr[1..3]` → build `{ptr+off, len}`. Needs `cir.array_to_slice` op.
-- #040 Slice length/pointer — `s.len`, `s.ptr` → extract fields. Needs `cir.slice_len`, `cir.slice_ptr` ops.
+- #045 Error union type — `!cir.error_union<T>` or `E!T`. Needs error set types, error code as integer.
+- #046 Try expression — `try foo()`. Unwrap error union or propagate error.
+- #047 Catch expression — `foo() catch |e| {}`. Handle error case.
+- #048 Error set declaration — `error { OutOfMemory, NotFound }`. Integer enum for error codes.
+
+**Reference:** Zig `E!T` (Sema.zig), Rust `Result<T,E>` (MIR). See PHASE5_DESIGN.md for detailed reference-to-port mapping.
 
 **For each feature, follow the 12-step checklist in CLAUDE.md. ALL THREE frontends must stay in sync.**
 
-### Distribution & Plugin Architecture
+### Distribution & Plugin Architecture — IMPLEMENTED
 
-**Read `claude/DISTRIBUTION_DESIGN.md`** — full design for making libcir/libcot distributable via Homebrew, expanding the C API for cross-language frontends, and adding a pass plugin interface. Implement before Phase 5.
+**See `claude/DISTRIBUTION_DESIGN.md`** for full design. Phase A (CMake super-build) and Phase B (C API) are done. Phase C (pass plugins) is partial — `--load-pass-plugin` flag works, full pipeline integration pending.
 
 ### Key Architecture Decisions Already Made
 
