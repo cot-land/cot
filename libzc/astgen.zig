@@ -56,6 +56,10 @@ const Gen = struct {
     local_types: std.ArrayList(mlir.Type) = .empty,
     // Struct types registered by name (growable)
     structs: std.ArrayList(StructInfo) = .empty,
+    // Enum types registered by name (growable)
+    enums: std.ArrayList(EnumInfo) = .empty,
+    // Current function's return type (for enum literal context inference)
+    current_return_type: mlir.Type = .{ .ptr = null },
     // Current function's region (for adding blocks)
     current_func: mlir.Operation = .{ .ptr = null },
     // Current insertion block (changes after control flow)
@@ -67,6 +71,12 @@ const Gen = struct {
         mlir_type: mlir.Type,
         field_names: []const []const u8,
         field_types: []const mlir.Type,
+    };
+
+    const EnumInfo = struct {
+        name: []const u8,
+        mlir_type: mlir.Type,
+        variant_names: []const []const u8,
     };
 
     /// Function pointer types for mapBinOp/mapUnaryOp dispatch.
@@ -105,6 +115,11 @@ const Gen = struct {
             for (self.structs.items) |s| {
                 if (std.mem.eql(u8, s.name, name))
                     return s.mlir_type;
+            }
+            // Check enum types
+            for (self.enums.items) |e| {
+                if (std.mem.eql(u8, e.name, name))
+                    return e.mlir_type;
             }
         }
         // Pointer type: *T → !cir.ref<T>, []T → !cir.slice<T>
@@ -213,24 +228,42 @@ const Gen = struct {
         }
     }
 
-    /// Handle top-level const declarations. If the init is a struct container
-    /// declaration, register it as a struct type. Otherwise ignore.
+    /// Handle top-level const declarations. If the init is a container
+    /// declaration, register it as a struct or enum type. Otherwise ignore.
     /// Reference: Zig AstGen containerDecl — dispatches on main_token tag.
     fn mapTopLevelVarDecl(self: *Gen, node: Node.Index) void {
         const tree = self.tree;
         const d = tree.nodeData(node).opt_node_and_opt_node;
         const init_node = d[1].unwrap() orelse return;
         const init_tag = tree.nodeTag(init_node);
-        // Check if init is a struct container declaration
+        // Get name: main_token is `const`/`var`, +1 is the identifier
+        const name_tok = tree.nodeMainToken(node) + 1;
+        const name = tree.tokenSlice(name_tok);
+
+        // Check if init is a container declaration (struct or enum)
         if (init_tag == .container_decl_two or
             init_tag == .container_decl_two_trailing or
             init_tag == .container_decl or
             init_tag == .container_decl_trailing)
         {
-            // Get name: main_token is `const`/`var`, +1 is the identifier
-            const name_tok = tree.nodeMainToken(node) + 1;
-            const name = tree.tokenSlice(name_tok);
-            self.mapStructDecl(name, init_node);
+            // Distinguish struct vs enum by main_token tag
+            const main_tok = tree.nodeMainToken(init_node);
+            const tok_tag = tree.tokens.items(.tag)[main_tok];
+            if (tok_tag == .keyword_enum) {
+                self.mapEnumDecl(name, init_node, .none);
+            } else {
+                self.mapStructDecl(name, init_node);
+            }
+        }
+        // container_decl_arg: enum(u8) or struct(arg) with explicit tag/arg
+        if (init_tag == .container_decl_arg or
+            init_tag == .container_decl_arg_trailing)
+        {
+            const main_tok = tree.nodeMainToken(init_node);
+            const tok_tag = tree.tokens.items(.tag)[main_tok];
+            if (tok_tag == .keyword_enum) {
+                self.mapEnumDecl(name, init_node, .none);
+            }
         }
     }
 
@@ -335,6 +368,104 @@ const Gen = struct {
         }) catch return;
     }
 
+    /// Parse a Zig enum container declaration and register the !cir.enum type.
+    /// Handles both `enum { a, b }` (container_decl/container_decl_two) and
+    /// `enum(u8) { a, b }` (container_decl_arg).
+    /// Reference: Zig AstGen containerDecl — main_token is keyword_enum.
+    fn mapEnumDecl(self: *Gen, name: []const u8, node: Node.Index, _: Node.OptionalIndex) void {
+        const tree = self.tree;
+        const tag = tree.nodeTag(node);
+
+        // Collect member nodes based on container variant
+        var members_buf: [2]Node.Index = undefined;
+        var tag_type_node: ?Node.Index = null;
+        const members: []const Node.Index = switch (tag) {
+            .container_decl_two, .container_decl_two_trailing => blk: {
+                const d = tree.nodeData(node).opt_node_and_opt_node;
+                var count: usize = 0;
+                if (d[0].unwrap()) |n| {
+                    members_buf[count] = n;
+                    count += 1;
+                }
+                if (d[1].unwrap()) |n| {
+                    members_buf[count] = n;
+                    count += 1;
+                }
+                break :blk members_buf[0..count];
+            },
+            .container_decl, .container_decl_trailing => blk: {
+                break :blk tree.extraDataSlice(
+                    tree.nodeData(node).extra_range, Node.Index);
+            },
+            .container_decl_arg, .container_decl_arg_trailing => blk: {
+                const d = tree.nodeData(node).node_and_extra;
+                tag_type_node = d[0];
+                const sub_range = tree.extraData(d[1], Node.SubRange);
+                break :blk tree.extraDataSlice(sub_range, Node.Index);
+            },
+            else => return,
+        };
+
+        // Determine tag type: default to i32, or resolve from explicit arg
+        var tag_type = self.b.intType(32);
+        if (tag_type_node) |tn| {
+            tag_type = self.resolveType(tn);
+        }
+
+        // Count enum variants (only container_field_init nodes without type annotations)
+        var variant_count: usize = 0;
+        for (members) |member| {
+            const field_tag = tree.nodeTag(member);
+            if (field_tag == .container_field_init or
+                field_tag == .container_field or
+                field_tag == .container_field_align)
+            {
+                variant_count += 1;
+            }
+        }
+
+        // Build arrays for C API call
+        const v_names = self.gpa.alloc(mlir.StringRef, variant_count) catch return;
+        defer self.gpa.free(v_names);
+        const v_values = self.gpa.alloc(i64, variant_count) catch return;
+        defer self.gpa.free(v_values);
+        const v_name_strs = self.gpa.alloc([]const u8, variant_count) catch return;
+
+        var vi: usize = 0;
+        for (members) |member| {
+            const field_tag = tree.nodeTag(member);
+            if (field_tag == .container_field_init or
+                field_tag == .container_field or
+                field_tag == .container_field_align)
+            {
+                const field_main_token = tree.nodeMainToken(member);
+                const variant_name = tree.tokenSlice(field_main_token);
+                v_names[vi] = mlir.StringRef.fromSlice(variant_name);
+                v_values[vi] = @intCast(vi); // auto-assign sequential values
+                v_name_strs[vi] = variant_name;
+                vi += 1;
+            }
+        }
+
+        // Create !cir.enum type via C API
+        const enum_type = mlir.cirEnumTypeGet(
+            self.ctx,
+            mlir.StringRef.fromSlice(name),
+            tag_type,
+            @intCast(variant_count),
+            v_names.ptr,
+            v_values.ptr,
+        );
+        if (enum_type.ptr == null) return;
+
+        // Register enum type
+        self.enums.append(self.gpa, .{
+            .name = name,
+            .mlir_type = enum_type,
+            .variant_names = v_name_strs,
+        }) catch return;
+    }
+
     /// Return MLIR type name string for a Zig type identifier node.
     fn resolveTypeName(self: *Gen, node: Node.Index) []const u8 {
         const tag = self.tree.nodeTag(node);
@@ -384,6 +515,9 @@ const Gen = struct {
             result_types[0] = ret_type;
             n_results = 1;
         }
+
+        // Track return type for enum literal context inference
+        self.current_return_type = if (n_results > 0) result_types[0] else .{ .ptr = null };
 
         const func = self.b.createFunc(
             self.module,
@@ -795,6 +929,12 @@ const Gen = struct {
             // Reference: Zig AstGen — error_value main_token is `error`, name at main_token + 2
             .error_value => blk2: {
                 break :blk2 self.mapErrorValue(block, node, result_type);
+            },
+            // Enum literal: .red → cir.enum_constant
+            // The main_token is the variant identifier (e.g. "red").
+            // The enum type is inferred from result_type (context).
+            .enum_literal => blk2: {
+                break :blk2 self.mapEnumLiteral(block, node, result_type);
             },
             else => mlir.cirBuildConstantInt(block, self.b.loc, result_type, 0),
         };
@@ -1274,5 +1414,39 @@ const Gen = struct {
 
         // Otherwise return raw i16 error code
         return mlir.cirBuildConstantInt(block, self.b.loc, self.b.intType(16), code);
+    }
+
+    /// `.red` — Zig enum literal. Resolve type from context (result_type) or
+    /// current function return type. Emit cir.enum_constant with the enum type.
+    /// Reference: Zig AstGen — enum_literal main_token is the variant identifier.
+    fn mapEnumLiteral(self: *Gen, block: mlir.Block, node: Node.Index, result_type: mlir.Type) mlir.Value {
+        const tok = self.tree.nodeMainToken(node);
+        const variant_name = self.tree.tokenSlice(tok);
+
+        // Try to determine the enum type:
+        // 1. If result_type is an enum type, use it directly
+        // 2. Fall back to current function return type
+        var enum_type = result_type;
+        if (!mlir.cirTypeIsEnum(enum_type)) {
+            enum_type = self.current_return_type;
+        }
+        if (!mlir.cirTypeIsEnum(enum_type)) {
+            // Cannot resolve enum type — search enums for a matching variant
+            for (self.enums.items) |e| {
+                for (e.variant_names) |vn| {
+                    if (std.mem.eql(u8, vn, variant_name)) {
+                        enum_type = e.mlir_type;
+                        break;
+                    }
+                }
+                if (mlir.cirTypeIsEnum(enum_type)) break;
+            }
+        }
+        if (!mlir.cirTypeIsEnum(enum_type)) {
+            // Still can't resolve — emit zero constant as fallback
+            return mlir.cirBuildConstantInt(block, self.b.loc, result_type, 0);
+        }
+
+        return mlir.cirBuildEnumConstant(block, self.b.loc, enum_type, mlir.StringRef.fromSlice(variant_name));
     }
 };

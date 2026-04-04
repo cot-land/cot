@@ -637,6 +637,58 @@ func CirTypeIsStruct(ty MlirType) bool {
 	return bool(C.cirTypeIsStruct(ty.ptr))
 }
 
+// --- Enum Type + Operations ---
+
+func CirEnumTypeGet(ctx MlirContext, name string, tagType MlirType, variantNames []string, variantValues []int64) MlirType {
+	cname := C.CString(name)
+	defer C.free(unsafe.Pointer(cname))
+	nameRef := C.MlirStringRef{data: cname, length: C.size_t(len(name))}
+
+	nVariants := len(variantNames)
+	cVarNames := make([]C.MlirStringRef, nVariants)
+	cVarNamePtrs := make([]*C.char, nVariants)
+	for i, vn := range variantNames {
+		cVarNamePtrs[i] = C.CString(vn)
+		cVarNames[i] = C.MlirStringRef{data: cVarNamePtrs[i], length: C.size_t(len(vn))}
+	}
+	defer func() {
+		for _, p := range cVarNamePtrs {
+			C.free(unsafe.Pointer(p))
+		}
+	}()
+
+	var vnPtr *C.MlirStringRef
+	var vvPtr *C.int64_t
+	cValues := make([]C.int64_t, nVariants)
+	for i, v := range variantValues {
+		cValues[i] = C.int64_t(v)
+	}
+	if nVariants > 0 {
+		vnPtr = &cVarNames[0]
+		vvPtr = &cValues[0]
+	}
+	return MlirType{ptr: C.cirEnumTypeGet(ctx.ptr, nameRef, tagType.ptr, C.intptr_t(nVariants), vnPtr, vvPtr)}
+}
+
+func CirTypeIsEnum(ty MlirType) bool {
+	return bool(C.cirTypeIsEnum(ty.ptr))
+}
+
+func CirEnumTypeGetTagType(enumType MlirType) MlirType {
+	return MlirType{ptr: C.cirEnumTypeGetTagType(enumType.ptr)}
+}
+
+func CirBuildEnumConstant(block MlirBlock, loc MlirLocation, enumType MlirType, variant string) MlirValue {
+	cs := C.CString(variant)
+	defer C.free(unsafe.Pointer(cs))
+	ref := C.MlirStringRef{data: cs, length: C.size_t(len(variant))}
+	return MlirValue{ptr: C.cirBuildEnumConstant(block.ptr, loc.ptr, enumType.ptr, ref)}
+}
+
+func CirBuildEnumValue(block MlirBlock, loc MlirLocation, tagType MlirType, enumVal MlirValue) MlirValue {
+	return MlirValue{ptr: C.cirBuildEnumValue(block.ptr, loc.ptr, tagType.ptr, enumVal.ptr)}
+}
+
 func CirStructTypeGetFieldIndex(structType MlirType, name string) int {
 	cs := C.CString(name)
 	defer C.free(unsafe.Pointer(cs))

@@ -215,6 +215,14 @@ pub extern "c" fn cirBuildThrow(block: Block, loc: Location, value: Value) callc
 pub extern "c" fn cirBuildInvoke(block: Block, loc: Location, callee: StringRef, nOperands: isize, operands: [*]const Value, resultType: Type, normalDest: Block, unwindDest: Block) callconv(.c) Value;
 pub extern "c" fn cirBuildLandingPad(block: Block, loc: Location, resultType: Type) callconv(.c) Value;
 
+// Enum type + ops
+pub extern "c" fn cirEnumTypeGet(ctx: Context, name: StringRef, tagType: Type, nVariants: isize, variantNames: [*]const StringRef, variantValues: [*]const i64) callconv(.c) Type;
+pub extern "c" fn cirTypeIsEnum(ty: Type) callconv(.c) bool;
+pub extern "c" fn cirEnumTypeGetTagType(enumType: Type) callconv(.c) Type;
+pub extern "c" fn cirEnumTypeGetVariantValue(enumType: Type, name: StringRef) callconv(.c) i64;
+pub extern "c" fn cirBuildEnumConstant(block: Block, loc: Location, enumType: Type, variant: StringRef) callconv(.c) Value;
+pub extern "c" fn cirBuildEnumValue(block: Block, loc: Location, tagType: Type, enumVal: Value) callconv(.c) Value;
+
 // ============================================================
 // Convenience API (ported from cot-failed/libzc/mlir.zig)
 // ============================================================

@@ -68,6 +68,12 @@ struct CIRToLLVMPass
       auto tagType = IntegerType::get(ctx, 1);
       return LLVM::LLVMStructType::getLiteral(ctx, {payloadType, tagType});
     });
+    // !cir.enum<"Name", TagType, ...> → TagType
+    // Enum IS its tag integer at LLVM level. Variant names dropped.
+    // Reference: Zig enum(u8) → u8
+    tc.addConversion([](cir::EnumType type) -> mlir::Type {
+      return type.getTagType();
+    });
     // !cir.error_union<T> → !llvm.struct<(T, i16)>
     // Layout: {payload, error_code}. error_code=0 means success.
     // Reference: Zig E!T layout (InternPool ErrorUnionType)

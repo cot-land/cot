@@ -1,0 +1,22 @@
+// RUN: %cot emit-llvm %s | %FileCheck %s
+
+// Features #049-050: Enum lowering
+// !cir.enum → tag integer type, enum_constant → llvm.mlir.constant
+
+enum Color { Red, Green, Blue }
+
+fn get_red() -> Color {
+    return Color.Red
+}
+
+fn get_green() -> Color {
+    return Color.Green
+}
+
+// CHECK-LABEL: llvm.func @get_red
+// CHECK: llvm.mlir.constant(0
+// CHECK: llvm.return
+
+// CHECK-LABEL: llvm.func @get_green
+// CHECK: llvm.mlir.constant(1
+// CHECK: llvm.return

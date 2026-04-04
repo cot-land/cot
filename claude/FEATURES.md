@@ -114,8 +114,8 @@ Status: `-` not started, `~` in progress, `✓` done.
 
 | # | Feature | CIR Op(s) | ac Syntax | Zig Syntax | LLVM Lowering | Status |
 |---|---------|-----------|-----------|------------|---------------|--------|
-| 049 | Enum declaration | `!cir.enum<"Name", TagType, ...>`, `cir.enum_constant` | `enum Color { Red, Green, Blue }` | `const Color = enum(u8) { red, green, blue };` | TagType integer | - |
-| 050 | Enum value | `cir.enum_value` | `Color.Red` | `.red` or `Color.red` | Identity (enum = integer) | - |
+| 049 | Enum declaration | `!cir.enum<"Name", TagType, ...>`, `cir.enum_constant` | `enum Color { Red, Green, Blue }` | `const Color = enum(u8) { red, green, blue };` | TagType integer | ✓ |
+| 050 | Enum value | `cir.enum_value` | `Color.Red` | `.red` or `Color.red` | Identity (enum = integer) | ✓ |
 | 051 | Match/switch statement | `cir.switch_br` | `match x { ... }` | `switch (x) { ... }` | `llvm.switch` | - |
 | 052 | Match/switch expression | `cir.switch_br` + value | `let y = match x { ... }` | `const y = switch (x) { ... };` | Switch + phi | - |
 | 053 | Tagged union | `cir.union_type` | `union { i32, f64, string }` | `const U = union(enum) { int: i32, float: f64 };` | Tag + payload | - |

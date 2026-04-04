@@ -201,6 +201,37 @@ struct TruncFOpLowering : public OpConversionPattern<cir::TruncFOp> {
   }
 };
 
+/// cir.enum_constant → llvm.mlir.constant (variant's integer value)
+/// Reference: Zig enum literal → integer constant
+struct EnumConstantOpLowering
+    : public OpConversionPattern<cir::EnumConstantOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::EnumConstantOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    auto enumType = llvm::cast<cir::EnumType>(op.getType());
+    auto tagType = enumType.getTagType();
+    auto val = enumType.getVariantValue(op.getVariant());
+    if (val < 0)
+      return rewriter.notifyMatchFailure(op, "variant not found");
+    rewriter.replaceOpWithNewOp<LLVM::ConstantOp>(
+        op, tagType, rewriter.getIntegerAttr(tagType, val));
+    return success();
+  }
+};
+
+/// cir.enum_value → identity (enum IS the integer at LLVM level)
+/// Reference: Rust Discriminant rvalue
+struct EnumValueOpLowering
+    : public OpConversionPattern<cir::EnumValueOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::EnumValueOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    // Identity — the enum is already the integer after type conversion
+    rewriter.replaceOp(op, adaptor.getInput());
+    return success();
+  }
+};
+
 } // namespace
 
 void cot::populateArithmeticPatterns(
@@ -214,6 +245,7 @@ void cot::populateArithmeticPatterns(
       // Casts — 1:1 to LLVM
       ExtSIOpLowering, ExtUIOpLowering, TruncIOpLowering,
       SIToFPOpLowering, FPToSIOpLowering,
-      ExtFOpLowering, TruncFOpLowering
+      ExtFOpLowering, TruncFOpLowering,
+      EnumConstantOpLowering, EnumValueOpLowering
   >(converter, ctx);
 }

@@ -34,7 +34,7 @@ struct Param {
 };
 
 // Expression kinds
-enum class ExprKind { IntLit, FloatLit, BoolLit, StringLit, NullLit, ErrorLit, Ident, BinOp, UnaryOp, Call, IfExpr, Cast, StructInit, FieldAccess, MethodCall, ArrayLit, IndexAccess, SliceExpr, TryExpr, CatchExpr };
+enum class ExprKind { IntLit, FloatLit, BoolLit, StringLit, NullLit, ErrorLit, Ident, BinOp, UnaryOp, Call, IfExpr, Cast, StructInit, FieldAccess, MethodCall, ArrayLit, IndexAccess, SliceExpr, TryExpr, CatchExpr, EnumAccess };
 
 struct Expr {
   ExprKind kind;
@@ -78,6 +78,17 @@ struct StructDecl {
   size_t pos;
 };
 
+struct EnumVariant {
+  std::string_view name;
+  int64_t value; // auto-assigned if not explicit
+};
+
+struct EnumDecl {
+  std::string_view name;
+  std::vector<EnumVariant> variants;
+  size_t pos;
+};
+
 struct FnDecl {
   std::string_view name;
   std::vector<Param> params;
@@ -96,6 +107,7 @@ struct Module {
   std::vector<FnDecl> functions;
   std::vector<TestDecl> tests;
   std::vector<StructDecl> structs;
+  std::vector<EnumDecl> enums;
 };
 
 Module parse(std::string_view source, const std::vector<Token> &tokens);

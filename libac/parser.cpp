@@ -827,6 +827,34 @@ class Parser {
     return sd;
   }
 
+  // ---- Enum declaration: enum Name { Variant1, Variant2, ... } ----
+  EnumDecl parseEnumDecl() {
+    expect(Tag::kw_enum);
+    EnumDecl ed;
+    ed.pos = peek().start;
+    ed.name = tokenText(expect(Tag::identifier));
+    expect(Tag::l_brace);
+    skipSemis();
+    int64_t nextValue = 0;
+    while (!check(Tag::r_brace) && !check(Tag::eof)) {
+      EnumVariant v;
+      v.name = tokenText(expect(Tag::identifier));
+      // Optional explicit value: Variant = 10
+      if (match(Tag::equal)) {
+        v.value = std::stoll(std::string(tokenText(expect(Tag::int_literal))));
+        nextValue = v.value + 1;
+      } else {
+        v.value = nextValue++;
+      }
+      ed.variants.push_back(v);
+      match(Tag::comma);
+      skipSemis();
+    }
+    expect(Tag::r_brace);
+    match(Tag::semicolon);
+    return ed;
+  }
+
   // ---- Test declaration (Zig pattern: test "name" { body }) ----
   TestDecl parseTestDecl() {
     expect(Tag::kw_test);
@@ -868,6 +896,8 @@ public:
         mod.tests.push_back(parseTestDecl());
       } else if (check(Tag::kw_struct)) {
         mod.structs.push_back(parseStructDecl());
+      } else if (check(Tag::kw_enum)) {
+        mod.enums.push_back(parseEnumDecl());
       } else {
         llvm::errs() << "error: unexpected '" << tokenText(peek()) << "' at top level\n";
         advance();

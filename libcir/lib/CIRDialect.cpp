@@ -115,6 +115,65 @@ void ArrayType::print(mlir::AsmPrinter &p) const {
 }
 
 //===----------------------------------------------------------------------===//
+// !cir.enum — custom parse/print + verifier + helpers
+// Syntax: !cir.enum<"Color", i32, Red: 0, Green: 1, Blue: 2>
+//===----------------------------------------------------------------------===//
+
+mlir::Type EnumType::parse(mlir::AsmParser &parser) {
+  std::string name;
+  if (parser.parseLess() || parser.parseString(&name) || parser.parseComma())
+    return {};
+  mlir::Type tagType;
+  if (parser.parseType(tagType))
+    return {};
+  llvm::SmallVector<mlir::StringAttr> variantNames;
+  llvm::SmallVector<int64_t> variantValues;
+  while (succeeded(parser.parseOptionalComma())) {
+    llvm::StringRef vname;
+    int64_t vval;
+    if (parser.parseKeyword(&vname) || parser.parseColon() ||
+        parser.parseInteger(vval))
+      return {};
+    variantNames.push_back(
+        mlir::StringAttr::get(parser.getContext(), vname));
+    variantValues.push_back(vval);
+  }
+  if (parser.parseGreater()) return {};
+  return get(parser.getContext(), name, tagType, variantNames, variantValues);
+}
+
+void EnumType::print(mlir::AsmPrinter &p) const {
+  p << "<\"" << getName() << "\", " << getTagType();
+  auto names = getVariantNames();
+  auto values = getVariantValues();
+  for (size_t i = 0; i < names.size(); i++)
+    p << ", " << names[i].getValue() << ": " << values[i];
+  p << ">";
+}
+
+mlir::LogicalResult EnumType::verify(
+    llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
+    llvm::StringRef name, mlir::Type tagType,
+    llvm::ArrayRef<mlir::StringAttr> variantNames,
+    llvm::ArrayRef<int64_t> variantValues) {
+  if (name.empty())
+    return emitError() << "enum type must have a name";
+  if (variantNames.size() != variantValues.size())
+    return emitError() << "variant names count must match variant values count";
+  if (!tagType.isIntOrIndex())
+    return emitError() << "tag type must be an integer type";
+  return mlir::success();
+}
+
+int64_t EnumType::getVariantValue(llvm::StringRef variantName) const {
+  auto names = getVariantNames();
+  auto values = getVariantValues();
+  for (size_t i = 0; i < names.size(); i++)
+    if (names[i].getValue() == variantName) return values[i];
+  return -1;
+}
+
+//===----------------------------------------------------------------------===//
 // !cir.optional<T> — isPointerLike helper
 //===----------------------------------------------------------------------===//
 
@@ -517,6 +576,31 @@ LogicalResult OptionalPayloadOp::verify() {
     return emitOpError("input must be !cir.optional<T>");
   if (getResult().getType() != optType.getPayloadType())
     return emitOpError("result type must match optional payload type");
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// Enum op verifiers
+//===----------------------------------------------------------------------===//
+
+LogicalResult EnumConstantOp::verify() {
+  auto enumType = llvm::dyn_cast<cir::EnumType>(getResult().getType());
+  if (!enumType)
+    return emitOpError("result must be !cir.enum<...>");
+  auto val = enumType.getVariantValue(getVariant());
+  if (val < 0)
+    return emitOpError("variant '") << getVariant()
+        << "' not found in enum '" << enumType.getName() << "'";
+  return success();
+}
+
+LogicalResult EnumValueOp::verify() {
+  auto enumType = llvm::dyn_cast<cir::EnumType>(getInput().getType());
+  if (!enumType)
+    return emitOpError("input must be !cir.enum<...>");
+  if (getResult().getType() != enumType.getTagType())
+    return emitOpError("result type must match enum tag type: expected ")
+        << enumType.getTagType() << ", got " << getResult().getType();
   return success();
 }
 

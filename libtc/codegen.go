@@ -69,6 +69,12 @@ type Gen struct {
 	typeAliasNames []string
 	typeAliasTypes []MlirType
 
+	// Enum type registry
+	enumNames        []string
+	enumTypes        []MlirType
+	enumMemberNames  [][]string
+	enumMemberValues [][]int64
+
 	// Try/catch state: pending catch block for exception unwinding
 	pendingCatchBlock MlirBlock
 	pendingCatchVar   string
@@ -114,6 +120,8 @@ func (g *Gen) mapDecl(node *ast.Node) {
 		g.mapInterfaceDecl(node)
 	case ast.KindTypeAliasDeclaration:
 		g.mapTypeAliasDecl(node)
+	case ast.KindEnumDeclaration:
+		g.mapEnumDecl(node)
 	}
 }
 
@@ -125,6 +133,43 @@ func (g *Gen) mapTypeAliasDecl(node *ast.Node) {
 	ty := g.resolveType(ta.Type)
 	g.typeAliasNames = append(g.typeAliasNames, name)
 	g.typeAliasTypes = append(g.typeAliasTypes, ty)
+}
+
+func (g *Gen) mapEnumDecl(node *ast.Node) {
+	ed := node.AsEnumDeclaration()
+	name := ed.Name().AsIdentifier().Text
+
+	var memberNames []string
+	var memberValues []int64
+	nextVal := int64(0)
+
+	if ed.Members != nil {
+		for _, member := range ed.Members.Nodes {
+			if member.Kind == ast.KindEnumMember {
+				em := member.AsEnumMember()
+				mname := em.Name().AsIdentifier().Text
+				memberNames = append(memberNames, mname)
+				// Use explicit initializer if present, otherwise auto-assign
+				if em.Initializer != nil && em.Initializer.Kind == ast.KindNumericLiteral {
+					lit := em.Initializer.AsNumericLiteral()
+					v, _ := strconv.ParseInt(lit.Text, 10, 64)
+					memberValues = append(memberValues, v)
+					nextVal = v + 1
+				} else {
+					memberValues = append(memberValues, nextVal)
+					nextVal++
+				}
+			}
+		}
+	}
+
+	tagType := g.b.IntType(32)
+	enumType := CirEnumTypeGet(g.ctx, name, tagType, memberNames, memberValues)
+
+	g.enumNames = append(g.enumNames, name)
+	g.enumTypes = append(g.enumTypes, enumType)
+	g.enumMemberNames = append(g.enumMemberNames, memberNames)
+	g.enumMemberValues = append(g.enumMemberValues, memberValues)
 }
 
 func (g *Gen) mapInterfaceDecl(node *ast.Node) {
@@ -831,10 +876,25 @@ func (g *Gen) mapElementAccess(block MlirBlock, node *ast.Node, resultType MlirT
 	return CirBuildElemVal(block, g.b.loc, resultType, arr, idxVal)
 }
 
-// Property access: p.x → cir.field_val
+// Property access: p.x → cir.field_val, Color.Red → cir.enum_constant
 func (g *Gen) mapPropertyAccess(block MlirBlock, node *ast.Node, resultType MlirType) MlirValue {
 	pa := node.AsPropertyAccessExpression()
 	fieldName := pa.Name().AsIdentifier().Text
+
+	// Check if this is an enum member access: Color.Red
+	if pa.Expression.Kind == ast.KindIdentifier {
+		exprName := pa.Expression.AsIdentifier().Text
+		for i, en := range g.enumNames {
+			if en == exprName {
+				// Verify member name exists in this enum
+				for _, mn := range g.enumMemberNames[i] {
+					if mn == fieldName {
+						return CirBuildEnumConstant(block, g.b.loc, g.enumTypes[i], fieldName)
+					}
+				}
+			}
+		}
+	}
 
 	// Emit object expression
 	obj := g.mapExpr(block, pa.Expression, resultType)
@@ -948,6 +1008,12 @@ func (g *Gen) resolveType(node *ast.Node) MlirType {
 					return g.structTypes[i]
 				}
 			}
+			// Check enum types
+			for i, en := range g.enumNames {
+				if en == name {
+					return g.enumTypes[i]
+				}
+			}
 			// "Error" by itself → i16 error code type
 			if name == "Error" {
 				return g.b.IntType(16)
@@ -1004,6 +1070,23 @@ func (g *Gen) resolveTypeName(node *ast.Node) string {
 		return "i0"
 	case ast.KindStringKeyword:
 		return "!cir.slice<i8>"
+	case ast.KindTypeReference:
+		tr := node.AsTypeReference()
+		if tr.TypeName != nil && tr.TypeName.Kind == ast.KindIdentifier {
+			name := tr.TypeName.AsIdentifier().Text
+			// Check enum types — return the enum type string
+			for _, en := range g.enumNames {
+				if en == name {
+					return "!cir.enum<\"" + name + "\">"
+				}
+			}
+			// Check struct types
+			for _, sn := range g.structNames {
+				if sn == name {
+					return "!cir.struct<\"" + name + "\">"
+				}
+			}
+		}
 	case ast.KindUnionType:
 		// Check if it's T | Error → !cir.error_union<T>
 		ut := node.AsUnionTypeNode()

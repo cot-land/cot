@@ -492,6 +492,57 @@ MlirValue cirBuildArrayToSlice(MlirBlock block, MlirLocation loc,
 }
 
 //===----------------------------------------------------------------------===//
+// Enum Type + Operations
+//===----------------------------------------------------------------------===//
+
+MlirType cirEnumTypeGet(MlirContext ctx, MlirStringRef name,
+                        MlirType tagType,
+                        intptr_t nVariants,
+                        MlirStringRef *variantNames,
+                        int64_t *variantValues) {
+  auto mlirCtx = unwrap(ctx);
+  llvm::SmallVector<mlir::StringAttr> names;
+  llvm::SmallVector<int64_t> values;
+  for (intptr_t i = 0; i < nVariants; i++) {
+    names.push_back(mlir::StringAttr::get(mlirCtx,
+        llvm::StringRef(variantNames[i].data, variantNames[i].length)));
+    values.push_back(variantValues[i]);
+  }
+  return wrap(cir::EnumType::get(mlirCtx,
+      llvm::StringRef(name.data, name.length),
+      unwrap(tagType), names, values));
+}
+
+bool cirTypeIsEnum(MlirType type) {
+  return llvm::isa<cir::EnumType>(unwrap(type));
+}
+
+MlirType cirEnumTypeGetTagType(MlirType enumType) {
+  return wrap(llvm::cast<cir::EnumType>(unwrap(enumType)).getTagType());
+}
+
+int64_t cirEnumTypeGetVariantValue(MlirType enumType, MlirStringRef name) {
+  return llvm::cast<cir::EnumType>(unwrap(enumType))
+      .getVariantValue(llvm::StringRef(name.data, name.length));
+}
+
+MlirValue cirBuildEnumConstant(MlirBlock block, MlirLocation loc,
+                               MlirType enumType, MlirStringRef variant) {
+  auto b = builderAtEnd(block, loc);
+  auto op = b.create<cir::EnumConstantOp>(unwrap(loc), unwrap(enumType),
+      b.getStringAttr(llvm::StringRef(variant.data, variant.length)));
+  return wrap(op.getResult());
+}
+
+MlirValue cirBuildEnumValue(MlirBlock block, MlirLocation loc,
+                            MlirType tagType, MlirValue enumVal) {
+  auto b = builderAtEnd(block, loc);
+  auto op = b.create<cir::EnumValueOp>(unwrap(loc), unwrap(tagType),
+                                        unwrap(enumVal));
+  return wrap(op.getResult());
+}
+
+//===----------------------------------------------------------------------===//
 // Error Union Type + Operations
 // Reference: Zig E!T — wrap_errunion_payload, wrap_errunion_err, is_err,
 //            unwrap_errunion_payload, unwrap_errunion_err

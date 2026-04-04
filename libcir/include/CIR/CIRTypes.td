@@ -132,6 +132,39 @@ def CIR_OptionalType : CIR_Type<"Optional", "optional"> {
   }];
 }
 
+def CIR_EnumType : CIR_Type<"Enum", "enum"> {
+  let summary = "named enumeration type with explicit tag type";
+  let description = [{
+    A named enumeration with variant names, integer values, and an explicit
+    backing integer type (the tag type).
+
+    Zig: enum(u8) { red, green, blue } — tag type is u8
+    TypeScript: enum Color { Red, Green, Blue } — tag type is i32
+    Rust: enum Color { Red, Green, Blue } — tag type auto-selected
+
+    Lowers to the tag integer type directly. Variant names are dropped
+    at LLVM level — only integer values remain.
+
+    Reference: Zig LoadedEnumType with int_tag_type and field_values.
+    Syntax: !cir.enum<"Color", i8, Red: 0, Green: 1, Blue: 2>
+  }];
+
+  let parameters = (ins
+    StringRefParameter<"enum name">:$name,
+    "mlir::Type":$tagType,
+    ArrayRefParameter<"mlir::StringAttr", "variant names">:$variantNames,
+    ArrayRefParameter<"int64_t", "variant values">:$variantValues
+  );
+
+  let extraClassDeclaration = [{
+    /// Get the integer value for a variant by name. Returns -1 if not found.
+    int64_t getVariantValue(llvm::StringRef variantName) const;
+  }];
+
+  let genVerifyDecl = 1;
+  let hasCustomAssemblyFormat = 1;
+}
+
 def CIR_ErrorUnionType : CIR_Type<"ErrorUnion", "error_union"> {
   let summary = "error union type (E!T — success value or error code)";
   let description = [{

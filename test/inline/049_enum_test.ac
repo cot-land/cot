@@ -1,0 +1,43 @@
+enum Color { Red, Green, Blue }
+
+fn get_color(x: i32) -> Color {
+    if x == 0 {
+        return Color.Red
+    }
+    if x == 1 {
+        return Color.Green
+    }
+    return Color.Blue
+}
+
+fn color_eq(a: Color, b: Color) -> i32 {
+    if a as i32 == b as i32 {
+        return 1
+    }
+    return 0
+}
+
+test "enum value Red is 0" {
+    let r: Color = Color.Red
+    assert(r as i32 == 0)
+}
+
+test "enum value Green is 1" {
+    let g: Color = Color.Green
+    assert(g as i32 == 1)
+}
+
+test "enum value Blue is 2" {
+    let b: Color = Color.Blue
+    assert(b as i32 == 2)
+}
+
+test "enum comparison" {
+    assert(color_eq(Color.Red, Color.Red) == 1)
+    assert(color_eq(Color.Red, Color.Blue) == 0)
+}
+
+test "enum function param and return" {
+    let c: Color = get_color(1)
+    assert(c as i32 == 1)
+}

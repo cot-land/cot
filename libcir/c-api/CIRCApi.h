@@ -322,6 +322,34 @@ MlirValue cirBuildArrayToSlice(MlirBlock block, MlirLocation loc,
                                MlirType arrayType);
 
 //===----------------------------------------------------------------------===//
+// Enum Type + Operations
+//===----------------------------------------------------------------------===//
+
+/// Get !cir.enum<"Name", TagType, ...> type.
+MlirType cirEnumTypeGet(MlirContext ctx, MlirStringRef name,
+                        MlirType tagType,
+                        intptr_t nVariants,
+                        MlirStringRef *variantNames,
+                        int64_t *variantValues);
+
+/// Check if a type is !cir.enum<...>.
+bool cirTypeIsEnum(MlirType type);
+
+/// Get tag type from !cir.enum<...>.
+MlirType cirEnumTypeGetTagType(MlirType enumType);
+
+/// Get variant value by name. Returns -1 if not found.
+int64_t cirEnumTypeGetVariantValue(MlirType enumType, MlirStringRef name);
+
+/// Create cir.enum_constant (construct enum value by variant name).
+MlirValue cirBuildEnumConstant(MlirBlock block, MlirLocation loc,
+                               MlirType enumType, MlirStringRef variant);
+
+/// Create cir.enum_value (extract integer from enum).
+MlirValue cirBuildEnumValue(MlirBlock block, MlirLocation loc,
+                            MlirType tagType, MlirValue enumVal);
+
+//===----------------------------------------------------------------------===//
 // Error Union Type + Operations
 //===----------------------------------------------------------------------===//
 

@@ -28,11 +28,11 @@ make test         # Run all test layers (lit, gate, inline, build)
 ./cot test file.ac          # Run inline test blocks
 ```
 
-**Total: 96 lit + 21 inline files + 1 gate + 4 build = 122 test targets, all passing.**
+**Total: 106 lit + 23 inline files + 1 gate + 4 build = 134 test targets, all passing.**
 
 ---
 
-## CIR Ops (53 ops, 7 custom types)
+## CIR Ops (55 ops, 8 custom types)
 
 | Op | Description | LLVM Lowering |
 |----|-------------|---------------|

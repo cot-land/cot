@@ -40,6 +40,9 @@ class CodeGen {
   // Struct type registry — populated by emitStructDecl, queried by resolveType
   std::unordered_map<std::string_view, mlir::Type> structTypes;
 
+  // Enum type registry — populated by emitEnumDecl, queried by resolveType
+  std::unordered_map<std::string_view, mlir::Type> enumTypes;
+
   mlir::Type resolveType(const TypeRef &t) {
     // Ref/pointer type: *T → !cir.ref<T>
     if (t.isRef) {
@@ -86,6 +89,9 @@ class CodeGen {
     // Struct types
     auto sit = structTypes.find(t.name);
     if (sit != structTypes.end()) return sit->second;
+    // Enum types
+    auto eit = enumTypes.find(t.name);
+    if (eit != enumTypes.end()) return eit->second;
     return b.getI32Type();
   }
 
@@ -425,7 +431,20 @@ class CodeGen {
       return call.getResult(0);
     }
 
+    case ExprKind::EnumAccess:
+      // Handled same as FieldAccess — enum detection below
+      [[fallthrough]];
     case ExprKind::FieldAccess: {
+      // Enum access: Color.Red → cir.enum_constant
+      // Check if lhs is an identifier naming an enum type
+      if (e.lhs->kind == ExprKind::Ident) {
+        auto eit = enumTypes.find(e.lhs->name);
+        if (eit != enumTypes.end()) {
+          auto enumTy = eit->second;
+          return b.create<cir::EnumConstantOp>(loc, enumTy,
+              b.getStringAttr(llvm::StringRef(e.name.data(), e.name.size())));
+        }
+      }
       // Field access: p.x → extract field from struct value
       // Auto-deref: if p is !cir.ref<StructType>, insert implicit deref first
       // Reference: Zig/Rust/Go auto-deref through pointers on field access
@@ -495,6 +514,14 @@ class CodeGen {
   /// Reference: Arith dialect — one op per direction, no mega-cast.
   mlir::Value emitCast(mlir::Value input, mlir::Type srcType,
                        mlir::Type dstType, bool isUnsigned = false) {
+    // Enum → integer: extract tag value, then cast if needed
+    if (auto enumType = llvm::dyn_cast<cir::EnumType>(srcType)) {
+      auto tagType = enumType.getTagType();
+      auto tagVal = b.create<cir::EnumValueOp>(loc, tagType, input);
+      if (tagType == dstType) return tagVal;
+      // May need integer width cast (e.g., i8 enum tag → i32)
+      return emitCast(tagVal, tagType, dstType, isUnsigned);
+    }
     bool srcInt = llvm::isa<mlir::IntegerType>(srcType);
     bool dstInt = llvm::isa<mlir::IntegerType>(dstType);
     bool srcFloat = llvm::isa<mlir::FloatType>(srcType);
@@ -1045,6 +1072,24 @@ class CodeGen {
     structTypes[sd.name] = structTy;
   }
 
+  /// Register an enum type from a parsed enum declaration.
+  /// Creates !cir.enum<"Name", i32, Variant1: 0, Variant2: 1, ...>.
+  void emitEnumDecl(const EnumDecl &ed) {
+    llvm::SmallVector<mlir::StringAttr> variantNames;
+    llvm::SmallVector<int64_t> variantValues;
+    for (auto &v : ed.variants) {
+      variantNames.push_back(mlir::StringAttr::get(
+          b.getContext(), llvm::StringRef(v.name.data(), v.name.size())));
+      variantValues.push_back(v.value);
+    }
+    // Default tag type is i32 (matches TypeScript). ac can specify explicitly later.
+    auto tagType = b.getI32Type();
+    auto enumTy = cir::EnumType::get(
+        b.getContext(), std::string(ed.name), tagType,
+        variantNames, variantValues);
+    enumTypes[ed.name] = enumTy;
+  }
+
 public:
   CodeGen(mlir::MLIRContext &ctx, std::string_view source)
       : b(&ctx), loc(b.getUnknownLoc()), source_(source) {}
@@ -1052,8 +1097,9 @@ public:
   mlir::OwningOpRef<mlir::ModuleOp> emit(const Module &mod, bool testMode) {
     auto module = mlir::ModuleOp::create(loc);
     module_ = module;
-    // Register struct types first — needed before resolving function param types
+    // Register types first — needed before resolving function param types
     for (auto &sd : mod.structs) emitStructDecl(sd);
+    for (auto &ed : mod.enums) emitEnumDecl(ed);
     for (auto &fn : mod.functions) emitFn(module, fn);
     if (testMode && !mod.tests.empty()) {
       for (size_t i = 0; i < mod.tests.size(); i++)

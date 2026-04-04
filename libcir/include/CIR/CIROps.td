@@ -645,6 +645,41 @@ def CIR_OptionalPayloadOp : CIR_Op<"optional_payload", [Pure]> {
 }
 
 //===----------------------------------------------------------------------===//
+// Enum operations
+// Reference: Zig enum literals, Swift EnumInst, Rust Discriminant
+//===----------------------------------------------------------------------===//
+
+def CIR_EnumConstantOp : CIR_Op<"enum_constant", [Pure]> {
+  let summary = "construct enum value by variant name";
+  let description = [{
+    Creates an enum value for the named variant. Pure constant.
+    Lowers to llvm.mlir.constant with the variant's integer value.
+    Reference: Swift EnumInst, Zig enum literal.
+    Example:
+      %c = cir.enum_constant "Red" : !cir.enum<"Color", i32, Red: 0, Green: 1, Blue: 2>
+  }];
+  let arguments = (ins StrAttr:$variant);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$variant attr-dict `:` type($result)";
+  let hasVerifier = 1;
+}
+
+def CIR_EnumValueOp : CIR_Op<"enum_value", [Pure]> {
+  let summary = "extract integer value from enum";
+  let description = [{
+    Extracts the underlying integer (tag type) from an enum value.
+    Identity lowering — the enum IS the integer at LLVM level.
+    Reference: Rust Discriminant rvalue.
+    Example:
+      %i = cir.enum_value %c : !cir.enum<"Color", i32, ...> to i32
+  }];
+  let arguments = (ins AnyType:$input);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$input attr-dict `:` type($input) `to` type($result)";
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
 // Error union operations
 // Reference: Zig E!T — wrap_errunion_payload, wrap_errunion_err, is_err,
 //            unwrap_errunion_payload, unwrap_errunion_err
