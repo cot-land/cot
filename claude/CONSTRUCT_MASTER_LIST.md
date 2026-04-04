@@ -8,6 +8,9 @@
 TypeScript has 356 AST kind constants. Many overlap. This document groups at
 the AST construct level — what each frontend parser actually handles.
 
+**Cross-referenced with:** `claude/FEATURES.md` (~120 features across 12 phases).
+New constructs from this audit added to FEATURES.md as #054a-c, #060a-f, #065a-g, #080b-e, #081-088.
+
 ---
 
 ## High-Level Progress

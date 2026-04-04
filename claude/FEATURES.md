@@ -1,7 +1,10 @@
 # COT Feature Implementation Plan
 
-**Date:** 2026-04-04
+**Date:** 2026-04-05
 **Rule:** Each feature adds CIR ops + ac syntax + Zig syntax + TypeScript syntax + lowering + test. All three frontends must stay in sync. Nothing ships without a test.
+
+**Progress: ~50 of ~120 features implemented (42%). 55 CIR ops, 8 types, 134 tests.**
+Cross-referenced with `claude/CONSTRUCT_MASTER_LIST.md` for Zig (84 constructs) and TypeScript (93 constructs) coverage.
 
 ---
 
@@ -120,6 +123,9 @@ Status: `-` not started, `~` in progress, `✓` done.
 | 052 | Match/switch expression | `cir.switch_br` + value | `let y = match x { ... }` | `const y = switch (x) { ... };` | Switch + phi | - |
 | 053 | Tagged union | `cir.union_type` | `union { i32, f64, string }` | `const U = union(enum) { int: i32, float: f64 };` | Tag + payload | - |
 | 054 | Union match + payload | `cir.get_union_tag`, `cir.union_payload` | `match u { .Int \|v\| => ... }` | `switch (u) { .int => \|v\| ... }` | Tag switch + extract | - |
+| 054a | Short-circuit && \|\| | `cir.condbr` chain | `a and b`, `a or b` | `a and b`, `a or b` | Branch chain | - |
+| 054b | Orelse / ?? | `cir.is_non_null + select` | `x orelse 0` | `x orelse 0` / TS `x ?? 0` | Null check + select | - |
+| 054c | Force unwrap .? / x! | `cir.optional_payload + trap` | `x!` | `x.?` / TS `x!` | Payload + trap on null | - |
 
 ### Phase 7 — Generics and Traits
 
@@ -131,6 +137,12 @@ Status: `-` not started, `~` in progress, `✓` done.
 | 058 | Trait implementation | `cir.trait_impl` | `impl Hashable for Point { }` | (no Zig equivalent — duck typing via `anytype`) | Generate witness | - |
 | 059 | Trait bounds | `cir.trait_bound` | `fn foo[T: Hashable](x: T)` | `fn foo(x: anytype) ...` | Monomorphize | - |
 | 060 | Trait objects | `cir.existential` | `dyn Hashable` | (no Zig equivalent) | Existential container | - |
+| 060a | Do-while loop | `cir.condbr` (post-test) | `do { } while cond` | (no Zig equiv) / TS `do {} while()` | Loop with post-test | - |
+| 060b | Increment/decrement | load + add/sub + store | `x++`, `++x` | (no Zig equiv) / TS `x++` | Desugar to load+op+store | - |
+| 060c | Indirect call | `cir.call_indirect` | `fn_ptr(args)` | callback pattern | LLVM indirect call | - |
+| 060d | Optional chaining | `cir.is_non_null + condbr` | `x?.y` | (no Zig equiv) / TS `x?.y` | Null check + field/null | - |
+| 060e | Non-null assert | `cir.optional_payload` | `x!` | (no Zig equiv) / TS `x!` | Payload extract | - |
+| 060f | Type assertion | noop / cast | `x as T` | (no Zig equiv) / TS `x as T` | Cast or noop | - |
 
 ### Phase 8 — Memory Management (ARC from Swift)
 
@@ -141,6 +153,13 @@ Status: `-` not started, `~` in progress, `✓` done.
 | 063 | ARC optimization | (pass removes redundant pairs) | (implicit) | (N/A for Zig) | Eliminate retain+release | - |
 | 064 | Weak references | `cir_arc.weak_retain/release` | `weak *Point` | (N/A for Zig) | Side-table alloc | - |
 | 065 | Move semantics | `cir_arc.move` | `move x` | (Zig moves by default) | Transfer without retain | - |
+| 065a | Wrapping arithmetic | `cir.add_wrap/sub_wrap/mul_wrap` | `a +% b` | `a +% b` (Zig) | LLVM add nsw/nuw | - |
+| 065b | Saturating arithmetic | `cir.add_sat/sub_sat` | `a +\| b` | `a +\| b` (Zig) | LLVM sadd.sat | - |
+| 065c | Tuple type + init | `!cir.tuple + cir.tuple_init` | `(i32, f64)` | (no TS equiv) | LLVM struct | - |
+| 065d | Destructuring | desugar to field/elem | `let (a, b) = tup` | TS `const {a, b} = obj` | Multiple stores | - |
+| 065e | Spread operator | desugar | `[...arr, x]` | TS `[...arr]` | Copy + append | - |
+| 065f | Labeled blocks | block names + args | `blk: { break :blk val }` | TS labels | Block args | - |
+| 065g | instanceof / in | runtime type check | — | TS `x instanceof C` | Runtime check call | - |
 
 ### Phase 9 — Concurrency (from Swift)
 
@@ -173,6 +192,23 @@ Status: `-` not started, `~` in progress, `✓` done.
 | 079a | Errdefer | `cir.errdefer` | `errdefer cleanup()` | `errdefer cleanup();` | Cleanup on error only | - |
 | 080 | Multiple return values | (tuple or struct return) | `fn divmod(a, b) -> (i32, i32)` | `fn divmod(a: i32, b: i32) struct { q: i32, r: i32 }` | LLVM struct return | - |
 | 080a | Unreachable | `cir.unreachable` | `unreachable` | `unreachable` | `llvm.unreachable` | - |
+| 080b | For-each / iterators | desugar to while | `for item in arr { }` | Zig `for(items) \|item\|` / TS `for (x of arr)` | Index loop | - |
+| 080c | Template literals | string concat | — | TS `` `hello ${name}` `` | String ops | - |
+| 080d | Inline assembly | passthrough | `asm { }` | Zig `asm volatile` | LLVM inline asm | - |
+| 080e | Safety ops | `cir.bounds_check`, `cir.null_check` | (implicit) | (pass-injected) | Branch + trap | - |
+
+### Phase 12 — Classes (TypeScript-specific)
+
+| # | Feature | CIR Op(s) | ac Syntax | Zig Syntax | LLVM Lowering | Status |
+|---|---------|-----------|-----------|------------|---------------|--------|
+| 081 | Class declaration | vtable struct | `class Foo { }` | (no Zig equiv) / TS `class Foo { }` | Struct + vtable | - |
+| 082 | Constructor | init function | `new Foo(args)` | (no Zig equiv) / TS `new Foo()` | Alloc + init call | - |
+| 083 | Class methods | function in vtable | `foo.method()` | (no Zig equiv) / TS `foo.method()` | Indirect call | - |
+| 084 | Class properties | struct fields | `foo.prop` | (no Zig equiv) / TS `foo.prop` | Field access | - |
+| 085 | Getter/Setter | accessor functions | `get x() {}` | (no Zig equiv) / TS `get x() {}` | Function call | - |
+| 086 | Static members | module-level | `static foo()` | (no Zig equiv) / TS `static foo()` | Regular function | - |
+| 087 | Inheritance (extends) | vtable chain | `class B extends A` | (no Zig equiv) / TS `extends` | Vtable + struct embed | - |
+| 088 | Abstract class | interface | `abstract class A` | (no Zig equiv) / TS `abstract` | Vtable with null slots | - |
 
 ---
 
