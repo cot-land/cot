@@ -262,6 +262,17 @@ func (g *Gen) mapVarDecl(node *ast.Node) {
 		varType = g.resolveType(vd.Type)
 	}
 
+	// Infer array type from initializer if it's an array literal
+	if vd.Initializer != nil && vd.Initializer.Kind == ast.KindArrayLiteralExpression {
+		ale := vd.Initializer.AsArrayLiteralExpression()
+		nElems := 0
+		if ale.Elements != nil {
+			nElems = len(ale.Elements.Nodes)
+		}
+		typeStr := "!cir.array<" + strconv.Itoa(nElems) + " x i32>"
+		varType = g.b.ParseType(typeStr)
+	}
+
 	// Allocate on stack
 	addr := g.b.Emit(g.currentBlock, "cir.alloca", []MlirType{g.ptrType()}, nil,
 		[]MlirNamedAttr{g.b.NamedAttr("elem_type", g.b.TypeAttr(varType))})
@@ -472,6 +483,10 @@ func (g *Gen) mapExpr(block MlirBlock, node *ast.Node, resultType MlirType) Mlir
 		return g.mapConditionalExpr(block, node, resultType)
 	case ast.KindPropertyAccessExpression:
 		return g.mapPropertyAccess(block, node, resultType)
+	case ast.KindArrayLiteralExpression:
+		return g.mapArrayLiteral(block, node, resultType)
+	case ast.KindElementAccessExpression:
+		return g.mapElementAccess(block, node, resultType)
 	case ast.KindObjectLiteralExpression:
 		return g.mapObjectLiteral(block, node, resultType)
 	case ast.KindTrueKeyword:
@@ -611,6 +626,36 @@ func (g *Gen) mapPrefixUnary(block MlirBlock, node *ast.Node, resultType MlirTyp
 		return g.b.Emit(block, "cir.bit_xor", []MlirType{resultType}, []MlirValue{operand, one}, nil)
 	}
 	return operand
+}
+
+// Array literal: [1, 2, 3] → cir.array_init
+func (g *Gen) mapArrayLiteral(block MlirBlock, node *ast.Node, resultType MlirType) MlirValue {
+	ale := node.AsArrayLiteralExpression()
+	var elemVals []MlirValue
+	elemType := g.b.IntType(32)
+	if ale.Elements != nil {
+		for _, elem := range ale.Elements.Nodes {
+			elemVals = append(elemVals, g.mapExpr(block, elem, elemType))
+		}
+	}
+	// Build array type string
+	typeStr := "!cir.array<" + strconv.Itoa(len(elemVals)) + " x i32>"
+	arrayType := g.b.ParseType(typeStr)
+	return g.b.Emit(block, "cir.array_init", []MlirType{arrayType}, elemVals, nil)
+}
+
+// Element access: arr[i] → cir.elem_val
+func (g *Gen) mapElementAccess(block MlirBlock, node *ast.Node, resultType MlirType) MlirValue {
+	ea := node.AsElementAccessExpression()
+	arr := g.mapExpr(block, ea.Expression, resultType)
+	// Get constant index from argument
+	var idxVal int64
+	if ea.ArgumentExpression != nil && ea.ArgumentExpression.Kind == ast.KindNumericLiteral {
+		lit := ea.ArgumentExpression.AsNumericLiteral()
+		idxVal, _ = strconv.ParseInt(lit.Text, 10, 64)
+	}
+	return g.b.Emit(block, "cir.elem_val", []MlirType{resultType}, []MlirValue{arr},
+		[]MlirNamedAttr{g.b.NamedAttr("index", g.b.IntAttr(g.b.IntType(64), idxVal))})
 }
 
 // Property access: p.x → cir.field_val

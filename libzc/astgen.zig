@@ -103,6 +103,20 @@ const Gen = struct {
                     return s.mlir_type;
             }
         }
+        // Array type: [N]T
+        if (tag == .array_type) {
+            const d = self.tree.nodeData(node);
+            const len_node = d.node_and_node[0];
+            const elem_node = d.node_and_node[1];
+            // Get length from number literal
+            const len_tok = self.tree.nodeMainToken(len_node);
+            const len_text = self.tree.tokenSlice(len_tok);
+            const len_val = std.fmt.parseInt(i64, len_text, 10) catch 0;
+            const elem_name = self.resolveTypeName(elem_node);
+            var buf: [64]u8 = undefined;
+            const type_str = std.fmt.bufPrint(&buf, "!cir.array<{d} x {s}>", .{ len_val, elem_name }) catch return self.i32Type();
+            return self.b.parseType(type_str);
+        }
         return self.i32Type();
     }
 
@@ -586,6 +600,18 @@ const Gen = struct {
             => blk2: {
                 break :blk2 self.mapStructInit(block, node, result_type);
             },
+            // Array init: .{ 1, 2, 3 } or [3]i32{ 1, 2, 3 }
+            .array_init_dot_two, .array_init_dot_two_comma,
+            .array_init_dot, .array_init_dot_comma,
+            .array_init_one, .array_init_one_comma,
+            .array_init, .array_init_comma,
+            => blk2: {
+                break :blk2 self.mapArrayInit(block, node, result_type);
+            },
+            // Array access: arr[i]
+            .array_access => blk2: {
+                break :blk2 self.mapArrayAccess(block, node, result_type);
+            },
             // Zig builtins: @intCast, @floatCast, @truncate, @floatFromInt
             // Reference: ~/claude/references/zig/lib/std/zig/AstGen.zig typeCast
             .builtin_call_two, .builtin_call_two_comma => blk2: {
@@ -813,6 +839,73 @@ const Gen = struct {
         }
 
         return self.b.emitStructInit(block, struct_type, field_values[0..n_fields]);
+    }
+
+    /// Handle array init: .{ 1, 2, 3 } → cir.array_init
+    fn mapArrayInit(self: *Gen, block: mlir.Block, node: Node.Index, _: mlir.Type) mlir.Value {
+        const tree = self.tree;
+        const tag = tree.nodeTag(node);
+        // Get element nodes based on variant
+        var elems_buf: [2]Node.Index = undefined;
+        var elements: []const Node.Index = undefined;
+        switch (tag) {
+            .array_init_dot_two, .array_init_dot_two_comma => {
+                const d = tree.nodeData(node).opt_node_and_opt_node;
+                var count: usize = 0;
+                if (d[0].unwrap()) |n| { elems_buf[count] = n; count += 1; }
+                if (d[1].unwrap()) |n| { elems_buf[count] = n; count += 1; }
+                elements = elems_buf[0..count];
+            },
+            .array_init_dot, .array_init_dot_comma => {
+                elements = tree.extraDataSlice(tree.nodeData(node).extra_range, Node.Index);
+            },
+            .array_init_one, .array_init_one_comma => {
+                const d = tree.nodeData(node).node_and_opt_node;
+                if (d[1].unwrap()) |n| {
+                    elems_buf[0] = n;
+                    elements = elems_buf[0..1];
+                } else {
+                    elements = elems_buf[0..0];
+                }
+            },
+            .array_init, .array_init_comma => {
+                const d = tree.nodeData(node).node_and_extra;
+                const sub_range = tree.extraData(d[1], Node.SubRange);
+                elements = tree.extraDataSlice(sub_range, Node.Index);
+            },
+            else => return mlir.Value{ .ptr = null },
+        }
+        // Build array type string and parse it
+        var type_buf: [64]u8 = undefined;
+        const type_str = std.fmt.bufPrint(&type_buf, "!cir.array<{d} x i32>", .{elements.len}) catch return mlir.Value{ .ptr = null };
+        const array_type = self.b.parseType(type_str);
+        // Emit elements
+        const elem_vals = self.gpa.alloc(mlir.Value, elements.len) catch @panic("OOM");
+        defer self.gpa.free(elem_vals);
+        for (elements, 0..) |elem_node, i| {
+            elem_vals[i] = self.mapExpr(block, elem_node, self.i32Type());
+        }
+        return self.b.emit(block, "cir.array_init", &.{array_type}, elem_vals, &.{});
+    }
+
+    /// Handle array access: arr[i] → cir.elem_val for constant index
+    fn mapArrayAccess(self: *Gen, block: mlir.Block, node: Node.Index, result_type: mlir.Type) mlir.Value {
+        const tree = self.tree;
+        const d = tree.nodeData(node).node_and_node;
+        const arr_node = d[0];
+        const idx_node = d[1];
+        // Get the array value (load from local)
+        const arr = self.mapExpr(block, arr_node, result_type);
+        // Try to get constant index from number literal
+        var idx_val: i64 = 0;
+        if (tree.nodeTag(idx_node) == .number_literal) {
+            const tok = tree.nodeMainToken(idx_node);
+            const text = tree.tokenSlice(tok);
+            idx_val = std.fmt.parseInt(i64, text, 10) catch 0;
+        }
+        return self.b.emit(block, "cir.elem_val", &.{result_type}, &.{arr}, &.{
+            self.b.attr("index", self.b.intAttr(self.b.intType(64), idx_val)),
+        });
     }
 
     fn mapCall(self: *Gen, block: mlir.Block, node: Node.Index, result_type: mlir.Type) mlir.Value {

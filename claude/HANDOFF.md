@@ -28,7 +28,7 @@ make test         # Run all test layers (lit, gate, inline, build)
 ./cot test file.ac          # Run inline test blocks
 ```
 
-**Total: 64 lit + 34 inline + 1 gate + 4 build = 103 tests, all passing.**
+**Total: 66 lit + 34 inline + 1 gate + 4 build = 105 tests, all passing.**
 
 ---
 
@@ -128,7 +128,7 @@ claude/          Internal docs
 - ✓ #025 Struct construction — ac `Point { x: 1, y: 2 }`, Zig `Point{ .x = 1, .y = 2 }`, TS `{ x: 1, y: 2 }` → `cir.struct_init` → `llvm.insertvalue` chain
 - ✓ #026 Struct field access — `p.x` → `cir.field_val` → `llvm.extractvalue`. Also `cir.field_ptr` → `llvm.getelementptr` (for pointer-based access). Merged func-to-llvm into CIR lowering pass (shared type converter).
 - ✓ #027 Struct method syntax — `p.sum()` desugars to `sum(p)` at frontend level. No new CIR ops. All 3 frontends handle method call dispatch.
-- ✓ #028-030 Arrays — `[4]i32` type, `[1,2,3,4]` literal → `cir.array_init`, `arr[i]` → `cir.elem_val`/`cir.elem_ptr`. ac frontend complete. Zig/TS frontends need array literal/indexing support (CIR ops + lowering ready).
+- ✓ #028-030 Arrays — `[4]i32` type, `[1,2,3,4]` literal → `cir.array_init`, `arr[i]` → `cir.elem_val`/`cir.elem_ptr`. All 3 frontends: ac `[1,2,3]`, Zig `.{1,2,3}`, TS `[1,2,3]`.
 - Infrastructure: Cast ops (7, CastOpInterface + verifiers), Sema pass, `!cir.struct` with field names, alloca type conversion fix
 
 ---
