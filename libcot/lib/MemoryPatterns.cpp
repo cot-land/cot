@@ -78,6 +78,51 @@ struct FieldPtrOpLowering : public OpConversionPattern<cir::FieldPtrOp> {
   }
 };
 
+/// cir.array_init → llvm.mlir.undef + llvm.insertvalue chain
+struct ArrayInitOpLowering : public OpConversionPattern<cir::ArrayInitOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::ArrayInitOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    auto llvmType = getTypeConverter()->convertType(op.getType());
+    if (!llvmType)
+      return rewriter.notifyMatchFailure(op, "failed to convert type");
+    Value result = rewriter.create<LLVM::UndefOp>(op.getLoc(), llvmType);
+    for (auto [i, elem] : llvm::enumerate(adaptor.getElements())) {
+      result = rewriter.create<LLVM::InsertValueOp>(
+          op.getLoc(), result, elem, i);
+    }
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+/// cir.elem_val → llvm.extractvalue (constant index)
+struct ElemValOpLowering : public OpConversionPattern<cir::ElemValOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::ElemValOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<LLVM::ExtractValueOp>(
+        op, adaptor.getInput(), op.getIndex());
+    return success();
+  }
+};
+
+/// cir.elem_ptr → llvm.getelementptr [0, %index] (dynamic index)
+struct ElemPtrOpLowering : public OpConversionPattern<cir::ElemPtrOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::ElemPtrOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    auto arrayType = getTypeConverter()->convertType(op.getElemType());
+    if (!arrayType)
+      return rewriter.notifyMatchFailure(op, "failed to convert array type");
+    auto ptrType = LLVM::LLVMPointerType::get(op.getContext());
+    rewriter.replaceOpWithNewOp<LLVM::GEPOp>(
+        op, ptrType, arrayType, adaptor.getBase(),
+        llvm::ArrayRef<LLVM::GEPArg>{0, adaptor.getIndex()});
+    return success();
+  }
+};
+
 /// cir.struct_init → llvm.mlir.undef + llvm.insertvalue chain
 /// Reference: FIR UndefOpConversion + InsertValueOpConversion
 ///   ~/claude/references/flang-ref/flang/lib/Optimizer/CodeGen/CodeGen.cpp
@@ -108,6 +153,7 @@ void cot::populateMemoryPatterns(
   MLIRContext *ctx = patterns.getContext();
   patterns.add<AllocaOpLowering, StoreOpLowering, LoadOpLowering,
                FieldValOpLowering, FieldPtrOpLowering,
-               StructInitOpLowering>(
+               StructInitOpLowering,
+               ArrayInitOpLowering, ElemValOpLowering, ElemPtrOpLowering>(
       converter, ctx);
 }

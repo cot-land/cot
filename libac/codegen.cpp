@@ -41,6 +41,12 @@ class CodeGen {
   std::unordered_map<std::string_view, mlir::Type> structTypes;
 
   mlir::Type resolveType(const TypeRef &t) {
+    // Array type: [N]T
+    if (t.arraySize > 0) {
+      TypeRef elemRef{t.arrayElemType};
+      auto elemType = resolveType(elemRef);
+      return cir::ArrayType::get(b.getContext(), t.arraySize, elemType);
+    }
     // Integer types (signless in MLIR — signed/unsigned in op semantics)
     if (t.name == "i8"  || t.name == "u8")  return b.getIntegerType(8);
     if (t.name == "i16" || t.name == "u16") return b.getIntegerType(16);
@@ -172,6 +178,50 @@ class CodeGen {
       auto srcType = srcVal.getType();
       if (srcType == dstType) return srcVal; // no-op cast
       return emitCast(srcVal, srcType, dstType);
+    }
+
+    case ExprKind::ArrayLit: {
+      // Array literal: [1, 2, 3] → cir.array_init
+      auto arrayTy = llvm::dyn_cast<cir::ArrayType>(resultType);
+      if (!arrayTy) {
+        llvm::errs() << "error: array literal requires array type context\n";
+        return {};
+      }
+      auto elemType = arrayTy.getElementType();
+      llvm::SmallVector<mlir::Value> elems;
+      for (auto &arg : e.args)
+        elems.push_back(emitExpr(*arg, elemType));
+      return b.create<cir::ArrayInitOp>(loc, arrayTy, elems);
+    }
+
+    case ExprKind::IndexAccess: {
+      // Array indexing: arr[i]
+      // arr is a local (alloca) — use elem_ptr + load for dynamic index
+      auto obj = emitExpr(*e.lhs, resultType);
+      auto objType = obj.getType();
+      // If the object is an array SSA value and index is a constant, use elem_val
+      auto arrayTy = llvm::dyn_cast<cir::ArrayType>(objType);
+      if (!arrayTy) {
+        llvm::errs() << "error: indexing non-array type\n";
+        return {};
+      }
+      auto idx = emitExpr(*e.rhs, b.getI32Type());
+      auto elemType = arrayTy.getElementType();
+      // For constant index on SSA value, use cir.elem_val
+      if (auto constOp = idx.getDefiningOp<cir::ConstantOp>()) {
+        if (auto intAttr = llvm::dyn_cast<mlir::IntegerAttr>(constOp.getValue())) {
+          return b.create<cir::ElemValOp>(loc, elemType, obj,
+              b.getI64IntegerAttr(intAttr.getInt()));
+        }
+      }
+      // Dynamic index: store to alloca, use elem_ptr + load
+      auto ptrType = cir::PointerType::get(b.getContext());
+      auto addr = b.create<cir::AllocaOp>(loc, ptrType,
+          mlir::TypeAttr::get(arrayTy));
+      b.create<cir::StoreOp>(loc, obj, addr);
+      auto elemPtr = b.create<cir::ElemPtrOp>(loc, ptrType, addr, idx,
+          mlir::TypeAttr::get(arrayTy));
+      return b.create<cir::LoadOp>(loc, elemType, elemPtr);
     }
 
     case ExprKind::MethodCall: {

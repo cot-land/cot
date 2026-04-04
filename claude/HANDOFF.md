@@ -28,11 +28,11 @@ make test         # Run all test layers (lit, gate, inline, build)
 ./cot test file.ac          # Run inline test blocks
 ```
 
-**Total: 62 lit + 32 inline + 1 gate + 4 build = 99 tests, all passing.**
+**Total: 64 lit + 34 inline + 1 gate + 4 build = 103 tests, all passing.**
 
 ---
 
-## CIR Ops (31 ops, 3 custom types)
+## CIR Ops (34 ops, 3 custom types)
 
 | Op | Description | LLVM Lowering |
 |----|-------------|---------------|
@@ -120,7 +120,7 @@ claude/          Internal docs
 
 **Phase 2 (10/10):** Let/var bindings, assignment, compound assignment, if/else statement, if/else expression (select), while loop, break/continue, for loop, nested calls.
 
-**Phase 3 (7/10):**
+**Phase 3 (10/10 — COMPLETE):**
 - ✓ #021 Multiple int types (i8-i64, u8-u64) — all three frontends
 - ✓ #022 Float types (f32, f64) — all three frontends
 - ✓ #023 Type casts — ac `x as i64`, Zig `@intCast`/`@floatCast`/`@truncate`/`@floatFromInt`
@@ -128,6 +128,7 @@ claude/          Internal docs
 - ✓ #025 Struct construction — ac `Point { x: 1, y: 2 }`, Zig `Point{ .x = 1, .y = 2 }`, TS `{ x: 1, y: 2 }` → `cir.struct_init` → `llvm.insertvalue` chain
 - ✓ #026 Struct field access — `p.x` → `cir.field_val` → `llvm.extractvalue`. Also `cir.field_ptr` → `llvm.getelementptr` (for pointer-based access). Merged func-to-llvm into CIR lowering pass (shared type converter).
 - ✓ #027 Struct method syntax — `p.sum()` desugars to `sum(p)` at frontend level. No new CIR ops. All 3 frontends handle method call dispatch.
+- ✓ #028-030 Arrays — `[4]i32` type, `[1,2,3,4]` literal → `cir.array_init`, `arr[i]` → `cir.elem_val`/`cir.elem_ptr`. ac frontend complete. Zig/TS frontends need array literal/indexing support (CIR ops + lowering ready).
 - Infrastructure: Cast ops (7, CastOpInterface + verifiers), Sema pass, `!cir.struct` with field names, alloca type conversion fix
 
 ---

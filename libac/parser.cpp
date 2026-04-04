@@ -89,6 +89,15 @@ class Parser {
 
   // ---- Type reference ----
   TypeRef parseType() {
+    // Array type: [N]T
+    if (check(Tag::l_bracket)) {
+      advance(); // consume '['
+      auto sizeText = tokenText(expect(Tag::int_literal));
+      int64_t size = std::stoll(std::string(sizeText));
+      expect(Tag::r_bracket);
+      auto elemType = tokenText(advance());
+      return TypeRef{"", size, elemType};
+    }
     auto &tok = advance();
     return TypeRef{tokenText(tok)};
   }
@@ -204,6 +213,21 @@ class Parser {
       return e;
     }
 
+    // Array literal: [expr, expr, ...]
+    if (tok.tag == Tag::l_bracket) {
+      size_t p = advance().start; // consume '['
+      auto e = std::make_unique<Expr>();
+      e->kind = ExprKind::ArrayLit;
+      e->pos = p;
+      if (!check(Tag::r_bracket)) {
+        e->args.push_back(parseExpr());
+        while (match(Tag::comma))
+          e->args.push_back(parseExpr());
+      }
+      expect(Tag::r_bracket);
+      return e;
+    }
+
     // Unary prefix: - !
     if (tok.tag == Tag::minus || tok.tag == Tag::bang || tok.tag == Tag::tilde) {
       auto op = advance().tag;
@@ -261,6 +285,17 @@ class Parser {
           fa->name = fieldName;
           expr = std::move(fa);
         }
+      } else if (check(Tag::l_bracket)) {
+        // Array indexing: expr[index]
+        size_t p = advance().start; // consume '['
+        auto idx = parseExpr();
+        expect(Tag::r_bracket);
+        auto ia = std::make_unique<Expr>();
+        ia->kind = ExprKind::IndexAccess;
+        ia->pos = p;
+        ia->lhs = std::move(expr);
+        ia->rhs = std::move(idx);
+        expr = std::move(ia);
       } else {
         break;
       }

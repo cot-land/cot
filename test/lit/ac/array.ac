@@ -1,0 +1,14 @@
+// RUN: %cot emit-cir %s | %FileCheck %s
+
+// Feature #028-030: Array type, literal, indexing — ac syntax
+
+fn sum_first_two() -> i32 {
+    let arr: [4]i32 = [10, 20, 30, 40]
+    return arr[0] + arr[1]
+}
+
+// CHECK-LABEL: func.func @sum_first_two
+// CHECK: cir.array_init
+// CHECK-SAME: !cir.array<4 x i32>
+// CHECK: cir.elem_val
+// CHECK-SAME: !cir.array<4 x i32> -> i32

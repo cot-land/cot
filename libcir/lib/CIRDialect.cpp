@@ -292,6 +292,92 @@ LogicalResult FieldPtrOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// cir.array_init — custom print/parse + verifier
+//===----------------------------------------------------------------------===//
+
+ParseResult ArrayInitOp::parse(OpAsmParser &parser, OperationState &result) {
+  llvm::SmallVector<OpAsmParser::UnresolvedOperand> operands;
+  if (parser.parseLParen())
+    return failure();
+  if (failed(parser.parseOptionalRParen())) {
+    do {
+      OpAsmParser::UnresolvedOperand operand;
+      if (parser.parseOperand(operand))
+        return failure();
+      operands.push_back(operand);
+    } while (succeeded(parser.parseOptionalComma()));
+    if (parser.parseRParen())
+      return failure();
+  }
+  Type resultType;
+  if (parser.parseColonType(resultType))
+    return failure();
+  result.addTypes(resultType);
+  auto arrayType = llvm::dyn_cast<cir::ArrayType>(resultType);
+  if (!arrayType)
+    return parser.emitError(parser.getNameLoc(), "expected !cir.array type");
+  auto elemType = arrayType.getElementType();
+  for (auto &op : operands) {
+    if (parser.resolveOperand(op, elemType, result.operands))
+      return failure();
+  }
+  return success();
+}
+
+void ArrayInitOp::print(OpAsmPrinter &p) {
+  p << "(";
+  p.printOperands(getElements());
+  p << ") : " << getResult().getType();
+}
+
+LogicalResult ArrayInitOp::verify() {
+  auto arrayType = llvm::dyn_cast<cir::ArrayType>(getResult().getType());
+  if (!arrayType)
+    return emitOpError("result must be a !cir.array type");
+  if (static_cast<int64_t>(getElements().size()) != arrayType.getSize())
+    return emitOpError("expected ") << arrayType.getSize()
+        << " elements, got " << getElements().size();
+  auto elemType = arrayType.getElementType();
+  for (auto [i, elem] : llvm::enumerate(getElements())) {
+    if (elem.getType() != elemType)
+      return emitOpError("element ") << i << " type mismatch: expected "
+          << elemType << ", got " << elem.getType();
+  }
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// cir.elem_val — verifier
+//===----------------------------------------------------------------------===//
+
+LogicalResult ElemValOp::verify() {
+  auto arrayType = llvm::dyn_cast<cir::ArrayType>(getInput().getType());
+  if (!arrayType)
+    return emitOpError("input must be a !cir.array type");
+  int64_t idx = getIndex();
+  if (idx < 0 || idx >= arrayType.getSize())
+    return emitOpError("index ") << idx << " out of range for array of size "
+        << arrayType.getSize();
+  if (getResult().getType() != arrayType.getElementType())
+    return emitOpError("result type must match array element type");
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// cir.elem_ptr — verifier
+//===----------------------------------------------------------------------===//
+
+LogicalResult ElemPtrOp::verify() {
+  if (!llvm::isa<cir::PointerType>(getBase().getType()))
+    return emitOpError("base must be !cir.ptr");
+  if (!llvm::isa<cir::PointerType>(getResult().getType()))
+    return emitOpError("result must be !cir.ptr");
+  if (!llvm::isa<cir::ArrayType>(getElemType()))
+    return emitOpError("elem_type must be a !cir.array type");
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // Cast op verifiers — width constraints per Arith dialect pattern
 // Reference: mlir/lib/Dialect/Arith/IR/ArithOps.cpp verifyExtOp/verifyTruncateOp
 //===----------------------------------------------------------------------===//

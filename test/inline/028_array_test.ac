@@ -1,0 +1,13 @@
+fn sum_array() -> i32 {
+    let arr: [4]i32 = [10, 20, 30, 42]
+    return arr[0] + arr[1] + arr[2] + arr[3]
+}
+
+test "array literal and indexing" {
+    assert(sum_array() == 102)
+}
+
+test "array element access" {
+    let arr: [3]i32 = [19, 23, 0]
+    assert(arr[0] + arr[1] == 42)
+}

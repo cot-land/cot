@@ -77,9 +77,9 @@ Status: `-` not started, `~` in progress, `✓` done.
 | 025 | Struct construction | `cir.struct_init` | `Point { x: 1, y: 2 }` | `Point{ .x = 1, .y = 2 }` | `llvm.insertvalue` | ✓ |
 | 026 | Struct field access | `cir.field_val`, `cir.field_ptr` | `p.x`, `p.y` | `p.x`, `p.y` | `llvm.extractvalue`, GEP | ✓ |
 | 027 | Struct method syntax | Desugar to call | `p.distance()` | `p.distance()` | Regular function call | ✓ |
-| 028 | Array type | `cir.array_type` | `[4]i32` | `[4]i32` | LLVM array type | - |
-| 029 | Array literal | `cir.array_init` | `[1, 2, 3, 4]` | `.{ 1, 2, 3, 4 }` | `llvm.insertvalue` chain | - |
-| 030 | Array indexing | `cir.elem_val`, `cir.elem_ptr` | `arr[i]` | `arr[i]` | GEP + load | - |
+| 028 | Array type | `!cir.array<N x T>` | `[4]i32` | `[4]i32` | LLVM array type | ✓ |
+| 029 | Array literal | `cir.array_init` | `[1, 2, 3, 4]` | `.{ 1, 2, 3, 4 }` | `llvm.insertvalue` chain | ✓ |
+| 030 | Array indexing | `cir.elem_val`, `cir.elem_ptr` | `arr[i]` | `arr[i]` | extractvalue / GEP + load | ✓ |
 | 030a | For-each (array/slice) | Desugared to while + index | `for item in arr { }` | `for (items) \|item\| { }` | Index loop | - |
 
 ### Phase 4 — Pointers and Strings

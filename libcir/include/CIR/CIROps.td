@@ -362,6 +362,67 @@ def CIR_FieldPtrOp : CIR_Op<"field_ptr", [Pure]> {
   let hasVerifier = 1;
 }
 
+//===----------------------------------------------------------------------===//
+// Array construction and element access
+// Reference: FIR fir.insert_value chain / fir.extract_value / fir.coordinate_of
+//            LLVM llvm.insertvalue / llvm.extractvalue / llvm.getelementptr
+//===----------------------------------------------------------------------===//
+
+def CIR_ArrayInitOp : CIR_Op<"array_init", [Pure]> {
+  let summary = "construct array value from element values";
+  let description = [{
+    Constructs a fixed-size array from individual element values.
+    Operands are positional — operand 0 is element 0, etc.
+    Result type is a !cir.array.
+
+    Lowers to llvm.mlir.undef + llvm.insertvalue chain.
+
+    Example:
+      %a = cir.array_init(%x, %y, %z) : !cir.array<3 x i32>
+  }];
+
+  let arguments = (ins Variadic<AnyType>:$elements);
+  let results = (outs AnyType:$result);
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+}
+
+def CIR_ElemValOp : CIR_Op<"elem_val", [Pure]> {
+  let summary = "extract element value from array by constant index";
+  let description = [{
+    Extracts an element from an array SSA value at a constant index.
+    Lowers to llvm.extractvalue.
+
+    Example:
+      %v = cir.elem_val %arr, 0 : !cir.array<4 x i32> -> i32
+  }];
+
+  let arguments = (ins AnyType:$input, I64Attr:$index);
+  let results = (outs AnyType:$result);
+  let assemblyFormat =
+      "$input `,` $index attr-dict `:` type($input) `->` type($result)";
+  let hasVerifier = 1;
+}
+
+def CIR_ElemPtrOp : CIR_Op<"elem_ptr", [Pure]> {
+  let summary = "get pointer to array element by dynamic index";
+  let description = [{
+    Given a pointer to an array, returns a pointer to the element at
+    the given runtime index. Lowers to llvm.getelementptr.
+
+    Example:
+      %ep = cir.elem_ptr %arr_ptr, %idx {elem_type = !cir.array<4 x i32>}
+            : (!cir.ptr, i32) -> !cir.ptr
+  }];
+
+  let arguments = (ins AnyType:$base, AnyInteger:$index,
+                       TypeAttr:$elem_type);
+  let results = (outs AnyType:$result);
+  let assemblyFormat =
+      "$base `,` $index attr-dict `:` `(` type($base) `,` type($index) `)` `->` type($result)";
+  let hasVerifier = 1;
+}
+
 def CIR_TrapOp : CIR_Op<"trap", [Terminator]> {
   let summary = "abort execution (assertion failure)";
   let description = [{

@@ -20,6 +20,8 @@ using StmtPtr = std::unique_ptr<Stmt>;
 
 struct TypeRef {
   std::string_view name; // "i32", "void", etc. — view into source
+  int64_t arraySize = 0; // >0 for array types: [N]T
+  std::string_view arrayElemType; // element type name for arrays
 };
 
 struct Param {
@@ -28,7 +30,7 @@ struct Param {
 };
 
 // Expression kinds
-enum class ExprKind { IntLit, FloatLit, BoolLit, Ident, BinOp, UnaryOp, Call, IfExpr, Cast, StructInit, FieldAccess, MethodCall };
+enum class ExprKind { IntLit, FloatLit, BoolLit, Ident, BinOp, UnaryOp, Call, IfExpr, Cast, StructInit, FieldAccess, MethodCall, ArrayLit, IndexAccess };
 
 struct Expr {
   ExprKind kind;
