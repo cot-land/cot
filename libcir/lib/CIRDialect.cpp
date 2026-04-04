@@ -160,6 +160,16 @@ LogicalResult ConstantOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// cir.alloca — verifier (result must be !cir.ptr)
+//===----------------------------------------------------------------------===//
+
+LogicalResult AllocaOp::verify() {
+  if (!llvm::isa<cir::PointerType>(getResult().getType()))
+    return emitOpError("result must be !cir.ptr, got ") << getResult().getType();
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // cir.store / cir.load — verifiers (addr must be !cir.ptr)
 //===----------------------------------------------------------------------===//
 

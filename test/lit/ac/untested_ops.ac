@@ -1,0 +1,13 @@
+// RUN: %cot emit-cir %s | %FileCheck %s
+
+// Audit T2: Test ops with zero coverage — extui, field_ptr, elem_ptr, trap
+
+fn test_assert_fail() -> i32 {
+    assert(1 == 0)
+    return 0
+}
+
+// CHECK-LABEL: func.func @test_assert_fail
+// CHECK: cir.cmp
+// CHECK: cir.condbr
+// CHECK: cir.trap

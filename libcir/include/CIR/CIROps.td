@@ -166,7 +166,7 @@ def CIR_TruncFOp : CIR_FToFCastOp<"truncf"> {
 // Reference: LLVM dialect AllocaOp/StoreOp/LoadOp
 //===----------------------------------------------------------------------===//
 
-def CIR_AllocaOp : CIR_Op<"alloca"> {
+def CIR_AllocaOp : CIR_Op<"alloca", [MemoryEffects<[MemAlloc<DefaultResource>]>]> {
   let summary = "stack allocation";
   let description = [{
     Allocates stack space for one value of the given type.
@@ -177,9 +177,10 @@ def CIR_AllocaOp : CIR_Op<"alloca"> {
   let arguments = (ins TypeAttr:$elem_type);
   let results = (outs AnyType:$result);
   let assemblyFormat = "$elem_type attr-dict `:` type($result)";
+  let hasVerifier = 1;
 }
 
-def CIR_StoreOp : CIR_Op<"store"> {
+def CIR_StoreOp : CIR_Op<"store", [MemoryEffects<[MemWrite<DefaultResource>]>]> {
   let summary = "store value to memory";
   let description = [{
     Stores a value to the address produced by cir.alloca.
@@ -191,7 +192,7 @@ def CIR_StoreOp : CIR_Op<"store"> {
   let hasVerifier = 1;
 }
 
-def CIR_LoadOp : CIR_Op<"load"> {
+def CIR_LoadOp : CIR_Op<"load", [MemoryEffects<[MemRead<DefaultResource>]>]> {
   let summary = "load value from memory";
   let description = [{
     Loads a value from the address produced by cir.alloca.
