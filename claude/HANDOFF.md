@@ -122,7 +122,8 @@ claude/          Internal docs
 ## Key Documents — Read Order
 
 1. **CLAUDE.md** — Rules + 12-step feature checklist. READ THIS FIRST.
-2. **claude/PHASE5_DESIGN.md** — Current phase: optionals + error unions design, reference-to-port mapping.
+2. **claude/PHASE6_DESIGN.md** — Current phase: enums, tagged unions, match/switch design.
+2b. **claude/PHASE5_DESIGN.md** — Previous phase: optionals + error unions + exceptions (complete).
 3. **claude/ARCHITECTURE.md** — Design, CIR ops, Sema pass, Swift type philosophy, pass pipeline.
 4. **claude/REFERENCES.md** — Which reference to study for each component.
 5. **claude/FEATURES.md** — 80 features with Zig syntax column. Implementation order.
@@ -182,15 +183,21 @@ claude/          Internal docs
 
 **Phase 5 delivered 8 features, 5 new CIR ops, 1 new type, 7 new tests (93→118 total).**
 
-**Next features in order (Phase 6):**
-- #049 Enum declaration — `cir.enum_type`. ac `enum Color { Red, Green, Blue }`, Zig `const Color = enum { red, green, blue };`
-- #050 Enum value — `cir.enum_literal`. ac `Color.Red`, Zig `.red`
-- #051 Match/switch statement — `cir.switch_br`. ac `match x { ... }`, Zig `switch (x) { ... }`
-- #052 Match/switch expression — value-producing switch
-- #053 Tagged union — `cir.union_type`. ac `union { i32, f64, string }`
-- #054 Union match + payload — `cir.get_union_tag`, `cir.union_payload`
+**Read `claude/PHASE6_DESIGN.md` first** — full architecture, reference-to-port map, op definitions.
 
-**For each feature, follow the 12-step checklist in CLAUDE.md. ALL THREE frontends must stay in sync.**
+**Next features in order (Phase 6 — Enums, Unions, Match):**
+- #049 Enum type — `!cir.enum<"Name", variants...>` + `cir.enum_constant` + type converter + C API
+- #050 Enum value — `cir.enum_value` (enum → integer) + all 3 frontends emit enum values
+- #051 Switch statement — `cir.switch` (integer multi-way branch) + `match`/`switch` in all 3 frontends
+- #052 Switch expression — value-producing switch with block argument phi
+- #053 Tagged union — `!cir.tagged_union<"Name", variants...>` + `cir.union_init` + `cir.union_tag` + `cir.union_payload`
+- #054 Union match + payload — `cir.switch` + `cir.union_payload` in case blocks with capture
+
+**Implementation approach:** Enums first (simpler — just integer constants), then switch/match (control flow), then tagged unions (complex layout). Each step follows 12-step checklist. Tests first, never modify tests.
+
+**Frontend fidelity:** Zig tests must be valid Zig. TS tests must be valid TypeScript. ac is the kitchen sink.
+
+**Reference compilers:** Zig (enum type + switch semantics), Rust (tagged union layout + SwitchInt), Swift SIL (enum ops), LLVM (switch lowering target).
 
 ### Distribution & Plugin Architecture — IMPLEMENTED
 
