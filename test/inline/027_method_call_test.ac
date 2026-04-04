@@ -1,0 +1,22 @@
+struct Point {
+    x: i32
+    y: i32
+}
+
+fn sum(p: Point) -> i32 {
+    return p.x + p.y
+}
+
+fn get_x(p: Point) -> i32 {
+    return p.x
+}
+
+test "method call returns correct value" {
+    let p: Point = Point { x: 19, y: 23 }
+    assert(p.sum() == 42)
+}
+
+test "method call on field access" {
+    let p: Point = Point { x: 10, y: 20 }
+    assert(p.get_x() == 10)
+}

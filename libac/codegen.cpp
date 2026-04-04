@@ -174,6 +174,30 @@ class CodeGen {
       return emitCast(srcVal, srcType, dstType);
     }
 
+    case ExprKind::MethodCall: {
+      // Method call: p.distance() → distance(p)
+      // Desugar to function call with object as first argument.
+      // Reference: Zig AstGen — methods are functions, receiver is first param.
+      std::string callee(e.name);
+      auto funcOp = module_.lookupSymbol<mlir::func::FuncOp>(callee);
+      // Emit receiver (the object before the dot)
+      mlir::Type selfType = funcOp ? funcOp.getArgumentTypes()[0] : resultType;
+      auto self = emitExpr(*e.lhs, selfType);
+      llvm::SmallVector<mlir::Value> args;
+      args.push_back(self);
+      // Emit remaining arguments
+      for (size_t i = 0; i < e.args.size(); i++) {
+        mlir::Type argType = (funcOp && i + 1 < funcOp.getNumArguments())
+            ? funcOp.getArgumentTypes()[i + 1] : resultType;
+        args.push_back(emitExpr(*e.args[i], argType));
+      }
+      mlir::Type callResultType = (funcOp && funcOp.getNumResults() > 0)
+          ? funcOp.getResultTypes()[0] : resultType;
+      auto call = b.create<mlir::func::CallOp>(loc, callee,
+          mlir::TypeRange{callResultType}, mlir::ValueRange(args));
+      return call.getResult(0);
+    }
+
     case ExprKind::FieldAccess: {
       // Field access: p.x → load struct, extract field
       auto obj = emitExpr(*e.lhs, resultType);

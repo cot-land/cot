@@ -237,12 +237,30 @@ class Parser {
       } else if (check(Tag::dot)) {
         size_t p = advance().start; // consume '.'
         auto fieldName = tokenText(expect(Tag::identifier));
-        auto fa = std::make_unique<Expr>();
-        fa->kind = ExprKind::FieldAccess;
-        fa->pos = p;
-        fa->lhs = std::move(expr);
-        fa->name = fieldName;
-        expr = std::move(fa);
+        // Method call: expr.name(args) → desugar to call with expr as first arg
+        if (check(Tag::l_paren)) {
+          advance(); // consume '('
+          auto mc = std::make_unique<Expr>();
+          mc->kind = ExprKind::MethodCall;
+          mc->pos = p;
+          mc->lhs = std::move(expr);
+          mc->name = fieldName;
+          if (!check(Tag::r_paren)) {
+            mc->args.push_back(parseExpr());
+            while (match(Tag::comma))
+              mc->args.push_back(parseExpr());
+          }
+          expect(Tag::r_paren);
+          expr = std::move(mc);
+        } else {
+          // Field access: expr.name
+          auto fa = std::make_unique<Expr>();
+          fa->kind = ExprKind::FieldAccess;
+          fa->pos = p;
+          fa->lhs = std::move(expr);
+          fa->name = fieldName;
+          expr = std::move(fa);
+        }
       } else {
         break;
       }

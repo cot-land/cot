@@ -1,0 +1,21 @@
+// RUN: %cot emit-cir %s | %FileCheck %s
+
+// Feature #027: Struct method syntax — ac
+
+struct Point {
+    x: i32
+    y: i32
+}
+
+fn sum(p: Point) -> i32 {
+    return p.x + p.y
+}
+
+fn main() -> i32 {
+    let p: Point = Point { x: 19, y: 23 }
+    return p.sum()
+}
+
+// CHECK-LABEL: func.func @main
+// CHECK: call @sum
+// CHECK-SAME: !cir.struct<"Point", x: i32, y: i32>

@@ -574,10 +574,20 @@ func (g *Gen) emitCmp(block MlirBlock, lhs, rhs MlirValue, predicate int64) Mlir
 func (g *Gen) mapCallExpr(block MlirBlock, node *ast.Node, resultType MlirType) MlirValue {
 	ce := node.AsCallExpression()
 	calleeName := ""
-	if ce.Expression.Kind == ast.KindIdentifier {
+	var args []MlirValue
+
+	// Method call: p.distance() — callee is PropertyAccessExpression
+	// Reference: Zig AstGen — methods desugar to call with receiver as first arg
+	if ce.Expression.Kind == ast.KindPropertyAccessExpression {
+		pa := ce.Expression.AsPropertyAccessExpression()
+		calleeName = pa.Name().AsIdentifier().Text
+		// Emit receiver as first argument
+		receiver := g.mapExpr(block, pa.Expression, resultType)
+		args = append(args, receiver)
+	} else if ce.Expression.Kind == ast.KindIdentifier {
 		calleeName = ce.Expression.AsIdentifier().Text
 	}
-	var args []MlirValue
+
 	if ce.Arguments != nil {
 		for _, arg := range ce.Arguments.Nodes {
 			args = append(args, g.mapExpr(block, arg, resultType))

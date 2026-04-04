@@ -819,12 +819,37 @@ const Gen = struct {
         const tree = self.tree;
         var call_buf: [1]Node.Index = undefined;
         const call = tree.fullCall(&call_buf, node) orelse return mlir.Value{ .ptr = null };
+        const fn_expr_tag = tree.nodeTag(call.ast.fn_expr);
+
+        // Method call: p.distance() — callee is a field_access node
+        // Reference: Zig AstGen — methods desugar to function call with receiver as first arg
+        if (fn_expr_tag == .field_access) {
+            const d = tree.nodeData(call.ast.fn_expr).node_and_token;
+            const obj_node = d[0];
+            const method_tok = d[1];
+            const method_name = tree.tokenSlice(method_tok);
+            // Emit receiver as first argument
+            const receiver = self.mapExpr(block, obj_node, result_type);
+            const n_params = call.ast.params.len;
+            const args = self.gpa.alloc(mlir.Value, n_params + 1) catch @panic("OOM");
+            defer self.gpa.free(args);
+            args[0] = receiver;
+            for (call.ast.params, 0..) |param_node, i| {
+                args[i + 1] = self.mapExpr(block, param_node, result_type);
+            }
+            return self.b.emit(block, "func.call", &.{result_type}, args, &.{
+                self.b.attr("callee", mlir.mlirFlatSymbolRefAttrGet(self.ctx, mlir.StringRef.fromSlice(method_name))),
+            });
+        }
+
+        // Regular function call
         const callee_name = tree.tokenSlice(tree.nodeMainToken(call.ast.fn_expr));
-        var args: [16]mlir.Value = undefined;
+        const args = self.gpa.alloc(mlir.Value, call.ast.params.len) catch @panic("OOM");
+        defer self.gpa.free(args);
         for (call.ast.params, 0..) |param_node, i| {
             args[i] = self.mapExpr(block, param_node, result_type);
         }
-        return self.b.emit(block, "func.call", &.{result_type}, args[0..call.ast.params.len], &.{
+        return self.b.emit(block, "func.call", &.{result_type}, args, &.{
             self.b.attr("callee", mlir.mlirFlatSymbolRefAttrGet(self.ctx, mlir.StringRef.fromSlice(callee_name))),
         });
     }

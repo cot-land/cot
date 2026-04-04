@@ -28,7 +28,7 @@ make test         # Run all test layers (lit, gate, inline, build)
 ./cot test file.ac          # Run inline test blocks
 ```
 
-**Total: 59 lit + 30 inline + 1 gate + 4 build = 94 tests, all passing.**
+**Total: 62 lit + 32 inline + 1 gate + 4 build = 99 tests, all passing.**
 
 ---
 
@@ -120,13 +120,14 @@ claude/          Internal docs
 
 **Phase 2 (10/10):** Let/var bindings, assignment, compound assignment, if/else statement, if/else expression (select), while loop, break/continue, for loop, nested calls.
 
-**Phase 3 (6/10):**
+**Phase 3 (7/10):**
 - ✓ #021 Multiple int types (i8-i64, u8-u64) — all three frontends
 - ✓ #022 Float types (f32, f64) — all three frontends
 - ✓ #023 Type casts — ac `x as i64`, Zig `@intCast`/`@floatCast`/`@truncate`/`@floatFromInt`
 - ✓ #024 Struct declaration — ac `struct Point { x: i32, y: i32 }`, Zig `const Point = struct { ... }`, TS `interface Point { x: number; y: number; }`
 - ✓ #025 Struct construction — ac `Point { x: 1, y: 2 }`, Zig `Point{ .x = 1, .y = 2 }`, TS `{ x: 1, y: 2 }` → `cir.struct_init` → `llvm.insertvalue` chain
 - ✓ #026 Struct field access — `p.x` → `cir.field_val` → `llvm.extractvalue`. Also `cir.field_ptr` → `llvm.getelementptr` (for pointer-based access). Merged func-to-llvm into CIR lowering pass (shared type converter).
+- ✓ #027 Struct method syntax — `p.sum()` desugars to `sum(p)` at frontend level. No new CIR ops. All 3 frontends handle method call dispatch.
 - Infrastructure: Cast ops (7, CastOpInterface + verifiers), Sema pass, `!cir.struct` with field names, alloca type conversion fix
 
 ---
@@ -136,7 +137,6 @@ claude/          Internal docs
 ### Continue Phase 3
 
 **Next features in order:**
-- #027 Struct method syntax — `p.distance()`. Desugars to function call.
 - #028-030 Arrays — `[4]i32`, `[1,2,3,4]`, `arr[i]`. `!cir.array` type exists.
 
 **For each feature, follow the 12-step checklist in CLAUDE.md. ALL THREE frontends (ac, Zig, TypeScript) must stay in sync.**
