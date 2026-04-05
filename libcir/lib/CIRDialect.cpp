@@ -580,6 +580,55 @@ LogicalResult OptionalPayloadOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// cir.switch — verifier + BranchOpInterface + custom parse/print
+//===----------------------------------------------------------------------===//
+
+LogicalResult SwitchOp::verify() {
+  auto numCases = getCaseValues().size();
+  auto numDests = getCaseDests().size();
+  if (numCases != numDests)
+    return emitOpError("case values count (") << numCases
+        << ") must match case destinations count (" << numDests << ")";
+  return success();
+}
+
+SuccessorOperands SwitchOp::getSuccessorOperands(unsigned index) {
+  return SuccessorOperands(MutableOperandRange(getOperation(), 0, 0));
+}
+
+/// Parse: 0: ^bb1, 1: ^bb2, 2: ^bb3
+static ParseResult parseSwitchCases(
+    OpAsmParser &parser, DenseI64ArrayAttr &caseValues,
+    SmallVectorImpl<Block *> &caseDests) {
+  SmallVector<int64_t> values;
+  if (failed(parser.parseOptionalRSquare())) {
+    do {
+      int64_t val;
+      Block *dest;
+      if (parser.parseInteger(val) || parser.parseColon() ||
+          parser.parseSuccessor(dest))
+        return failure();
+      values.push_back(val);
+      caseDests.push_back(dest);
+    } while (succeeded(parser.parseOptionalComma()));
+    if (parser.parseRSquare())
+      return failure();
+  }
+  caseValues = DenseI64ArrayAttr::get(parser.getContext(), values);
+  return success();
+}
+
+/// Print: 0: ^bb1, 1: ^bb2, 2: ^bb3
+static void printSwitchCases(OpAsmPrinter &p, SwitchOp op,
+                              DenseI64ArrayAttr caseValues,
+                              SuccessorRange caseDests) {
+  for (size_t i = 0; i < caseValues.size(); i++) {
+    if (i > 0) p << ", ";
+    p << caseValues[i] << ": " << caseDests[i];
+  }
+}
+
+//===----------------------------------------------------------------------===//
 // Enum op verifiers
 //===----------------------------------------------------------------------===//
 

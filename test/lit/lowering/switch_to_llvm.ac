@@ -1,0 +1,16 @@
+// RUN: %cot emit-llvm %s | %FileCheck %s
+
+// Feature #051: Switch lowering
+// cir.switch → llvm.switch
+
+fn pick(x: i32) -> i32 {
+    match x {
+        0 => return 10
+        1 => return 20
+    }
+    return 0
+}
+
+// CHECK-LABEL: llvm.func @pick
+// CHECK: llvm.switch %arg0 : i32,
+// CHECK: llvm.return

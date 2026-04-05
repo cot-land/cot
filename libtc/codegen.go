@@ -300,6 +300,8 @@ func (g *Gen) mapStmt(node *ast.Node) {
 		}
 	case ast.KindBlock:
 		g.mapBlock(g.currentBlock, node)
+	case ast.KindSwitchStatement:
+		g.mapSwitchStmt(node)
 	case ast.KindTryStatement:
 		g.mapTryStmt(node)
 	case ast.KindThrowStatement:
@@ -564,6 +566,126 @@ func (g *Gen) mapForStmt(node *ast.Node) {
 	}
 
 	g.currentBlock = exitBlock
+	g.hasTerminator = false
+}
+
+// ============================================================
+// Switch statement
+// ============================================================
+
+// mapSwitchStmt handles TypeScript switch(expr) { case X: ...; default: ... }
+// Emits cir.enum_value to extract integer tag from enum discriminant,
+// then cir.switch for multi-way branch to case blocks.
+// Reference: Zig AstGen switchExpr — condition + case dispatch
+func (g *Gen) mapSwitchStmt(node *ast.Node) {
+	ss := node.AsSwitchStatement()
+	caseBlock := ss.CaseBlock.AsCaseBlock()
+
+	// Evaluate discriminant expression
+	condVal := g.mapExpr(g.currentBlock, ss.Expression, g.b.IntType(32))
+	condType := ValueGetType(condVal)
+
+	// If condition is an enum, extract the integer tag
+	switchVal := condVal
+	if CirTypeIsEnum(condType) {
+		tagType := CirEnumTypeGetTagType(condType)
+		switchVal = CirBuildEnumValue(g.currentBlock, g.b.loc, tagType, condVal)
+	}
+
+	// Create merge block (all cases branch here after their body)
+	mergeBlock := g.b.AddBlock(g.currentFunc)
+
+	// First pass: collect case values, create case blocks, find default
+	var caseValues []int64
+	var caseDests []MlirBlock
+	var defaultDest MlirBlock
+	hasDefault := false
+
+	type caseInfo struct {
+		block  MlirBlock
+		clause *ast.CaseOrDefaultClause
+	}
+	var caseInfos []caseInfo
+
+	if caseBlock.Clauses != nil {
+		for _, clause := range caseBlock.Clauses.Nodes {
+			armBlock := g.b.AddBlock(g.currentFunc)
+			ci := caseInfo{block: armBlock}
+
+			if clause.Kind == ast.KindCaseClause {
+				cc := clause.AsCaseOrDefaultClause()
+				ci.clause = cc
+				// Resolve the case value
+				var caseVal int64
+				if cc.Expression != nil {
+					// Handle Color.Red style: PropertyAccessExpression
+					if cc.Expression.Kind == ast.KindPropertyAccessExpression {
+						pa := cc.Expression.AsPropertyAccessExpression()
+						memberName := pa.Name().AsIdentifier().Text
+						// Look up enum member value
+						if pa.Expression.Kind == ast.KindIdentifier {
+							enumName := pa.Expression.AsIdentifier().Text
+							for i, en := range g.enumNames {
+								if en == enumName {
+									for j, mn := range g.enumMemberNames[i] {
+										if mn == memberName {
+											caseVal = g.enumMemberValues[i][j]
+											break
+										}
+									}
+									break
+								}
+							}
+						}
+					} else if cc.Expression.Kind == ast.KindNumericLiteral {
+						lit := cc.Expression.AsNumericLiteral()
+						caseVal, _ = strconv.ParseInt(lit.Text, 10, 64)
+					}
+				}
+				caseValues = append(caseValues, caseVal)
+				caseDests = append(caseDests, armBlock)
+			} else if clause.Kind == ast.KindDefaultClause {
+				cc := clause.AsCaseOrDefaultClause()
+				ci.clause = cc
+				defaultDest = armBlock
+				hasDefault = true
+			}
+			caseInfos = append(caseInfos, ci)
+		}
+	}
+
+	// If no default clause, create a default block that branches to merge
+	if !hasDefault {
+		defaultDest = g.b.AddBlock(g.currentFunc)
+		CirBuildBr(defaultDest, g.b.loc, mergeBlock, nil)
+	}
+
+	// Emit cir.switch in the current block
+	CirBuildSwitch(g.currentBlock, g.b.loc, switchVal, caseValues, caseDests, defaultDest)
+
+	// Second pass: emit body for each case
+	allTerminated := true
+	for _, ci := range caseInfos {
+		g.currentBlock = ci.block
+		g.hasTerminator = false
+		if ci.clause != nil && ci.clause.Statements != nil {
+			for _, stmt := range ci.clause.Statements.Nodes {
+				if g.hasTerminator {
+					break
+				}
+				g.mapStmt(stmt)
+			}
+		}
+		if !g.hasTerminator {
+			CirBuildBr(g.currentBlock, g.b.loc, mergeBlock, nil)
+		}
+		if !g.hasTerminator {
+			allTerminated = false
+		}
+	}
+	_ = allTerminated
+
+	g.currentBlock = mergeBlock
 	g.hasTerminator = false
 }
 

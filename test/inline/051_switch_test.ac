@@ -1,0 +1,43 @@
+enum Color { Red, Green, Blue }
+
+fn color_value(c: Color) -> i32 {
+    match c {
+        Color.Red => return 10
+        Color.Green => return 20
+        Color.Blue => return 30
+    }
+    return 0
+}
+
+fn int_switch(x: i32) -> i32 {
+    match x {
+        0 => return 100
+        1 => return 200
+        2 => return 300
+    }
+    return 0
+}
+
+test "switch on enum Red" {
+    assert(color_value(Color.Red) == 10)
+}
+
+test "switch on enum Green" {
+    assert(color_value(Color.Green) == 20)
+}
+
+test "switch on enum Blue" {
+    assert(color_value(Color.Blue) == 30)
+}
+
+test "switch on integer 0" {
+    assert(int_switch(0) == 100)
+}
+
+test "switch on integer 1" {
+    assert(int_switch(1) == 200)
+}
+
+test "switch default (no match)" {
+    assert(int_switch(99) == 0)
+}

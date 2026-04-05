@@ -492,6 +492,25 @@ MlirValue cirBuildArrayToSlice(MlirBlock block, MlirLocation loc,
 }
 
 //===----------------------------------------------------------------------===//
+// Switch
+//===----------------------------------------------------------------------===//
+
+void cirBuildSwitch(MlirBlock block, MlirLocation loc,
+                    MlirValue value,
+                    intptr_t nCases, int64_t *caseValues,
+                    MlirBlock *caseDests,
+                    MlirBlock defaultDest) {
+  auto b = builderAtEnd(block, loc);
+  llvm::SmallVector<int64_t> values(caseValues, caseValues + nCases);
+  llvm::SmallVector<Block *> dests;
+  for (intptr_t i = 0; i < nCases; i++)
+    dests.push_back(unwrap(caseDests[i]));
+  b.create<cir::SwitchOp>(unwrap(loc), unwrap(value),
+      DenseI64ArrayAttr::get(b.getContext(), values),
+      unwrap(defaultDest), dests);
+}
+
+//===----------------------------------------------------------------------===//
 // Enum Type + Operations
 //===----------------------------------------------------------------------===//
 

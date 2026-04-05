@@ -616,11 +616,14 @@ const Gen = struct {
                             }
                         }
                         var val = self.mapExpr(blk, ret_expr, emit_type);
+                        // After mapExpr, current_block may have changed (e.g. switch expr).
+                        // Use current_block for the return emission.
+                        const ret_blk = self.current_block;
                         // Auto-wrap into error union if needed
                         if (mlir.cirTypeIsErrorUnion(ret_type) and !mlir.cirTypeIsErrorUnion(mlir.mlirValueGetType(val))) {
-                            val = mlir.cirBuildWrapResult(blk, self.b.loc, ret_type, val);
+                            val = mlir.cirBuildWrapResult(ret_blk, self.b.loc, ret_type, val);
                         }
-                        _ = self.b.emit(blk, "func.return", &.{}, &.{val}, &.{});
+                        _ = self.b.emit(ret_blk, "func.return", &.{}, &.{val}, &.{});
                     } else {
                         _ = self.b.emit(blk, "func.return", &.{}, &.{}, &.{});
                     }
@@ -935,6 +938,11 @@ const Gen = struct {
             // The enum type is inferred from result_type (context).
             .enum_literal => blk2: {
                 break :blk2 self.mapEnumLiteral(block, node, result_type);
+            },
+            // Switch expression: switch (c) { .red => 1, .green => 2, .blue => 3 }
+            // Reference: Zig AstGen switchExpr — fullSwitch + fullSwitchCase
+            .@"switch", .switch_comma => blk2: {
+                break :blk2 self.mapSwitchExpr(block, node, result_type);
             },
             else => mlir.cirBuildConstantInt(block, self.b.loc, result_type, 0),
         };
@@ -1448,5 +1456,139 @@ const Gen = struct {
         }
 
         return mlir.cirBuildEnumConstant(block, self.b.loc, enum_type, mlir.StringRef.fromSlice(variant_name));
+    }
+
+    /// Handle Zig switch expression: switch (c) { .red => 1, .green => 2, .blue => 3 }
+    /// Emits cir.enum_value to extract integer tag, then cir.switch for multi-way branch.
+    /// Each case block evaluates the arm expression and branches to merge with the result.
+    /// Reference: Zig AstGen switchExpr — fullSwitch, fullSwitchCase
+    fn mapSwitchExpr(self: *Gen, block: mlir.Block, node: Node.Index, result_type: mlir.Type) mlir.Value {
+        const tree = self.tree;
+        const d = tree.nodeData(node).node_and_extra;
+        const cond_node = d[0];
+        const sub_range = tree.extraData(d[1], Node.SubRange);
+        const cases = tree.extraDataSlice(sub_range, Node.Index);
+
+        // Evaluate the switch condition
+        const cond_val = self.mapExpr(block, cond_node, self.i32Type());
+        const cond_type = mlir.mlirValueGetType(cond_val);
+
+        // If condition is an enum, extract the integer tag
+        var switch_val = cond_val;
+        var tag_type = cond_type;
+        if (mlir.cirTypeIsEnum(cond_type)) {
+            tag_type = mlir.cirEnumTypeGetTagType(cond_type);
+            switch_val = mlir.cirBuildEnumValue(block, self.b.loc, tag_type, cond_val);
+        }
+
+        // Create merge block with a block argument for the result value
+        const merge_block = self.b.createBlock(&.{result_type});
+        const region = mlir.mlirOperationGetRegion(self.current_func, 0);
+        mlir.mlirRegionAppendOwnedBlock(region, merge_block);
+
+        // Collect case values and create case blocks
+        var case_values_buf: [32]i64 = undefined;
+        var case_blocks_buf: [32]mlir.Block = undefined;
+        var n_cases: usize = 0;
+        var default_block: mlir.Block = .{ .ptr = null };
+
+        for (cases) |case_node| {
+            const case_tag = tree.nodeTag(case_node);
+
+            // Create a block for this case arm
+            const arm_block = self.addBlock();
+
+            switch (case_tag) {
+                .switch_case_one, .switch_case_inline_one => {
+                    const case_data = tree.nodeData(case_node).opt_node_and_node;
+                    const value_opt = case_data[0];
+                    const target_expr = case_data[1];
+
+                    if (value_opt.unwrap()) |value_node| {
+                        // Non-else case: resolve the value
+                        const val_tag = tree.nodeTag(value_node);
+                        var case_val: i64 = 0;
+                        if (val_tag == .enum_literal) {
+                            // .red, .green, etc. — look up variant value
+                            const vtok = tree.nodeMainToken(value_node);
+                            const vname = tree.tokenSlice(vtok);
+                            if (mlir.cirTypeIsEnum(cond_type)) {
+                                case_val = mlir.cirEnumTypeGetVariantValue(cond_type, mlir.StringRef.fromSlice(vname));
+                            }
+                        } else if (val_tag == .number_literal) {
+                            const vtok = tree.nodeMainToken(value_node);
+                            const vtext = tree.tokenSlice(vtok);
+                            case_val = std.fmt.parseInt(i64, vtext, 10) catch 0;
+                        }
+
+                        case_values_buf[n_cases] = case_val;
+                        case_blocks_buf[n_cases] = arm_block;
+                        n_cases += 1;
+                    } else {
+                        // else case
+                        default_block = arm_block;
+                    }
+
+                    // Emit the target expression in the arm block, branch to merge
+                    const arm_val = self.mapExpr(arm_block, target_expr, result_type);
+                    mlir.cirBuildBr(arm_block, self.b.loc, merge_block, 1, &[_]mlir.Value{arm_val});
+                },
+                .switch_case, .switch_case_inline => {
+                    const case_data = tree.nodeData(case_node).extra_and_node;
+                    const values_range = tree.extraData(case_data[0], Node.SubRange);
+                    const values = tree.extraDataSlice(values_range, Node.Index);
+                    const target_expr = case_data[1];
+
+                    // Multi-value case: each value maps to the same block
+                    for (values) |value_node| {
+                        const val_tag = tree.nodeTag(value_node);
+                        var case_val: i64 = 0;
+                        if (val_tag == .enum_literal) {
+                            const vtok = tree.nodeMainToken(value_node);
+                            const vname = tree.tokenSlice(vtok);
+                            if (mlir.cirTypeIsEnum(cond_type)) {
+                                case_val = mlir.cirEnumTypeGetVariantValue(cond_type, mlir.StringRef.fromSlice(vname));
+                            }
+                        } else if (val_tag == .number_literal) {
+                            const vtok = tree.nodeMainToken(value_node);
+                            const vtext = tree.tokenSlice(vtok);
+                            case_val = std.fmt.parseInt(i64, vtext, 10) catch 0;
+                        }
+
+                        case_values_buf[n_cases] = case_val;
+                        case_blocks_buf[n_cases] = arm_block;
+                        n_cases += 1;
+                    }
+
+                    // Emit the target expression in the arm block, branch to merge
+                    const arm_val = self.mapExpr(arm_block, target_expr, result_type);
+                    mlir.cirBuildBr(arm_block, self.b.loc, merge_block, 1, &[_]mlir.Value{arm_val});
+                },
+                else => {},
+            }
+        }
+
+        // If no default case, create a trap block
+        if (default_block.ptr == null) {
+            default_block = self.addBlock();
+            // Default: use zero as fallback and branch to merge
+            const zero = mlir.cirBuildConstantInt(default_block, self.b.loc, result_type, 0);
+            mlir.cirBuildBr(default_block, self.b.loc, merge_block, 1, &[_]mlir.Value{zero});
+        }
+
+        // Emit cir.switch in the original block
+        mlir.cirBuildSwitch(
+            block,
+            self.b.loc,
+            switch_val,
+            @intCast(n_cases),
+            &case_values_buf,
+            &case_blocks_buf,
+            default_block,
+        );
+
+        // Continue codegen in the merge block
+        self.current_block = merge_block;
+        return mlir.mlirBlockGetArgument(merge_block, 0);
     }
 };

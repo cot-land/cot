@@ -38,6 +38,39 @@ struct TrapOpLowering : public OpConversionPattern<cir::TrapOp> {
   }
 };
 
+/// cir.switch → llvm.switch
+/// Reference: LLVM SwitchOp
+struct SwitchOpLowering : public OpConversionPattern<cir::SwitchOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::SwitchOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    auto caseValues = op.getCaseValues();
+    auto caseDests = op.getCaseDests();
+    // Build DenseIntElementsAttr for case values
+    auto valType = op.getValue().getType();
+    llvm::SmallVector<llvm::APInt> apValues;
+    unsigned bitWidth = valType.getIntOrFloatBitWidth();
+    for (auto v : caseValues)
+      apValues.push_back(llvm::APInt(bitWidth, v, /*isSigned=*/true));
+    auto caseValuesAttr = DenseIntElementsAttr::get(
+        RankedTensorType::get({static_cast<int64_t>(apValues.size())}, valType),
+        apValues);
+    // Build case destinations
+    llvm::SmallVector<Block *> caseDestBlocks(caseDests.begin(),
+                                               caseDests.end());
+    llvm::SmallVector<ValueRange> caseOperands(caseDestBlocks.size(),
+                                                ValueRange{});
+    // Create LLVM switch with all empty operand segments
+    auto switchOp = rewriter.create<LLVM::SwitchOp>(
+        op.getLoc(), adaptor.getValue(),
+        op.getDefaultDest(), ValueRange{},
+        caseValuesAttr, caseDestBlocks, caseOperands);
+    (void)switchOp;
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 /// cir.throw → llvm.trap + llvm.unreachable
 /// Phase 1 lowering: crash on throw (like assertion failure).
 /// Phase 2 will add full C++ ABI: __cxa_allocate_exception + __cxa_throw.
@@ -106,6 +139,7 @@ void cot::populateControlFlowPatterns(
     RewritePatternSet &patterns) {
   MLIRContext *ctx = patterns.getContext();
   patterns.add<BrOpLowering, CondBrOpLowering, TrapOpLowering,
+               SwitchOpLowering,
                ThrowOpLowering, InvokeOpLowering, LandingPadOpLowering>(
       converter, ctx);
 }

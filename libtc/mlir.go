@@ -487,6 +487,22 @@ func CirBuildTrap(block MlirBlock, loc MlirLocation) {
 	C.cirBuildTrap(block.ptr, loc.ptr)
 }
 
+func CirBuildSwitch(block MlirBlock, loc MlirLocation, value MlirValue, caseValues []int64, caseDests []MlirBlock, defaultDest MlirBlock) {
+	nCases := len(caseValues)
+	if nCases == 0 {
+		C.cirBuildSwitch(block.ptr, loc.ptr, value.ptr, 0, nil, nil, defaultDest.ptr)
+		return
+	}
+	cValues := make([]C.int64_t, nCases)
+	for i, v := range caseValues {
+		cValues[i] = C.int64_t(v)
+	}
+	C.cirBuildSwitch(block.ptr, loc.ptr, value.ptr,
+		C.intptr_t(nCases), &cValues[0],
+		(*C.MlirBlock)(unsafe.Pointer(&caseDests[0])),
+		defaultDest.ptr)
+}
+
 // --- Type Constructors ---
 
 func CirPointerTypeGet(ctx MlirContext) MlirType {

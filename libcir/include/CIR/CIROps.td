@@ -645,6 +645,45 @@ def CIR_OptionalPayloadOp : CIR_Op<"optional_payload", [Pure]> {
 }
 
 //===----------------------------------------------------------------------===//
+// Switch — integer multi-way branch
+// Reference: LLVM SwitchOp, Rust SwitchInt, Zig zirSwitchBlock
+//===----------------------------------------------------------------------===//
+
+def CIR_SwitchOp : CIR_Op<"switch",
+    [Terminator, DeclareOpInterfaceMethods<BranchOpInterface>]> {
+  let summary = "integer multi-way branch";
+  let description = [{
+    Branches to one of N case destinations based on an integer value,
+    or to the default destination if no case matches.
+
+    Used by enum switch (after cir.enum_value) and integer switch.
+    Frontends desugar match/switch to cir.switch on the integer discriminant.
+
+    Lowers to llvm.switch.
+
+    Reference: LLVM SwitchOp, Rust SwitchInt, Zig zirSwitchBlock.
+
+    Example:
+      cir.switch %val : i32, [
+          0: ^bb_red,
+          1: ^bb_green,
+          2: ^bb_blue
+      ] default ^bb_unreachable
+  }];
+  let arguments = (ins AnyInteger:$value,
+                       DenseI64ArrayAttr:$case_values);
+  let successors = (successor AnySuccessor:$defaultDest,
+                              VariadicSuccessor<AnySuccessor>:$caseDests);
+  let assemblyFormat = [{
+    $value `:` type($value) `,`
+    `[` custom<SwitchCases>($case_values, $caseDests) `]`
+    `default` $defaultDest
+    attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
 // Enum operations
 // Reference: Zig enum literals, Swift EnumInst, Rust Discriminant
 //===----------------------------------------------------------------------===//

@@ -322,6 +322,17 @@ MlirValue cirBuildArrayToSlice(MlirBlock block, MlirLocation loc,
                                MlirType arrayType);
 
 //===----------------------------------------------------------------------===//
+// Switch
+//===----------------------------------------------------------------------===//
+
+/// Create cir.switch (integer multi-way branch).
+void cirBuildSwitch(MlirBlock block, MlirLocation loc,
+                    MlirValue value,
+                    intptr_t nCases, int64_t *caseValues,
+                    MlirBlock *caseDests,
+                    MlirBlock defaultDest);
+
+//===----------------------------------------------------------------------===//
 // Enum Type + Operations
 //===----------------------------------------------------------------------===//
 

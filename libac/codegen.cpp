@@ -849,11 +849,86 @@ class CodeGen {
       emitIfStmt(s, returnType, parentFunc); break;
     case StmtKind::IfUnwrap:
       emitIfUnwrapStmt(s, returnType, parentFunc); break;
+    case StmtKind::Match:
+      emitMatchStmt(s, returnType, parentFunc); break;
     case StmtKind::Throw:
       emitThrowStmt(s); break;
     case StmtKind::TryCatch:
       emitTryCatchStmt(s, returnType, parentFunc); break;
     }
+  }
+
+  void emitMatchStmt(const Stmt &s, mlir::Type returnType,
+                       mlir::func::FuncOp parentFunc) {
+    // match expr { pattern => body, ... }
+    // Desugar: emit expr, extract integer (enum_value if enum), switch on cases
+
+    auto matchVal = emitExpr(*s.expr, b.getI32Type());
+    auto matchType = matchVal.getType();
+
+    // If matching on an enum, extract the integer tag
+    mlir::Value switchVal = matchVal;
+    if (auto enumType = llvm::dyn_cast<cir::EnumType>(matchType)) {
+      switchVal = b.create<cir::EnumValueOp>(loc, enumType.getTagType(),
+                                              matchVal);
+    }
+
+    // Create blocks: one per arm + default (fallthrough)
+    auto *defaultBlock = addBlock(parentFunc);
+    auto *mergeBlock = addBlock(parentFunc);
+    llvm::SmallVector<mlir::Block *> armBlocks;
+    llvm::SmallVector<int64_t> caseValues;
+
+    for (auto &arm : s.matchArms) {
+      auto *armBlock = addBlock(parentFunc);
+      armBlocks.push_back(armBlock);
+
+      // Evaluate the pattern to get the integer case value
+      if (arm.pattern->kind == ExprKind::IntLit) {
+        caseValues.push_back(arm.pattern->intVal);
+      } else if (arm.pattern->kind == ExprKind::FieldAccess ||
+                 arm.pattern->kind == ExprKind::EnumAccess) {
+        // Enum constant: Color.Red → look up the integer value
+        if (arm.pattern->lhs && arm.pattern->lhs->kind == ExprKind::Ident) {
+          auto eit = enumTypes.find(arm.pattern->lhs->name);
+          if (eit != enumTypes.end()) {
+            auto et = llvm::cast<cir::EnumType>(eit->second);
+            auto val = et.getVariantValue(
+                llvm::StringRef(arm.pattern->name.data(),
+                                arm.pattern->name.size()));
+            caseValues.push_back(val);
+          } else {
+            caseValues.push_back(0); // fallback
+          }
+        } else {
+          caseValues.push_back(0);
+        }
+      } else {
+        caseValues.push_back(0);
+      }
+    }
+
+    // Emit cir.switch
+    b.create<cir::SwitchOp>(loc, switchVal,
+        mlir::DenseI64ArrayAttr::get(b.getContext(), caseValues),
+        defaultBlock, armBlocks);
+
+    // Emit each arm body
+    for (size_t i = 0; i < armBlocks.size(); i++) {
+      b.setInsertionPointToStart(armBlocks[i]);
+      for (auto &st : s.matchArms[i].body) {
+        if (blockTerminated()) break;
+        emitStmt(*st, returnType, parentFunc);
+      }
+      if (!blockTerminated())
+        b.create<cir::BrOp>(loc, mlir::ValueRange{}, mergeBlock);
+    }
+
+    // Default block: branch to merge
+    b.setInsertionPointToStart(defaultBlock);
+    b.create<cir::BrOp>(loc, mlir::ValueRange{}, mergeBlock);
+
+    b.setInsertionPointToStart(mergeBlock);
   }
 
   void emitThrowStmt(const Stmt &s) {

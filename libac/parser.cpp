@@ -516,6 +516,29 @@ class Parser {
       return s;
     }
 
+    // Match statement: match expr { pattern => stmt, ... }
+    if (check(Tag::kw_match)) {
+      size_t p = advance().start; // consume 'match'
+      auto s = std::make_unique<Stmt>();
+      s->kind = StmtKind::Match;
+      s->pos = p;
+      s->expr = parseExpr(); // the value being matched
+      expect(Tag::l_brace);
+      skipSemis();
+      while (!check(Tag::r_brace) && !check(Tag::eof)) {
+        MatchArm arm;
+        arm.pattern = parseExpr(); // parse the pattern value (Color.Red, 0, etc.)
+        expect(Tag::fat_arrow);
+        // Parse arm body — single statement or block
+        arm.body.push_back(parseStmt());
+        s->matchArms.push_back(std::move(arm));
+        skipSemis();
+      }
+      expect(Tag::r_brace);
+      match(Tag::semicolon);
+      return s;
+    }
+
     // If statement: if cond { } else { }
     if (check(Tag::kw_if)) {
       size_t p = advance().start;

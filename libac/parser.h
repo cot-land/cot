@@ -52,8 +52,13 @@ struct Expr {
   std::vector<std::string_view> fieldNames; // StructInit: field names
 };
 
+struct MatchArm {
+  ExprPtr pattern;              // The match value (enum constant or int literal)
+  std::vector<StmtPtr> body;    // Arm body statements
+};
+
 // Statement kinds
-enum class StmtKind { Return, ExprStmt, If, IfUnwrap, While, For, Break, Continue, Assert, Let, Var, Assign, CompoundAssign, Throw, TryCatch };
+enum class StmtKind { Return, ExprStmt, If, IfUnwrap, While, For, Break, Continue, Assert, Let, Var, Assign, CompoundAssign, Throw, TryCatch, Match };
 
 struct Stmt {
   StmtKind kind;
@@ -65,6 +70,7 @@ struct Stmt {
   TypeRef varType;                // Let/Var: type annotation
   Tag op = Tag::invalid;          // CompoundAssign: operator (+= → plus, etc.)
   ExprPtr rangeEnd;               // For: end of range
+  std::vector<MatchArm> matchArms; // Match: case arms
 };
 
 struct StructField {
