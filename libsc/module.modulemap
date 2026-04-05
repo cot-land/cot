@@ -1,0 +1,6 @@
+module CIRCAPI {
+    header "../libcir/c-api/CIRCApi.h"
+    header "/opt/homebrew/Cellar/llvm@20/20.1.8/include/mlir-c/IR.h"
+    header "/opt/homebrew/Cellar/llvm@20/20.1.8/include/mlir-c/Support.h"
+    export *
+}

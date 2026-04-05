@@ -86,7 +86,8 @@ Every feature from `claude/FEATURES.md` follows this checklist. Do ALL steps —
 5. **ac frontend.** Add syntax to `libac/` — scanner token (if new), parser rule, codegen emission. Update `claude/AC_SYNTAX.md`.
 6. **Zig frontend.** Add handling in `libzc/astgen.zig` — map AST node to CIR ops.
 7. **TypeScript frontend.** Add handling in `libtc/codegen.go` — map TS AST node to CIR ops.
-8. **lit tests — ALL THREE frontends.** Add `test/lit/ac/<feature>.ac` AND `test/lit/zig/<feature>.zig` AND `test/lit/ts/<feature>.ts`. Use `%cot emit-cir` + FileCheck. All three must produce equivalent CIR.
+7b. **Swift frontend.** Add handling in `libsc/` — map Swift AST node to CIR ops.
+8. **lit tests — ALL FOUR frontends.** Add `test/lit/ac/<feature>.ac` AND `test/lit/zig/<feature>.zig` AND `test/lit/ts/<feature>.ts` AND `test/lit/swift/<feature>.swift`. Use `%cot emit-cir` + FileCheck. All four must produce equivalent CIR where the feature exists in that language.
 9. **Lowering test.** If feature adds new CIR→LLVM patterns, add `test/lit/lowering/<feature>.ac` to verify LLVM output.
 10. **Inline tests.** Add or extend `test/inline/<NNN>_<name>_test.ac` with `test "name" { assert(...) }` blocks to verify runtime correctness.
 11. **Build + test ALL.** Run `make all && make test`. All tests must pass.
@@ -97,9 +98,10 @@ Every feature from `claude/FEATURES.md` follows this checklist. Do ALL steps —
 **Frontend fidelity rules (until cot 1.0):**
 - **libzc must be 1:1 compatible with Zig.** Every Zig test must compile with `zig build`. No new features added to Zig syntax.
 - **libtc must be 1:1 compatible with TypeScript.** Every TS test must compile with `tsc`. No new features added to TS syntax.
+- **libsc must be 1:1 compatible with Swift.** Every Swift test must compile with `swiftc`. No new features added to Swift syntax.
 - **libac (ac) is the kitchen sink.** All CIR features are exercised via ac. New syntax, combined features, experimental constructs — all go in ac.
-- **Validate against reference compilers.** Zig tests verified with zig. TS tests verified with tsc/typescript. This guarantees we stay true to the reference languages.
-- If a CIR feature has no equivalent in Zig or TS, the Zig/TS test is omitted — only ac tests that feature.
+- **Validate against reference compilers.** Zig tests verified with zig. TS tests verified with tsc. Swift tests verified with swiftc. This guarantees we stay true to the reference languages.
+- If a CIR feature has no equivalent in a reference language, that language's test is omitted — only ac tests that feature.
 
 Build order: `make all` (libcir → libcot → libzc → libtc → cot)
 
@@ -114,6 +116,7 @@ Build order: `make all` (libcir → libcot → libzc → libtc → cot)
 | AST | Zig index-based arena | `~/claude/references/zig/lib/std/zig/Ast.zig` |
 | AST→CIR (Zig) | Zig AstGen | `~/claude/references/zig/lib/std/zig/AstGen.zig` |
 | AST→CIR (TS) | TypeScript-Go | `~/claude/references/typescript-go/internal/parser/` |
+| AST→CIR (Swift) | SwiftSyntax | `~/claude/references/swift/lib/Parse/` |
 | CIR dialect | MLIR (Lattner) | `~/claude/references/llvm-project/mlir/` |
 | Type resolution | Zig Sema | `~/claude/references/zig/src/Sema.zig` |
 | Comptime | Zig Sema | `~/claude/references/zig/src/Sema.zig` |
@@ -161,6 +164,7 @@ libcot/        Compiler passes (C++ MLIR passes) — CIRToLLVM lowering
 libac/         ac frontend (C++) — Agentic-Cot, agent-designed syntax
 libzc/         zc frontend (Zig) — Zig-Cot, uses std.zig.Ast parser
 libtc/         tc frontend (Go) — TypeScript-Cot, uses TypeScript-Go parser
+libsc/         sc frontend (Swift) — Swift-Cot, uses SwiftSyntax parser
 cot/           CLI driver (C++)
 claude/
   ARCHITECTURE.md    THE DESIGN — read first

@@ -8,7 +8,7 @@
 
 A compiler toolkit built on MLIR/LLVM. CIR (Cot Intermediate Representation) is a universal IR that any language frontend can target. Passes transform CIR. LLVM produces native/wasm. Think: the layer above MLIR that Lattner designed MLIR to enable.
 
-**ac (agentic cot)** is our dogfood language — syntax designed by AI agents. **libzc** is a Zig frontend proving CIR is language-agnostic.
+**ac (agentic cot)** is our dogfood language — syntax designed by AI agents. **libzc** (Zig), **libtc** (TypeScript), and **libsc** (Swift) are reference language frontends proving CIR is truly universal.
 
 ---
 
