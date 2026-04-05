@@ -26,6 +26,11 @@ enum TokenKind: Equatable {
     // Keywords
     case kwFunc, kwLet, kwVar, kwReturn, kwIf, kwElse, kwWhile
     case kwStruct, kwEnum, kwCase, kwSwitch, kwDefault, kwBreak, kwContinue
+    case kwFor, kwIn
+
+    // Range operators
+    case halfOpenRange   // ..<
+    case question        // ?
 
     // Delimiters
     case lParen, rParen, lBrace, rBrace, lBracket, rBracket
@@ -148,7 +153,17 @@ struct Scanner {
         case UInt8(ascii: ":"): return Token(kind: .colon, line: tokLine, col: tokCol)
         case UInt8(ascii: ";"): return Token(kind: .semicolon, line: tokLine, col: tokCol)
         case UInt8(ascii: "~"): return Token(kind: .tilde, line: tokLine, col: tokCol)
-        case UInt8(ascii: "."): return Token(kind: .dot, line: tokLine, col: tokCol)
+        case UInt8(ascii: "."):
+            // Check for ..< (half-open range)
+            if let n = peek(), n == UInt8(ascii: ".") {
+                if let n2 = peekNext(), n2 == UInt8(ascii: "<") {
+                    _ = advance() // .
+                    _ = advance() // <
+                    return Token(kind: .halfOpenRange, line: tokLine, col: tokCol)
+                }
+            }
+            return Token(kind: .dot, line: tokLine, col: tokCol)
+        case UInt8(ascii: "?"): return Token(kind: .question, line: tokLine, col: tokCol)
         default: break
         }
 
@@ -293,6 +308,8 @@ private func keywordKind(_ s: String) -> TokenKind {
     case "default":  return .kwDefault
     case "break":    return .kwBreak
     case "continue": return .kwContinue
+    case "for":      return .kwFor
+    case "in":       return .kwIn
     case "true":     return .boolLiteral(true)
     case "false":    return .boolLiteral(false)
     case "nil":      return .nilLiteral
@@ -315,7 +332,11 @@ indirect enum Expr {
     case unaryMinus(Expr)
     case call(String, [Expr])
     case memberAccess(Expr, String)        // expr.field
+    case methodCall(Expr, String, [Expr])  // expr.method(args)
     case structInit(String, [(String, Expr)]) // TypeName(field: val, ...)
+    case arrayLit([Expr])                  // [1, 2, 3]
+    case subscriptExpr(Expr, Expr)         // arr[i]
+    case typeCast(String, Expr)            // Int32(x) — type conversion call
 }
 
 enum BinOp {
@@ -332,7 +353,9 @@ indirect enum Stmt {
     case assign(String, Expr)
     case compoundAssign(BinOp, String, Expr)
     case ifStmt(Expr, [Stmt], [Stmt]?)
+    case ifLetStmt(String, Expr, [Stmt], [Stmt]?)   // if let val = expr { } else { }
     case whileStmt(Expr, [Stmt])
+    case forInStmt(String, Expr, Expr, [Stmt])       // for i in lo..<hi { body }
     case breakStmt
     case continueStmt
     case switchStmt(Expr, [(SwitchCase, [Stmt])], [Stmt]?)
@@ -343,8 +366,10 @@ enum SwitchCase {
     case defaultCase
 }
 
-enum SwiftType {
-    case named(String)  // Int32, Bool, String, MyStruct...
+indirect enum SwiftType {
+    case named(String)           // Int32, Bool, String, MyStruct...
+    case optional(SwiftType)     // Int32?
+    case array(SwiftType, Int64) // [3]Int32 (fixed-size for CIR)
 }
 
 struct FuncParam {
@@ -535,8 +560,22 @@ struct Parser {
     }
 
     mutating func parseType() -> SwiftType? {
+        // Array type: [Int32] — Swift uses this for Array<Int32>
+        if tokenMatches(peek(), .lBracket) {
+            _ = advance() // [
+            guard let elemType = parseType() else { return nil }
+            _ = expect(.rBracket) // ]
+            // For CIR we need a fixed size. Use 0 as "dynamic" placeholder;
+            // actual size comes from array literal context.
+            return .array(elemType, 0)
+        }
         if case .identifier(let s) = peek() {
             _ = advance()
+            // Check for optional suffix: Int32?
+            if tokenMatches(peek(), .question) {
+                _ = advance()
+                return .optional(.named(s))
+            }
             return .named(s)
         }
         return nil
@@ -567,6 +606,7 @@ struct Parser {
         case .kwVar:      return parseVarDecl()
         case .kwIf:       return parseIfStmt()
         case .kwWhile:    return parseWhileStmt()
+        case .kwFor:      return parseForInStmt()
         case .kwBreak:    _ = advance(); return .breakStmt
         case .kwContinue: _ = advance(); return .continueStmt
         case .kwSwitch:   return parseSwitchStmt()
@@ -618,6 +658,27 @@ struct Parser {
 
     mutating func parseIfStmt() -> Stmt? {
         _ = advance() // if
+
+        // Check for `if let val = expr { ... } else { ... }`
+        if tokenMatches(peek(), .kwLet) {
+            _ = advance() // let
+            guard let bindName = expectIdentifier() else { return nil }
+            guard expect(.assign) else { return nil }
+            guard let optExpr = parseExpr() else { return nil }
+            guard expect(.lBrace) else { return nil }
+            let thenBody = parseStmtList()
+            _ = expect(.rBrace)
+
+            var elseBody: [Stmt]? = nil
+            if tokenMatches(peek(), .kwElse) {
+                _ = advance()
+                guard expect(.lBrace) else { return nil }
+                elseBody = parseStmtList()
+                _ = expect(.rBrace)
+            }
+            return .ifLetStmt(bindName, optExpr, thenBody, elseBody)
+        }
+
         let cond = parseExpr()!
         guard expect(.lBrace) else { return nil }
         let thenBody = parseStmtList()
@@ -648,6 +709,21 @@ struct Parser {
         let body = parseStmtList()
         _ = expect(.rBrace)
         return .whileStmt(cond, body)
+    }
+
+    // for i in 0..<10 { body }
+    mutating func parseForInStmt() -> Stmt? {
+        _ = advance() // for
+        guard let varName = expectIdentifier() else { return nil }
+        guard expect(.kwIn) else { return nil }
+        guard let lo = parseExpr() else { return nil }
+        // Expect ..< for half-open range
+        guard expect(.halfOpenRange) else { return nil }
+        guard let hi = parseExpr() else { return nil }
+        guard expect(.lBrace) else { return nil }
+        let body = parseStmtList()
+        _ = expect(.rBrace)
+        return .forInStmt(varName, lo, hi, body)
     }
 
     mutating func parseSwitchStmt() -> Stmt? {
@@ -824,7 +900,26 @@ struct Parser {
             if tokenMatches(peek(), .dot) {
                 _ = advance()
                 guard let field = expectIdentifier() else { return nil }
-                expr = .memberAccess(expr, field)
+                // Check if it's a method call: expr.field(args)
+                if tokenMatches(peek(), .lParen) {
+                    _ = advance() // (
+                    var args: [Expr] = []
+                    while !tokenMatches(peek(), .rParen) && !isEof() {
+                        guard let arg = parseExpr() else { break }
+                        args.append(arg)
+                        if !tokenMatches(peek(), .rParen) { _ = expect(.comma) }
+                    }
+                    _ = expect(.rParen)
+                    expr = .methodCall(expr, field, args)
+                } else {
+                    expr = .memberAccess(expr, field)
+                }
+            } else if tokenMatches(peek(), .lBracket) {
+                // Subscript: expr[index]
+                _ = advance() // [
+                guard let index = parseExpr() else { return nil }
+                _ = expect(.rBracket)
+                expr = .subscriptExpr(expr, index)
             } else {
                 break
             }
@@ -882,6 +977,10 @@ struct Parser {
                 if isLabeled {
                     return .structInit(name, labeledArgs)
                 }
+                // Check if this is a type cast: Int32(x), Float(x), etc.
+                if isTypeCastName(name) && args.count == 1 {
+                    return .typeCast(name, args[0])
+                }
                 return .call(name, args)
             }
             return .ident(name)
@@ -890,8 +989,34 @@ struct Parser {
             let expr = parseExpr()
             _ = expect(.rParen)
             return expr
+        case .lBracket:
+            // Array literal: [1, 2, 3]
+            _ = advance() // [
+            var elements: [Expr] = []
+            while !tokenMatches(peek(), .rBracket) && !isEof() {
+                guard let elem = parseExpr() else { break }
+                elements.append(elem)
+                if !tokenMatches(peek(), .rBracket) { _ = expect(.comma) }
+            }
+            _ = expect(.rBracket)
+            return .arrayLit(elements)
+        case .dot:
+            // Enum member shorthand: .red, .green — parse as memberAccess on implicit enum
+            _ = advance() // .
+            guard let memberName = expectIdentifier() else { return nil }
+            return .memberAccess(.ident("_enum"), memberName)
         default:
             return nil
+        }
+    }
+
+    func isTypeCastName(_ name: String) -> Bool {
+        switch name {
+        case "Int8", "UInt8", "Int16", "UInt16", "Int32", "UInt32",
+             "Int64", "UInt64", "Int", "Float", "Double":
+            return true
+        default:
+            return false
         }
     }
 }
@@ -947,6 +1072,10 @@ private func tokenMatches(_ a: TokenKind, _ b: TokenKind) -> Bool {
     case (.kwDefault, .kwDefault): return true
     case (.kwBreak, .kwBreak): return true
     case (.kwContinue, .kwContinue): return true
+    case (.kwFor, .kwFor): return true
+    case (.kwIn, .kwIn): return true
+    case (.halfOpenRange, .halfOpenRange): return true
+    case (.question, .question): return true
     case (.nilLiteral, .nilLiteral): return true
     default: return false
     }
@@ -1075,6 +1204,12 @@ final class Gen {
                 }
                 return intType(32) // default fallback
             }
+        case .optional(let inner):
+            let innerType = resolveType(inner)
+            return cirOptionalTypeGet(ctx, innerType)
+        case .array(let elem, let size):
+            let elemType = resolveType(elem)
+            return cirArrayTypeGet(ctx, size, elemType)
         }
     }
 
@@ -1334,8 +1469,12 @@ final class Gen {
             mapCompoundAssign(op: op, name: name, expr: expr)
         case .ifStmt(let cond, let thenBody, let elseBody):
             mapIfStmt(cond: cond, thenBody: thenBody, elseBody: elseBody)
+        case .ifLetStmt(let bindName, let optExpr, let thenBody, let elseBody):
+            mapIfLetStmt(bindName: bindName, optExpr: optExpr, thenBody: thenBody, elseBody: elseBody)
         case .whileStmt(let cond, let body):
             mapWhileStmt(cond: cond, body: body)
+        case .forInStmt(let varName, let lo, let hi, let body):
+            mapForInStmt(varName: varName, lo: lo, hi: hi, body: body)
         case .breakStmt:
             if let loop = loopStack.last {
                 cirBuildBr(currentBlock, unknownLoc, loop.exit, 0, nil)
@@ -1379,7 +1518,13 @@ final class Gen {
     func mapVarBinding(name: String, ty: SwiftType?, init_: Expr?) {
         var varType: MlirType
         if let ty = ty {
-            varType = resolveType(ty)
+            // Special case: [T] with array literal — infer size from literal
+            if case .array(let elemTy, let sz) = ty, sz == 0,
+               let init_ = init_, case .arrayLit(let elems) = init_ {
+                varType = resolveType(.array(elemTy, Int64(elems.count)))
+            } else {
+                varType = resolveType(ty)
+            }
         } else {
             varType = intType(32)
         }
@@ -1387,8 +1532,20 @@ final class Gen {
         let addr = cirBuildAlloca(currentBlock, unknownLoc, varType)
 
         if let init_ = init_ {
-            let val = mapExpr(init_, expectedType: varType)
-            cirBuildStore(currentBlock, unknownLoc, val, addr)
+            // Special case: nil literal for optional types
+            if case .nilLit = init_, cirTypeIsOptional(varType) {
+                let noneVal = cirBuildNone(currentBlock, unknownLoc, varType)
+                cirBuildStore(currentBlock, unknownLoc, noneVal, addr)
+            } else if cirTypeIsOptional(varType) {
+                // Wrapping a non-nil value into optional
+                let payloadType = cirOptionalTypeGetPayload(varType)
+                let innerVal = mapExpr(init_, expectedType: payloadType)
+                let wrapped = cirBuildWrapOptional(currentBlock, unknownLoc, varType, innerVal)
+                cirBuildStore(currentBlock, unknownLoc, wrapped, addr)
+            } else {
+                let val = mapExpr(init_, expectedType: varType)
+                cirBuildStore(currentBlock, unknownLoc, val, addr)
+            }
         }
 
         localNames.append(name)
@@ -1399,8 +1556,23 @@ final class Gen {
     func mapAssign(name: String, expr: Expr) {
         for i in stride(from: localNames.count - 1, through: 0, by: -1) {
             if localNames[i] == name {
-                let val = mapExpr(expr, expectedType: localTypes[i])
-                cirBuildStore(currentBlock, unknownLoc, val, localAddrs[i])
+                let varType = localTypes[i]
+                if cirTypeIsOptional(varType) {
+                    // Check if assigning nil
+                    if case .nilLit = expr {
+                        let noneVal = cirBuildNone(currentBlock, unknownLoc, varType)
+                        cirBuildStore(currentBlock, unknownLoc, noneVal, localAddrs[i])
+                    } else {
+                        // Wrap value into optional
+                        let payloadType = cirOptionalTypeGetPayload(varType)
+                        let innerVal = mapExpr(expr, expectedType: payloadType)
+                        let wrapped = cirBuildWrapOptional(currentBlock, unknownLoc, varType, innerVal)
+                        cirBuildStore(currentBlock, unknownLoc, wrapped, localAddrs[i])
+                    }
+                } else {
+                    let val = mapExpr(expr, expectedType: varType)
+                    cirBuildStore(currentBlock, unknownLoc, val, localAddrs[i])
+                }
                 return
             }
         }
@@ -1491,6 +1663,119 @@ final class Gen {
         hasTerminator = false
     }
 
+    // for i in lo..<hi { body } => lowered as while loop
+    func mapForInStmt(varName: String, lo: Expr, hi: Expr, body: [Stmt]) {
+        let loopType = intType(32)
+
+        // Allocate loop variable, initialize to lo
+        let addr = cirBuildAlloca(currentBlock, unknownLoc, loopType)
+        let loVal = mapExpr(lo, expectedType: loopType)
+        cirBuildStore(currentBlock, unknownLoc, loVal, addr)
+
+        localNames.append(varName)
+        localAddrs.append(addr)
+        localTypes.append(loopType)
+
+        let headerBlock = addBlock()
+        let bodyBlock = addBlock()
+        let exitBlock = addBlock()
+
+        cirBuildBr(currentBlock, unknownLoc, headerBlock, 0, nil)
+
+        // Header: check i < hi
+        currentBlock = headerBlock
+        let curVal = cirBuildLoad(currentBlock, unknownLoc, loopType, addr)
+        let hiVal = mapExpr(hi, expectedType: loopType)
+        let condVal = cirBuildCmp(currentBlock, unknownLoc, CIR_CMP_SLT, curVal, hiVal)
+        cirBuildCondBr(headerBlock, unknownLoc, condVal, bodyBlock, exitBlock)
+
+        // Body
+        loopStack.append(LoopCtx(header: headerBlock, exit: exitBlock))
+        currentBlock = bodyBlock
+        hasTerminator = false
+        for stmt in body {
+            if hasTerminator { break }
+            mapStmt(stmt)
+        }
+        // Increment: i = i + 1
+        if !hasTerminator {
+            let current = cirBuildLoad(currentBlock, unknownLoc, loopType, addr)
+            let one = cirBuildConstantInt(currentBlock, unknownLoc, loopType, 1)
+            let next = cirBuildAdd(currentBlock, unknownLoc, loopType, current, one)
+            cirBuildStore(currentBlock, unknownLoc, next, addr)
+            cirBuildBr(currentBlock, unknownLoc, headerBlock, 0, nil)
+        }
+        loopStack.removeLast()
+
+        currentBlock = exitBlock
+        hasTerminator = false
+    }
+
+    // if let val = optExpr { thenBody } else { elseBody }
+    func mapIfLetStmt(bindName: String, optExpr: Expr, thenBody: [Stmt], elseBody: [Stmt]?) {
+        // Evaluate the optional expression
+        let optVal = mapExpr(optExpr, expectedType: intType(64))
+        let optType = mlirValueGetType(optVal)
+
+        // Check if non-null
+        let condVal = cirBuildIsNonNull(currentBlock, unknownLoc, optVal)
+
+        let thenBlock = addBlock()
+        let elseBlock = addBlock()
+        let mergeBlock = addBlock()
+
+        cirBuildCondBr(currentBlock, unknownLoc, condVal, thenBlock, elseBlock)
+
+        // Then branch: extract payload, bind to name
+        currentBlock = thenBlock
+        hasTerminator = false
+        let payloadType: MlirType
+        if cirTypeIsOptional(optType) {
+            payloadType = cirOptionalTypeGetPayload(optType)
+        } else {
+            payloadType = intType(32)
+        }
+        let payload = cirBuildOptionalPayload(currentBlock, unknownLoc, payloadType, optVal)
+
+        // Create local for the bound name
+        let addr = cirBuildAlloca(currentBlock, unknownLoc, payloadType)
+        cirBuildStore(currentBlock, unknownLoc, payload, addr)
+        localNames.append(bindName)
+        localAddrs.append(addr)
+        localTypes.append(payloadType)
+
+        for stmt in thenBody {
+            if hasTerminator { break }
+            mapStmt(stmt)
+        }
+        let thenTerminated = hasTerminator
+        if !thenTerminated {
+            cirBuildBr(currentBlock, unknownLoc, mergeBlock, 0, nil)
+        }
+
+        // Else branch
+        currentBlock = elseBlock
+        hasTerminator = false
+        if let elseBody = elseBody {
+            for stmt in elseBody {
+                if hasTerminator { break }
+                mapStmt(stmt)
+            }
+        }
+        let elseTerminated = hasTerminator
+        if !elseTerminated {
+            cirBuildBr(currentBlock, unknownLoc, mergeBlock, 0, nil)
+        }
+
+        currentBlock = mergeBlock
+        if thenTerminated && elseTerminated {
+            cirBuildTrap(mergeBlock, unknownLoc)
+            hasTerminator = true
+        } else {
+            hasTerminator = false
+        }
+    }
+
     func mapSwitchStmt(disc: Expr, cases: [(SwitchCase, [Stmt])], defaultBody: [Stmt]?) {
         let condVal = mapExpr(disc, expectedType: intType(32))
         let condType = mlirValueGetType(condVal)
@@ -1520,8 +1805,18 @@ final class Gen {
                 } else if case .memberAccess(let enumExpr, let member) = e,
                           case .ident(let enumName) = enumExpr {
                     // Look up enum variant value
+                    // If enumName is "_enum", infer from switch discriminant type
+                    var lookupEnumName = enumName
+                    if enumName == "_enum" && cirTypeIsEnum(condType) {
+                        for ei in enums {
+                            if mlirTypeEqual(ei.mlirType, condType) {
+                                lookupEnumName = ei.name
+                                break
+                            }
+                        }
+                    }
                     for ei in enums {
-                        if ei.name == enumName {
+                        if ei.name == lookupEnumName {
                             for (j, vn) in ei.variantNames.enumerated() {
                                 if vn == member {
                                     caseValues.append(ei.variantValues[j])
@@ -1563,6 +1858,7 @@ final class Gen {
         }
 
         // Emit case bodies
+        var allTerminated = true
         for (i, stmts) in caseStmts.enumerated() {
             currentBlock = caseBlocks[i]
             hasTerminator = false
@@ -1572,6 +1868,7 @@ final class Gen {
             }
             if !hasTerminator {
                 cirBuildBr(currentBlock, unknownLoc, mergeBlock, 0, nil)
+                allTerminated = false
             }
         }
 
@@ -1585,11 +1882,19 @@ final class Gen {
             }
             if !hasTerminator {
                 cirBuildBr(currentBlock, unknownLoc, mergeBlock, 0, nil)
+                allTerminated = false
             }
+        } else {
+            allTerminated = false // default falls through
         }
 
         currentBlock = mergeBlock
-        hasTerminator = false
+        if allTerminated {
+            cirBuildTrap(mergeBlock, unknownLoc)
+            hasTerminator = true
+        } else {
+            hasTerminator = false
+        }
     }
 
     // MARK: Expression codegen
@@ -1620,8 +1925,16 @@ final class Gen {
             return mapCall(name: name, args: args, expectedType: expectedType)
         case .memberAccess(let base, let field):
             return mapMemberAccess(base: base, field: field, expectedType: expectedType)
+        case .methodCall(let base, let method, let args):
+            return mapMethodCall(base: base, method: method, args: args, expectedType: expectedType)
         case .structInit(let name, let fieldInits):
             return mapStructInit(name: name, fieldInits: fieldInits)
+        case .arrayLit(let elements):
+            return mapArrayLit(elements: elements, expectedType: expectedType)
+        case .subscriptExpr(let base, let index):
+            return mapSubscript(base: base, index: index, expectedType: expectedType)
+        case .typeCast(let targetType, let inner):
+            return mapTypeCast(targetType: targetType, inner: inner)
         }
     }
 
@@ -1793,6 +2106,125 @@ final class Gen {
         return cirBuildConstantInt(currentBlock, unknownLoc, intType(32), 0)
     }
 
+    func mapMethodCall(base: Expr, method: String, args: [Expr],
+                       expectedType: MlirType) -> MlirValue {
+        // Method call: p.distance() => call @distance(p)
+        let baseVal = mapExpr(base, expectedType: intType(32))
+        var allArgs = [baseVal]
+        for arg in args {
+            allArgs.append(mapExpr(arg, expectedType: intType(32)))
+        }
+
+        var resultTypes: [MlirType] = []
+        if expectedType.ptr != nil {
+            resultTypes.append(expectedType)
+        }
+
+        let calleeAttr: MlirAttribute = method.withCString { cstr in
+            let ref = mlirStringRefCreateFromCString(cstr)
+            return mlirFlatSymbolRefAttrGet(ctx, ref)
+        }
+        let attrs = [namedAttr("callee", calleeAttr)]
+
+        return emit(block: currentBlock, name: "func.call",
+                    resultTypes: resultTypes, operands: allArgs,
+                    attrs: attrs, location: unknownLoc)
+    }
+
+    func mapArrayLit(elements: [Expr], expectedType: MlirType) -> MlirValue {
+        // Determine element type from expected type or default i32
+        let elemType: MlirType
+        if cirTypeIsArray(expectedType) {
+            elemType = cirArrayTypeGetElementType(expectedType)
+        } else {
+            elemType = intType(32)
+        }
+        let count = Int64(elements.count)
+        let arrType = cirArrayTypeGet(ctx, count, elemType)
+
+        var elemVals: [MlirValue] = []
+        for elem in elements {
+            elemVals.append(mapExpr(elem, expectedType: elemType))
+        }
+
+        return elemVals.withUnsafeMutableBufferPointer { buf in
+            return cirBuildArrayInit(currentBlock, unknownLoc, arrType,
+                buf.count, buf.count > 0 ? buf.baseAddress : nil)
+        }
+    }
+
+    func mapSubscript(base: Expr, index: Expr, expectedType: MlirType) -> MlirValue {
+        let baseVal = mapExpr(base, expectedType: expectedType)
+        let baseType = mlirValueGetType(baseVal)
+
+        if cirTypeIsArray(baseType) {
+            let elemType = cirArrayTypeGetElementType(baseType)
+            // cirBuildElemVal takes static int64_t index
+            if case .intLit(let idx) = index {
+                return cirBuildElemVal(currentBlock, unknownLoc, elemType, baseVal, idx)
+            }
+            // For runtime index, evaluate and use elem_ptr + load
+            let indexVal = mapExpr(index, expectedType: intType(64))
+            let elemPtr = cirBuildElemPtr(currentBlock, unknownLoc, baseVal, indexVal, elemType)
+            return cirBuildLoad(currentBlock, unknownLoc, elemType, elemPtr)
+        }
+
+        // Fallback
+        return baseVal
+    }
+
+    func mapTypeCast(targetType: String, inner: Expr) -> MlirValue {
+        let destType: MlirType
+        switch targetType {
+        case "Int8", "UInt8":   destType = intType(8)
+        case "Int16", "UInt16": destType = intType(16)
+        case "Int32", "UInt32": destType = intType(32)
+        case "Int64", "UInt64", "Int": destType = intType(64)
+        case "Float":  destType = f32Type()
+        case "Double": destType = f64Type()
+        default: destType = intType(32)
+        }
+
+        // Evaluate the inner expression with a compatible source type
+        let srcVal = mapExpr(inner, expectedType: destType)
+        let srcType = mlirValueGetType(srcVal)
+
+        // Integer -> Integer
+        if mlirTypeIsAInteger(srcType) && mlirTypeIsAInteger(destType) {
+            let srcW = mlirIntegerTypeGetWidth(srcType)
+            let dstW = mlirIntegerTypeGetWidth(destType)
+            if srcW == dstW { return srcVal }
+            if srcW < dstW {
+                return cirBuildExtSI(currentBlock, unknownLoc, destType, srcVal)
+            } else {
+                return cirBuildTruncI(currentBlock, unknownLoc, destType, srcVal)
+            }
+        }
+
+        // Integer -> Float
+        if mlirTypeIsAInteger(srcType) && mlirTypeIsAFloat(destType) {
+            return cirBuildSIToFP(currentBlock, unknownLoc, destType, srcVal)
+        }
+
+        // Float -> Integer
+        if mlirTypeIsAFloat(srcType) && mlirTypeIsAInteger(destType) {
+            return cirBuildFPToSI(currentBlock, unknownLoc, destType, srcVal)
+        }
+
+        // Float -> Float
+        if mlirTypeIsAFloat(srcType) && mlirTypeIsAFloat(destType) {
+            let srcBits = mlirFloatTypeGetWidth(srcType)
+            let dstBits = mlirFloatTypeGetWidth(destType)
+            if srcBits < dstBits {
+                return cirBuildExtF(currentBlock, unknownLoc, destType, srcVal)
+            } else if srcBits > dstBits {
+                return cirBuildTruncF(currentBlock, unknownLoc, destType, srcVal)
+            }
+        }
+
+        return srcVal
+    }
+
     // MARK: Serialization
 
     /// Serialize the module to MLIR bytecode, returned as [UInt8].
@@ -1848,6 +2280,10 @@ private func swiftTypeToString(_ ty: SwiftType) -> String {
         case "Void":   return "i0"
         default:       return "i32"
         }
+    case .optional(let inner):
+        return "!cir.optional<\(swiftTypeToString(inner))>"
+    case .array(let elem, let size):
+        return "!cir.array<\(size) x \(swiftTypeToString(elem))>"
     }
 }
 
