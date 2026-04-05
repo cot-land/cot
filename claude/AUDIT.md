@@ -1,6 +1,6 @@
 # CIR Audit — MLIR/LLVM Standards Compliance
 
-**Last audit:** 2026-04-05 Round 7 (Phase 5 complete — 53 CIR ops, 7 types, 127 test targets, 3 frontends)
+**Last audit:** 2026-04-05 Round 8 (Phase 6 in progress — 56 CIR ops, 8 types, 142 test targets, 3 frontends)
 **Reference compilers:** Flang FIR, MLIR Arith/SCF, ArithToLLVM, Go parser, Zig AstGen, TypeScript-Go
 
 ---
@@ -78,7 +78,7 @@ CIR is audited against production MLIR references:
 | # | Issue | Severity | Status | Notes |
 |---|-------|----------|--------|-------|
 | F3 | **No error recovery** | HIGH | OPEN | Parser reports first error, produces broken AST. |
-| F5 | **No line/column in errors** | MEDIUM | OPEN | Reports "error at byte N" — not user-friendly. |
+| F5 | ~~No line/column in errors~~ | MEDIUM | **FIXED** | FileLineColLoc on every op. All 3 frontends. `--mlir-print-debuginfo` shows locations. |
 | F7 | **TypeScript test parity gap** | HIGH | OPEN | 19 TS tests vs 31 ac tests. Missing: float types, if-expression, for loops, casts, pointers. |
 | F9 | **Driver hardcoded frontend dispatch** | MEDIUM | OPEN | if/else on file extension. Need registry for 10+ frontends. |
 | F10 | **Inconsistent C ABI for frontends** | MEDIUM | OPEN | zc: const char**, doesn't free. tc: char**, driver frees. |
@@ -87,7 +87,7 @@ CIR is audited against production MLIR references:
 
 | # | Issue | Severity | Status | Notes |
 |---|-------|----------|--------|-------|
-| T1 | **No negative tests** | HIGH | OPEN | No tests for type mismatch, undefined vars, bad casts. |
+| T1 | **No negative tests** | HIGH | **PARTIAL** | 3 negative tests: arg_count, type_mismatch_return, bad_optional_unwrap. More needed for undefined vars, bad casts. |
 | T2 | ~~4 ops with zero test coverage~~ | HIGH | **FIXED** | `extui` (unsigned cast), `field_ptr` (field mutation), `elem_ptr` (array mutation), `trap` (assert fail). All tested in untested_ops.ac + inline 047. |
 | T3 | **Zig/TS test parity gaps** | MEDIUM | **PARTIAL** | Zig added: comparison, negation. TS added: for_loop, if_expr. Remaining: TS float_types, type_casts, pointers (not valid TS — deferred). |
 | T4 | **No integration tests** | MEDIUM | OPEN | Nothing verifies 3 frontends produce identical binaries. |
@@ -108,11 +108,24 @@ CIR is audited against production MLIR references:
 | E2 | `std::unordered_map` → `llvm::StringMap` | LOW | codegen.cpp namedValues. |
 | E3 | Generated pass from .td | LOW | Manual PassWrapper. |
 
-### Closed Since Last Audit
+### Closed Since Last Audit (Round 8)
 
 | # | Issue | Resolution |
 |---|-------|------------|
-| I1 | C API too minimal | FIXED — 50 functions now (Round 6) |
+| F5 | No line/column in errors | FIXED — FileLineColLoc on every op, all 3 frontends |
+| T1 | No negative tests | PARTIAL — 3 negative tests added (arg_count, type_mismatch, bad_optional) |
+| T2 | 4 ops with zero test coverage | FIXED — extui, field_ptr, elem_ptr, trap all tested |
+| D10 | Memory ops need MemoryEffect traits | FIXED — Alloca/Store/Load have correct traits |
+| D13 | AllocaOp missing verifier | FIXED — verify result is !cir.ptr |
+| — | Frontend segfaults on invalid input | FIXED — hasError_ flag + dummy values + null module return |
+| — | No MLIR debug flags in CLI | FIXED — --mlir-print-debuginfo, --mlir-print-ir-after-all |
+| — | Sema errors lack context | FIXED — notes point to callee declaration |
+
+### Closed Prior (Rounds 1-7)
+
+| # | Issue | Resolution |
+|---|-------|------------|
+| I1 | C API too minimal | FIXED — 60+ functions now |
 | F8 | Type resolution duplicated 3x | PARTIALLY FIXED — C API type constructors shared |
 | D11 | No InferIntRangeInterface | DEFERRED — not needed before optimization |
 | D12 | TrapOp missing NoReturn | LOW — trap has Terminator trait which is sufficient |
@@ -181,7 +194,15 @@ Matches LLVM/MLIR Homebrew pattern: lib/libCIR.a, include/CIR/, lib/cmake/cir/CI
 - [x] C API covers all CIR types and ops
 - [x] CMake install produces correct layout with find_package support
 - [x] PipelineBuilder has extension points for plugin passes
-- [ ] Negative tests for Sema error paths
+- [x] Negative tests for Sema error paths (3 tests: arg_count, type_mismatch, bad_optional)
 - [ ] All CIR ops tested in all 3 frontends
-- [ ] MemoryEffect traits on memory ops
+- [x] MemoryEffect traits on memory ops (Alloca=MemAlloc, Store=MemWrite, Load=MemRead)
 - [ ] FRONTEND.md documentation
+- [x] Source locations on all CIR ops (FileLineColLoc, all 3 frontends)
+- [x] MLIR CLI debug flags (--mlir-print-debuginfo, --mlir-print-ir-after-all)
+- [x] Sema diagnostics with notes (arg count, type mismatch → "declared here")
+- [x] Graceful frontend error handling (no segfaults on invalid input)
+- [ ] Error codes (E001+) with documentation
+- [ ] "Did you mean?" suggestions
+- [ ] SourceMgrDiagnosticHandler for source-context underlines
+- [ ] DWARF debug info emission

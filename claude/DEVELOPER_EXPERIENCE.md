@@ -386,31 +386,35 @@ This is Phase 11+ work but the foundation (source locations) must be built now.
 
 ## 6. Implementation Plan
 
-### Immediate (add to current Phase 6 work)
+### Done (implemented)
 
-| # | Action | Effort | Impact |
-|---|--------|--------|--------|
-| 1 | Replace `UnknownLoc` with `FileLineColLoc` in ac frontend | 2 hr | All ac errors get file:line:col |
-| 2 | Add `cirLocationFileLineCol` to C API | 15 min | Enables Zig/TS frontends |
-| 3 | Use `FileLineColLoc` in Zig frontend | 1 hr | Zig errors get locations |
-| 4 | Use `FileLineColLoc` in TS frontend | 1 hr | TS errors get locations |
-| 5 | Register `SourceMgrDiagnosticHandler` in driver | 30 min | Source context in errors |
+| # | Action | Status |
+|---|--------|--------|
+| 1 | `cirLocationFileLineCol` C API | **DONE** — wraps `mlir::FileLineColLoc::get` |
+| 2 | `cirDiagnosticEmit` C API | **DONE** — emits Error/Warning/Remark through MLIR engine |
+| 3 | `FileLineColLoc` in ac frontend | **DONE** — `locFromOffset(byte_pos)` computes line:col |
+| 4 | `FileLineColLoc` in Zig frontend | **DONE** — `locFromNode` uses `tree.tokenLocation` |
+| 5 | `FileLineColLoc` in TS frontend | **DONE** — `locFromPos` binary search over ECMALineMap |
+| 6 | MLIR CLI flags in driver | **DONE** — `--mlir-print-debuginfo`, `--mlir-print-ir-after-all`, `--mlir-pass-statistics` |
+| 7 | Sema diagnostics with notes | **DONE** — arg count/type mismatch errors include "declared here" note |
+| 8 | Graceful error handling | **DONE** — `hasError_` flag, dummy values on error, no more segfaults |
+| 9 | Negative tests | **DONE** — 3 tests: arg_count, type_mismatch_return, bad_optional_unwrap |
+| 10 | `%not` lit substitution | **DONE** — enables negative test patterns |
 
-### Phase 7 (with Sema expansion)
+### Remaining (implement as compiler advances)
 
-| # | Action | Effort | Impact |
-|---|--------|--------|--------|
-| 6 | Structured Sema diagnostics (multi-span, notes) | 4 hr | Rust-quality type errors |
-| 7 | Error codes (E001-E010) with documentation | 2 hr | Searchable error codes |
-| 8 | "Did you mean?" suggestions for undefined names | 2 hr | Major DX improvement |
-
-### Phase 11 (with full pipeline)
-
-| # | Action | Effort | Impact |
-|---|--------|--------|--------|
-| 9 | DWARF debug info emission | 8 hr | Source-level debugging |
-| 10 | `--mlir-print-ir-after-all` CLI flag | 1 hr | Pipeline debugging |
-| 11 | `cot emit-cir-sema` command | 30 min | Stage inspection |
+| # | Action | When | Effort | Impact |
+|---|--------|------|--------|--------|
+| 11 | Error codes (E001-E010) with documentation | Phase 7 | 2 hr | Searchable error codes |
+| 12 | "Did you mean?" suggestions for undefined names | Phase 7 | 2 hr | Major DX improvement |
+| 13 | SourceMgrDiagnosticHandler for source-context underlines | Phase 7 | 2 hr | Rust-style underlined errors |
+| 14 | `cot emit-cir-sema` command | Phase 7 | 30 min | Stage inspection |
+| 15 | Sema errors for generic type mismatches | Phase 7 | 4 hr | Generics need rich type errors |
+| 16 | Class/trait conformance errors | Phase 7b/12 | 4 hr | "Type does not implement interface" |
+| 17 | DWARF debug info emission | Phase 11 | 8 hr | Source-level debugging (lldb/gdb) |
+| 18 | Error recovery in parser (continue after error) | Phase 11 | 6 hr | Report multiple errors per file |
+| 19 | LSP integration (diagnostics as JSON) | Phase 11+ | 4 hr | IDE red squiggles |
+| 20 | Colorized terminal output | Phase 11 | 1 hr | Red=error, yellow=warning |
 
 ---
 
