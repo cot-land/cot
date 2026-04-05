@@ -777,7 +777,15 @@ class Parser {
       }
 
       // Index assignment: arr[i] = expr (ident[expr] = expr)
-      if (nextTag == Tag::l_bracket) {
+      // Skip if next-next token is a type keyword (that's a generic call, not index)
+      if (nextTag == Tag::l_bracket &&
+          !(pos_ + 2 < tokens_.size() &&
+            (tokens_[pos_ + 2].tag == Tag::kw_i8 ||
+             tokens_[pos_ + 2].tag == Tag::kw_i16 ||
+             tokens_[pos_ + 2].tag == Tag::kw_i32 ||
+             tokens_[pos_ + 2].tag == Tag::kw_i64 ||
+             tokens_[pos_ + 2].tag == Tag::kw_f32 ||
+             tokens_[pos_ + 2].tag == Tag::kw_f64))) {
         // Save position, try to parse as index assignment
         size_t saved = pos_;
         size_t p = peek().start;

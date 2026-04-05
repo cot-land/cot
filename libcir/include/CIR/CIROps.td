@@ -709,7 +709,10 @@ def CIR_GenericApplyOp : CIR_Op<"generic_apply", []> {
                        ArrayAttr:$subs_keys,
                        ArrayAttr:$subs_types);
   let results = (outs Optional<AnyType>:$result);
-  let hasCustomAssemblyFormat = 1;
+  let assemblyFormat = [{
+    $callee `(` $operands `)` `subs` $subs_keys $subs_types attr-dict
+    `:` functional-type($operands, results)
+  }];
   let hasVerifier = 1;
 }
 

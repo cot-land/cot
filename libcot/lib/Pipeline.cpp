@@ -61,7 +61,18 @@ int PipelineBuilder::runSemaStages(ModuleOp module) {
     }
   }
 
-  // 2. Sema (type checking + cast insertion)
+  // 2. Generic specialization (resolve type_param → concrete types)
+  // Must run BEFORE Sema — Sema validates types must be concrete
+  {
+    PassManager specPM(ctx_);
+    specPM.addPass(createGenericSpecializerPass());
+    if (failed(specPM.run(module))) {
+      llvm::errs() << "error: generic specialization failed\n";
+      return 1;
+    }
+  }
+
+  // 3. Sema (type checking + cast insertion)
   {
     PassManager semaPM(ctx_);
     semaPM.enableVerifier(false); // IR may be invalid pre-Sema
@@ -72,17 +83,7 @@ int PipelineBuilder::runSemaStages(ModuleOp module) {
     }
   }
 
-  // 3. Generic specialization (monomorphize cir.generic_apply)
-  {
-    PassManager specPM(ctx_);
-    specPM.addPass(createGenericSpecializerPass());
-    if (failed(specPM.run(module))) {
-      llvm::errs() << "error: generic specialization failed\n";
-      return 1;
-    }
-  }
-
-  // 4. Verify (after specialization, all types should be concrete)
+  // 4. Verify (after Sema, all types should be concrete and well-typed)
   if (failed(verify(module))) {
     llvm::errs() << "error: verify failed after sema\n";
     return 1;

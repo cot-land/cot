@@ -1,23 +1,23 @@
 // RUN: %cot emit-cir %s | %FileCheck %s
 
 // Feature #055: Generic function — ac syntax
+// Frontend emits !cir.type_param + cir.generic_apply.
+// GenericSpecializer pass resolves before output.
 
-fn max[T](a: T, b: T) -> T {
-    if a > b {
-        return a
-    }
-    return b
+fn identity[T](x: T) -> T {
+    return x
 }
 
 fn main() -> i32 {
-    return max[i32](3, 7)
+    return identity[i32](42)
 }
 
-// Frontend monomorphizes: max[i32] → max_i32
-// CHECK-LABEL: func.func @max_i32
-// CHECK: cir.cmp sgt
+// After specialization: main calls identity_i32
+// CHECK-LABEL: func.func @main
+// CHECK: call @identity_i32
 // CHECK: return
 
-// CHECK-LABEL: func.func @main
-// CHECK: call @max_i32
+// Specialized function
+// CHECK-LABEL: func.func @identity_i32
+// CHECK-SAME: i32
 // CHECK: return

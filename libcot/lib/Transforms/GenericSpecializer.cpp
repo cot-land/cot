@@ -101,29 +101,35 @@ static func::FuncOp specializeFunction(
     newResults.push_back(substituteType(result, subs));
   auto specializedType = builder.getFunctionType(newInputs, newResults);
 
+
   // Create the new function
   auto specializedFn = func::FuncOp::create(
       genericFn.getLoc(), specializedName, specializedType);
 
-  // Clone the body with type substitutions
+  // Clone the body with type substitutions.
+  // Two-pass approach: (1) create all blocks + map args, (2) clone ops.
+  // This ensures forward block references (branches) are resolved.
   IRMapping mapping;
 
-  // Clone each block
+  // Pass 1: Create blocks, map arguments
   for (auto &block : genericFn.getBody()) {
     auto *newBlock = new Block();
     specializedFn.getBody().push_back(newBlock);
+    mapping.map(&block, newBlock);
 
-    // Map block arguments with substituted types
     for (auto arg : block.getArguments()) {
       auto newType = substituteType(arg.getType(), subs);
       auto newArg = newBlock->addArgument(newType, arg.getLoc());
       mapping.map(arg, newArg);
     }
+  }
 
-    // Clone operations
+  // Pass 2: Clone operations into mapped blocks
+  for (auto &block : genericFn.getBody()) {
+    auto *newBlock = mapping.lookup(&block);
     builder.setInsertionPointToEnd(newBlock);
+
     for (auto &op : block) {
-      // Substitute types in the operation
       auto *newOp = builder.clone(op, mapping);
 
       // Update result types
@@ -159,17 +165,29 @@ struct GenericSpecializerPass
     auto module = getOperation();
     llvm::DenseSet<StringRef> specializedNames;
 
-    // Collect all generic_apply ops
-    llvm::SmallVector<cir::GenericApplyOp> applyOps;
+
+    // Collect all cir.generic_apply ops
+    llvm::SmallVector<cir::GenericApplyOp> genericCalls;
     module.walk([&](cir::GenericApplyOp op) {
-      applyOps.push_back(op);
+      genericCalls.push_back(op);
     });
 
-    if (applyOps.empty()) return; // nothing to specialize
+    if (genericCalls.empty()) {
+      return;
+    }
 
-    // Process each generic_apply
-    for (auto applyOp : applyOps) {
-      auto subs = buildSubstitutionMap(applyOp);
+    // Process each generic call
+    for (auto applyOp : genericCalls) {
+      // Build substitution map from attributes
+      llvm::DenseMap<StringRef, Type> subs;
+      auto keys = applyOp.getSubsKeys();
+      auto types = applyOp.getSubsTypes();
+      for (size_t i = 0; i < keys.size(); i++) {
+        auto key = llvm::cast<StringAttr>(keys[i]).getValue();
+        auto type = llvm::cast<TypeAttr>(types[i]).getValue();
+        subs[key] = type;
+      }
+
       auto callee = applyOp.getCallee();
 
       // Find the generic function
@@ -195,14 +213,14 @@ struct GenericSpecializerPass
         }
       }
 
-      // Replace generic_apply with func.call
+      // Replace generic_apply with func.call to specialized version
       OpBuilder builder(applyOp);
-      auto call = builder.create<func::CallOp>(
+      auto newCall = builder.create<func::CallOp>(
           applyOp.getLoc(), specializedName,
           existingFn.getResultTypes(),
           applyOp.getOperands());
       if (applyOp.getResult())
-        applyOp.getResult().replaceAllUsesWith(call.getResult(0));
+        applyOp.getResult().replaceAllUsesWith(newCall.getResult(0));
       applyOp.erase();
     }
 
@@ -212,21 +230,28 @@ struct GenericSpecializerPass
     llvm::SmallVector<func::FuncOp> toRemove;
     module.walk([&](func::FuncOp fn) {
       auto fnType = fn.getFunctionType();
+      bool hasTypeParam = false;
       for (auto input : fnType.getInputs()) {
         if (llvm::isa<cir::TypeParamType>(input)) {
-          toRemove.push_back(fn);
+          hasTypeParam = true;
           break;
         }
       }
-      for (auto result : fnType.getResults()) {
-        if (llvm::isa<cir::TypeParamType>(result)) {
-          toRemove.push_back(fn);
-          break;
+      if (!hasTypeParam) {
+        for (auto result : fnType.getResults()) {
+          if (llvm::isa<cir::TypeParamType>(result)) {
+            hasTypeParam = true;
+            break;
+          }
         }
+      }
+      if (hasTypeParam) {
+        toRemove.push_back(fn);
       }
     });
-    for (auto fn : toRemove)
+    for (auto fn : toRemove) {
       fn.erase();
+    }
   }
 };
 

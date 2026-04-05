@@ -67,18 +67,15 @@ class CodeGen {
   // Union type registry — populated by emitUnionDecl, queried by resolveType
   std::unordered_map<std::string_view, mlir::Type> unionTypes;
 
-  // Generic function templates — stored for monomorphization at call sites
-  std::unordered_map<std::string_view, const FnDecl*> genericTemplates;
-  // Track already-emitted specializations to avoid duplicates
-  std::unordered_set<std::string> emittedSpecializations;
-  // Current type substitution for monomorphization (T → i32)
-  const std::unordered_map<std::string_view, mlir::Type> *currentTypeSubst_ = nullptr;
+  // Current generic type parameters (for resolving T → !cir.type_param<"T">)
+  std::vector<std::string_view> currentTypeParams_;
 
   mlir::Type resolveType(const TypeRef &t) {
-    // Check type parameter substitution (for monomorphized generics)
-    if (currentTypeSubst_ && !t.name.empty()) {
-      auto it = currentTypeSubst_->find(t.name);
-      if (it != currentTypeSubst_->end()) return it->second;
+    // Check if this is a generic type parameter (T → !cir.type_param<"T">)
+    for (auto &tp : currentTypeParams_) {
+      if (t.name == tp)
+        return cir::TypeParamType::get(b.getContext(),
+            llvm::StringRef(tp.data(), tp.size()));
     }
     // Ref/pointer type: *T → !cir.ref<T>
     if (t.isRef) {
@@ -546,33 +543,50 @@ class CodeGen {
     }
 
     case ExprKind::GenericCall: {
-      // Generic function call: max[i32](3, 7) → monomorphize and call max_i32
-      auto tmplIt = genericTemplates.find(e.name);
-      if (tmplIt == genericTemplates.end()) {
-        mlir::emitError(loc) << "undefined generic function '" << e.name << "'";
-        hasError_ = true;
-        return b.create<cir::ConstantOp>(loc, resultType,
-            b.getIntegerAttr(resultType, 0));
-      }
-      auto *tmpl = tmplIt->second;
-      std::string mangled = monomorphize(module_, *tmpl, e.typeArgs);
-      // Emit call to the monomorphized function
-      auto funcOp = module_.lookupSymbol<mlir::func::FuncOp>(mangled);
-      if (!funcOp) {
-        mlir::emitError(loc) << "monomorphization failed for '" << mangled << "'";
-        hasError_ = true;
-        return b.create<cir::ConstantOp>(loc, resultType,
-            b.getIntegerAttr(resultType, 0));
-      }
+      // Generic function call: identity[i32](42) → cir.generic_apply
+      auto callee = std::string(e.name);
+
+      // Resolve concrete types from type args
+      llvm::SmallVector<mlir::Type> concreteTypes;
+      for (auto &ta : e.typeArgs)
+        concreteTypes.push_back(resolveType(ta));
+
+      // Emit arguments with concrete types
       llvm::SmallVector<mlir::Value> args;
-      auto paramTypes = funcOp.getArgumentTypes();
       for (size_t i = 0; i < e.args.size(); i++) {
-        mlir::Type argType = (i < paramTypes.size()) ? paramTypes[i] : resultType;
+        mlir::Type argType = !concreteTypes.empty() ? concreteTypes[0] : resultType;
         args.push_back(emitExpr(*e.args[i], argType));
       }
-      auto call = b.create<mlir::func::CallOp>(loc, mangled,
-          funcOp.getResultTypes(), args);
-      return call.getNumResults() > 0 ? call.getResult(0) : mlir::Value();
+
+      // Build substitution map from the generic function's type params
+      llvm::SmallVector<mlir::Attribute> subsKeys;
+      llvm::SmallVector<mlir::Attribute> subsTypeAttrs;
+      auto funcOp = module_.lookupSymbol<mlir::func::FuncOp>(callee);
+      if (funcOp) {
+        if (auto gp = funcOp->getAttrOfType<mlir::ArrayAttr>("cir.generic_params")) {
+          for (size_t i = 0; i < gp.size() && i < concreteTypes.size(); i++) {
+            subsKeys.push_back(gp[i]);
+            subsTypeAttrs.push_back(mlir::TypeAttr::get(concreteTypes[i]));
+          }
+        }
+      }
+
+      // DEBUG: try creating GenericApplyOp with minimal args
+
+      auto emptyArr = mlir::ArrayAttr::get(b.getContext(), {});
+      auto keysArr = subsKeys.empty() ? emptyArr
+          : mlir::ArrayAttr::get(b.getContext(), subsKeys);
+      auto typesArr = subsTypeAttrs.empty() ? emptyArr
+          : mlir::ArrayAttr::get(b.getContext(), subsTypeAttrs);
+      auto calleeRef = mlir::FlatSymbolRefAttr::get(b.getContext(), callee);
+
+      auto op = b.create<cir::GenericApplyOp>(loc,
+          /*result=*/resultType,
+          calleeRef,
+          args,
+          keysArr,
+          typesArr);
+      return op.getResult();
     }
 
     case ExprKind::EnumAccess:
@@ -1214,23 +1228,11 @@ class CodeGen {
   }
 
   void emitFn(mlir::ModuleOp module, const FnDecl &fn) {
-    // Generic functions are stored as templates, not emitted directly.
-    // They are monomorphized when a GenericCall is encountered.
-    if (!fn.typeParams.empty()) {
-      genericTemplates[fn.name] = &fn;
-      return;
-    }
-    emitConcreteFn(module, fn, std::string(fn.name), {});
-  }
-
-  /// Emit a concrete (non-generic or monomorphized) function.
-  /// typeSubst maps type parameter names to concrete types.
-  void emitConcreteFn(mlir::ModuleOp module, const FnDecl &fn,
-                       const std::string &mangledName,
-                       const std::unordered_map<std::string_view, mlir::Type> &typeSubst) {
-    // Push type substitutions into resolveType
-    auto savedSubst = currentTypeSubst_;
-    currentTypeSubst_ = &typeSubst;
+    // Set generic type params for resolveType
+    auto savedTypeParams = currentTypeParams_;
+    currentTypeParams_.clear();
+    for (auto &tp : fn.typeParams)
+      currentTypeParams_.push_back(tp);
 
     llvm::SmallVector<mlir::Type> paramTypes;
     for (auto &p : fn.params) paramTypes.push_back(resolveType(p.type));
@@ -1240,7 +1242,18 @@ class CodeGen {
       resultTypes.push_back(resolveType(fn.returnType));
 
     auto funcType = b.getFunctionType(paramTypes, resultTypes);
-    auto funcOp = mlir::func::FuncOp::create(loc, mangledName, funcType);
+    auto funcOp = mlir::func::FuncOp::create(loc, std::string(fn.name), funcType);
+
+    // Store generic parameter names as attribute for the specializer
+    if (!fn.typeParams.empty()) {
+      llvm::SmallVector<mlir::Attribute> paramAttrs;
+      for (auto &tp : fn.typeParams)
+        paramAttrs.push_back(mlir::StringAttr::get(b.getContext(),
+            llvm::StringRef(tp.data(), tp.size())));
+      funcOp->setAttr("cir.generic_params",
+          mlir::ArrayAttr::get(b.getContext(), paramAttrs));
+    }
+
     auto *entry = funcOp.addEntryBlock();
 
     mlir::OpBuilder::InsertionGuard guard(b);
@@ -1258,28 +1271,7 @@ class CodeGen {
     }
 
     module.push_back(funcOp);
-    currentTypeSubst_ = savedSubst;
-  }
-
-  /// Monomorphize a generic function for concrete type arguments.
-  /// Returns the mangled name of the specialized function.
-  std::string monomorphize(mlir::ModuleOp module, const FnDecl &tmpl,
-                            const std::vector<TypeRef> &typeArgs) {
-    // Build mangled name: max_i32, identity_f64, etc.
-    std::string mangled(tmpl.name);
-    for (auto &ta : typeArgs) {
-      mangled += "_";
-      mangled += ta.name;
-    }
-    // Skip if already emitted
-    if (emittedSpecializations.count(mangled)) return mangled;
-    emittedSpecializations.insert(mangled);
-    // Build type substitution map
-    std::unordered_map<std::string_view, mlir::Type> typeSubst;
-    for (size_t i = 0; i < tmpl.typeParams.size() && i < typeArgs.size(); i++)
-      typeSubst[tmpl.typeParams[i]] = resolveType(typeArgs[i]);
-    emitConcreteFn(module, tmpl, mangled, typeSubst);
-    return mangled;
+    currentTypeParams_ = savedTypeParams;
   }
 
   // Zig pattern: test blocks become parameterless void functions.
