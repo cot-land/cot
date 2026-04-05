@@ -72,13 +72,23 @@ int PipelineBuilder::runSemaStages(ModuleOp module) {
     }
   }
 
-  // 3. Verify (after Sema, CIR should be well-typed)
+  // 3. Generic specialization (monomorphize cir.generic_apply)
+  {
+    PassManager specPM(ctx_);
+    specPM.addPass(createGenericSpecializerPass());
+    if (failed(specPM.run(module))) {
+      llvm::errs() << "error: generic specialization failed\n";
+      return 1;
+    }
+  }
+
+  // 4. Verify (after specialization, all types should be concrete)
   if (failed(verify(module))) {
     llvm::errs() << "error: verify failed after sema\n";
     return 1;
   }
 
-  // 4. Post-Sema passes (typed, verified CIR)
+  // 5. Post-Sema passes (typed, verified CIR)
   if (!postSemaPasses_.empty()) {
     PassManager postPM(ctx_);
     for (auto &pass : postSemaPasses_)

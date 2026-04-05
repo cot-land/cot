@@ -17,6 +17,7 @@ add_library(COT STATIC
   c-api/COTCApi.cpp
   # CIR → CIR transformation passes
   lib/Transforms/SemanticAnalysis.cpp
+  lib/Transforms/GenericSpecializer.cpp
   # CIR → LLVM lowering
   lib/CIRToLLVM.cpp
   lib/ArithmeticPatterns.cpp

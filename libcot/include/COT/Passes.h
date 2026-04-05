@@ -45,6 +45,13 @@ void populateControlFlowPatterns(
 /// Reference: Zig Sema, Flang Transforms.
 std::unique_ptr<mlir::Pass> createSemanticAnalysisPass();
 
+/// Create the generic specializer pass (monomorphize generic functions).
+/// Finds cir.generic_apply ops, clones generic function bodies with concrete
+/// types substituted for !cir.type_param, replaces generic_apply with func.call.
+/// Must run BEFORE CIR→LLVM lowering (type_param can't lower to LLVM).
+/// Reference: Swift GenericSpecializer.
+std::unique_ptr<mlir::Pass> createGenericSpecializerPass();
+
 //--- CIR → LLVM lowering pass ---
 
 /// Create the CIR → LLVM dialect lowering pass.
