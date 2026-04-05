@@ -366,6 +366,14 @@ func (g *Gen) mapReturn(node *ast.Node) {
 				val = CirBuildWrapResult(g.currentBlock, g.b.loc, g.currentRetType, val)
 			}
 		}
+		// If function returns optional and value is the payload type,
+		// wrap it with wrap_optional
+		if CirTypeIsOptional(g.currentRetType) {
+			valType := ValueGetType(val)
+			if !CirTypeIsOptional(valType) {
+				val = CirBuildWrapOptional(g.currentBlock, g.b.loc, g.currentRetType, val)
+			}
+		}
 		// Auto-cast integer width mismatches (e.g., i64 slice_len → i32 number)
 		valType := ValueGetType(val)
 		retType := g.currentRetType
@@ -851,6 +859,14 @@ func (g *Gen) mapExpr(block MlirBlock, node *ast.Node, resultType MlirType) Mlir
 		return g.mapElementAccess(block, node, resultType)
 	case ast.KindObjectLiteralExpression:
 		return g.mapObjectLiteral(block, node, resultType)
+	case ast.KindAsExpression:
+		// x as number → identity cast (no-op, same value)
+		ae := node.AsAsExpression()
+		targetType := resultType
+		if ae.Type != nil {
+			targetType = g.resolveType(ae.Type)
+		}
+		return g.mapExpr(block, ae.Expression, targetType)
 	case ast.KindTrueKeyword:
 		return CirBuildConstantBool(block, g.b.loc, true)
 	case ast.KindFalseKeyword:
@@ -1193,8 +1209,10 @@ func (g *Gen) resolveType(node *ast.Node) MlirType {
 	return g.b.IntType(32)
 }
 
-// resolveUnionType handles TypeScript union types like `number | Error`.
+// resolveUnionType handles TypeScript union types like `number | Error`
+// and `number | null`.
 // If one arm is "Error", produces !cir.error_union<T> where T is the other arm.
+// If one arm is "null", produces !cir.optional<T> where T is the other arm.
 // Otherwise falls back to the first type in the union.
 func (g *Gen) resolveUnionType(node *ast.Node) MlirType {
 	ut := node.AsUnionTypeNode()
@@ -1202,9 +1220,10 @@ func (g *Gen) resolveUnionType(node *ast.Node) MlirType {
 		return g.b.IntType(32)
 	}
 
-	// Scan for "Error" type in the union arms
+	// Scan for "Error" and "null" types in the union arms
 	var payloadType MlirType
 	hasError := false
+	hasNull := false
 	for _, tn := range ut.Types.Nodes {
 		if tn.Kind == ast.KindTypeReference {
 			tr := tn.AsTypeReference()
@@ -1216,6 +1235,19 @@ func (g *Gen) resolveUnionType(node *ast.Node) MlirType {
 				}
 			}
 		}
+		// null keyword in union: number | null
+		if tn.Kind == ast.KindNullKeyword {
+			hasNull = true
+			continue
+		}
+		// LiteralType wrapping null: the parser may wrap null as LiteralType
+		if tn.Kind == ast.KindLiteralType {
+			lt := tn.AsLiteralTypeNode()
+			if lt.Literal != nil && lt.Literal.Kind == ast.KindNullKeyword {
+				hasNull = true
+				continue
+			}
+		}
 		// This arm is the payload type
 		payloadType = g.resolveType(tn)
 	}
@@ -1224,7 +1256,11 @@ func (g *Gen) resolveUnionType(node *ast.Node) MlirType {
 		return CirErrorUnionTypeGet(g.ctx, payloadType)
 	}
 
-	// Not an error union — fall back to first type
+	if hasNull && !isNullType(payloadType) {
+		return CirOptionalTypeGet(g.ctx, payloadType)
+	}
+
+	// Not an error union or optional — fall back to first type
 	return g.resolveType(ut.Types.Nodes[0])
 }
 
@@ -1256,10 +1292,11 @@ func (g *Gen) resolveTypeName(node *ast.Node) string {
 			}
 		}
 	case ast.KindUnionType:
-		// Check if it's T | Error → !cir.error_union<T>
+		// Check if it's T | Error → !cir.error_union<T> or T | null → !cir.optional<T>
 		ut := node.AsUnionTypeNode()
 		if ut.Types != nil {
 			hasError := false
+			hasNull := false
 			payloadName := "i32"
 			for _, tn := range ut.Types.Nodes {
 				if tn.Kind == ast.KindTypeReference {
@@ -1271,10 +1308,24 @@ func (g *Gen) resolveTypeName(node *ast.Node) string {
 						}
 					}
 				}
+				if tn.Kind == ast.KindNullKeyword {
+					hasNull = true
+					continue
+				}
+				if tn.Kind == ast.KindLiteralType {
+					lt := tn.AsLiteralTypeNode()
+					if lt.Literal != nil && lt.Literal.Kind == ast.KindNullKeyword {
+						hasNull = true
+						continue
+					}
+				}
 				payloadName = g.resolveTypeName(tn)
 			}
 			if hasError {
 				return "!cir.error_union<" + payloadName + ">"
+			}
+			if hasNull {
+				return "!cir.optional<" + payloadName + ">"
 			}
 		}
 	}

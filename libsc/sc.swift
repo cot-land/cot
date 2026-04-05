@@ -27,6 +27,7 @@ enum TokenKind: Equatable {
     case kwFunc, kwLet, kwVar, kwReturn, kwIf, kwElse, kwWhile
     case kwStruct, kwEnum, kwCase, kwSwitch, kwDefault, kwBreak, kwContinue
     case kwFor, kwIn
+    case kwThrows, kwThrow, kwTry, kwDo, kwCatch
 
     // Range operators
     case halfOpenRange   // ..<
@@ -310,6 +311,11 @@ private func keywordKind(_ s: String) -> TokenKind {
     case "continue": return .kwContinue
     case "for":      return .kwFor
     case "in":       return .kwIn
+    case "throws":   return .kwThrows
+    case "throw":    return .kwThrow
+    case "try":      return .kwTry
+    case "do":       return .kwDo
+    case "catch":    return .kwCatch
     case "true":     return .boolLiteral(true)
     case "false":    return .boolLiteral(false)
     case "nil":      return .nilLiteral
@@ -335,6 +341,7 @@ indirect enum Expr {
     case methodCall(Expr, String, [Expr])  // expr.method(args)
     case structInit(String, [(String, Expr)]) // TypeName(field: val, ...)
     case arrayLit([Expr])                  // [1, 2, 3]
+    case dotCall(String, [Expr])           // .circle(r) — enum variant init with payload
     case subscriptExpr(Expr, Expr)         // arr[i]
     case typeCast(String, Expr)            // Int32(x) — type conversion call
 }
@@ -359,6 +366,8 @@ indirect enum Stmt {
     case breakStmt
     case continueStmt
     case switchStmt(Expr, [(SwitchCase, [Stmt])], [Stmt]?)
+    case throwStmt(Expr)                              // throw expr
+    case doTryCatchStmt([Stmt], String?, [Stmt])      // do { try body } catch { handler }
 }
 
 enum SwitchCase {
@@ -378,9 +387,10 @@ struct FuncParam {
 }
 
 enum Decl {
-    case funcDecl(String, [FuncParam], SwiftType?, [Stmt])
+    case funcDecl(String, [FuncParam], SwiftType?, Bool, [Stmt])  // name, params, retType, throws, body
     case structDecl(String, [(String, SwiftType)])
     case enumDecl(String, [(String, Int64?)])
+    case taggedUnionDecl(String, [(String, SwiftType?)])          // enum with associated values
 }
 
 // =============================================================================
@@ -485,6 +495,13 @@ struct Parser {
         }
         _ = expect(.rParen)
 
+        // Check for throws
+        var doesThrow = false
+        if tokenMatches(peek(), .kwThrows) {
+            _ = advance() // throws
+            doesThrow = true
+        }
+
         // Return type
         var retType: SwiftType? = nil
         if tokenMatches(peek(), .arrow) {
@@ -497,7 +514,7 @@ struct Parser {
         let body = parseStmtList()
         _ = expect(.rBrace)
 
-        return .funcDecl(name, params, retType, body)
+        return .funcDecl(name, params, retType, doesThrow, body)
     }
 
     // struct Name { let field: Type; ... }
@@ -523,40 +540,62 @@ struct Parser {
     }
 
     // enum Name { case a, b, c } or enum Name: Int32 { case a = 0 ... }
+    // or enum Name { case circle(Int32); case none } (tagged union with associated values)
     mutating func parseEnumDecl() -> Decl? {
         _ = advance() // enum
         guard let name = expectIdentifier() else { return nil }
 
-        // Optional raw type annotation (enum Color: Int32)
+        // Optional conformance (enum MyError: Error)
         if tokenMatches(peek(), .colon) {
             _ = advance() // :
-            _ = parseType() // consume raw type (we use i32 by default)
+            _ = parseType() // consume conformance type (e.g. Error, Int32)
         }
 
         guard expect(.lBrace) else { return nil }
 
-        var variants: [(String, Int64?)] = []
+        // First pass: collect all variants, detecting if any have associated values
+        var simpleVariants: [(String, Int64?)] = []
+        var taggedVariants: [(String, SwiftType?)] = []
+        var hasAssociatedValues = false
+
         while !tokenMatches(peek(), .rBrace) && !isEof() {
             guard expect(.kwCase) else {
                 _ = advance() // skip unknown
                 continue
             }
-            // case name [= value] [, name2 [= value2], ...]
+            // case name [(Type)] [= value] [, name2 ...]
             repeat {
                 guard let vname = expectIdentifier() else { break }
-                var val: Int64? = nil
-                if tokenMatches(peek(), .assign) {
-                    _ = advance()
+
+                // Check for associated value: case circle(Int32)
+                if tokenMatches(peek(), .lParen) {
+                    _ = advance() // (
+                    let assocType = parseType()
+                    _ = expect(.rParen)
+                    hasAssociatedValues = true
+                    taggedVariants.append((vname, assocType))
+                    simpleVariants.append((vname, nil))
+                } else if tokenMatches(peek(), .assign) {
+                    _ = advance() // =
+                    var val: Int64? = nil
                     if case .intLiteral(let v) = peek() {
                         _ = advance()
                         val = v
                     }
+                    simpleVariants.append((vname, val))
+                    taggedVariants.append((vname, nil))
+                } else {
+                    simpleVariants.append((vname, nil))
+                    taggedVariants.append((vname, nil))
                 }
-                variants.append((vname, val))
             } while expect(.comma)
         }
         _ = expect(.rBrace)
-        return .enumDecl(name, variants)
+
+        if hasAssociatedValues {
+            return .taggedUnionDecl(name, taggedVariants)
+        }
+        return .enumDecl(name, simpleVariants)
     }
 
     mutating func parseType() -> SwiftType? {
@@ -610,6 +649,8 @@ struct Parser {
         case .kwBreak:    _ = advance(); return .breakStmt
         case .kwContinue: _ = advance(); return .continueStmt
         case .kwSwitch:   return parseSwitchStmt()
+        case .kwThrow:    return parseThrowStmt()
+        case .kwDo:       return parseDoTryCatchStmt()
         default:          return parseExprOrAssignStmt()
         }
     }
@@ -770,6 +811,42 @@ struct Parser {
         return .switchStmt(disc, cases, defaultBody)
     }
 
+    // throw expr
+    mutating func parseThrowStmt() -> Stmt? {
+        _ = advance() // throw
+        guard let expr = parseExpr() else { return nil }
+        return .throwStmt(expr)
+    }
+
+    // do { try body } catch { handler } or do { try body } catch let e { handler }
+    mutating func parseDoTryCatchStmt() -> Stmt? {
+        _ = advance() // do
+        guard expect(.lBrace) else { return nil }
+        let tryBody = parseStmtList()
+        _ = expect(.rBrace)
+
+        // Parse catch clause
+        guard tokenMatches(peek(), .kwCatch) else {
+            // do block without catch — just a plain block, emit as statements
+            // (shouldn't normally happen for error handling)
+            return nil
+        }
+        _ = advance() // catch
+
+        // Optional catch variable: catch let e { ... } or just catch { ... }
+        var catchVarName: String? = nil
+        if tokenMatches(peek(), .kwLet) {
+            _ = advance() // let
+            catchVarName = expectIdentifier()
+        }
+
+        guard expect(.lBrace) else { return nil }
+        let catchBody = parseStmtList()
+        _ = expect(.rBrace)
+
+        return .doTryCatchStmt(tryBody, catchVarName, catchBody)
+    }
+
     mutating func parseExprOrAssignStmt() -> Stmt? {
         guard let expr = parseExpr() else { return nil }
         // Check for assignment: ident = expr
@@ -791,6 +868,10 @@ struct Parser {
     // MARK: Expressions (precedence climbing)
 
     mutating func parseExpr() -> Expr? {
+        // Swift `try` is a transparent prefix for error handling annotation
+        if tokenMatches(peek(), .kwTry) {
+            _ = advance() // try
+        }
         return parseComparison()
     }
 
@@ -1002,8 +1083,21 @@ struct Parser {
             return .arrayLit(elements)
         case .dot:
             // Enum member shorthand: .red, .green — parse as memberAccess on implicit enum
+            // Also handles .circle(r) — tagged union variant init
             _ = advance() // .
             guard let memberName = expectIdentifier() else { return nil }
+            // Check for .circle(arg) — tagged union variant with payload
+            if tokenMatches(peek(), .lParen) {
+                _ = advance() // (
+                var args: [Expr] = []
+                while !tokenMatches(peek(), .rParen) && !isEof() {
+                    guard let arg = parseExpr() else { break }
+                    args.append(arg)
+                    if !tokenMatches(peek(), .rParen) { _ = expect(.comma) }
+                }
+                _ = expect(.rParen)
+                return .dotCall(memberName, args)
+            }
             return .memberAccess(.ident("_enum"), memberName)
         default:
             return nil
@@ -1074,6 +1168,11 @@ private func tokenMatches(_ a: TokenKind, _ b: TokenKind) -> Bool {
     case (.kwContinue, .kwContinue): return true
     case (.kwFor, .kwFor): return true
     case (.kwIn, .kwIn): return true
+    case (.kwThrows, .kwThrows): return true
+    case (.kwThrow, .kwThrow): return true
+    case (.kwTry, .kwTry): return true
+    case (.kwDo, .kwDo): return true
+    case (.kwCatch, .kwCatch): return true
     case (.halfOpenRange, .halfOpenRange): return true
     case (.question, .question): return true
     case (.nilLiteral, .nilLiteral): return true
@@ -1109,6 +1208,10 @@ final class Gen {
     var hasTerminator: Bool = false
     var currentRetType: MlirType = MlirType(ptr: nil)
 
+    // Try/catch state: pending catch block for exception unwinding
+    var pendingCatchBlock: MlirBlock = MlirBlock(ptr: nil)
+    var pendingCatchVar: String? = nil
+
     // Scope: parameter names and values
     var paramNames: [String] = []
     var paramValues: [MlirValue] = []
@@ -1142,6 +1245,15 @@ final class Gen {
         let variantValues: [Int64]
     }
     var enums: [EnumInfo] = []
+
+    // Tagged union type registry
+    struct TaggedUnionInfo {
+        let name: String
+        let mlirType: MlirType
+        let variantNames: [String]
+        let variantTypes: [MlirType?]   // nil for variants with no payload
+    }
+    var taggedUnions: [TaggedUnionInfo] = []
 
     init(filename: String) {
         self.filename = filename
@@ -1201,6 +1313,10 @@ final class Gen {
                 // Check enum types
                 for e in enums {
                     if e.name == name { return e.mlirType }
+                }
+                // Check tagged union types
+                for tu in taggedUnions {
+                    if tu.name == name { return tu.mlirType }
                 }
                 return intType(32) // default fallback
             }
@@ -1337,12 +1453,14 @@ final class Gen {
 
     func mapDecl(_ decl: Decl) {
         switch decl {
-        case .funcDecl(let name, let params, let retType, let body):
-            mapFuncDecl(name: name, params: params, retType: retType, body: body)
+        case .funcDecl(let name, let params, let retType, let doesThrow, let body):
+            mapFuncDecl(name: name, params: params, retType: retType, doesThrow: doesThrow, body: body)
         case .structDecl(let name, let fields):
             mapStructDecl(name: name, fields: fields)
         case .enumDecl(let name, let variants):
             mapEnumDecl(name: name, variants: variants)
+        case .taggedUnionDecl(let name, let variants):
+            mapTaggedUnionDecl(name: name, variants: variants)
         }
     }
 
@@ -1407,11 +1525,54 @@ final class Gen {
                               variantNames: variantNames, variantValues: variantValues))
     }
 
-    func mapFuncDecl(name: String, params: [FuncParam], retType: SwiftType?, body: [Stmt]) {
+    func mapTaggedUnionDecl(name: String, variants: [(String, SwiftType?)]) {
+        var variantNames: [String] = []
+        var variantTypes: [MlirType] = []
+        var variantSwiftTypes: [MlirType?] = []
+
+        for (vname, vtype) in variants {
+            variantNames.append(vname)
+            if let vt = vtype {
+                let resolved = resolveType(vt)
+                variantTypes.append(resolved)
+                variantSwiftTypes.append(resolved)
+            } else {
+                // No payload — use i8 as placeholder (void variant)
+                variantTypes.append(intType(8))
+                variantSwiftTypes.append(nil)
+            }
+        }
+
+        // Create CIR tagged union type via C API
+        let unionType = withArrayOfCStrings(variantNames) { _, refs in
+            var mutableRefs = refs
+            return name.withCString { nameCs in
+                let nameRef = mlirStringRefCreateFromCString(nameCs)
+                return mutableRefs.withUnsafeMutableBufferPointer { refBuf in
+                    variantTypes.withUnsafeMutableBufferPointer { typeBuf in
+                        return cirTaggedUnionTypeGet(ctx, nameRef,
+                            refBuf.count,
+                            refBuf.count > 0 ? refBuf.baseAddress : nil,
+                            typeBuf.count > 0 ? typeBuf.baseAddress : nil)
+                    }
+                }
+            }
+        }
+
+        taggedUnions.append(TaggedUnionInfo(name: name, mlirType: unionType,
+                                             variantNames: variantNames,
+                                             variantTypes: variantSwiftTypes))
+    }
+
+    func mapFuncDecl(name: String, params: [FuncParam], retType: SwiftType?, doesThrow: Bool = false, body: [Stmt]) {
         let paramTypes = params.map { resolveType($0.type) }
         var returnTypes: [MlirType] = []
         if let rt = retType {
-            let resolved = resolveType(rt)
+            var resolved = resolveType(rt)
+            // If function throws, wrap return type in error_union
+            if doesThrow {
+                resolved = cirErrorUnionTypeGet(ctx, resolved)
+            }
             returnTypes.append(resolved)
             currentRetType = resolved
         } else {
@@ -1487,12 +1648,31 @@ final class Gen {
             }
         case .switchStmt(let disc, let cases, let defaultBody):
             mapSwitchStmt(disc: disc, cases: cases, defaultBody: defaultBody)
+        case .throwStmt(let expr):
+            mapThrowStmt(expr: expr)
+        case .doTryCatchStmt(let tryBody, let catchVar, let catchBody):
+            mapDoTryCatchStmt(tryBody: tryBody, catchVar: catchVar, catchBody: catchBody)
         }
     }
 
     func mapReturn(_ expr: Expr?) {
         if let expr = expr {
-            var val = mapExpr(expr, expectedType: currentRetType)
+            // When returning error_union, evaluate expression with payload type
+            let exprType: MlirType
+            if cirTypeIsErrorUnion(currentRetType) {
+                exprType = cirErrorUnionTypeGetPayload(currentRetType)
+            } else {
+                exprType = currentRetType
+            }
+            var val = mapExpr(expr, expectedType: exprType)
+            // If function returns error_union and value is the payload type,
+            // wrap it with wrap_result
+            if cirTypeIsErrorUnion(currentRetType) {
+                let valType = mlirValueGetType(val)
+                if !cirTypeIsErrorUnion(valType) {
+                    val = cirBuildWrapResult(currentBlock, unknownLoc, currentRetType, val)
+                }
+            }
             // Auto-cast integer width mismatches
             let valType = mlirValueGetType(val)
             if mlirTypeIsAInteger(valType) && mlirTypeIsAInteger(currentRetType) {
@@ -1513,6 +1693,74 @@ final class Gen {
                      resultTypes: [], operands: [], attrs: [], location: unknownLoc)
         }
         hasTerminator = true
+    }
+
+    // throw expr → cir.throw
+    func mapThrowStmt(expr: Expr) {
+        let throwVal = mapExpr(expr, expectedType: intType(32))
+        cirBuildThrow(currentBlock, unknownLoc, throwVal)
+        hasTerminator = true
+    }
+
+    // do { try body } catch [let e] { handler }
+    // Calls inside the try body are emitted as cir.invoke (with normal/unwind
+    // successors). The catch block begins with cir.landingpad.
+    func mapDoTryCatchStmt(tryBody: [Stmt], catchVar: String?, catchBody: [Stmt]) {
+        let catchBlock = addBlock()
+        let mergeBlock = addBlock()
+
+        // Save scope state and set catch context
+        let savedCatchBlock = pendingCatchBlock
+        let savedCatchVar = pendingCatchVar
+        pendingCatchBlock = catchBlock
+        pendingCatchVar = catchVar
+
+        // Emit try body — calls will use cir.invoke with unwind to catchBlock
+        for stmt in tryBody {
+            if hasTerminator { break }
+            mapStmt(stmt)
+        }
+        let tryTerminated = hasTerminator
+        if !tryTerminated {
+            cirBuildBr(currentBlock, unknownLoc, mergeBlock, 0, nil)
+        }
+
+        // Restore catch context
+        pendingCatchBlock = savedCatchBlock
+        pendingCatchVar = savedCatchVar
+
+        // Emit catch clause with landingpad
+        currentBlock = catchBlock
+        hasTerminator = false
+
+        let exnType = intType(32)
+        let exnVal = cirBuildLandingPad(catchBlock, unknownLoc, exnType)
+
+        // Bind catch variable if present
+        if let varName = catchVar {
+            let addr = cirBuildAlloca(currentBlock, unknownLoc, exnType)
+            cirBuildStore(currentBlock, unknownLoc, exnVal, addr)
+            localNames.append(varName)
+            localAddrs.append(addr)
+            localTypes.append(exnType)
+        }
+
+        for stmt in catchBody {
+            if hasTerminator { break }
+            mapStmt(stmt)
+        }
+        let catchTerminated = hasTerminator
+        if !catchTerminated {
+            cirBuildBr(currentBlock, unknownLoc, mergeBlock, 0, nil)
+        }
+
+        currentBlock = mergeBlock
+        if tryTerminated && catchTerminated {
+            cirBuildTrap(mergeBlock, unknownLoc)
+            hasTerminator = true
+        } else {
+            hasTerminator = false
+        }
     }
 
     func mapVarBinding(name: String, ty: SwiftType?, init_: Expr?) {
@@ -1935,6 +2183,8 @@ final class Gen {
             return mapSubscript(base: base, index: index, expectedType: expectedType)
         case .typeCast(let targetType, let inner):
             return mapTypeCast(targetType: targetType, inner: inner)
+        case .dotCall(let variant, let args):
+            return mapDotCall(variant: variant, args: args, expectedType: expectedType)
         }
     }
 
@@ -2032,6 +2282,22 @@ final class Gen {
             resultTypes.append(expectedType)
         }
 
+        // If inside a try block, emit cir.invoke with normal/unwind successors
+        if pendingCatchBlock.ptr != nil {
+            let normalBlock = addBlock()
+            let resultType = resultTypes.isEmpty ? intType(32) : resultTypes[0]
+            let callResult = name.withCString { cstr in
+                let ref = MlirStringRef(data: cstr, length: name.utf8.count)
+                return argValues.withUnsafeMutableBufferPointer { argBuf in
+                    return cirBuildInvoke(currentBlock, unknownLoc, ref,
+                        argBuf.count, argBuf.count > 0 ? argBuf.baseAddress : nil,
+                        resultType, normalBlock, pendingCatchBlock)
+                }
+            }
+            currentBlock = normalBlock
+            return callResult
+        }
+
         let calleeAttr: MlirAttribute = name.withCString { cstr in
             let ref = mlirStringRefCreateFromCString(cstr)
             return mlirFlatSymbolRefAttrGet(ctx, ref)
@@ -2051,6 +2317,28 @@ final class Gen {
                     return field.withCString { cstr in
                         let ref = mlirStringRefCreateFromCString(cstr)
                         return cirBuildEnumConstant(currentBlock, unknownLoc, ei.mlirType, ref)
+                    }
+                }
+            }
+            // Check tagged unions: Shape.none → cirBuildUnionInitVoid
+            for tu in taggedUnions {
+                if tu.name == typeName {
+                    return field.withCString { cstr in
+                        let ref = MlirStringRef(data: cstr, length: field.utf8.count)
+                        return cirBuildUnionInitVoid(currentBlock, unknownLoc, tu.mlirType, ref)
+                    }
+                }
+            }
+        }
+
+        // Handle implicit enum base (_enum) — also try tagged unions
+        if case .ident(let typeName) = base, typeName == "_enum" {
+            // If expectedType is a tagged union, use union_init_void
+            for tu in taggedUnions {
+                if mlirTypeEqual(tu.mlirType, expectedType) || cirTypeIsTaggedUnion(expectedType) {
+                    return field.withCString { cstr in
+                        let ref = MlirStringRef(data: cstr, length: field.utf8.count)
+                        return cirBuildUnionInitVoid(currentBlock, unknownLoc, tu.mlirType, ref)
                     }
                 }
             }
@@ -2223,6 +2511,61 @@ final class Gen {
         }
 
         return srcVal
+    }
+
+    // .circle(r) → cir.union_init on inferred tagged union type from expectedType
+    func mapDotCall(variant: String, args: [Expr], expectedType: MlirType) -> MlirValue {
+        // Find the tagged union type that matches expectedType
+        for tu in taggedUnions {
+            if mlirTypeEqual(tu.mlirType, expectedType) || cirTypeIsTaggedUnion(expectedType) {
+                // Find variant type
+                for (i, vname) in tu.variantNames.enumerated() {
+                    if vname == variant {
+                        if let payloadType = tu.variantTypes[i], !args.isEmpty {
+                            // Variant with payload
+                            let payloadVal = mapExpr(args[0], expectedType: payloadType)
+                            return variant.withCString { cstr in
+                                let ref = MlirStringRef(data: cstr, length: variant.utf8.count)
+                                return cirBuildUnionInit(currentBlock, unknownLoc,
+                                    tu.mlirType, ref, payloadVal)
+                            }
+                        } else {
+                            // Variant without payload (void)
+                            return variant.withCString { cstr in
+                                let ref = MlirStringRef(data: cstr, length: variant.utf8.count)
+                                return cirBuildUnionInitVoid(currentBlock, unknownLoc,
+                                    tu.mlirType, ref)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback: look at all tagged unions for a matching variant name
+        for tu in taggedUnions {
+            for (i, vname) in tu.variantNames.enumerated() {
+                if vname == variant {
+                    if let payloadType = tu.variantTypes[i], !args.isEmpty {
+                        let payloadVal = mapExpr(args[0], expectedType: payloadType)
+                        return variant.withCString { cstr in
+                            let ref = MlirStringRef(data: cstr, length: variant.utf8.count)
+                            return cirBuildUnionInit(currentBlock, unknownLoc,
+                                tu.mlirType, ref, payloadVal)
+                        }
+                    } else {
+                        return variant.withCString { cstr in
+                            let ref = MlirStringRef(data: cstr, length: variant.utf8.count)
+                            return cirBuildUnionInitVoid(currentBlock, unknownLoc,
+                                tu.mlirType, ref)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Unknown variant — return zero constant
+        return cirBuildConstantInt(currentBlock, unknownLoc, intType(32), 0)
     }
 
     // MARK: Serialization
