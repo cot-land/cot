@@ -344,6 +344,7 @@ indirect enum Expr {
     case dotCall(String, [Expr])           // .circle(r) — enum variant init with payload
     case subscriptExpr(Expr, Expr)         // arr[i]
     case typeCast(String, Expr)            // Int32(x) — type conversion call
+    case addrOf(Expr)                      // &x — address-of
 }
 
 enum BinOp {
@@ -366,6 +367,7 @@ indirect enum Stmt {
     case breakStmt
     case continueStmt
     case switchStmt(Expr, [(SwitchCase, [Stmt])], [Stmt]?)
+    case memberAssign(Expr, String, Expr)               // expr.field = val (for p.pointee = val)
     case throwStmt(Expr)                              // throw expr
     case doTryCatchStmt([Stmt], String?, [Stmt])      // do { try body } catch { handler }
 }
@@ -379,6 +381,7 @@ indirect enum SwiftType {
     case named(String)           // Int32, Bool, String, MyStruct...
     case optional(SwiftType)     // Int32?
     case array(SwiftType, Int64) // [3]Int32 (fixed-size for CIR)
+    case pointer(SwiftType)      // UnsafePointer<T> / UnsafeMutablePointer<T> → !cir.ref<T>
 }
 
 struct FuncParam {
@@ -610,6 +613,19 @@ struct Parser {
         }
         if case .identifier(let s) = peek() {
             _ = advance()
+            // UnsafePointer<T> / UnsafeMutablePointer<T> → pointer(T)
+            if (s == "UnsafePointer" || s == "UnsafeMutablePointer"),
+               tokenMatches(peek(), .lt) {
+                _ = advance() // <
+                guard let innerType = parseType() else { return nil }
+                _ = expect(.gt) // >
+                // Check for optional suffix: UnsafePointer<Int32>?
+                if tokenMatches(peek(), .question) {
+                    _ = advance()
+                    return .optional(.pointer(innerType))
+                }
+                return .pointer(innerType)
+            }
             // Check for optional suffix: Int32?
             if tokenMatches(peek(), .question) {
                 _ = advance()
@@ -862,6 +878,14 @@ struct Parser {
                 return .compoundAssign(op, name, rhs)
             }
         }
+        // Check for member assignment: expr.field = val (for p.pointee = val)
+        if case .memberAccess(let base, let field) = expr {
+            if tokenMatches(peek(), .assign) {
+                _ = advance()
+                guard let rhs = parseExpr() else { return nil }
+                return .memberAssign(base, field, rhs)
+            }
+        }
         return .exprStmt(expr)
     }
 
@@ -971,6 +995,12 @@ struct Parser {
             _ = advance()
             guard let operand = parseUnary() else { return nil }
             return .unaryMinus(operand)
+        }
+        // &x — address-of
+        if tokenMatches(peek(), .ampersand) {
+            _ = advance()
+            guard let operand = parseUnary() else { return nil }
+            return .addrOf(operand)
         }
         return parsePostfix()
     }
@@ -1326,6 +1356,9 @@ final class Gen {
         case .array(let elem, let size):
             let elemType = resolveType(elem)
             return cirArrayTypeGet(ctx, size, elemType)
+        case .pointer(let inner):
+            let innerType = resolveType(inner)
+            return cirRefTypeGet(ctx, innerType)
         }
     }
 
@@ -1648,6 +1681,8 @@ final class Gen {
             }
         case .switchStmt(let disc, let cases, let defaultBody):
             mapSwitchStmt(disc: disc, cases: cases, defaultBody: defaultBody)
+        case .memberAssign(let base, let field, let rhs):
+            mapMemberAssign(base: base, field: field, rhs: rhs)
         case .throwStmt(let expr):
             mapThrowStmt(expr: expr)
         case .doTryCatchStmt(let tryBody, let catchVar, let catchBody):
@@ -1824,6 +1859,23 @@ final class Gen {
                 return
             }
         }
+    }
+
+    // p.pointee = val → store through pointer
+    func mapMemberAssign(base: Expr, field: String, rhs: Expr) {
+        if field == "pointee" {
+            // base should resolve to a !cir.ref<T> value
+            // We need the pointer value, then store rhs through it
+            let ptrVal = mapExpr(base, expectedType: intType(32))
+            let ptrType = mlirValueGetType(ptrVal)
+            if cirTypeIsRef(ptrType) {
+                let pointeeType = cirRefTypeGetPointee(ptrType)
+                let rhsVal = mapExpr(rhs, expectedType: pointeeType)
+                cirBuildStore(currentBlock, unknownLoc, rhsVal, ptrVal)
+            }
+            return
+        }
+        // General struct field assignment could go here
     }
 
     func mapCompoundAssign(op: BinOp, name: String, expr: Expr) {
@@ -2185,6 +2237,8 @@ final class Gen {
             return mapTypeCast(targetType: targetType, inner: inner)
         case .dotCall(let variant, let args):
             return mapDotCall(variant: variant, args: args, expectedType: expectedType)
+        case .addrOf(let operand):
+            return mapAddrOf(operand: operand)
         }
     }
 
@@ -2310,6 +2364,18 @@ final class Gen {
     }
 
     func mapMemberAccess(base: Expr, field: String, expectedType: MlirType) -> MlirValue {
+        // p.pointee → cir.deref (pointer dereference)
+        if field == "pointee" {
+            let ptrVal = mapExpr(base, expectedType: expectedType)
+            let ptrType = mlirValueGetType(ptrVal)
+            if cirTypeIsRef(ptrType) {
+                let pointeeType = cirRefTypeGetPointee(ptrType)
+                return cirBuildDeref(currentBlock, unknownLoc, pointeeType, ptrVal)
+            }
+            // Fallback: treat as regular deref with expected type
+            return cirBuildDeref(currentBlock, unknownLoc, expectedType, ptrVal)
+        }
+
         // Check if base is an enum name
         if case .ident(let typeName) = base {
             for ei in enums {
@@ -2568,6 +2634,21 @@ final class Gen {
         return cirBuildConstantInt(currentBlock, unknownLoc, intType(32), 0)
     }
 
+    // &x → cir.addr_of (address-of operator)
+    func mapAddrOf(operand: Expr) -> MlirValue {
+        if case .ident(let name) = operand {
+            // Look up as local variable — get its alloca address
+            for i in stride(from: localNames.count - 1, through: 0, by: -1) {
+                if localNames[i] == name {
+                    let refType = cirRefTypeGet(ctx, localTypes[i])
+                    return cirBuildAddrOf(currentBlock, unknownLoc, refType, localAddrs[i])
+                }
+            }
+        }
+        // Fallback: evaluate operand and return it
+        return mapExpr(operand, expectedType: intType(32))
+    }
+
     // MARK: Serialization
 
     /// Serialize the module to MLIR bytecode, returned as [UInt8].
@@ -2627,6 +2708,8 @@ private func swiftTypeToString(_ ty: SwiftType) -> String {
         return "!cir.optional<\(swiftTypeToString(inner))>"
     case .array(let elem, let size):
         return "!cir.array<\(size) x \(swiftTypeToString(elem))>"
+    case .pointer(let inner):
+        return "!cir.ref<\(swiftTypeToString(inner))>"
     }
 }
 
