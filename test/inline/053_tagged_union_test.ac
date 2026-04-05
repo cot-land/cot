@@ -1,0 +1,32 @@
+union IntOrNone {
+    Some: i32,
+    None
+}
+
+fn make_some(x: i32) -> IntOrNone {
+    return IntOrNone.Some(x)
+}
+
+fn make_none() -> IntOrNone {
+    return IntOrNone.None
+}
+
+fn get_tag(v: IntOrNone) -> i32 {
+    return v.tag as i32
+}
+
+test "tagged union construction Some" {
+    let v: IntOrNone = make_some(42)
+    assert(get_tag(v) == 0)
+}
+
+test "tagged union construction None" {
+    let v: IntOrNone = make_none()
+    assert(get_tag(v) == 1)
+}
+
+test "tagged union tags are distinct" {
+    let a: IntOrNone = make_some(10)
+    let b: IntOrNone = make_none()
+    assert(get_tag(a) != get_tag(b))
+}

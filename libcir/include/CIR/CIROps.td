@@ -719,6 +719,65 @@ def CIR_EnumValueOp : CIR_Op<"enum_value", [Pure]> {
 }
 
 //===----------------------------------------------------------------------===//
+// Tagged union operations
+// Reference: Zig union(enum), Swift EnumInst, Rust Aggregate(Adt, variant)
+//===----------------------------------------------------------------------===//
+
+def CIR_UnionInitOp : CIR_Op<"union_init", [Pure]> {
+  let summary = "construct tagged union with variant and payload";
+  let description = [{
+    Creates a tagged union value for the named variant with an optional payload.
+    Lowers to: undef + insertvalue(tag, [0]) + insertvalue(payload_bytes, [1]).
+    Reference: Swift EnumInst, Rust Aggregate(Adt, variant, [fields]).
+    Example:
+      %u = cir.union_init "Circle", %r : i32
+            -> !cir.tagged_union<"Shape", circle: i32, rect: i32, none: void>
+  }];
+  let arguments = (ins StrAttr:$variant, Optional<AnyType>:$payload);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = [{
+    $variant (`,` $payload^ `:` type($payload))? attr-dict
+    `->` type($result)
+  }];
+  let hasVerifier = 1;
+}
+
+def CIR_UnionTagOp : CIR_Op<"union_tag", [Pure]> {
+  let summary = "extract tag (discriminant) from tagged union";
+  let description = [{
+    Returns the i8 tag value. Used with cir.switch for union matching.
+    Lowers to: extractvalue [0].
+    Reference: Rust Discriminant rvalue, Zig unionToTag().
+    Example:
+      %tag = cir.union_tag %u
+            : !cir.tagged_union<"Shape", ...> to i8
+  }];
+  let arguments = (ins AnyType:$input);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$input attr-dict `:` type($input) `to` type($result)";
+  let hasVerifier = 1;
+}
+
+def CIR_UnionPayloadOp : CIR_Op<"union_payload", [Pure]> {
+  let summary = "extract payload from tagged union (unchecked)";
+  let description = [{
+    Extracts the payload for a specific variant. Unchecked — caller must have
+    already branched on the tag via cir.switch.
+    Lowers to: extractvalue [1] + bitcast to variant payload type.
+    Reference: Swift UncheckedEnumDataInst.
+    Example:
+      %r = cir.union_payload "Circle", %u
+            : !cir.tagged_union<"Shape", ...> to i32
+  }];
+  let arguments = (ins StrAttr:$variant, AnyType:$input);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = [{
+    $variant `,` $input attr-dict `:` type($input) `to` type($result)
+  }];
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
 // Error union operations
 // Reference: Zig E!T — wrap_errunion_payload, wrap_errunion_err, is_err,
 //            unwrap_errunion_payload, unwrap_errunion_err

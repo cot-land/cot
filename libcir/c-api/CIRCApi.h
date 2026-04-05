@@ -342,6 +342,37 @@ MlirValue cirBuildArrayToSlice(MlirBlock block, MlirLocation loc,
                                MlirType arrayType);
 
 //===----------------------------------------------------------------------===//
+// Tagged Union Type + Operations
+//===----------------------------------------------------------------------===//
+
+/// Get !cir.tagged_union<"Name", variant: type, ...> type.
+MlirType cirTaggedUnionTypeGet(MlirContext ctx, MlirStringRef name,
+                                intptr_t nVariants,
+                                MlirStringRef *variantNames,
+                                MlirType *variantTypes);
+
+/// Check if a type is !cir.tagged_union<...>.
+bool cirTypeIsTaggedUnion(MlirType type);
+
+/// Create cir.union_init (construct tagged union with variant + payload).
+MlirValue cirBuildUnionInit(MlirBlock block, MlirLocation loc,
+                            MlirType unionType, MlirStringRef variant,
+                            MlirValue payload);
+
+/// Create cir.union_init with no payload.
+MlirValue cirBuildUnionInitVoid(MlirBlock block, MlirLocation loc,
+                                MlirType unionType, MlirStringRef variant);
+
+/// Create cir.union_tag (extract i8 tag from tagged union).
+MlirValue cirBuildUnionTag(MlirBlock block, MlirLocation loc,
+                           MlirValue unionVal);
+
+/// Create cir.union_payload (extract payload from tagged union, unchecked).
+MlirValue cirBuildUnionPayload(MlirBlock block, MlirLocation loc,
+                               MlirType payloadType, MlirStringRef variant,
+                               MlirValue unionVal);
+
+//===----------------------------------------------------------------------===//
 // Switch
 //===----------------------------------------------------------------------===//
 

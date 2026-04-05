@@ -521,6 +521,67 @@ MlirValue cirBuildArrayToSlice(MlirBlock block, MlirLocation loc,
 }
 
 //===----------------------------------------------------------------------===//
+// Tagged Union Type + Operations
+//===----------------------------------------------------------------------===//
+
+MlirType cirTaggedUnionTypeGet(MlirContext ctx, MlirStringRef name,
+                                intptr_t nVariants,
+                                MlirStringRef *variantNames,
+                                MlirType *variantTypes) {
+  auto mlirCtx = unwrap(ctx);
+  llvm::SmallVector<mlir::StringAttr> names;
+  llvm::SmallVector<mlir::Type> types;
+  for (intptr_t i = 0; i < nVariants; i++) {
+    names.push_back(mlir::StringAttr::get(mlirCtx,
+        llvm::StringRef(variantNames[i].data, variantNames[i].length)));
+    types.push_back(unwrap(variantTypes[i]));
+  }
+  return wrap(cir::TaggedUnionType::get(mlirCtx,
+      llvm::StringRef(name.data, name.length), names, types));
+}
+
+bool cirTypeIsTaggedUnion(MlirType type) {
+  return llvm::isa<cir::TaggedUnionType>(unwrap(type));
+}
+
+MlirValue cirBuildUnionInit(MlirBlock block, MlirLocation loc,
+                            MlirType unionType, MlirStringRef variant,
+                            MlirValue payload) {
+  auto b = builderAtEnd(block, loc);
+  auto op = b.create<cir::UnionInitOp>(unwrap(loc), unwrap(unionType),
+      b.getStringAttr(llvm::StringRef(variant.data, variant.length)),
+      unwrap(payload));
+  return wrap(op.getResult());
+}
+
+MlirValue cirBuildUnionInitVoid(MlirBlock block, MlirLocation loc,
+                                MlirType unionType, MlirStringRef variant) {
+  auto b = builderAtEnd(block, loc);
+  auto op = b.create<cir::UnionInitOp>(unwrap(loc), unwrap(unionType),
+      b.getStringAttr(llvm::StringRef(variant.data, variant.length)),
+      Value());
+  return wrap(op.getResult());
+}
+
+MlirValue cirBuildUnionTag(MlirBlock block, MlirLocation loc,
+                           MlirValue unionVal) {
+  auto b = builderAtEnd(block, loc);
+  auto op = b.create<cir::UnionTagOp>(unwrap(loc), b.getI8Type(),
+                                       unwrap(unionVal));
+  return wrap(op.getResult());
+}
+
+MlirValue cirBuildUnionPayload(MlirBlock block, MlirLocation loc,
+                               MlirType payloadType, MlirStringRef variant,
+                               MlirValue unionVal) {
+  auto b = builderAtEnd(block, loc);
+  auto op = b.create<cir::UnionPayloadOp>(unwrap(loc), unwrap(payloadType),
+      b.getStringAttr(llvm::StringRef(variant.data, variant.length)),
+      unwrap(unionVal));
+  return wrap(op.getResult());
+}
+
+//===----------------------------------------------------------------------===//
 // Switch
 //===----------------------------------------------------------------------===//
 

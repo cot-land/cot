@@ -165,6 +165,42 @@ def CIR_EnumType : CIR_Type<"Enum", "enum"> {
   let hasCustomAssemblyFormat = 1;
 }
 
+def CIR_TaggedUnionType : CIR_Type<"TaggedUnion", "tagged_union"> {
+  let summary = "tagged union (discriminated union) type";
+  let description = [{
+    A discriminated union with named variants. Each variant has a tag value
+    (auto-assigned) and an optional payload type. The tag is stored as i8.
+
+    Zig: union(enum) { circle: i32, rect: struct{...}, none }
+    TypeScript: discriminated union { kind: "circle", radius: number } | ...
+    Rust: enum Shape { Circle(i32), Rect{w: i32, h: i32}, None }
+
+    Lowers to !llvm.struct<(i8, [max_payload_size x i8])> — tag first,
+    then payload bytes (sized to the largest variant). Payload is bitcast
+    to the variant's type when extracted.
+
+    Syntax: !cir.tagged_union<"Shape", circle: i32, rect: i32, none: void>
+  }];
+
+  let parameters = (ins
+    StringRefParameter<"union name">:$name,
+    ArrayRefParameter<"mlir::StringAttr", "variant names">:$variantNames,
+    ArrayRefParameter<"mlir::Type", "variant payload types">:$variantTypes
+  );
+
+  let extraClassDeclaration = [{
+    /// Get the index of a variant by name. Returns -1 if not found.
+    int getVariantIndex(llvm::StringRef variantName) const;
+    /// Get the payload type for a variant by name.
+    mlir::Type getVariantType(llvm::StringRef variantName) const;
+    /// Get the maximum payload size in bits across all variants.
+    unsigned getMaxPayloadBitWidth() const;
+  }];
+
+  let genVerifyDecl = 1;
+  let hasCustomAssemblyFormat = 1;
+}
+
 def CIR_ErrorUnionType : CIR_Type<"ErrorUnion", "error_union"> {
   let summary = "error union type (E!T — success value or error code)";
   let description = [{

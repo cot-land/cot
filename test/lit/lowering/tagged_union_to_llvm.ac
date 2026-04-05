@@ -1,0 +1,27 @@
+// RUN: %cot emit-llvm %s | %FileCheck %s
+
+// Features #053-054: Tagged union lowering
+// !cir.tagged_union → !llvm.struct<(i8, array)>
+// union_init → insertvalue tag + payload
+// union_tag → extractvalue [0]
+
+union IntOrNone {
+    Some: i32,
+    None
+}
+
+fn make_some(x: i32) -> IntOrNone {
+    return IntOrNone.Some(x)
+}
+
+fn get_tag(v: IntOrNone) -> i32 {
+    return v.tag as i32
+}
+
+// CHECK-LABEL: llvm.func @make_some
+// CHECK: llvm.insertvalue
+// CHECK: llvm.return
+
+// CHECK-LABEL: llvm.func @get_tag
+// CHECK: llvm.extractvalue
+// CHECK: llvm.return

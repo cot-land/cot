@@ -1,0 +1,34 @@
+// RUN: %cot emit-cir %s | %FileCheck %s
+
+// Features #053-054: Tagged union type + construction + match with payload
+
+union Shape {
+    Circle: i32,
+    Rect: i32,
+    None
+}
+
+fn make_circle(r: i32) -> Shape {
+    return Shape.Circle(r)
+}
+
+fn make_none() -> Shape {
+    return Shape.None
+}
+
+fn get_tag(s: Shape) -> i32 {
+    return s.tag as i32
+}
+
+// CHECK-LABEL: func.func @make_circle
+// CHECK: cir.union_init "Circle"
+// CHECK-SAME: !cir.tagged_union<"Shape"
+// CHECK: return
+
+// CHECK-LABEL: func.func @make_none
+// CHECK: cir.union_init "None"
+// CHECK: return
+
+// CHECK-LABEL: func.func @get_tag
+// CHECK: cir.union_tag
+// CHECK: return

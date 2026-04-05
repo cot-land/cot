@@ -174,6 +174,76 @@ int64_t EnumType::getVariantValue(llvm::StringRef variantName) const {
 }
 
 //===----------------------------------------------------------------------===//
+// !cir.tagged_union — custom parse/print + verifier + helpers
+// Syntax: !cir.tagged_union<"Shape", circle: i32, rect: i32, none: void>
+//===----------------------------------------------------------------------===//
+
+mlir::Type TaggedUnionType::parse(mlir::AsmParser &parser) {
+  std::string name;
+  if (parser.parseLess() || parser.parseString(&name))
+    return {};
+  llvm::SmallVector<mlir::StringAttr> variantNames;
+  llvm::SmallVector<mlir::Type> variantTypes;
+  while (succeeded(parser.parseOptionalComma())) {
+    llvm::StringRef vname;
+    mlir::Type vtype;
+    if (parser.parseKeyword(&vname) || parser.parseColon() ||
+        parser.parseType(vtype))
+      return {};
+    variantNames.push_back(
+        mlir::StringAttr::get(parser.getContext(), vname));
+    variantTypes.push_back(vtype);
+  }
+  if (parser.parseGreater()) return {};
+  return get(parser.getContext(), name, variantNames, variantTypes);
+}
+
+void TaggedUnionType::print(mlir::AsmPrinter &p) const {
+  p << "<\"" << getName() << "\"";
+  auto names = getVariantNames();
+  auto types = getVariantTypes();
+  for (size_t i = 0; i < names.size(); i++)
+    p << ", " << names[i].getValue() << ": " << types[i];
+  p << ">";
+}
+
+mlir::LogicalResult TaggedUnionType::verify(
+    llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
+    llvm::StringRef name,
+    llvm::ArrayRef<mlir::StringAttr> variantNames,
+    llvm::ArrayRef<mlir::Type> variantTypes) {
+  if (name.empty())
+    return emitError() << "tagged union must have a name";
+  if (variantNames.size() != variantTypes.size())
+    return emitError() << "variant names count must match variant types count";
+  return mlir::success();
+}
+
+int TaggedUnionType::getVariantIndex(llvm::StringRef variantName) const {
+  auto names = getVariantNames();
+  for (size_t i = 0; i < names.size(); i++)
+    if (names[i].getValue() == variantName) return static_cast<int>(i);
+  return -1;
+}
+
+mlir::Type TaggedUnionType::getVariantType(llvm::StringRef variantName) const {
+  int idx = getVariantIndex(variantName);
+  if (idx < 0) return {};
+  return getVariantTypes()[idx];
+}
+
+unsigned TaggedUnionType::getMaxPayloadBitWidth() const {
+  unsigned maxBits = 0;
+  for (auto t : getVariantTypes()) {
+    if (auto intTy = llvm::dyn_cast<mlir::IntegerType>(t))
+      maxBits = std::max(maxBits, intTy.getWidth());
+    else if (auto floatTy = llvm::dyn_cast<mlir::FloatType>(t))
+      maxBits = std::max(maxBits, floatTy.getWidth());
+  }
+  return maxBits;
+}
+
+//===----------------------------------------------------------------------===//
 // !cir.optional<T> — isPointerLike helper
 //===----------------------------------------------------------------------===//
 
@@ -576,6 +646,39 @@ LogicalResult OptionalPayloadOp::verify() {
     return emitOpError("input must be !cir.optional<T>");
   if (getResult().getType() != optType.getPayloadType())
     return emitOpError("result type must match optional payload type");
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// Tagged union op verifiers
+//===----------------------------------------------------------------------===//
+
+LogicalResult UnionInitOp::verify() {
+  auto tuType = llvm::dyn_cast<cir::TaggedUnionType>(getResult().getType());
+  if (!tuType)
+    return emitOpError("result must be !cir.tagged_union<...>");
+  int idx = tuType.getVariantIndex(getVariant());
+  if (idx < 0)
+    return emitOpError("variant '") << getVariant()
+        << "' not found in union '" << tuType.getName() << "'";
+  return success();
+}
+
+LogicalResult UnionTagOp::verify() {
+  if (!llvm::isa<cir::TaggedUnionType>(getInput().getType()))
+    return emitOpError("input must be !cir.tagged_union<...>");
+  if (!getResult().getType().isInteger(8))
+    return emitOpError("result must be i8");
+  return success();
+}
+
+LogicalResult UnionPayloadOp::verify() {
+  auto tuType = llvm::dyn_cast<cir::TaggedUnionType>(getInput().getType());
+  if (!tuType)
+    return emitOpError("input must be !cir.tagged_union<...>");
+  int idx = tuType.getVariantIndex(getVariant());
+  if (idx < 0)
+    return emitOpError("variant '") << getVariant() << "' not found";
   return success();
 }
 

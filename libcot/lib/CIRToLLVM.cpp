@@ -74,6 +74,20 @@ struct CIRToLLVMPass
     tc.addConversion([](cir::EnumType type) -> mlir::Type {
       return type.getTagType();
     });
+    // !cir.tagged_union<"Name", ...> → !llvm.struct<(i8, [max_payload x i8])>
+    // Tag is i8 (supports up to 256 variants). Payload is byte array
+    // sized to the largest variant.
+    // Reference: Rust Variants::Multiple with TagEncoding::Direct
+    tc.addConversion([&tc](cir::TaggedUnionType type) -> mlir::Type {
+      auto ctx = type.getContext();
+      auto tagType = IntegerType::get(ctx, 8);
+      unsigned maxBits = type.getMaxPayloadBitWidth();
+      unsigned payloadBytes = (maxBits + 7) / 8;
+      if (payloadBytes == 0) payloadBytes = 1; // min 1 byte
+      auto payloadType = LLVM::LLVMArrayType::get(
+          IntegerType::get(ctx, 8), payloadBytes);
+      return LLVM::LLVMStructType::getLiteral(ctx, {tagType, payloadType});
+    });
     // !cir.error_union<T> → !llvm.struct<(T, i16)>
     // Layout: {payload, error_code}. error_code=0 means success.
     // Reference: Zig E!T layout (InternPool ErrorUnionType)

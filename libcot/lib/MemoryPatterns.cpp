@@ -500,6 +500,88 @@ struct ErrorCodeOpLowering
   }
 };
 
+/// cir.union_init → set tag + store payload in byte array
+/// Reference: Rust Aggregate(Adt, variant), Swift EnumInst
+struct UnionInitOpLowering
+    : public OpConversionPattern<cir::UnionInitOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::UnionInitOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto tuType = llvm::cast<cir::TaggedUnionType>(op.getType());
+    auto llvmType = getTypeConverter()->convertType(op.getType());
+    if (!llvmType)
+      return rewriter.notifyMatchFailure(op, "type conversion failed");
+    int idx = tuType.getVariantIndex(op.getVariant());
+    if (idx < 0) return failure();
+    // Start with undef
+    Value result = rewriter.create<LLVM::UndefOp>(loc, llvmType);
+    // Set tag (field 0)
+    auto tag = rewriter.create<LLVM::ConstantOp>(
+        loc, rewriter.getI8Type(),
+        rewriter.getIntegerAttr(rewriter.getI8Type(), idx));
+    result = rewriter.create<LLVM::InsertValueOp>(loc, result, tag, 0);
+    // Set payload (field 1) if present — bitcast to byte array
+    if (adaptor.getPayload()) {
+      // Store payload via alloca + bitcast pattern
+      // For simple integer payloads, we can directly insertvalue into the array
+      // For now: alloca the struct, store tag, store payload via ptr, load back
+      auto ptrType = LLVM::LLVMPointerType::get(op.getContext());
+      auto one = rewriter.create<LLVM::ConstantOp>(
+          loc, rewriter.getI64Type(), rewriter.getI64IntegerAttr(1));
+      auto alloca = rewriter.create<LLVM::AllocaOp>(
+          loc, ptrType, llvmType, one);
+      rewriter.create<LLVM::StoreOp>(loc, result, alloca);
+      // GEP to payload field, bitcast to payload type ptr, store
+      auto payloadGep = rewriter.create<LLVM::GEPOp>(
+          loc, ptrType, llvmType, alloca, ArrayRef<LLVM::GEPArg>{0, 1});
+      rewriter.create<LLVM::StoreOp>(loc, adaptor.getPayload(), payloadGep);
+      result = rewriter.create<LLVM::LoadOp>(loc, llvmType, alloca);
+    }
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+/// cir.union_tag → extractvalue [0]
+/// Reference: Rust Discriminant rvalue
+struct UnionTagOpLowering
+    : public OpConversionPattern<cir::UnionTagOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::UnionTagOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<LLVM::ExtractValueOp>(
+        op, adaptor.getInput(), 0);
+    return success();
+  }
+};
+
+/// cir.union_payload → extractvalue [1] + load via alloca/bitcast
+/// Reference: Swift UncheckedEnumDataInst
+struct UnionPayloadOpLowering
+    : public OpConversionPattern<cir::UnionPayloadOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::UnionPayloadOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto llvmUnionType = getTypeConverter()->convertType(
+        op.getInput().getType());
+    auto resultType = getTypeConverter()->convertType(op.getType());
+    if (!llvmUnionType || !resultType) return failure();
+    // Alloca the union, store it, GEP to payload, load as result type
+    auto ptrType = LLVM::LLVMPointerType::get(op.getContext());
+    auto one = rewriter.create<LLVM::ConstantOp>(
+        loc, rewriter.getI64Type(), rewriter.getI64IntegerAttr(1));
+    auto alloca = rewriter.create<LLVM::AllocaOp>(
+        loc, ptrType, llvmUnionType, one);
+    rewriter.create<LLVM::StoreOp>(loc, adaptor.getInput(), alloca);
+    auto payloadGep = rewriter.create<LLVM::GEPOp>(
+        loc, ptrType, llvmUnionType, alloca, ArrayRef<LLVM::GEPArg>{0, 1});
+    rewriter.replaceOpWithNewOp<LLVM::LoadOp>(op, resultType, payloadGep);
+    return success();
+  }
+};
+
 /// cir.struct_init → llvm.mlir.undef + llvm.insertvalue chain
 /// Reference: FIR UndefOpConversion + InsertValueOpConversion
 ///   ~/claude/references/flang-ref/flang/lib/Optimizer/CodeGen/CodeGen.cpp
@@ -539,6 +621,8 @@ void cot::populateMemoryPatterns(
                WrapResultOpLowering, WrapErrorOpLowering,
                IsErrorOpLowering, ErrorPayloadOpLowering,
                ErrorCodeOpLowering,
+               UnionInitOpLowering, UnionTagOpLowering,
+               UnionPayloadOpLowering,
                ArrayInitOpLowering, ElemValOpLowering, ElemPtrOpLowering>(
       converter, ctx);
 }
