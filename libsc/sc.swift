@@ -1310,20 +1310,12 @@ final class Gen {
     }
     var taggedUnions: [TaggedUnionInfo] = []
 
-    // Generic function templates — stored for monomorphization at call sites
-    // Reference: ac frontend monomorphization pattern (libac/codegen.cpp)
-    struct GenericFuncTemplate {
-        let name: String
-        let typeParams: [String]
-        let params: [FuncParam]
-        let retType: SwiftType?
-        let doesThrow: Bool
-        let body: [Stmt]
-    }
-    var genericTemplates: [GenericFuncTemplate] = []
-    var emittedSpecializations: Set<String> = []
-    // Current type substitution for monomorphization (T -> Int32)
-    var currentTypeSubst: [String: String] = [:]
+    // Current generic type parameters (for resolving T → !cir.type_param<"T">)
+    // Reference: ac frontend currentTypeParams_ pattern (libac/codegen.cpp)
+    var currentTypeParams: [String] = []
+    // Generic function registry — to detect generic calls at call sites
+    var genericFuncNames: [String] = []
+    var genericFuncTypeParams: [[String]] = []
 
     init(filename: String) {
         self.filename = filename
@@ -1362,9 +1354,13 @@ final class Gen {
     func resolveType(_ ty: SwiftType) -> MlirType {
         switch ty {
         case .named(let name):
-            // Check type parameter substitution (for monomorphized generics)
-            if let substName = currentTypeSubst[name] {
-                return resolveType(.named(substName))
+            // Check if this is a generic type parameter (T → !cir.type_param<"T">)
+            // Reference: ac frontend currentTypeParams_ pattern (libac/codegen.cpp)
+            if currentTypeParams.contains(name) {
+                return name.withCString { cstr in
+                    let ref = mlirStringRefCreateFromCString(cstr)
+                    return cirTypeParamGet(ctx, ref)
+                }
             }
             switch name {
             case "Int8", "UInt8":   return intType(8)
@@ -1533,12 +1529,35 @@ final class Gen {
         case .funcDecl(let name, let params, let retType, let doesThrow, let body):
             mapFuncDecl(name: name, params: params, retType: retType, doesThrow: doesThrow, body: body)
         case .genericFuncDecl(let name, let typeParams, let params, let retType, let doesThrow, let body):
-            // Generic functions are stored as templates, not emitted directly.
-            // They are monomorphized when a call is encountered.
-            // Reference: ac frontend genericTemplates pattern in libac/codegen.cpp
-            genericTemplates.append(GenericFuncTemplate(
-                name: name, typeParams: typeParams, params: params,
-                retType: retType, doesThrow: doesThrow, body: body))
+            // Emit generic function with !cir.type_param types.
+            // The GenericSpecializer pass in libcot handles monomorphization.
+            // Reference: ac frontend currentTypeParams_ pattern (libac/codegen.cpp)
+            let savedTypeParams = currentTypeParams
+            currentTypeParams = typeParams
+            // Register as generic for call-site detection
+            genericFuncNames.append(name)
+            genericFuncTypeParams.append(typeParams)
+            mapFuncDecl(name: name, params: params, retType: retType,
+                        doesThrow: doesThrow, body: body)
+            // Add cir.generic_params attribute to the func op
+            if !typeParams.isEmpty {
+                var paramAttrs: [MlirAttribute] = []
+                for tp in typeParams {
+                    let attr = tp.withCString { cstr in
+                        let ref = mlirStringRefCreateFromCString(cstr)
+                        return mlirStringAttrGet(ctx, ref)
+                    }
+                    paramAttrs.append(attr)
+                }
+                let arrAttr = paramAttrs.withUnsafeMutableBufferPointer { buf in
+                    return mlirArrayAttrGet(ctx, buf.count, buf.baseAddress)
+                }
+                "cir.generic_params".withCString { cstr in
+                    let ref = mlirStringRefCreateFromCString(cstr)
+                    mlirOperationSetAttributeByName(currentFunc, ref, arrAttr)
+                }
+            }
+            currentTypeParams = savedTypeParams
         case .structDecl(let name, let fields):
             mapStructDecl(name: name, fields: fields)
         case .enumDecl(let name, let variants):
@@ -2374,13 +2393,14 @@ final class Gen {
     }
 
     func mapCall(name: String, args: [Expr], expectedType: MlirType) -> MlirValue {
-        // Check if callee is a generic template — monomorphize if so
+        // Check if callee is a generic function — emit cir.generic_apply
         // Reference: ac frontend GenericCall handling in libac/codegen.cpp
-        if let tmpl = genericTemplates.first(where: { $0.name == name }) {
+        // Frontends emit cir.generic_apply; GenericSpecializer pass monomorphizes.
+        if let idx = genericFuncNames.firstIndex(of: name) {
+            let typeParams = genericFuncTypeParams[idx]
             // Infer type arguments from call site:
             // Use the expected return type to determine T
-            let inferredTypeName = inferSwiftTypeName(expectedType)
-            let mangledName = monomorphizeSwift(tmpl: tmpl, typeArgs: [inferredTypeName])
+            let inferredType = expectedType
 
             // Emit call arguments
             var argValues: [MlirValue] = []
@@ -2388,19 +2408,34 @@ final class Gen {
                 let val = mapExpr(arg, expectedType: expectedType)
                 argValues.append(val)
             }
-            var resultTypes: [MlirType] = []
-            if expectedType.ptr != nil {
-                resultTypes.append(expectedType)
-            }
 
-            let calleeAttr: MlirAttribute = mangledName.withCString { cstr in
-                let ref = mlirStringRefCreateFromCString(cstr)
-                return mlirFlatSymbolRefAttrGet(ctx, ref)
+            // Emit cir.generic_apply
+            var subsTypes: [MlirType] = Array(repeating: inferredType, count: typeParams.count)
+            let nSubs = typeParams.count
+            // Allocate stable C string storage for callee + type param names
+            let calleePtr = strdup(name)!
+            let keyPtrs: [UnsafeMutablePointer<CChar>] = typeParams.map { strdup($0)! }
+            var subsKeys: [MlirStringRef] = keyPtrs.enumerated().map { (i, ptr) in
+                MlirStringRef(data: ptr, length: typeParams[i].utf8.count)
             }
-            let attrs = [namedAttr("callee", calleeAttr)]
-            return emit(block: currentBlock, name: "func.call",
-                        resultTypes: resultTypes, operands: argValues,
-                        attrs: attrs, location: unknownLoc)
+            let calleeRef = MlirStringRef(data: calleePtr, length: name.utf8.count)
+            let result = argValues.withUnsafeMutableBufferPointer { argBuf in
+                subsKeys.withUnsafeMutableBufferPointer { keyBuf in
+                    subsTypes.withUnsafeMutableBufferPointer { typeBuf in
+                        return cirBuildGenericApply(
+                            currentBlock, unknownLoc, calleeRef,
+                            argBuf.count,
+                            argBuf.count > 0 ? argBuf.baseAddress : nil,
+                            expectedType,
+                            nSubs,
+                            nSubs > 0 ? keyBuf.baseAddress : nil,
+                            nSubs > 0 ? typeBuf.baseAddress : nil)
+                    }
+                }
+            }
+            free(calleePtr)
+            for ptr in keyPtrs { free(ptr) }
+            return result
         }
 
         // Non-generic function call
@@ -2442,80 +2477,6 @@ final class Gen {
         return emit(block: currentBlock, name: "func.call",
                     resultTypes: resultTypes, operands: argValues,
                     attrs: attrs, location: unknownLoc)
-    }
-
-    /// Monomorphize a generic function for concrete type arguments.
-    /// Returns the mangled name of the specialized function.
-    /// Reference: ac frontend monomorphize() in libac/codegen.cpp
-    func monomorphizeSwift(tmpl: GenericFuncTemplate, typeArgs: [String]) -> String {
-        // Build mangled name: identity_Int32, max_Int32, etc.
-        var mangled = tmpl.name
-        for ta in typeArgs {
-            mangled += "_\(ta)"
-        }
-
-        // Skip if already emitted
-        if emittedSpecializations.contains(mangled) { return mangled }
-        emittedSpecializations.insert(mangled)
-
-        // Build type substitution map: T -> Int32, etc.
-        let savedSubst = currentTypeSubst
-        for (i, tp) in tmpl.typeParams.enumerated() {
-            if i < typeArgs.count {
-                currentTypeSubst[tp] = typeArgs[i]
-            }
-        }
-
-        // Save function-level state (monomorphization happens inside another fn's codegen)
-        let savedFunc = currentFunc
-        let savedBlock = currentBlock
-        let savedTerminator = hasTerminator
-        let savedRetType = currentRetType
-        let savedParamNames = paramNames
-        let savedParamValues = paramValues
-        let savedLocalNames = localNames
-        let savedLocalAddrs = localAddrs
-        let savedLocalTypes = localTypes
-        let savedLoopStack = loopStack
-
-        // Emit concrete function with mangled name
-        mapFuncDecl(name: mangled, params: tmpl.params, retType: tmpl.retType,
-                    doesThrow: tmpl.doesThrow, body: tmpl.body)
-
-        // Restore function-level state
-        currentFunc = savedFunc
-        currentBlock = savedBlock
-        hasTerminator = savedTerminator
-        currentRetType = savedRetType
-        paramNames = savedParamNames
-        paramValues = savedParamValues
-        localNames = savedLocalNames
-        localAddrs = savedLocalAddrs
-        localTypes = savedLocalTypes
-        loopStack = savedLoopStack
-
-        // Restore type substitution state
-        currentTypeSubst = savedSubst
-
-        return mangled
-    }
-
-    /// Infer a Swift type name from an MLIR type (for generic type argument inference).
-    func inferSwiftTypeName(_ ty: MlirType) -> String {
-        if mlirTypeIsAInteger(ty) {
-            let width = mlirIntegerTypeGetWidth(ty)
-            switch width {
-            case 1:  return "Bool"
-            case 8:  return "Int8"
-            case 16: return "Int16"
-            case 32: return "Int32"
-            case 64: return "Int64"
-            default: return "Int32"
-            }
-        }
-        if mlirTypeIsAF32(ty) { return "Float" }
-        if mlirTypeIsAF64(ty) { return "Double" }
-        return "Int32" // default fallback
     }
 
     func mapMemberAccess(base: Expr, field: String, expectedType: MlirType) -> MlirValue {

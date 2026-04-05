@@ -100,6 +100,12 @@ pub extern "c" fn mlirTypeIsAFloat(ty: Type) callconv(.c) bool;
 pub extern "c" fn mlirIntegerTypeGetWidth(ty: Type) callconv(.c) c_uint;
 pub extern "c" fn mlirFloatTypeGetWidth(ty: Type) callconv(.c) c_uint;
 
+// Operation attribute manipulation (for cir.generic_params)
+pub extern "c" fn mlirOperationSetAttributeByName(op: Operation, name: StringRef, attr: Attribute) callconv(.c) void;
+
+// Array attribute (for cir.generic_params array of string attrs)
+pub extern "c" fn mlirArrayAttrGet(ctx: Context, numElements: isize, elements: [*]const Attribute) callconv(.c) Attribute;
+
 // ============================================================
 // CIR C API (from libcir/c-api/CIRCApi.h)
 // ============================================================
@@ -236,6 +242,11 @@ pub extern "c" fn cirLocationFileLineCol(ctx: Context, filename: StringRef, line
 
 // Switch
 pub extern "c" fn cirBuildSwitch(block: Block, loc: Location, value: Value, nCases: isize, caseValues: [*]const i64, caseDests: [*]const Block, defaultDest: Block) callconv(.c) void;
+
+// Generic types + operations
+pub extern "c" fn cirTypeParamGet(ctx: Context, name: StringRef) callconv(.c) Type;
+pub extern "c" fn cirTypeIsTypeParam(ty: Type) callconv(.c) bool;
+pub extern "c" fn cirBuildGenericApply(block: Block, loc: Location, callee: StringRef, nOperands: isize, operands: [*]const Value, resultType: Type, nSubs: isize, subsKeys: [*]const StringRef, subsTypes: [*]const Type) callconv(.c) Value;
 
 // ============================================================
 // Convenience API (ported from cot-failed/libzc/mlir.zig)

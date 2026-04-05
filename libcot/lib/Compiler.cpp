@@ -85,7 +85,8 @@ OwningOpRef<ModuleOp> cot::parseSourceToCIR(MLIRContext &ctx,
     int rc = zc_parse(source.data(), source.size(), inputFile.c_str(),
                       &cirBytes, &cirLen);
     if (rc != 0) { llvm::errs() << "error: zig frontend failed\n"; return {}; }
-    ParserConfig config(&ctx);
+    // Disable verify: IR may have !cir.type_param types pre-specialization
+    ParserConfig config(&ctx, /*verifyAfterParse=*/false);
     return parseSourceString<ModuleOp>(llvm::StringRef(cirBytes, cirLen), config);
   }
 
@@ -96,7 +97,8 @@ OwningOpRef<ModuleOp> cot::parseSourceToCIR(MLIRContext &ctx,
     int rc = tc_parse(const_cast<char*>(source.data()), source.size(),
         const_cast<char*>(inputFile.c_str()), &cirBytes, &cirLen);
     if (rc != 0) { llvm::errs() << "error: typescript frontend failed\n"; return {}; }
-    ParserConfig config(&ctx);
+    // Disable verify: IR may have !cir.type_param types pre-specialization
+    ParserConfig config(&ctx, /*verifyAfterParse=*/false);
     auto result = parseSourceString<ModuleOp>(
         llvm::StringRef(cirBytes, cirLen), config);
     free(cirBytes);
@@ -110,7 +112,8 @@ OwningOpRef<ModuleOp> cot::parseSourceToCIR(MLIRContext &ctx,
     int rc = sc_parse(source.data(), source.size(), inputFile.c_str(),
                       &cirBytes, &cirLen);
     if (rc != 0) { llvm::errs() << "error: swift frontend failed\n"; return {}; }
-    ParserConfig config(&ctx);
+    // Disable verify: IR may have !cir.type_param types pre-specialization
+    ParserConfig config(&ctx, /*verifyAfterParse=*/false);
     auto result = parseSourceString<ModuleOp>(
         llvm::StringRef(cirBytes, cirLen), config);
     free(cirBytes);

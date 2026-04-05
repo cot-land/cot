@@ -63,8 +63,10 @@ int PipelineBuilder::runSemaStages(ModuleOp module) {
 
   // 2. Generic specialization (resolve type_param → concrete types)
   // Must run BEFORE Sema — Sema validates types must be concrete
+  // Verifier disabled: IR intentionally has !cir.type_param types pre-specialization
   {
     PassManager specPM(ctx_);
+    specPM.enableVerifier(false);
     specPM.addPass(createGenericSpecializerPass());
     if (failed(specPM.run(module))) {
       llvm::errs() << "error: generic specialization failed\n";
