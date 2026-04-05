@@ -29,6 +29,12 @@ extern "C" int tc_parse(
     char *filename,
     char **out_ptr, size_t *out_len);
 
+// libsc C ABI — Swift frontend (Swift)
+extern "C" int sc_parse(
+    const char *source_ptr, size_t source_len,
+    const char *filename,
+    char **out_ptr, size_t *out_len);
+
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Parser/Parser.h"
@@ -90,6 +96,20 @@ OwningOpRef<ModuleOp> cot::parseSourceToCIR(MLIRContext &ctx,
     int rc = tc_parse(const_cast<char*>(source.data()), source.size(),
         const_cast<char*>(inputFile.c_str()), &cirBytes, &cirLen);
     if (rc != 0) { llvm::errs() << "error: typescript frontend failed\n"; return {}; }
+    ParserConfig config(&ctx);
+    auto result = parseSourceString<ModuleOp>(
+        llvm::StringRef(cirBytes, cirLen), config);
+    free(cirBytes);
+    return result;
+  }
+
+  // Swift frontend
+  if (endsWith(inputFile, ".swift")) {
+    char *cirBytes = nullptr;
+    size_t cirLen = 0;
+    int rc = sc_parse(source.data(), source.size(), inputFile.c_str(),
+                      &cirBytes, &cirLen);
+    if (rc != 0) { llvm::errs() << "error: swift frontend failed\n"; return {}; }
     ParserConfig config(&ctx);
     auto result = parseSourceString<ModuleOp>(
         llvm::StringRef(cirBytes, cirLen), config);

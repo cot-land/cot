@@ -14,7 +14,7 @@ PREFIX ?= /usr/local
 MLIR_DIR ?= /opt/homebrew/Cellar/llvm@20/20.1.8/lib/cmake/mlir
 LLVM_DIR ?= /opt/homebrew/Cellar/llvm@20/20.1.8/lib/cmake/llvm
 
-.PHONY: all configure libcir libzc libtc cot test test-lit test-gate test-inline test-build install clean
+.PHONY: all configure libcir libzc libtc libsc cot test test-lit test-gate test-inline test-build install clean
 
 all: cot
 
@@ -35,8 +35,15 @@ libzc: libcir
 libtc: libcir
 	@cd libtc && CGO_ENABLED=1 go build -buildmode=c-archive -o libtc.a .
 
-# Step 4: Build everything (libcot + cot driver link against libzc/libtc)
-cot: libzc libtc
+libsc: libcir
+	@swiftc -emit-library -static -o libsc/libsc.a \
+		-import-objc-header libsc/bridge.h \
+		-I libcir/c-api -I libcir/include -I build/libcir/include \
+		-I /opt/homebrew/Cellar/llvm@20/20.1.8/include \
+		libsc/sc.swift
+
+# Step 4: Build everything (libcot + cot driver link against libzc/libtc/libsc)
+cot: libzc libtc libsc
 	@cmake --build build --parallel
 
 # Tests
@@ -66,3 +73,4 @@ clean:
 	@rm -rf build
 	@cd libzc && rm -rf zig-out .zig-cache 2>/dev/null || true
 	@rm -f libtc/libtc.a libtc/libtc.h 2>/dev/null || true
+	@rm -f libsc/libsc.a 2>/dev/null || true

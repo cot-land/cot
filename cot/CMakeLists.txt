@@ -36,6 +36,18 @@ target_link_libraries(cot PRIVATE
 target_link_libraries(cot PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../libzc/zig-out/lib/libzc.a
 )
+# libsc — Swift frontend (C ABI)
+target_link_libraries(cot PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../libsc/libsc.a
+)
+# Swift runtime (needed by libsc)
+if(APPLE)
+  target_link_directories(cot PRIVATE
+    /usr/lib/swift
+    /Library/Developer/CommandLineTools/usr/lib/swift/macosx
+  )
+  target_link_libraries(cot PRIVATE "-lswiftCore")
+endif()
 
 # MLIR libraries needed by the driver but not transitively from COT
 target_link_libraries(cot PRIVATE

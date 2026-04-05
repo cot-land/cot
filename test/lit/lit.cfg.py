@@ -9,7 +9,7 @@ import os
 
 config.name = "COT"
 config.test_format = lit.formats.ShTest(True)
-config.suffixes = ['.ac', '.zig', '.ts']
+config.suffixes = ['.ac', '.zig', '.ts', '.swift']
 
 # Find tools
 config.test_source_root = os.path.dirname(__file__)
