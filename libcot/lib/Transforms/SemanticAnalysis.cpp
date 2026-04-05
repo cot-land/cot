@@ -83,9 +83,12 @@ private:
     auto paramTypes = callee.getArgumentTypes();
     auto operands = callOp.getOperands();
     if (paramTypes.size() != operands.size()) {
-      callOp.emitError("call to '") << callee.getName()
-          << "' passes " << operands.size() << " arguments, expected "
-          << paramTypes.size();
+      auto diag = callOp.emitError("call to '")
+          << callee.getName() << "' passes " << operands.size()
+          << " arguments, expected " << paramTypes.size();
+      diag.attachNote(callee.getLoc())
+          << "'" << callee.getName() << "' declared here with "
+          << paramTypes.size() << " parameters";
       return failure();
     }
 
@@ -102,8 +105,11 @@ private:
       Value cast = insertCast(builder, callOp.getLoc(),
                               argValue, argType, paramType);
       if (!cast) {
-        callOp.emitError("cannot convert argument ")
-            << i << " from " << argType << " to " << paramType;
+        auto diag = callOp.emitError("type mismatch in argument ")
+            << i << " of call to '" << callee.getName()
+            << "': expected " << paramType << ", got " << argType;
+        diag.attachNote(callee.getLoc())
+            << "parameter " << i << " declared as " << paramType << " here";
         return failure();
       }
       callOp.setOperand(i, cast);

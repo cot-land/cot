@@ -1,0 +1,9 @@
+// RUN: %not %cot emit-cir %s 2>&1 | %FileCheck %s
+
+// Negative test: null used in non-optional context
+
+fn get_int() -> i32 {
+    return null
+}
+
+// CHECK: error: null used in non-optional context

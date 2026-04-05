@@ -28,6 +28,7 @@ class CodeGen {
   std::string_view source_;
   std::string filename_;
   mlir::ModuleOp module_;
+  bool hasError_ = false;
 
   /// Compute line and column from byte offset in source.
   std::pair<unsigned, unsigned> lineCol(size_t offset) const {
@@ -134,8 +135,12 @@ class CodeGen {
     case ExprKind::NullLit: {
       // null literal — resultType must be an optional type
       if (!llvm::isa<cir::OptionalType>(resultType)) {
-        llvm::errs() << "error: null used in non-optional context\n";
-        return {};
+        mlir::emitError(loc) << "null used in non-optional context, "
+            << "expected optional type but got " << resultType;
+        hasError_ = true;
+        // Return a dummy value to avoid cascading crashes
+        return b.create<cir::ConstantOp>(loc, resultType,
+            b.getIntegerAttr(resultType, 0));
       }
       return b.create<cir::NoneOp>(loc, resultType);
     }
@@ -1207,6 +1212,7 @@ public:
         emitTest(module, mod.tests[i], i);
       emitTestRunner(module, mod.tests.size());
     }
+    if (hasError_) return {};
     return module;
   }
 };

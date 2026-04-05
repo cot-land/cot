@@ -1,0 +1,13 @@
+// RUN: %not %cot emit-cir %s 2>&1 | %FileCheck %s
+
+// Negative test: wrong number of arguments to function call
+
+fn add(a: i32, b: i32) -> i32 {
+    return a + b
+}
+
+fn main() -> i32 {
+    return add(1, 2, 3)
+}
+
+// CHECK: error: call to 'add' passes 3 arguments, expected 2

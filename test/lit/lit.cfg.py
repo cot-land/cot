@@ -24,3 +24,4 @@ llvm_bin = '/opt/homebrew/Cellar/llvm@20/20.1.8/bin'
 
 config.substitutions.append(('%cot', cot_exe))
 config.substitutions.append(('%FileCheck', os.path.join(llvm_bin, 'FileCheck')))
+config.substitutions.append(('%not', os.path.join(llvm_bin, 'not')))

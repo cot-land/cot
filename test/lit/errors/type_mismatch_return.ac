@@ -1,0 +1,11 @@
+// RUN: %not %cot emit-cir %s 2>&1 | %FileCheck %s
+
+// Negative test: return type mismatch
+
+fn get_num() -> i32 {
+    return "hello"
+}
+
+// CHECK: error:
+// CHECK: type of return operand
+// CHECK: doesn't match function result type
