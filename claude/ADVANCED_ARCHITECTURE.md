@@ -378,7 +378,80 @@ Phase 9: Async
 
 ---
 
-## 8. Production Readiness Checklist
+## 8. Cross-Language Linking — ac/Zig/TypeScript Interop
+
+### The Goal
+
+Any COT frontend can import and call functions from any other frontend:
+
+```ac
+import "math.zig" as math     // ac calling Zig
+import "utils.ts" as utils     // ac calling TypeScript
+let x: f64 = math.sqrt(2.0)
+let s: string = utils.format("hello")
+```
+
+### Why This Works
+
+All three frontends compile to **the same CIR**. CIR lowers to **the same LLVM IR**.
+LLVM produces **the same native object files**. At the linker level, a function
+compiled from Zig is indistinguishable from one compiled from TypeScript or ac.
+
+```
+math.zig → CIR → LLVM → math.o ─┐
+utils.ts → CIR → LLVM → utils.o ─├─ linker → binary
+main.ac  → CIR → LLVM → main.o ─┘
+```
+
+This is exactly how C and C++ interop works. CIR guarantees ABI compatibility
+because all frontends lower through the same type converter and calling convention.
+
+### What's Needed (Phase 10)
+
+1. **Module system** — `import` triggers compilation of the imported file
+2. **Shared type layout** — Same `!cir.struct` → same `!llvm.struct` across frontends
+3. **Name convention** — No mangling (C convention). All exports are `@name` in CIR.
+4. **Interface extraction** — Compile imported file to CIR, extract `func.func` signatures
+
+### ABI Guarantee
+
+CIR enforces layout compatibility through the shared type converter:
+- Integer sizes: LLVM guarantees `i32` = 4 bytes everywhere
+- Struct layout: field order determines layout, same in all frontends
+- Calling convention: C convention (LLVM default) for all exported functions
+- String: `!cir.slice<i8>` = `{ptr, len}` regardless of source language
+- Optional/error union: same `!llvm.struct` regardless of source language
+
+---
+
+## 9. Self-Hosted Standard Library
+
+### The Goal
+
+ac's standard library is written in ac — like Swift's stdlib in Swift and Zig's
+stdlib in Zig. This proves ac is capable enough for real systems programming.
+
+### Bootstrap Path
+
+1. Build COT compiler (C++ / Zig / Go + MLIR/LLVM) — no ac stdlib yet
+2. Write core stdlib in ac: `std/io.ac`, `std/mem.ac`, `std/string.ac`
+3. Compile with COT → `libac_std.a`
+4. ac programs `import "std"` → link against `libac_std.a`
+5. Future: COT driver rewritten in ac (full self-hosting)
+
+### Runtime Library
+
+`libac_rt` — small C library (~500 lines) that ac programs link against:
+- ARC retain/release (`_arc_retain`, `_arc_release`)
+- Exception runtime (`_cot_throw`, `_cot_catch`)
+- Memory allocator (default: system malloc, pluggable)
+- Panic/trap handler
+
+Similar to Zig's `compiler_rt` or Swift's `libswiftCore`.
+
+---
+
+## 10. Production Readiness Checklist
 
 Before releasing CIR 1.0, these must be true:
 
@@ -396,7 +469,7 @@ Before releasing CIR 1.0, these must be true:
 
 ---
 
-## 9. What Makes This Architecture Not Laughable
+## 11. What Makes This Architecture Not Laughable
 
 1. **It's Lattner's architecture.** MLIR is Lattner. SIL is Lattner. CIR follows both.
    The progressive lowering pipeline is proven across LLVM, Swift, and MLIR itself.
