@@ -455,6 +455,57 @@ class CodeGen {
       return call.getResult(0);
     }
 
+    case ExprKind::MatchExpr: {
+      // match expr { pattern => value, ... } as expression
+      // Same as match statement but produces a value via block argument phi
+      auto matchVal = emitExpr(*e.lhs, b.getI32Type());
+      auto matchType = matchVal.getType();
+      mlir::Value switchVal = matchVal;
+      if (auto enumType = llvm::dyn_cast<cir::EnumType>(matchType)) {
+        switchVal = b.create<cir::EnumValueOp>(loc, enumType.getTagType(),
+                                                matchVal);
+      }
+      auto parentFunc = llvm::cast<mlir::func::FuncOp>(
+          b.getInsertionBlock()->getParentOp());
+      auto *defaultBlock = addBlock(parentFunc);
+      auto *mergeBlock = addBlock(parentFunc);
+      // Add block argument for the result value
+      mergeBlock->addArgument(resultType, loc);
+      llvm::SmallVector<mlir::Block *> armBlocks;
+      llvm::SmallVector<int64_t> caseValues;
+      for (auto &[pattern, value] : e.matchExprArms) {
+        auto *armBlock = addBlock(parentFunc);
+        armBlocks.push_back(armBlock);
+        if (pattern->kind == ExprKind::IntLit) {
+          caseValues.push_back(pattern->intVal);
+        } else if (pattern->lhs && pattern->lhs->kind == ExprKind::Ident) {
+          auto eit = enumTypes.find(pattern->lhs->name);
+          if (eit != enumTypes.end()) {
+            auto et = llvm::cast<cir::EnumType>(eit->second);
+            caseValues.push_back(et.getVariantValue(
+                llvm::StringRef(pattern->name.data(), pattern->name.size())));
+          } else { caseValues.push_back(0); }
+        } else { caseValues.push_back(0); }
+      }
+      b.create<cir::SwitchOp>(loc, switchVal,
+          mlir::DenseI64ArrayAttr::get(b.getContext(), caseValues),
+          defaultBlock, armBlocks);
+      // Emit each arm: evaluate expression, branch to merge with value
+      for (size_t i = 0; i < armBlocks.size(); i++) {
+        b.setInsertionPointToStart(armBlocks[i]);
+        auto armVal = emitExpr(*e.matchExprArms[i].second, resultType);
+        b.create<cir::BrOp>(loc, mlir::ValueRange{armVal}, mergeBlock);
+      }
+      // Default: zero value
+      b.setInsertionPointToStart(defaultBlock);
+      auto zero = b.create<cir::ConstantOp>(loc, resultType,
+          b.getIntegerAttr(resultType, 0));
+      b.create<cir::BrOp>(loc, mlir::ValueRange{zero}, mergeBlock);
+      // Continue in merge block — result is block argument
+      b.setInsertionPointToStart(mergeBlock);
+      return mergeBlock->getArgument(0);
+    }
+
     case ExprKind::EnumAccess:
       // Handled same as FieldAccess — enum detection below
       [[fallthrough]];

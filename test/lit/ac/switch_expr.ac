@@ -1,0 +1,20 @@
+// RUN: %cot emit-cir %s | %FileCheck %s
+
+// Feature #052: Switch/match expression (value-producing) — ac syntax
+
+enum Color { Red, Green, Blue }
+
+fn color_value(c: Color) -> i32 {
+    let x: i32 = match c {
+        Color.Red => 10
+        Color.Green => 20
+        Color.Blue => 30
+    }
+    return x
+}
+
+// CHECK-LABEL: func.func @color_value
+// CHECK: cir.enum_value
+// CHECK: cir.switch
+// CHECK: cir.br
+// CHECK: return

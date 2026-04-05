@@ -222,6 +222,26 @@ class Parser {
       return e;
     }
 
+    // Match expression: match expr { pattern => value, ... }
+    if (tok.tag == Tag::kw_match) {
+      advance();
+      auto e = std::make_unique<Expr>();
+      e->kind = ExprKind::MatchExpr;
+      e->pos = tok.start;
+      e->lhs = parseExpr(); // the value being matched
+      expect(Tag::l_brace);
+      skipSemis();
+      while (!check(Tag::r_brace) && !check(Tag::eof)) {
+        auto pattern = parseExpr();
+        expect(Tag::fat_arrow);
+        auto value = parseExpr();
+        e->matchExprArms.push_back({std::move(pattern), std::move(value)});
+        skipSemis();
+      }
+      expect(Tag::r_brace);
+      return e;
+    }
+
     if (tok.tag == Tag::kw_true || tok.tag == Tag::kw_false) {
       advance();
       auto e = std::make_unique<Expr>();

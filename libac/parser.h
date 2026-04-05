@@ -34,7 +34,7 @@ struct Param {
 };
 
 // Expression kinds
-enum class ExprKind { IntLit, FloatLit, BoolLit, StringLit, NullLit, ErrorLit, Ident, BinOp, UnaryOp, Call, IfExpr, Cast, StructInit, FieldAccess, MethodCall, ArrayLit, IndexAccess, SliceExpr, TryExpr, CatchExpr, EnumAccess };
+enum class ExprKind { IntLit, FloatLit, BoolLit, StringLit, NullLit, ErrorLit, Ident, BinOp, UnaryOp, Call, IfExpr, Cast, StructInit, FieldAccess, MethodCall, ArrayLit, IndexAccess, SliceExpr, TryExpr, CatchExpr, EnumAccess, MatchExpr };
 
 struct Expr {
   ExprKind kind;
@@ -50,6 +50,7 @@ struct Expr {
   std::vector<ExprPtr> args;     // Call
   TypeRef targetType;             // Cast: target type (x as i64)
   std::vector<std::string_view> fieldNames; // StructInit: field names
+  std::vector<std::pair<ExprPtr, ExprPtr>> matchExprArms; // MatchExpr: (pattern, value) pairs
 };
 
 struct MatchArm {

@@ -766,7 +766,9 @@ const Gen = struct {
                 const addr = mlir.cirBuildAlloca(blk, self.b.loc, var_type);
                 if (init_node.unwrap()) |init_expr| {
                     const val = self.mapExpr(blk, init_expr, var_type);
-                    mlir.cirBuildStore(blk, self.b.loc, val, addr);
+                    // After mapExpr, current_block may have changed (e.g. switch expr)
+                    const cur = self.current_block;
+                    mlir.cirBuildStore(cur, self.b.loc, val, addr);
                 }
                 const tok = self.tree.nodeMainToken(node);
                 const name = self.tree.tokenSlice(tok + 1);
