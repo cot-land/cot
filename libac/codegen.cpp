@@ -26,7 +26,25 @@ class CodeGen {
   mlir::OpBuilder b;
   mlir::Location loc;
   std::string_view source_;
+  std::string filename_;
   mlir::ModuleOp module_;
+
+  /// Compute line and column from byte offset in source.
+  std::pair<unsigned, unsigned> lineCol(size_t offset) const {
+    unsigned line = 1, col = 1;
+    for (size_t i = 0; i < offset && i < source_.size(); i++) {
+      if (source_[i] == '\n') { line++; col = 1; }
+      else { col++; }
+    }
+    return {line, col};
+  }
+
+  /// Create a FileLineColLoc from a byte offset in source.
+  mlir::Location locFromOffset(size_t offset) {
+    auto [line, col] = lineCol(offset);
+    return mlir::FileLineColLoc::get(
+        b.getContext(), llvm::StringRef(filename_), line, col);
+  }
 
   // Zig AstGen pattern: scope holds named values for current function.
   // params: SSA value (direct), locals: SSA address (needs cir.load)
@@ -97,6 +115,7 @@ class CodeGen {
 
   // Zig AstGen pattern: expr() dispatches on node kind, returns IR value.
   mlir::Value emitExpr(const Expr &e, mlir::Type resultType) {
+    loc = locFromOffset(e.pos);
     switch (e.kind) {
     case ExprKind::IntLit:
       return b.create<cir::ConstantOp>(loc, resultType,
@@ -799,6 +818,7 @@ class CodeGen {
 
   void emitStmt(const Stmt &s, mlir::Type returnType,
                 mlir::func::FuncOp parentFunc) {
+    loc = locFromOffset(s.pos);
     switch (s.kind) {
     case StmtKind::Return:
       if (s.expr) {
@@ -1166,8 +1186,14 @@ class CodeGen {
   }
 
 public:
-  CodeGen(mlir::MLIRContext &ctx, std::string_view source)
-      : b(&ctx), loc(b.getUnknownLoc()), source_(source) {}
+  CodeGen(mlir::MLIRContext &ctx, std::string_view source,
+          std::string_view filename = "<unknown>")
+      : b(&ctx), loc(b.getUnknownLoc()), source_(source),
+        filename_(filename) {
+    // Default location — will be overridden per-op by locFromOffset
+    loc = mlir::FileLineColLoc::get(b.getContext(),
+        llvm::StringRef(filename_), 1, 1);
+  }
 
   mlir::OwningOpRef<mlir::ModuleOp> emit(const Module &mod, bool testMode) {
     auto module = mlir::ModuleOp::create(loc);
@@ -1188,8 +1214,9 @@ public:
 mlir::OwningOpRef<mlir::ModuleOp> codegen(mlir::MLIRContext &ctx,
                                            std::string_view source,
                                            const Module &mod,
-                                           bool testMode) {
-  CodeGen cg(ctx, source);
+                                           bool testMode,
+                                           std::string_view filename) {
+  CodeGen cg(ctx, source, filename);
   return cg.emit(mod, testMode);
 }
 

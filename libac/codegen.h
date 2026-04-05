@@ -16,7 +16,8 @@ namespace ac {
 mlir::OwningOpRef<mlir::ModuleOp> codegen(mlir::MLIRContext &ctx,
                                            std::string_view source,
                                            const Module &mod,
-                                           bool testMode = false);
+                                           bool testMode = false,
+                                           std::string_view filename = "<unknown>");
 
 } // namespace ac
 

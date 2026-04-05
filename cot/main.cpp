@@ -10,10 +10,15 @@
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Verifier.h"
+#include "mlir/IR/AsmState.h"
+#include "mlir/IR/MLIRContext.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Pass/PassRegistry.h"
+#include "mlir/Support/ToolUtilities.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/DynamicLibrary.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <string>
@@ -62,6 +67,28 @@ static bool loadPassPlugin(const std::string &path) {
 }
 
 int main(int argc, char **argv) {
+  // Register MLIR's CLI options (--mlir-print-debuginfo, --mlir-print-ir-after-all, etc.)
+  mlir::registerAsmPrinterCLOptions();
+  mlir::registerMLIRContextCLOptions();
+  mlir::registerPassManagerCLOptions();
+
+  // Separate MLIR flags (--mlir-*) from our positional args (emit-cir, file, etc.)
+  std::vector<const char *> mlirArgs = {argv[0]};
+  std::vector<const char *> cotArgs = {argv[0]};
+  for (int i = 1; i < argc; i++) {
+    if (llvm::StringRef(argv[i]).starts_with("--mlir-"))
+      mlirArgs.push_back(argv[i]);
+    else
+      cotArgs.push_back(argv[i]);
+  }
+  // Parse MLIR flags first (registers printing options, etc.)
+  int mlirArgc = mlirArgs.size();
+  llvm::cl::ParseCommandLineOptions(mlirArgc, mlirArgs.data(),
+                                     "cot — compiler toolkit\n");
+  // Now use cotArgs for our positional command parsing
+  argc = cotArgs.size();
+  argv = const_cast<char **>(cotArgs.data());
+
   if (argc < 2) {
     llvm::outs() << "cot — compiler toolkit\n\n"
                  << "Usage:\n"

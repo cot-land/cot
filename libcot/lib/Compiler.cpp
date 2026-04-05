@@ -100,7 +100,7 @@ OwningOpRef<ModuleOp> cot::parseSourceToCIR(MLIRContext &ctx,
   // ac frontend (default)
   auto tokens = ac::scanAll(source);
   auto ast = ac::parse(source, tokens);
-  return ac::codegen(ctx, source, ast, testMode);
+  return ac::codegen(ctx, source, ast, testMode, inputFile);
 }
 
 //===----------------------------------------------------------------------===//

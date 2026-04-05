@@ -27,6 +27,26 @@ extern "C" {
 void cirRegisterDialect(MlirContext ctx);
 
 //===----------------------------------------------------------------------===//
+// Source Locations
+//===----------------------------------------------------------------------===//
+
+/// Create a file:line:col source location.
+/// Every CIR op should carry a source location for error messages.
+MlirLocation cirLocationFileLineCol(MlirContext ctx,
+                                     MlirStringRef filename,
+                                     unsigned line,
+                                     unsigned col);
+
+//===----------------------------------------------------------------------===//
+// Diagnostics
+//===----------------------------------------------------------------------===//
+
+/// Emit a diagnostic through MLIR's diagnostic engine.
+/// Severity: 0=Error, 1=Warning, 2=Note, 3=Remark
+void cirDiagnosticEmit(MlirContext ctx, MlirLocation loc,
+                       int severity, MlirStringRef message);
+
+//===----------------------------------------------------------------------===//
 // Type Constructors
 //===----------------------------------------------------------------------===//
 

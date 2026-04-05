@@ -18,6 +18,35 @@
 using namespace mlir;
 
 //===----------------------------------------------------------------------===//
+// Source Locations
+//===----------------------------------------------------------------------===//
+
+MlirLocation cirLocationFileLineCol(MlirContext ctx,
+                                     MlirStringRef filename,
+                                     unsigned line,
+                                     unsigned col) {
+  return mlirLocationFileLineColGet(ctx, mlirStringRefCreate(filename.data, filename.length), line, col);
+}
+
+//===----------------------------------------------------------------------===//
+// Diagnostics
+//===----------------------------------------------------------------------===//
+
+void cirDiagnosticEmit(MlirContext ctx, MlirLocation loc,
+                       int severity, MlirStringRef message) {
+  (void)ctx;
+  auto mlirLoc = unwrap(loc);
+  auto msg = StringRef(message.data, message.length);
+  switch (severity) {
+    case 0: emitError(mlirLoc) << msg; break;
+    case 1: emitWarning(mlirLoc) << msg; break;
+    case 2: // Note — attach to previous diagnostic (fallback to remark)
+    case 3: emitRemark(mlirLoc) << msg; break;
+    default: emitError(mlirLoc) << msg; break;
+  }
+}
+
+//===----------------------------------------------------------------------===//
 // Helpers
 //===----------------------------------------------------------------------===//
 
