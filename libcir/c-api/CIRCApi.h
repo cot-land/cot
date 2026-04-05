@@ -342,6 +342,25 @@ MlirValue cirBuildArrayToSlice(MlirBlock block, MlirLocation loc,
                                MlirType arrayType);
 
 //===----------------------------------------------------------------------===//
+// Generic Types + Operations
+//===----------------------------------------------------------------------===//
+
+/// Get !cir.type_param<"T"> type.
+MlirType cirTypeParamGet(MlirContext ctx, MlirStringRef name);
+
+/// Check if a type is !cir.type_param<...>.
+bool cirTypeIsTypeParam(MlirType type);
+
+/// Create cir.generic_apply (call generic function with type substitutions).
+MlirValue cirBuildGenericApply(MlirBlock block, MlirLocation loc,
+                               MlirStringRef callee,
+                               intptr_t nOperands, MlirValue *operands,
+                               MlirType resultType,
+                               intptr_t nSubs,
+                               MlirStringRef *subsKeys,
+                               MlirType *subsTypes);
+
+//===----------------------------------------------------------------------===//
 // Tagged Union Type + Operations
 //===----------------------------------------------------------------------===//
 

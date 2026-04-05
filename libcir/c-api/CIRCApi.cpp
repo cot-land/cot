@@ -521,6 +521,52 @@ MlirValue cirBuildArrayToSlice(MlirBlock block, MlirLocation loc,
 }
 
 //===----------------------------------------------------------------------===//
+// Generic Types + Operations
+//===----------------------------------------------------------------------===//
+
+MlirType cirTypeParamGet(MlirContext ctx, MlirStringRef name) {
+  return wrap(cir::TypeParamType::get(unwrap(ctx),
+      llvm::StringRef(name.data, name.length)));
+}
+
+bool cirTypeIsTypeParam(MlirType type) {
+  return llvm::isa<cir::TypeParamType>(unwrap(type));
+}
+
+MlirValue cirBuildGenericApply(MlirBlock block, MlirLocation loc,
+                               MlirStringRef callee,
+                               intptr_t nOperands, MlirValue *operands,
+                               MlirType resultType,
+                               intptr_t nSubs,
+                               MlirStringRef *subsKeys,
+                               MlirType *subsTypes) {
+  auto b = builderAtEnd(block, loc);
+  auto ctx = b.getContext();
+  llvm::SmallVector<Value> opVals;
+  for (intptr_t i = 0; i < nOperands; i++)
+    opVals.push_back(unwrap(operands[i]));
+  llvm::SmallVector<Attribute> keys;
+  llvm::SmallVector<Type> types;
+  for (intptr_t i = 0; i < nSubs; i++) {
+    keys.push_back(StringAttr::get(ctx,
+        llvm::StringRef(subsKeys[i].data, subsKeys[i].length)));
+    types.push_back(unwrap(subsTypes[i]));
+  }
+  auto calleeRef = FlatSymbolRefAttr::get(ctx,
+      llvm::StringRef(callee.data, callee.length));
+  llvm::SmallVector<Type> resultTypes;
+  if (unwrap(resultType))
+    resultTypes.push_back(unwrap(resultType));
+  auto op = b.create<cir::GenericApplyOp>(unwrap(loc),
+      resultTypes, calleeRef, opVals,
+      ArrayAttr::get(ctx, keys),
+      b.getTypeArrayAttr(types));
+  if (op.getResult())
+    return wrap(op.getResult());
+  return {nullptr};
+}
+
+//===----------------------------------------------------------------------===//
 // Tagged Union Type + Operations
 //===----------------------------------------------------------------------===//
 

@@ -684,6 +684,36 @@ def CIR_SwitchOp : CIR_Op<"switch",
 }
 
 //===----------------------------------------------------------------------===//
+// Generic operations
+// Reference: Swift SIL apply with SubstitutionMap
+//===----------------------------------------------------------------------===//
+
+def CIR_GenericApplyOp : CIR_Op<"generic_apply", []> {
+  let summary = "call generic function with type substitutions";
+  let description = [{
+    Calls a generic function, providing concrete type substitutions for
+    each type parameter. The GenericSpecializer pass resolves this to a
+    regular func.call to a monomorphized version of the function.
+
+    Must not reach CIR→LLVM lowering — the specializer must resolve it first.
+
+    Reference: Swift SIL apply with SubstitutionMap.
+
+    Example:
+      %r = cir.generic_apply @max(%a, %b)
+          subs ["T" = i32]
+          : (i32, i32) -> i32
+  }];
+  let arguments = (ins FlatSymbolRefAttr:$callee,
+                       Variadic<AnyType>:$operands,
+                       ArrayAttr:$subs_keys,
+                       ArrayAttr:$subs_types);
+  let results = (outs Optional<AnyType>:$result);
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
 // Enum operations
 // Reference: Zig enum literals, Swift EnumInst, Rust Discriminant
 //===----------------------------------------------------------------------===//

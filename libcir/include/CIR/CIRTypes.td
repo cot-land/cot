@@ -201,6 +201,24 @@ def CIR_TaggedUnionType : CIR_Type<"TaggedUnion", "tagged_union"> {
   let hasCustomAssemblyFormat = 1;
 }
 
+def CIR_TypeParamType : CIR_Type<"TypeParam", "type_param"> {
+  let summary = "generic type parameter (unresolved until specialization)";
+  let description = [{
+    An unresolved generic type parameter. Carries the parameter name (e.g., "T").
+    Present in generic function signatures and bodies before specialization.
+
+    The GenericSpecializer pass resolves all type_param types to concrete types.
+    If any type_param reaches CIR→LLVM lowering, that's an error — all generics
+    must be specialized before lowering.
+
+    Reference: Swift SIL generic archetypes, Rust ty::Param.
+    Syntax: !cir.type_param<"T">
+  }];
+
+  let parameters = (ins StringRefParameter<"parameter name">:$name);
+  let assemblyFormat = "`<` $name `>`";
+}
+
 def CIR_ErrorUnionType : CIR_Type<"ErrorUnion", "error_union"> {
   let summary = "error union type (E!T — success value or error code)";
   let description = [{
