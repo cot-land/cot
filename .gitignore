@@ -28,3 +28,4 @@ Thumbs.db
 # lit test artifacts
 test/lit/**/Output/
 test/lit/.lit_test_times.txt
+libsc/.build/
