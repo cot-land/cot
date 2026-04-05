@@ -439,15 +439,38 @@ stdlib in Zig. This proves ac is capable enough for real systems programming.
 4. ac programs `import "std"` → link against `libac_std.a`
 5. Future: COT driver rewritten in ac (full self-hosting)
 
-### Runtime Library
+### Library Architecture
 
-`libac_rt` — small C library (~500 lines) that ac programs link against:
-- ARC retain/release (`_arc_retain`, `_arc_release`)
-- Exception runtime (`_cot_throw`, `_cot_catch`)
-- Memory allocator (default: system malloc, pluggable)
-- Panic/trap handler
+Three separate libraries, each with a clear responsibility:
 
-Similar to Zig's `compiler_rt` or Swift's `libswiftCore`.
+```
+libcot_core        ac standard library (written in ac)
+                   Types, collections, string ops, I/O, math
+                   Equivalent to Swift's libswiftCore
+                   Users see: import "std"
+
+libcot_runtime     Runtime support (written in C)
+                   ARC: cot_retain, cot_release, cot_allocObject
+                   Exceptions: cot_throw, cot_beginCatch, cot_endCatch
+                   Allocator: cot_malloc, cot_free (pluggable)
+                   Metadata: type info for dynamic dispatch
+                   Panic: cot_trap, cot_assertFail
+                   Equivalent to Swift's libswiftRuntime
+
+libcot_concurrency Async runtime (written in C + ac, later)
+                   Task scheduler, async frames, channels
+                   Equivalent to Swift's libswiftConcurrency
+```
+
+**Why separate:**
+- `libcot_runtime` is C because ac depends on it (bootstrap — can't use ac to compile ac's own retain/release)
+- `libcot_core` is ac because it proves the language works and dogfoods the compiler
+- `libcot_concurrency` is separate because not every program needs async — don't link what you don't use
+
+**Linking:**
+- `cot build main.ac` → automatically links `libcot_runtime` + `libcot_core`
+- `cot build main.ac --no-stdlib` → links only `libcot_runtime` (bare metal / embedded)
+- `cot build main.ac --no-runtime` → links nothing (freestanding — user provides everything)
 
 ---
 
