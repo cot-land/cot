@@ -1,0 +1,23 @@
+fn max[T](a: T, b: T) -> T {
+    if a > b {
+        return a
+    }
+    return b
+}
+
+fn identity[T](x: T) -> T {
+    return x
+}
+
+test "generic max with i32" {
+    assert(max[i32](3, 7) == 7)
+    assert(max[i32](10, 2) == 10)
+}
+
+test "generic max with equal values" {
+    assert(max[i32](5, 5) == 5)
+}
+
+test "generic identity" {
+    assert(identity[i32](42) == 42)
+}

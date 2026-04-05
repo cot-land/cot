@@ -62,6 +62,14 @@ const Gen = struct {
     enums: std.ArrayList(EnumInfo) = .empty,
     // Tagged union types registered by name (growable)
     unions: std.ArrayList(UnionInfo) = .empty,
+    // Generic function templates — stored for monomorphization at call sites
+    // Reference: ac frontend monomorphization pattern (libac/codegen.cpp)
+    generic_templates: std.ArrayList(GenericTemplate) = .empty,
+    // Track already-emitted specializations to avoid duplicates
+    emitted_specializations: std.ArrayList([]const u8) = .empty,
+    // Current type substitution for monomorphization (T → i32)
+    type_subst_names: std.ArrayList([]const u8) = .empty,
+    type_subst_types: std.ArrayList(mlir.Type) = .empty,
     // Current function's return type (for enum literal context inference)
     current_return_type: mlir.Type = .{ .ptr = null },
     // Current function's region (for adding blocks)
@@ -88,6 +96,16 @@ const Gen = struct {
         mlir_type: mlir.Type,
         variant_names: []const []const u8,
         variant_types: []const mlir.Type,
+    };
+
+    /// Generic function template — stored when fn has comptime type params.
+    /// Monomorphized into concrete functions at call sites.
+    const GenericTemplate = struct {
+        name: []const u8,
+        proto_node: Node.Index,
+        body_node: Node.Index,
+        // Names of comptime type params (e.g., "T")
+        type_param_names: []const []const u8,
     };
 
     /// Function pointer types for mapBinOp/mapUnaryOp dispatch.
@@ -134,6 +152,11 @@ const Gen = struct {
         if (tag == .identifier) {
             const tok = self.tree.nodeMainToken(node);
             const name = self.tree.tokenSlice(tok);
+            // Check type parameter substitution (for monomorphized generics)
+            for (self.type_subst_names.items, 0..) |subst_name, si| {
+                if (std.mem.eql(u8, subst_name, name))
+                    return self.type_subst_types.items[si];
+            }
             if (std.mem.eql(u8, name, "i8") or std.mem.eql(u8, name, "u8")) return self.b.intType(8);
             if (std.mem.eql(u8, name, "i16") or std.mem.eql(u8, name, "u16")) return self.b.intType(16);
             if (std.mem.eql(u8, name, "i32") or std.mem.eql(u8, name, "u32")) return self.b.intType(32);
@@ -664,16 +687,75 @@ const Gen = struct {
 
         const fn_name = if (proto.name_token) |tok| tree.tokenSlice(tok) else "anon";
 
-        var param_count: usize = 0;
-        var param_types: [16]mlir.Type = undefined;
+        // Detect generic functions: any param with comptime_noalias + type == "type"
+        // Reference: Zig comptime generics — monomorphize at compile time
+        // ac frontend pattern: store as template, emit concrete at call site
+        var type_param_names_buf: [8][]const u8 = undefined;
+        var n_type_params: usize = 0;
         {
             var it = proto.iterate(tree);
             while (it.next()) |param| {
+                if (param.comptime_noalias) |_| {
+                    // Check if this is `comptime T: type`
+                    if (param.type_expr) |type_node| {
+                        if (tree.nodeTag(type_node) == .identifier) {
+                            const type_name = tree.tokenSlice(tree.nodeMainToken(type_node));
+                            if (std.mem.eql(u8, type_name, "type")) {
+                                if (param.name_token) |name_tok| {
+                                    type_param_names_buf[n_type_params] = tree.tokenSlice(name_tok);
+                                    n_type_params += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Generic functions are stored as templates, not emitted directly.
+        // They are monomorphized when a call is encountered.
+        if (n_type_params > 0) {
+            const names = self.gpa.alloc([]const u8, n_type_params) catch @panic("OOM");
+            @memcpy(names, type_param_names_buf[0..n_type_params]);
+            self.generic_templates.append(self.gpa, .{
+                .name = fn_name,
+                .proto_node = proto_node,
+                .body_node = body_node,
+                .type_param_names = names,
+            }) catch @panic("OOM");
+            return;
+        }
+
+        self.emitConcreteFn(fn_name, proto_node, body_node);
+    }
+
+    /// Emit a concrete (non-generic or monomorphized) function.
+    fn emitConcreteFn(self: *Gen, fn_name: []const u8, proto_node: Node.Index, body_node: Node.Index) void {
+        const tree = self.tree;
+        var proto_buf: [1]Node.Index = undefined;
+        const proto = tree.fullFnProto(&proto_buf, proto_node) orelse return;
+
+        var param_count: usize = 0;
+        var param_types: [16]mlir.Type = undefined;
+        var param_name_tokens: [16]?Ast.TokenIndex = undefined;
+        {
+            var it = proto.iterate(tree);
+            while (it.next()) |param| {
+                // Skip comptime type params (they are not runtime params)
+                if (param.comptime_noalias) |_| {
+                    if (param.type_expr) |type_node| {
+                        if (tree.nodeTag(type_node) == .identifier) {
+                            const type_name = tree.tokenSlice(tree.nodeMainToken(type_node));
+                            if (std.mem.eql(u8, type_name, "type")) continue;
+                        }
+                    }
+                }
                 if (param.type_expr) |type_node| {
                     param_types[param_count] = self.resolveType(type_node);
                 } else {
                     param_types[param_count] = self.i32Type();
                 }
+                param_name_tokens[param_count] = param.name_token;
                 param_count += 1;
             }
         }
@@ -703,10 +785,8 @@ const Gen = struct {
         self.local_addrs.clearRetainingCapacity();
         self.local_types.clearRetainingCapacity();
         {
-            var it = proto.iterate(tree);
-            var i: usize = 0;
-            while (it.next()) |param| : (i += 1) {
-                if (param.name_token) |name_tok| {
+            for (0..param_count) |i| {
+                if (param_name_tokens[i]) |name_tok| {
                     self.param_names.append(self.gpa, tree.tokenSlice(name_tok)) catch @panic("OOM");
                     self.param_values.append(self.gpa, mlir.mlirBlockGetArgument(func.entry_block, @intCast(i))) catch @panic("OOM");
                 }
@@ -714,6 +794,96 @@ const Gen = struct {
         }
 
         self.mapBody(func.entry_block, body_node, result_types[0..n_results]);
+    }
+
+    /// Monomorphize a generic function for concrete type arguments.
+    /// Returns the mangled name of the specialized function.
+    /// Reference: ac frontend monomorphize() in libac/codegen.cpp
+    fn monomorphize(self: *Gen, tmpl: GenericTemplate, type_args: []const []const u8) []const u8 {
+        // Build mangled name: max_i32, identity_f64, etc.
+        var name_len: usize = tmpl.name.len;
+        for (type_args) |ta| name_len += 1 + ta.len;
+        const mangled = self.gpa.alloc(u8, name_len) catch @panic("OOM");
+        var pos: usize = 0;
+        @memcpy(mangled[pos..][0..tmpl.name.len], tmpl.name);
+        pos += tmpl.name.len;
+        for (type_args) |ta| {
+            mangled[pos] = '_';
+            pos += 1;
+            @memcpy(mangled[pos..][0..ta.len], ta);
+            pos += ta.len;
+        }
+
+        // Skip if already emitted
+        for (self.emitted_specializations.items) |spec| {
+            if (std.mem.eql(u8, spec, mangled)) return mangled;
+        }
+        self.emitted_specializations.append(self.gpa, mangled) catch @panic("OOM");
+
+        // Build type substitution map: T → i32, etc.
+        const saved_subst_names = self.type_subst_names.items.len;
+        const saved_subst_types = self.type_subst_types.items.len;
+        for (tmpl.type_param_names, 0..) |tp_name, i| {
+            if (i >= type_args.len) break;
+            self.type_subst_names.append(self.gpa, tp_name) catch @panic("OOM");
+            // Resolve the type arg name to an MLIR type
+            const ta = type_args[i];
+            const mlir_type = self.resolveTypeByName(ta);
+            self.type_subst_types.append(self.gpa, mlir_type) catch @panic("OOM");
+        }
+
+        // Save function-level state (monomorphization happens inside another fn's codegen)
+        const saved_func = self.current_func;
+        const saved_block = self.current_block;
+        const saved_terminator = self.has_terminator;
+        const saved_return_type = self.current_return_type;
+        // Save param/local scopes by cloning
+        const saved_param_names = self.param_names.items.len;
+        const saved_param_values = self.param_values.items.len;
+        const saved_local_names = self.local_names.items.len;
+        const saved_local_addrs = self.local_addrs.items.len;
+        const saved_local_types = self.local_types.items.len;
+
+        // Emit concrete function with mangled name
+        self.emitConcreteFn(mangled, tmpl.proto_node, tmpl.body_node);
+
+        // Restore function-level state
+        self.current_func = saved_func;
+        self.current_block = saved_block;
+        self.has_terminator = saved_terminator;
+        self.current_return_type = saved_return_type;
+        self.param_names.shrinkRetainingCapacity(saved_param_names);
+        self.param_values.shrinkRetainingCapacity(saved_param_values);
+        self.local_names.shrinkRetainingCapacity(saved_local_names);
+        self.local_addrs.shrinkRetainingCapacity(saved_local_addrs);
+        self.local_types.shrinkRetainingCapacity(saved_local_types);
+
+        // Restore type substitution state
+        self.type_subst_names.shrinkRetainingCapacity(saved_subst_names);
+        self.type_subst_types.shrinkRetainingCapacity(saved_subst_types);
+
+        return mangled;
+    }
+
+    /// Resolve a type name string to an MLIR type (for monomorphization).
+    fn resolveTypeByName(self: *Gen, name: []const u8) mlir.Type {
+        // Check type substitution first
+        for (self.type_subst_names.items, 0..) |subst_name, si| {
+            if (std.mem.eql(u8, subst_name, name))
+                return self.type_subst_types.items[si];
+        }
+        if (std.mem.eql(u8, name, "i8") or std.mem.eql(u8, name, "u8")) return self.b.intType(8);
+        if (std.mem.eql(u8, name, "i16") or std.mem.eql(u8, name, "u16")) return self.b.intType(16);
+        if (std.mem.eql(u8, name, "i32") or std.mem.eql(u8, name, "u32")) return self.b.intType(32);
+        if (std.mem.eql(u8, name, "i64") or std.mem.eql(u8, name, "u64")) return self.b.intType(64);
+        if (std.mem.eql(u8, name, "bool")) return self.b.intType(1);
+        if (std.mem.eql(u8, name, "f32")) return mlir.mlirF32TypeGet(self.ctx);
+        if (std.mem.eql(u8, name, "f64")) return mlir.mlirF64TypeGet(self.ctx);
+        // Check struct types
+        for (self.structs.items) |s| {
+            if (std.mem.eql(u8, s.name, name)) return s.mlir_type;
+        }
+        return self.b.intType(32); // default fallback
     }
 
     fn mapTestDecl(self: *Gen, node: Node.Index) void {
@@ -1534,6 +1704,36 @@ const Gen = struct {
 
         // Regular function call
         const callee_name = tree.tokenSlice(tree.nodeMainToken(call.ast.fn_expr));
+
+        // Check if callee is a generic template — monomorphize if so
+        // Reference: ac frontend GenericCall handling in libac/codegen.cpp
+        for (self.generic_templates.items) |tmpl| {
+            if (std.mem.eql(u8, tmpl.name, callee_name)) {
+                // First N args are comptime type args (identifiers)
+                const n_type_params = tmpl.type_param_names.len;
+                var type_arg_names: [8][]const u8 = undefined;
+                for (0..n_type_params) |ti| {
+                    if (ti >= call.ast.params.len) break;
+                    const type_arg_node = call.ast.params[ti];
+                    // The type arg should be an identifier (e.g., "i32")
+                    type_arg_names[ti] = tree.tokenSlice(tree.nodeMainToken(type_arg_node));
+                }
+                // Monomorphize: emit concrete function, get mangled name
+                const mangled = self.monomorphize(tmpl, type_arg_names[0..n_type_params]);
+                // Emit call with remaining (non-type) args
+                const n_runtime_args = call.ast.params.len - n_type_params;
+                const args = self.gpa.alloc(mlir.Value, n_runtime_args) catch @panic("OOM");
+                defer self.gpa.free(args);
+                for (0..n_runtime_args) |i| {
+                    args[i] = self.mapExpr(block, call.ast.params[n_type_params + i], result_type);
+                }
+                return self.b.emit(block, "func.call", &.{result_type}, args, &.{
+                    self.b.attr("callee", mlir.mlirFlatSymbolRefAttrGet(self.ctx, mlir.StringRef.fromSlice(mangled))),
+                });
+            }
+        }
+
+        // Non-generic function call
         const args = self.gpa.alloc(mlir.Value, call.ast.params.len) catch @panic("OOM");
         defer self.gpa.free(args);
         for (call.ast.params, 0..) |param_node, i| {

@@ -256,6 +256,47 @@ class Parser {
       size_t p = tok.start;
       advance();
 
+      // Generic call: ident '[' typeargs ']' '(' args ')'
+      // e.g., max[i32](3, 7)
+      if (check(Tag::l_bracket)) {
+        // Lookahead: is this ident[Type]( — generic call?
+        // Save position, try to parse as generic call
+        size_t saved = pos_;
+        advance(); // consume '['
+        // Check if next token looks like a type (keyword or identifier)
+        if (check(Tag::kw_i8) || check(Tag::kw_i16) || check(Tag::kw_i32) ||
+            check(Tag::kw_i64) || check(Tag::kw_u8) || check(Tag::kw_u16) ||
+            check(Tag::kw_u32) || check(Tag::kw_u64) || check(Tag::kw_f32) ||
+            check(Tag::kw_f64) || check(Tag::kw_bool) || check(Tag::kw_string) ||
+            check(Tag::identifier)) {
+          auto typeArg = parseType();
+          std::vector<TypeRef> typeArgs;
+          typeArgs.push_back(typeArg);
+          while (match(Tag::comma))
+            typeArgs.push_back(parseType());
+          if (check(Tag::r_bracket)) {
+            advance(); // consume ']'
+            if (check(Tag::l_paren)) {
+              advance(); // consume '('
+              auto e = std::make_unique<Expr>();
+              e->kind = ExprKind::GenericCall;
+              e->name = name;
+              e->pos = p;
+              e->typeArgs = std::move(typeArgs);
+              if (!check(Tag::r_paren)) {
+                e->args.push_back(parseExpr());
+                while (match(Tag::comma))
+                  e->args.push_back(parseExpr());
+              }
+              expect(Tag::r_paren);
+              return e;
+            }
+          }
+        }
+        // Not a generic call — restore position (it's array index)
+        pos_ = saved;
+      }
+
       // Function call: ident '(' args ')'
       if (check(Tag::l_paren)) {
         advance();
@@ -812,6 +853,14 @@ class Parser {
     FnDecl fn;
     fn.pos = peek().start;
     fn.name = tokenText(expect(Tag::identifier));
+
+    // Optional type parameters: fn max[T, U](...)
+    if (match(Tag::l_bracket)) {
+      fn.typeParams.push_back(tokenText(expect(Tag::identifier)));
+      while (match(Tag::comma))
+        fn.typeParams.push_back(tokenText(expect(Tag::identifier)));
+      expect(Tag::r_bracket);
+    }
 
     expect(Tag::l_paren);
     if (!check(Tag::r_paren)) {

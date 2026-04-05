@@ -18,6 +18,8 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 
+#include <unordered_set>
+
 #include <unordered_map>
 
 namespace ac {
@@ -65,7 +67,19 @@ class CodeGen {
   // Union type registry — populated by emitUnionDecl, queried by resolveType
   std::unordered_map<std::string_view, mlir::Type> unionTypes;
 
+  // Generic function templates — stored for monomorphization at call sites
+  std::unordered_map<std::string_view, const FnDecl*> genericTemplates;
+  // Track already-emitted specializations to avoid duplicates
+  std::unordered_set<std::string> emittedSpecializations;
+  // Current type substitution for monomorphization (T → i32)
+  const std::unordered_map<std::string_view, mlir::Type> *currentTypeSubst_ = nullptr;
+
   mlir::Type resolveType(const TypeRef &t) {
+    // Check type parameter substitution (for monomorphized generics)
+    if (currentTypeSubst_ && !t.name.empty()) {
+      auto it = currentTypeSubst_->find(t.name);
+      if (it != currentTypeSubst_->end()) return it->second;
+    }
     // Ref/pointer type: *T → !cir.ref<T>
     if (t.isRef) {
       TypeRef elemRef{t.name};
@@ -529,6 +543,36 @@ class CodeGen {
       // Continue in merge block — result is block argument
       b.setInsertionPointToStart(mergeBlock);
       return mergeBlock->getArgument(0);
+    }
+
+    case ExprKind::GenericCall: {
+      // Generic function call: max[i32](3, 7) → monomorphize and call max_i32
+      auto tmplIt = genericTemplates.find(e.name);
+      if (tmplIt == genericTemplates.end()) {
+        mlir::emitError(loc) << "undefined generic function '" << e.name << "'";
+        hasError_ = true;
+        return b.create<cir::ConstantOp>(loc, resultType,
+            b.getIntegerAttr(resultType, 0));
+      }
+      auto *tmpl = tmplIt->second;
+      std::string mangled = monomorphize(module_, *tmpl, e.typeArgs);
+      // Emit call to the monomorphized function
+      auto funcOp = module_.lookupSymbol<mlir::func::FuncOp>(mangled);
+      if (!funcOp) {
+        mlir::emitError(loc) << "monomorphization failed for '" << mangled << "'";
+        hasError_ = true;
+        return b.create<cir::ConstantOp>(loc, resultType,
+            b.getIntegerAttr(resultType, 0));
+      }
+      llvm::SmallVector<mlir::Value> args;
+      auto paramTypes = funcOp.getArgumentTypes();
+      for (size_t i = 0; i < e.args.size(); i++) {
+        mlir::Type argType = (i < paramTypes.size()) ? paramTypes[i] : resultType;
+        args.push_back(emitExpr(*e.args[i], argType));
+      }
+      auto call = b.create<mlir::func::CallOp>(loc, mangled,
+          funcOp.getResultTypes(), args);
+      return call.getNumResults() > 0 ? call.getResult(0) : mlir::Value();
     }
 
     case ExprKind::EnumAccess:
@@ -1170,6 +1214,24 @@ class CodeGen {
   }
 
   void emitFn(mlir::ModuleOp module, const FnDecl &fn) {
+    // Generic functions are stored as templates, not emitted directly.
+    // They are monomorphized when a GenericCall is encountered.
+    if (!fn.typeParams.empty()) {
+      genericTemplates[fn.name] = &fn;
+      return;
+    }
+    emitConcreteFn(module, fn, std::string(fn.name), {});
+  }
+
+  /// Emit a concrete (non-generic or monomorphized) function.
+  /// typeSubst maps type parameter names to concrete types.
+  void emitConcreteFn(mlir::ModuleOp module, const FnDecl &fn,
+                       const std::string &mangledName,
+                       const std::unordered_map<std::string_view, mlir::Type> &typeSubst) {
+    // Push type substitutions into resolveType
+    auto savedSubst = currentTypeSubst_;
+    currentTypeSubst_ = &typeSubst;
+
     llvm::SmallVector<mlir::Type> paramTypes;
     for (auto &p : fn.params) paramTypes.push_back(resolveType(p.type));
 
@@ -1178,13 +1240,12 @@ class CodeGen {
       resultTypes.push_back(resolveType(fn.returnType));
 
     auto funcType = b.getFunctionType(paramTypes, resultTypes);
-    auto funcOp = mlir::func::FuncOp::create(loc, std::string(fn.name), funcType);
+    auto funcOp = mlir::func::FuncOp::create(loc, mangledName, funcType);
     auto *entry = funcOp.addEntryBlock();
 
     mlir::OpBuilder::InsertionGuard guard(b);
     b.setInsertionPointToStart(entry);
 
-    // Zig AstGen pattern: bind param names in scope.
     namedValues.clear();
     localAddrs.clear();
     for (size_t i = 0; i < fn.params.size(); i++)
@@ -1197,6 +1258,28 @@ class CodeGen {
     }
 
     module.push_back(funcOp);
+    currentTypeSubst_ = savedSubst;
+  }
+
+  /// Monomorphize a generic function for concrete type arguments.
+  /// Returns the mangled name of the specialized function.
+  std::string monomorphize(mlir::ModuleOp module, const FnDecl &tmpl,
+                            const std::vector<TypeRef> &typeArgs) {
+    // Build mangled name: max_i32, identity_f64, etc.
+    std::string mangled(tmpl.name);
+    for (auto &ta : typeArgs) {
+      mangled += "_";
+      mangled += ta.name;
+    }
+    // Skip if already emitted
+    if (emittedSpecializations.count(mangled)) return mangled;
+    emittedSpecializations.insert(mangled);
+    // Build type substitution map
+    std::unordered_map<std::string_view, mlir::Type> typeSubst;
+    for (size_t i = 0; i < tmpl.typeParams.size() && i < typeArgs.size(); i++)
+      typeSubst[tmpl.typeParams[i]] = resolveType(typeArgs[i]);
+    emitConcreteFn(module, tmpl, mangled, typeSubst);
+    return mangled;
   }
 
   // Zig pattern: test blocks become parameterless void functions.

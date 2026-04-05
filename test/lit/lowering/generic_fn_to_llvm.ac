@@ -1,0 +1,19 @@
+// RUN: %cot emit-llvm %s | %FileCheck %s
+
+// Feature #055: Generic function lowering
+// Frontend monomorphizes → concrete LLVM functions
+
+fn identity[T](x: T) -> T {
+    return x
+}
+
+fn main() -> i32 {
+    return identity[i32](42)
+}
+
+// CHECK-LABEL: llvm.func @identity_i32
+// CHECK: llvm.return
+
+// CHECK-LABEL: llvm.func @main
+// CHECK: llvm.call @identity_i32
+// CHECK: llvm.return
