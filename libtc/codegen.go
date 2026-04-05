@@ -10,10 +10,12 @@ package main
 //   ~/claude/references/typescript-go/internal/ast/
 
 import (
+	"sort"
 	"strconv"
 	"unsafe"
 
 	"github.com/microsoft/typescript-go/internal/ast"
+	"github.com/microsoft/typescript-go/internal/core"
 )
 
 // isNullBlock checks if an MlirBlock wrapper holds a null pointer.
@@ -42,6 +44,10 @@ type Gen struct {
 	ctx    MlirContext
 	module MlirModule
 	b      Builder
+
+	// Source location tracking
+	filename string
+	lineMap  []core.TextPos // ECMALineMap: line start offsets
 
 	// Current scope
 	paramNames  []string
@@ -98,9 +104,46 @@ func (g *Gen) Destroy() {
 
 // Generate walks the TypeScript AST and emits CIR ops.
 func (g *Gen) Generate(sf *ast.SourceFile) {
+	g.filename = sf.FileName()
+	g.lineMap = sf.ECMALineMap()
 	for _, stmt := range sf.Statements.Nodes {
 		g.mapDecl(stmt)
 	}
+}
+
+// locFromPos creates an MLIR FileLineCol location from a byte offset.
+func (g *Gen) locFromPos(pos int) MlirLocation {
+	if len(g.lineMap) == 0 {
+		return g.b.loc
+	}
+	// Binary search for line number: find last line start <= pos
+	line := sort.Search(len(g.lineMap), func(i int) bool {
+		return int(g.lineMap[i]) > pos
+	}) - 1
+	if line < 0 {
+		line = 0
+	}
+	col := pos - int(g.lineMap[line])
+	// MLIR uses 1-based line, 0-based column
+	return CirLocationFileLineCol(g.ctx, g.filename, uint(line+1), uint(col))
+}
+
+// locFromNode creates an MLIR FileLineCol location from an AST node's position.
+// For declarations with a Name, uses the name position (skips leading trivia).
+func (g *Gen) locFromNode(node *ast.Node) MlirLocation {
+	if node == nil || len(g.lineMap) == 0 {
+		return g.b.loc
+	}
+	// For declarations, prefer the name token position (skips leading trivia)
+	if name := node.Name(); name != nil {
+		return g.locFromPos(name.Pos())
+	}
+	return g.locFromPos(node.Pos())
+}
+
+// setLoc updates the builder's current location from an AST node.
+func (g *Gen) setLoc(node *ast.Node) {
+	g.b.loc = g.locFromNode(node)
 }
 
 // ptrType returns the !cir.ptr opaque pointer type.
@@ -113,6 +156,7 @@ func (g *Gen) ptrType() MlirType {
 // ============================================================
 
 func (g *Gen) mapDecl(node *ast.Node) {
+	g.setLoc(node)
 	switch node.Kind {
 	case ast.KindFunctionDeclaration:
 		g.mapFuncDecl(node)
@@ -275,6 +319,7 @@ func (g *Gen) mapBlock(block MlirBlock, node *ast.Node) {
 }
 
 func (g *Gen) mapStmt(node *ast.Node) {
+	g.setLoc(node)
 	switch node.Kind {
 	case ast.KindReturnStatement:
 		g.mapReturn(node)
@@ -782,6 +827,7 @@ func (g *Gen) mapTryStmt(node *ast.Node) {
 // ============================================================
 
 func (g *Gen) mapExpr(block MlirBlock, node *ast.Node, resultType MlirType) MlirValue {
+	g.setLoc(node)
 	switch node.Kind {
 	case ast.KindNumericLiteral:
 		return g.mapNumericLiteral(block, node, resultType)

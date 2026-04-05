@@ -18,7 +18,6 @@ export fn zc_parse(
     out_ptr: *[*]const u8,
     out_len: *usize,
 ) callconv(.c) i32 {
-    _ = filename;
     const gpa = std.heap.page_allocator;
 
     // Create sentinel-terminated source for Zig parser
@@ -31,8 +30,11 @@ export fn zc_parse(
     defer tree.deinit(gpa);
     if (tree.errors.len > 0) return -1;
 
-    // AstGen: AST → CIR MLIR module
-    var result = astgen.generate(gpa, &tree) catch return -1;
+    // Convert filename to slice for location tracking
+    const fname = std.mem.span(filename);
+
+    // AstGen: AST → CIR MLIR module (with filename for source locations)
+    var result = astgen.generate(gpa, &tree, fname) catch return -1;
 
     // Serialize to bytecode
     const bytes = result.toBytecode(gpa) catch return -1;

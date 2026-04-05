@@ -223,6 +223,9 @@ pub extern "c" fn cirEnumTypeGetVariantValue(enumType: Type, name: StringRef) ca
 pub extern "c" fn cirBuildEnumConstant(block: Block, loc: Location, enumType: Type, variant: StringRef) callconv(.c) Value;
 pub extern "c" fn cirBuildEnumValue(block: Block, loc: Location, tagType: Type, enumVal: Value) callconv(.c) Value;
 
+// Source Locations
+pub extern "c" fn cirLocationFileLineCol(ctx: Context, filename: StringRef, line: c_uint, col: c_uint) callconv(.c) Location;
+
 // Switch
 pub extern "c" fn cirBuildSwitch(block: Block, loc: Location, value: Value, nCases: isize, caseValues: [*]const i64, caseDests: [*]const Block, defaultDest: Block) callconv(.c) void;
 

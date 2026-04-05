@@ -31,9 +31,9 @@ pub const Result = struct {
     }
 };
 
-/// Generate CIR from Zig AST.
-pub fn generate(gpa: Allocator, tree: *const Ast) !Result {
-    var gen = Gen.init(gpa, tree);
+/// Generate CIR from Zig AST with source location tracking.
+pub fn generate(gpa: Allocator, tree: *const Ast, filename: []const u8) !Result {
+    var gen = Gen.init(gpa, tree, filename);
     for (tree.rootDecls()) |node| {
         gen.mapDecl(node);
     }
@@ -47,6 +47,8 @@ const Gen = struct {
     ctx: mlir.Context,
     module: mlir.Module,
     b: mlir.Builder,
+    // Source filename for location tracking
+    filename: []const u8,
     // Current scope: function params by name (growable)
     param_names: std.ArrayList([]const u8) = .empty,
     param_values: std.ArrayList(mlir.Value) = .empty,
@@ -83,7 +85,7 @@ const Gen = struct {
     const BinOpFn = *const fn (mlir.Block, mlir.Location, mlir.Type, mlir.Value, mlir.Value) callconv(.c) mlir.Value;
     const UnaryOpFn = *const fn (mlir.Block, mlir.Location, mlir.Type, mlir.Value) callconv(.c) mlir.Value;
 
-    fn init(gpa: Allocator, tree: *const Ast) Gen {
+    fn init(gpa: Allocator, tree: *const Ast, filename: []const u8) Gen {
         const ctx = mlir.createContext();
         return .{
             .gpa = gpa,
@@ -91,7 +93,27 @@ const Gen = struct {
             .ctx = ctx,
             .module = mlir.createModule(ctx),
             .b = mlir.Builder.init(ctx),
+            .filename = filename,
         };
+    }
+
+    /// Create an MLIR FileLineCol location from an AST node's main token.
+    /// Uses std.zig.Ast.tokenLocation to compute line/col from source.
+    fn locFromNode(self: *Gen, node: Node.Index) mlir.Location {
+        const tok = self.tree.nodeMainToken(node);
+        const loc = self.tree.tokenLocation(0, tok);
+        // tokenLocation returns 0-based line/col; MLIR uses 1-based line, 0-based col
+        return mlir.cirLocationFileLineCol(
+            self.ctx,
+            mlir.StringRef.fromSlice(self.filename),
+            @intCast(loc.line + 1),
+            @intCast(loc.column),
+        );
+    }
+
+    /// Set the builder's current location from an AST node.
+    fn setLoc(self: *Gen, node: Node.Index) void {
+        self.b.loc = self.locFromNode(node);
     }
 
     fn i32Type(self: *Gen) mlir.Type {
@@ -219,6 +241,7 @@ const Gen = struct {
     // ============================================================
 
     fn mapDecl(self: *Gen, node: Node.Index) void {
+        self.setLoc(node);
         const tag = self.tree.nodeTag(node);
         switch (tag) {
             .fn_decl => self.mapFnDecl(node),
@@ -597,6 +620,7 @@ const Gen = struct {
     }
 
     fn mapStmt(self: *Gen, node: Node.Index, result_types: []const mlir.Type) void {
+        self.setLoc(node);
         const tag = self.tree.nodeTag(node);
         const blk = self.current_block;
         switch (tag) {
@@ -791,6 +815,7 @@ const Gen = struct {
     // ============================================================
 
     fn mapExpr(self: *Gen, block: mlir.Block, node: Node.Index, result_type: mlir.Type) mlir.Value {
+        self.setLoc(node);
         const tree = self.tree;
         const tag = tree.nodeTag(node);
         return switch (tag) {

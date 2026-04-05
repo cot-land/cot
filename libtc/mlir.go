@@ -298,6 +298,16 @@ func (b *Builder) AddBlock(funcOp MlirOperation) MlirBlock {
 // CIR C API wrappers
 // ============================================================
 
+// --- Source Locations ---
+
+// CirLocationFileLineCol creates an MLIR FileLineCol location.
+func CirLocationFileLineCol(ctx MlirContext, filename string, line uint, col uint) MlirLocation {
+	cs := C.CString(filename)
+	defer C.free(unsafe.Pointer(cs))
+	ref := C.MlirStringRef{data: cs, length: C.size_t(len(filename))}
+	return MlirLocation{ptr: C.cirLocationFileLineCol(ctx.ptr, ref, C.uint(line), C.uint(col))}
+}
+
 // --- Constants ---
 
 func CirBuildConstantInt(block MlirBlock, loc MlirLocation, ty MlirType, value int64) MlirValue {
