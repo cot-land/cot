@@ -96,6 +96,18 @@ struct EnumDecl {
   size_t pos;
 };
 
+struct UnionVariant {
+  std::string_view name;
+  TypeRef payloadType;  // empty name = void (no payload)
+  int tag;              // auto-assigned
+};
+
+struct UnionDecl {
+  std::string_view name;
+  std::vector<UnionVariant> variants;
+  size_t pos;
+};
+
 struct FnDecl {
   std::string_view name;
   std::vector<Param> params;
@@ -115,6 +127,7 @@ struct Module {
   std::vector<TestDecl> tests;
   std::vector<StructDecl> structs;
   std::vector<EnumDecl> enums;
+  std::vector<UnionDecl> unions;
 };
 
 Module parse(std::string_view source, const std::vector<Token> &tokens);

@@ -898,6 +898,33 @@ class Parser {
     return ed;
   }
 
+  // ---- Union declaration: union Name { Variant: Type, Variant2, ... } ----
+  UnionDecl parseUnionDecl() {
+    expect(Tag::kw_union);
+    UnionDecl ud;
+    ud.pos = peek().start;
+    ud.name = tokenText(expect(Tag::identifier));
+    expect(Tag::l_brace);
+    skipSemis();
+    int tag = 0;
+    while (!check(Tag::r_brace) && !check(Tag::eof)) {
+      UnionVariant v;
+      v.name = tokenText(expect(Tag::identifier));
+      v.tag = tag++;
+      // Optional payload type: Variant: Type
+      if (match(Tag::colon)) {
+        v.payloadType = parseType();
+      }
+      // else: no payload (void)
+      ud.variants.push_back(v);
+      match(Tag::comma);
+      skipSemis();
+    }
+    expect(Tag::r_brace);
+    match(Tag::semicolon);
+    return ud;
+  }
+
   // ---- Test declaration (Zig pattern: test "name" { body }) ----
   TestDecl parseTestDecl() {
     expect(Tag::kw_test);
@@ -941,6 +968,8 @@ public:
         mod.structs.push_back(parseStructDecl());
       } else if (check(Tag::kw_enum)) {
         mod.enums.push_back(parseEnumDecl());
+      } else if (check(Tag::kw_union)) {
+        mod.unions.push_back(parseUnionDecl());
       } else {
         llvm::errs() << "error: unexpected '" << tokenText(peek()) << "' at top level\n";
         advance();

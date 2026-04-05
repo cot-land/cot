@@ -223,6 +223,14 @@ pub extern "c" fn cirEnumTypeGetVariantValue(enumType: Type, name: StringRef) ca
 pub extern "c" fn cirBuildEnumConstant(block: Block, loc: Location, enumType: Type, variant: StringRef) callconv(.c) Value;
 pub extern "c" fn cirBuildEnumValue(block: Block, loc: Location, tagType: Type, enumVal: Value) callconv(.c) Value;
 
+// Tagged union type + ops
+pub extern "c" fn cirTaggedUnionTypeGet(ctx: Context, name: StringRef, nVariants: isize, variantNames: [*]const StringRef, variantTypes: [*]const Type) callconv(.c) Type;
+pub extern "c" fn cirTypeIsTaggedUnion(ty: Type) callconv(.c) bool;
+pub extern "c" fn cirBuildUnionInit(block: Block, loc: Location, unionType: Type, variant: StringRef, payload: Value) callconv(.c) Value;
+pub extern "c" fn cirBuildUnionInitVoid(block: Block, loc: Location, unionType: Type, variant: StringRef) callconv(.c) Value;
+pub extern "c" fn cirBuildUnionTag(block: Block, loc: Location, unionVal: Value) callconv(.c) Value;
+pub extern "c" fn cirBuildUnionPayload(block: Block, loc: Location, payloadType: Type, variant: StringRef, unionVal: Value) callconv(.c) Value;
+
 // Source Locations
 pub extern "c" fn cirLocationFileLineCol(ctx: Context, filename: StringRef, line: c_uint, col: c_uint) callconv(.c) Location;
 

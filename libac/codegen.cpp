@@ -62,6 +62,9 @@ class CodeGen {
   // Enum type registry — populated by emitEnumDecl, queried by resolveType
   std::unordered_map<std::string_view, mlir::Type> enumTypes;
 
+  // Union type registry — populated by emitUnionDecl, queried by resolveType
+  std::unordered_map<std::string_view, mlir::Type> unionTypes;
+
   mlir::Type resolveType(const TypeRef &t) {
     // Ref/pointer type: *T → !cir.ref<T>
     if (t.isRef) {
@@ -111,6 +114,9 @@ class CodeGen {
     // Enum types
     auto eit = enumTypes.find(t.name);
     if (eit != enumTypes.end()) return eit->second;
+    // Union types
+    auto uit = unionTypes.find(t.name);
+    if (uit != unionTypes.end()) return uit->second;
     return b.getI32Type();
   }
 
@@ -426,6 +432,25 @@ class CodeGen {
     }
 
     case ExprKind::MethodCall: {
+      // Union construction: Shape.Circle(r) → cir.union_init "Circle", r
+      if (e.lhs->kind == ExprKind::Ident) {
+        auto uit = unionTypes.find(e.lhs->name);
+        if (uit != unionTypes.end()) {
+          auto tuType = uit->second;
+          auto tuCIR = llvm::cast<cir::TaggedUnionType>(tuType);
+          auto variantName = llvm::StringRef(e.name.data(), e.name.size());
+          auto payloadType = tuCIR.getVariantType(variantName);
+          if (e.args.empty() || !payloadType ||
+              llvm::isa<mlir::NoneType>(payloadType)) {
+            // No payload variant
+            return b.create<cir::UnionInitOp>(loc, tuType,
+                b.getStringAttr(variantName), mlir::Value());
+          }
+          auto payload = emitExpr(*e.args[0], payloadType);
+          return b.create<cir::UnionInitOp>(loc, tuType,
+              b.getStringAttr(variantName), payload);
+        }
+      }
       // Method call: p.distance() → distance(p)
       // Desugar to function call with object as first argument.
       // Auto-deref: if receiver is !cir.ref<T>, deref to match callee param type.
@@ -511,13 +536,28 @@ class CodeGen {
       [[fallthrough]];
     case ExprKind::FieldAccess: {
       // Enum access: Color.Red → cir.enum_constant
-      // Check if lhs is an identifier naming an enum type
       if (e.lhs->kind == ExprKind::Ident) {
         auto eit = enumTypes.find(e.lhs->name);
         if (eit != enumTypes.end()) {
           auto enumTy = eit->second;
           return b.create<cir::EnumConstantOp>(loc, enumTy,
               b.getStringAttr(llvm::StringRef(e.name.data(), e.name.size())));
+        }
+        // Union no-payload variant: Shape.None → cir.union_init "None"
+        auto uit = unionTypes.find(e.lhs->name);
+        if (uit != unionTypes.end()) {
+          auto tuType = uit->second;
+          auto variantName = llvm::StringRef(e.name.data(), e.name.size());
+          return b.create<cir::UnionInitOp>(loc, tuType,
+              b.getStringAttr(variantName), mlir::Value());
+        }
+      }
+      // Union .tag access: s.tag → cir.union_tag
+      if (e.name == "tag") {
+        auto obj = emitExpr(*e.lhs, resultType);
+        if (llvm::isa<cir::TaggedUnionType>(obj.getType())) {
+          auto tagVal = b.create<cir::UnionTagOp>(loc, b.getI8Type(), obj);
+          return tagVal;
         }
       }
       // Field access: p.x → extract field from struct value
@@ -1241,6 +1281,24 @@ class CodeGen {
     enumTypes[ed.name] = enumTy;
   }
 
+  void emitUnionDecl(const UnionDecl &ud) {
+    llvm::SmallVector<mlir::StringAttr> variantNames;
+    llvm::SmallVector<mlir::Type> variantTypes;
+    for (auto &v : ud.variants) {
+      variantNames.push_back(mlir::StringAttr::get(
+          b.getContext(), llvm::StringRef(v.name.data(), v.name.size())));
+      if (v.payloadType.name.empty()) {
+        // No payload — use void (NoneType isn't great, use i8 as placeholder)
+        variantTypes.push_back(b.getIntegerType(0));
+      } else {
+        variantTypes.push_back(resolveType(v.payloadType));
+      }
+    }
+    auto tuType = cir::TaggedUnionType::get(
+        b.getContext(), std::string(ud.name), variantNames, variantTypes);
+    unionTypes[ud.name] = tuType;
+  }
+
 public:
   CodeGen(mlir::MLIRContext &ctx, std::string_view source,
           std::string_view filename = "<unknown>")
@@ -1257,6 +1315,7 @@ public:
     // Register types first — needed before resolving function param types
     for (auto &sd : mod.structs) emitStructDecl(sd);
     for (auto &ed : mod.enums) emitEnumDecl(ed);
+    for (auto &ud : mod.unions) emitUnionDecl(ud);
     for (auto &fn : mod.functions) emitFn(module, fn);
     if (testMode && !mod.tests.empty()) {
       for (size_t i = 0; i < mod.tests.size(); i++)

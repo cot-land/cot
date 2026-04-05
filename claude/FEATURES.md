@@ -121,8 +121,8 @@ Status: `-` not started, `~` in progress, `✓` done.
 | 050 | Enum value | `cir.enum_value` | `Color.Red` | `.red` or `Color.red` | Identity (enum = integer) | ✓ |
 | 051 | Match/switch statement | `cir.switch_br` | `match x { ... }` | `switch (x) { ... }` | `llvm.switch` | - |
 | 052 | Match/switch expression | `cir.switch` + block args | `let y = match x { ... }` | `const y = switch (x) { ... };` | Switch + phi | ✓ |
-| 053 | Tagged union | `cir.union_type` | `union { i32, f64, string }` | `const U = union(enum) { int: i32, float: f64 };` | Tag + payload | - |
-| 054 | Union match + payload | `cir.get_union_tag`, `cir.union_payload` | `match u { .Int \|v\| => ... }` | `switch (u) { .int => \|v\| ... }` | Tag switch + extract | - |
+| 053 | Tagged union | `!cir.tagged_union`, `cir.union_init` | `union Shape { Circle: i32, None }` | `union(enum) { circle: i32, none }` | `{i8, [N x i8]}` | ✓ |
+| 054 | Union tag + payload | `cir.union_tag`, `cir.union_payload` | `s.tag`, match with capture | `switch (u) { .circle => \|r\| ... }` | extractvalue + GEP | ✓ |
 | 054a | Short-circuit && \|\| | `cir.condbr` chain | `a and b`, `a or b` | `a and b`, `a or b` | Branch chain | - |
 | 054b | Orelse / ?? | `cir.is_non_null + select` | `x orelse 0` | `x orelse 0` / TS `x ?? 0` | Null check + select | - |
 | 054c | Force unwrap .? / x! | `cir.optional_payload + trap` | `x!` | `x.?` / TS `x!` | Payload + trap on null | - |

@@ -60,6 +60,8 @@ const Gen = struct {
     structs: std.ArrayList(StructInfo) = .empty,
     // Enum types registered by name (growable)
     enums: std.ArrayList(EnumInfo) = .empty,
+    // Tagged union types registered by name (growable)
+    unions: std.ArrayList(UnionInfo) = .empty,
     // Current function's return type (for enum literal context inference)
     current_return_type: mlir.Type = .{ .ptr = null },
     // Current function's region (for adding blocks)
@@ -79,6 +81,13 @@ const Gen = struct {
         name: []const u8,
         mlir_type: mlir.Type,
         variant_names: []const []const u8,
+    };
+
+    const UnionInfo = struct {
+        name: []const u8,
+        mlir_type: mlir.Type,
+        variant_names: []const []const u8,
+        variant_types: []const mlir.Type,
     };
 
     /// Function pointer types for mapBinOp/mapUnaryOp dispatch.
@@ -142,6 +151,11 @@ const Gen = struct {
             for (self.enums.items) |e| {
                 if (std.mem.eql(u8, e.name, name))
                     return e.mlir_type;
+            }
+            // Check tagged union types
+            for (self.unions.items) |u| {
+                if (std.mem.eql(u8, u.name, name))
+                    return u.mlir_type;
             }
         }
         // Pointer type: *T → !cir.ref<T>, []T → !cir.slice<T>
@@ -287,6 +301,18 @@ const Gen = struct {
             if (tok_tag == .keyword_enum) {
                 self.mapEnumDecl(name, init_node, .none);
             }
+        }
+
+        // Tagged union: union(enum) { ... }
+        // Zig AST uses specific node types for tagged unions.
+        if (init_tag == .tagged_union or
+            init_tag == .tagged_union_trailing or
+            init_tag == .tagged_union_two or
+            init_tag == .tagged_union_two_trailing or
+            init_tag == .tagged_union_enum_tag or
+            init_tag == .tagged_union_enum_tag_trailing)
+        {
+            self.mapUnionDecl(name, init_node);
         }
     }
 
@@ -486,6 +512,127 @@ const Gen = struct {
             .name = name,
             .mlir_type = enum_type,
             .variant_names = v_name_strs,
+        }) catch return;
+    }
+
+    /// Parse a Zig union(enum) container declaration and register the
+    /// !cir.tagged_union type.
+    /// Handles tagged_union, tagged_union_two, tagged_union_enum_tag variants.
+    /// Reference: Zig AstGen containerDecl — specific node types for union(enum).
+    fn mapUnionDecl(self: *Gen, name: []const u8, node: Node.Index) void {
+        const tree = self.tree;
+        const tag = tree.nodeTag(node);
+
+        // Get member nodes based on AST node variant
+        var members_buf: [2]Node.Index = undefined;
+        const members: []const Node.Index = switch (tag) {
+            .tagged_union_two, .tagged_union_two_trailing => blk: {
+                const d = tree.nodeData(node).opt_node_and_opt_node;
+                var count: usize = 0;
+                if (d[0].unwrap()) |n| {
+                    members_buf[count] = n;
+                    count += 1;
+                }
+                if (d[1].unwrap()) |n| {
+                    members_buf[count] = n;
+                    count += 1;
+                }
+                break :blk members_buf[0..count];
+            },
+            .tagged_union, .tagged_union_trailing => blk: {
+                break :blk tree.extraDataSlice(
+                    tree.nodeData(node).extra_range, Node.Index);
+            },
+            .tagged_union_enum_tag, .tagged_union_enum_tag_trailing => blk: {
+                const d = tree.nodeData(node).node_and_extra;
+                const sub_range = tree.extraData(d[1], Node.SubRange);
+                break :blk tree.extraDataSlice(sub_range, Node.Index);
+            },
+            else => return,
+        };
+
+        // Count variants
+        var variant_count: usize = 0;
+        for (members) |member| {
+            const field_tag = tree.nodeTag(member);
+            if (field_tag == .container_field_init or
+                field_tag == .container_field or
+                field_tag == .container_field_align)
+            {
+                variant_count += 1;
+            }
+        }
+
+        // Build arrays for C API call
+        const v_names = self.gpa.alloc(mlir.StringRef, variant_count) catch return;
+        defer self.gpa.free(v_names);
+        const v_types = self.gpa.alloc(mlir.Type, variant_count) catch return;
+        defer self.gpa.free(v_types);
+        const v_name_strs = self.gpa.alloc([]const u8, variant_count) catch return;
+        const v_type_mlirs = self.gpa.alloc(mlir.Type, variant_count) catch return;
+
+        var vi: usize = 0;
+        for (members) |member| {
+            const field_tag = tree.nodeTag(member);
+            if (field_tag == .container_field_init or
+                field_tag == .container_field or
+                field_tag == .container_field_align)
+            {
+                const field_main_token = tree.nodeMainToken(member);
+                const variant_name = tree.tokenSlice(field_main_token);
+                v_names[vi] = mlir.StringRef.fromSlice(variant_name);
+                v_name_strs[vi] = variant_name;
+
+                // Get variant type node
+                const type_node: Node.Index = switch (field_tag) {
+                    .container_field_init => tree.nodeData(member).node_and_opt_node[0],
+                    .container_field_align => tree.nodeData(member).node_and_node[0],
+                    .container_field => tree.nodeData(member).node_and_extra[0],
+                    else => unreachable,
+                };
+
+                // Check if the type node's identifier matches the field name.
+                // For bare enum-like variants (e.g. `none,` with no `: type`),
+                // the Zig parser sets the type node to point at the same
+                // identifier. Detect this and treat as void (i0).
+                const type_tag = tree.nodeTag(type_node);
+                if (type_tag == .identifier) {
+                    const type_name_text = tree.tokenSlice(tree.nodeMainToken(type_node));
+                    if (std.mem.eql(u8, type_name_text, variant_name)) {
+                        // Void variant: name == type (bare name, no colon)
+                        v_types[vi] = self.b.intType(0);
+                        v_type_mlirs[vi] = self.b.intType(0);
+                    } else {
+                        const resolved = self.resolveType(type_node);
+                        v_types[vi] = resolved;
+                        v_type_mlirs[vi] = resolved;
+                    }
+                } else {
+                    const resolved = self.resolveType(type_node);
+                    v_types[vi] = resolved;
+                    v_type_mlirs[vi] = resolved;
+                }
+
+                vi += 1;
+            }
+        }
+
+        // Create !cir.tagged_union type via C API
+        const union_type = mlir.cirTaggedUnionTypeGet(
+            self.ctx,
+            mlir.StringRef.fromSlice(name),
+            @intCast(variant_count),
+            v_names.ptr,
+            v_types.ptr,
+        );
+        if (union_type.ptr == null) return;
+
+        // Register union type
+        self.unions.append(self.gpa, .{
+            .name = name,
+            .mlir_type = union_type,
+            .variant_names = v_name_strs,
+            .variant_types = v_type_mlirs,
         }) catch return;
     }
 
@@ -1201,8 +1348,18 @@ const Gen = struct {
             else => return mlir.Value{ .ptr = null },
         }
 
-        // Resolve struct type from the type expression identifier
+        // Resolve type from the type expression identifier
         const type_name = tree.tokenSlice(tree.nodeMainToken(type_expr_node));
+
+        // Check if this is a tagged union init: Shape{ .circle = r }
+        // Tagged unions use struct_init syntax but emit cir.union_init.
+        for (self.unions.items) |ui| {
+            if (std.mem.eql(u8, ui.name, type_name)) {
+                return self.mapUnionInit(block, fields, &ui);
+            }
+        }
+
+        // Otherwise, it's a struct init
         var found_struct: ?StructInfo = null;
         for (self.structs.items) |s| {
             if (std.mem.eql(u8, s.name, type_name)) {
@@ -1236,6 +1393,45 @@ const Gen = struct {
         }
 
         return mlir.cirBuildStructInit(block, self.b.loc, struct_type, @intCast(n_fields), field_values[0..n_fields].ptr);
+    }
+
+    /// Handle tagged union init: Shape{ .circle = r } → cir.union_init "circle"
+    /// Union init uses struct_init syntax in Zig, but we detect the union type
+    /// and emit cir.union_init (with payload) or cir.union_init_void (no payload).
+    fn mapUnionInit(self: *Gen, block: mlir.Block, fields: []const Node.Index, ui: *const UnionInfo) mlir.Value {
+        const tree = self.tree;
+        const union_type = ui.mlir_type;
+
+        // Tagged union init has exactly one field: Shape{ .circle = r }
+        // (or zero fields for void variant, which would be unusual syntax)
+        if (fields.len == 0) {
+            // No variant specified — shouldn't happen in valid Zig
+            return mlir.Value{ .ptr = null };
+        }
+
+        // Extract variant name: field name is at firstToken(value_expr) - 2
+        const field_node = fields[0];
+        const first_tok = tree.firstToken(field_node);
+        const variant_name = tree.tokenSlice(first_tok - 2);
+        const variant_ref = mlir.StringRef.fromSlice(variant_name);
+
+        // Find variant type
+        var variant_type: mlir.Type = self.b.intType(0); // default void
+        for (ui.variant_names, 0..) |vn, i| {
+            if (std.mem.eql(u8, vn, variant_name)) {
+                variant_type = ui.variant_types[i];
+                break;
+            }
+        }
+
+        // Check if this is a void variant (i0 type)
+        if (mlir.mlirTypeIsAInteger(variant_type) and mlir.mlirIntegerTypeGetWidth(variant_type) == 0) {
+            return mlir.cirBuildUnionInitVoid(block, self.b.loc, union_type, variant_ref);
+        }
+
+        // Emit payload expression and build union_init
+        const payload = self.mapExpr(block, field_node, variant_type);
+        return mlir.cirBuildUnionInit(block, self.b.loc, union_type, variant_ref, payload);
     }
 
     /// Handle array init: .{ 1, 2, 3 } → cir.array_init
