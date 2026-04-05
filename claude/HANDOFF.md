@@ -1,6 +1,6 @@
 # Handoff — COT Compiler Toolkit
 
-**Date:** 2026-04-05 (Phase 5 COMPLETE — optionals + error unions)
+**Date:** 2026-04-05 (Phase 6 COMPLETE — enums, switch/match, tagged unions. 4 frontends.)
 
 ---
 
@@ -28,11 +28,11 @@ make test         # Run all test layers (lit, gate, inline, build)
 ./cot test file.ac          # Run inline test blocks
 ```
 
-**Total: 106 lit + 23 inline files + 1 gate + 4 build = 134 test targets, all passing.**
+**Total: 153 lit + 26 inline files + 1 gate + 4 build = 184 test targets, all passing.**
 
 ---
 
-## CIR Ops (55 ops, 8 custom types)
+## CIR Ops (59 ops, 9 custom types)
 
 | Op | Description | LLVM Lowering |
 |----|-------------|---------------|
@@ -122,8 +122,9 @@ claude/          Internal docs
 ## Key Documents — Read Order
 
 1. **CLAUDE.md** — Rules + 12-step feature checklist. READ THIS FIRST.
-2. **claude/PHASE6_DESIGN.md** — Current phase: enums, tagged unions, match/switch design.
-2b. **claude/PHASE5_DESIGN.md** — Previous phase: optionals + error unions + exceptions (complete).
+2. **claude/ADVANCED_ARCHITECTURE.md** — Phase 7+ plan: generics, classes, closures, ARC, async.
+2b. **claude/PHASE6_DESIGN.md** — Phase 6 design (complete): enums, tagged unions, match/switch.
+2c. **claude/PHASE5_DESIGN.md** — Phase 5 design (complete): optionals, error unions, exceptions.
 3. **claude/ARCHITECTURE.md** — Design, CIR ops, Sema pass, Swift type philosophy, pass pipeline.
 4. **claude/REFERENCES.md** — Which reference to study for each component.
 5. **claude/FEATURES.md** — 80 features with Zig syntax column. Implementation order.
@@ -179,25 +180,28 @@ claude/          Internal docs
 
 ## What To Do Next
 
-### Phase 5 COMPLETE — Start Phase 6 (Enums, Unions, Match)
+### Phase 6 COMPLETE — Start Phase 7 (Generics and Traits)
 
-**Phase 5 delivered 8 features, 5 new CIR ops, 1 new type, 7 new tests (93→118 total).**
+**Phase 6 delivered:** 6 features (#049-054), 4 new CIR ops, 2 new types.
+- ✓ #049-050 Enum type + value — `!cir.enum`, `cir.enum_constant`, `cir.enum_value`
+- ✓ #051 Switch/match statement — `cir.switch` (integer multi-way branch)
+- ✓ #052 Switch/match expression — value-producing switch with block argument phi
+- ✓ #053-054 Tagged union — `!cir.tagged_union`, `cir.union_init`, `cir.union_tag`, `cir.union_payload`
 
-**Read `claude/PHASE6_DESIGN.md` first** — full architecture, reference-to-port map, op definitions.
+**Also completed this session:**
+- Phase 5b-c: Error unions + exceptions (8 new CIR ops)
+- libsc: Swift frontend (4th language, 29 lit tests)
+- DX: Source locations, MLIR debug flags, Sema diagnostics, negative tests
+- Architecture docs: Advanced plan, construct master list, DX design, library architecture
 
-**Next features in order (Phase 6 — Enums, Unions, Match):**
-- #049 Enum type — `!cir.enum<"Name", variants...>` + `cir.enum_constant` + type converter + C API
-- #050 Enum value — `cir.enum_value` (enum → integer) + all 3 frontends emit enum values
-- #051 Switch statement — `cir.switch` (integer multi-way branch) + `match`/`switch` in all 3 frontends
-- #052 Switch expression — value-producing switch with block argument phi
-- #053 Tagged union — `!cir.tagged_union<"Name", variants...>` + `cir.union_init` + `cir.union_tag` + `cir.union_payload`
-- #054 Union match + payload — `cir.switch` + `cir.union_payload` in case blocks with capture
+**Read `claude/ADVANCED_ARCHITECTURE.md`** for Phase 7+ plans.
 
-**Implementation approach:** Enums first (simpler — just integer constants), then switch/match (control flow), then tagged unions (complex layout). Each step follows 12-step checklist. Tests first, never modify tests.
+**Next: Phase 7 (Generics and Traits)**
+- #055 Generic function — monomorphized (Zig comptime pattern)
+- #056 Generic struct — monomorphized
+- #057-060 Traits/protocols — static dispatch first, then witness tables
 
-**Frontend fidelity:** Zig tests must be valid Zig. TS tests must be valid TypeScript. ac is the kitchen sink.
-
-**Reference compilers:** Zig (enum type + switch semantics), Rust (tagged union layout + SwitchInt), Swift SIL (enum ops), LLVM (switch lowering target).
+**4 frontends:** ac (C++), Zig (Zig), TypeScript (Go), Swift (Swift). All stay in sync.
 
 ### Distribution & Plugin Architecture — IMPLEMENTED
 

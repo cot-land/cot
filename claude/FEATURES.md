@@ -3,8 +3,9 @@
 **Date:** 2026-04-05
 **Rule:** Each feature adds CIR ops + ac syntax + Zig syntax + TypeScript syntax + lowering + test. All three frontends must stay in sync. Nothing ships without a test.
 
-**Progress: ~50 of ~120 features implemented (42%). 55 CIR ops, 8 types, 134 tests.**
-Cross-referenced with `claude/CONSTRUCT_MASTER_LIST.md` for Zig (84 constructs) and TypeScript (93 constructs) coverage.
+**Progress: ~56 of ~120 features implemented (47%). 59 CIR ops, 9 types, 184 tests.**
+**4 frontends:** ac (41 tests), Zig (32), TypeScript (32), Swift (29).
+Cross-referenced with `claude/CONSTRUCT_MASTER_LIST.md` for language coverage.
 
 ---
 
