@@ -1,6 +1,6 @@
 # Handoff — COT Compiler Toolkit
 
-**Date:** 2026-04-05 (Phase 6 COMPLETE — enums, switch/match, tagged unions. 4 frontends.)
+**Date:** 2026-04-06 (Phase 7a COMPLETE — CIR-level generics with GenericSpecializer. 4 frontends.)
 
 ---
 
@@ -28,11 +28,11 @@ make test         # Run all test layers (lit, gate, inline, build)
 ./cot test file.ac          # Run inline test blocks
 ```
 
-**Total: 153 lit + 26 inline files + 1 gate + 4 build = 184 test targets, all passing.**
+**Total: 158 lit + 27 inline files + 1 gate + 4 build = 190 test targets, all passing.**
 
 ---
 
-## CIR Ops (59 ops, 9 custom types)
+## CIR Ops (61 ops, 10 custom types)
 
 | Op | Description | LLVM Lowering |
 |----|-------------|---------------|
@@ -196,12 +196,27 @@ claude/          Internal docs
 
 **Read `claude/ADVANCED_ARCHITECTURE.md`** for Phase 7+ plans.
 
-**Next: Phase 7 (Generics and Traits)**
-- #055 Generic function — monomorphized (Zig comptime pattern)
-- #056 Generic struct — monomorphized
-- #057-060 Traits/protocols — static dispatch first, then witness tables
+**Phase 7a COMPLETE — CIR-level generics:**
+- ✓ #055 Generic function — `!cir.type_param<"T">` + `cir.generic_apply` + `GenericSpecializer` pass
+- All 4 frontends emit generic CIR (NOT frontend monomorphization)
+- GenericSpecializer clones generic functions with concrete types
+- Two-pass block cloning handles multi-block functions correctly
+- Pipeline: Specializer runs BEFORE Sema (resolves types first)
 
-**4 frontends:** ac (C++), Zig (Zig), TypeScript (Go), Swift (Swift). All stay in sync.
+**Next: Phase 7b-d (Witness Tables — the hard part)**
+Read `claude/PHASE7_WITNESS_DESIGN.md` for the full plan.
+- #056 Generic struct
+- #057-058 Trait/protocol declarations + conformances
+- #059 Protocol witness tables (PWT) + `cir.witness_method`
+- #060 Value witness tables (VWT) — the ARC bridge (size, align, copy, destroy)
+
+**Key architectural decisions made this session:**
+- No frontend monomorphization — CIR-level generics only
+- Swift-first witness table design (both PWT and VWT)
+- VWT required for ARC to work with generic types
+- Specializer is an optimization pass, not the only path
+
+**4 frontends:** ac (C++), Zig (Zig), TypeScript (Go), Swift (Swift). All emit identical CIR generic patterns.
 
 ### Distribution & Plugin Architecture — IMPLEMENTED
 
