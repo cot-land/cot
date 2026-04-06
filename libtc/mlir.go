@@ -294,6 +294,22 @@ func (b *Builder) AddBlock(funcOp MlirOperation) MlirBlock {
 	return MlirBlock{block}
 }
 
+// SetGenericParamsAttr adds "cir.generic_params" attribute to a function op.
+func (b *Builder) SetGenericParamsAttr(funcOp MlirOperation, typeParams []string) {
+	attrs := make([]C.MlirAttribute, len(typeParams))
+	for i, tp := range typeParams {
+		cs := C.CString(tp)
+		defer C.free(unsafe.Pointer(cs))
+		ref := C.mlirStringRefCreateFromCString(cs)
+		attrs[i] = C.mlirStringAttrGet(b.ctx.ptr, ref)
+	}
+	arrAttr := C.mlirArrayAttrGet(b.ctx.ptr, C.intptr_t(len(attrs)), &attrs[0])
+	key := C.CString("cir.generic_params")
+	defer C.free(unsafe.Pointer(key))
+	keyRef := C.mlirStringRefCreateFromCString(key)
+	C.mlirOperationSetAttributeByName(funcOp.ptr, keyRef, arrAttr)
+}
+
 // ============================================================
 // CIR C API wrappers
 // ============================================================
@@ -737,6 +753,134 @@ var bytecodeBuffer []byte
 func goMlirStringCallback(str C.MlirStringRef, userData unsafe.Pointer) {
 	data := C.GoBytes(unsafe.Pointer(str.data), C.int(str.length))
 	bytecodeBuffer = append(bytecodeBuffer, data...)
+}
+
+// =============================================================================
+// Generic + Trait Operations (Phase 7a-b)
+// =============================================================================
+
+func CirTypeParamGet(ctx MlirContext, name string) MlirType {
+	cs := C.CString(name)
+	defer C.free(unsafe.Pointer(cs))
+	ref := C.MlirStringRef{data: cs, length: C.size_t(len(name))}
+	return MlirType{ptr: C.cirTypeParamGet(ctx.ptr, ref)}
+}
+
+func CirTypeIsTypeParam(ty MlirType) bool {
+	return bool(C.cirTypeIsTypeParam(ty.ptr))
+}
+
+func MlirValueGetType(val MlirValue) MlirType {
+	return MlirType{ptr: C.mlirValueGetType(val.ptr)}
+}
+
+func MlirTypeEqual(t1 MlirType, t2 MlirType) bool {
+	return bool(C.mlirTypeEqual(t1.ptr, t2.ptr))
+}
+
+func CirBuildGenericApply(block MlirBlock, loc MlirLocation, callee string,
+	operands []MlirValue, resultType MlirType,
+	subsKeys []string, subsTypes []MlirType) MlirValue {
+	cc := C.CString(callee)
+	defer C.free(unsafe.Pointer(cc))
+	calleeRef := C.MlirStringRef{data: cc, length: C.size_t(len(callee))}
+
+	var opPtrs []C.MlirValue
+	for _, o := range operands {
+		opPtrs = append(opPtrs, o.ptr)
+	}
+	var opPtr *C.MlirValue
+	if len(opPtrs) > 0 {
+		opPtr = &opPtrs[0]
+	}
+
+	// Build key refs
+	cKeys := make([]*C.char, len(subsKeys))
+	keyRefs := make([]C.MlirStringRef, len(subsKeys))
+	for i, k := range subsKeys {
+		cKeys[i] = C.CString(k)
+		defer C.free(unsafe.Pointer(cKeys[i]))
+		keyRefs[i] = C.MlirStringRef{data: cKeys[i], length: C.size_t(len(k))}
+	}
+	var keyPtr *C.MlirStringRef
+	if len(keyRefs) > 0 {
+		keyPtr = &keyRefs[0]
+	}
+
+	// Build type ptrs
+	var typePtrs []C.MlirType
+	for _, t := range subsTypes {
+		typePtrs = append(typePtrs, t.ptr)
+	}
+	var typePtr *C.MlirType
+	if len(typePtrs) > 0 {
+		typePtr = &typePtrs[0]
+	}
+
+	return MlirValue{ptr: C.cirBuildGenericApply(block.ptr, loc.ptr,
+		calleeRef, C.intptr_t(len(operands)), opPtr,
+		resultType.ptr, C.intptr_t(len(subsKeys)), keyPtr, typePtr)}
+}
+
+func CirBuildWitnessTable(module MlirModule, loc MlirLocation,
+	tableName string, protocolName string, conformingType MlirType,
+	methodNames []string, methodImpls []string) {
+	ctn := C.CString(tableName)
+	defer C.free(unsafe.Pointer(ctn))
+	cpn := C.CString(protocolName)
+	defer C.free(unsafe.Pointer(cpn))
+	tnRef := C.MlirStringRef{data: ctn, length: C.size_t(len(tableName))}
+	pnRef := C.MlirStringRef{data: cpn, length: C.size_t(len(protocolName))}
+
+	cMNames := make([]*C.char, len(methodNames))
+	mnRefs := make([]C.MlirStringRef, len(methodNames))
+	for i, m := range methodNames {
+		cMNames[i] = C.CString(m)
+		defer C.free(unsafe.Pointer(cMNames[i]))
+		mnRefs[i] = C.MlirStringRef{data: cMNames[i], length: C.size_t(len(m))}
+	}
+	cMImpls := make([]*C.char, len(methodImpls))
+	miRefs := make([]C.MlirStringRef, len(methodImpls))
+	for i, m := range methodImpls {
+		cMImpls[i] = C.CString(m)
+		defer C.free(unsafe.Pointer(cMImpls[i]))
+		miRefs[i] = C.MlirStringRef{data: cMImpls[i], length: C.size_t(len(m))}
+	}
+
+	var mnPtr *C.MlirStringRef
+	if len(mnRefs) > 0 {
+		mnPtr = &mnRefs[0]
+	}
+	var miPtr *C.MlirStringRef
+	if len(miRefs) > 0 {
+		miPtr = &miRefs[0]
+	}
+
+	C.cirBuildWitnessTable(module.ptr, loc.ptr, tnRef, pnRef,
+		conformingType.ptr, C.intptr_t(len(methodNames)), mnPtr, miPtr)
+}
+
+func CirBuildTraitCall(block MlirBlock, loc MlirLocation,
+	protocolName string, methodName string,
+	operands []MlirValue, resultType MlirType) MlirValue {
+	cpn := C.CString(protocolName)
+	defer C.free(unsafe.Pointer(cpn))
+	cmn := C.CString(methodName)
+	defer C.free(unsafe.Pointer(cmn))
+	pnRef := C.MlirStringRef{data: cpn, length: C.size_t(len(protocolName))}
+	mnRef := C.MlirStringRef{data: cmn, length: C.size_t(len(methodName))}
+
+	var opPtrs []C.MlirValue
+	for _, o := range operands {
+		opPtrs = append(opPtrs, o.ptr)
+	}
+	var opPtr *C.MlirValue
+	if len(opPtrs) > 0 {
+		opPtr = &opPtrs[0]
+	}
+
+	return MlirValue{ptr: C.cirBuildTraitCall(block.ptr, loc.ptr,
+		pnRef, mnRef, C.intptr_t(len(operands)), opPtr, resultType.ptr)}
 }
 
 // SerializeToBytecode serializes an MLIR module to bytecode bytes.

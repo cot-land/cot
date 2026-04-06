@@ -132,6 +132,7 @@ void cot::populateCIRToLLVMConversionPatterns(
   populateBitwisePatterns(converter, patterns);
   populateMemoryPatterns(converter, patterns);
   populateControlFlowPatterns(converter, patterns);
+  populateWitnessTablePatterns(converter, patterns);
 }
 
 std::unique_ptr<mlir::Pass> cot::createCIRToLLVMPass() {

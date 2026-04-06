@@ -216,6 +216,7 @@ CIR_BINARY_OP(BitOr, BitOrOp)
 CIR_BINARY_OP(BitXor, BitXorOp)
 CIR_BINARY_OP(Shl, ShlOp)
 CIR_BINARY_OP(Shr, ShrOp)
+CIR_BINARY_OP(ShrS, ShrSOp)
 
 #undef CIR_BINARY_OP
 
@@ -793,4 +794,88 @@ MlirValue cirBuildLandingPad(MlirBlock block, MlirLocation loc,
   auto b = builderAtEnd(block, loc);
   auto op = b.create<cir::LandingPadOp>(unwrap(loc), unwrap(resultType));
   return wrap(op.getResult());
+}
+
+//===----------------------------------------------------------------------===//
+// Protocol Witness Tables + Trait Calls
+//===----------------------------------------------------------------------===//
+
+void cirBuildWitnessTable(MlirModule module, MlirLocation loc,
+                          MlirStringRef tableName,
+                          MlirStringRef protocolName,
+                          MlirType conformingType,
+                          intptr_t nMethods,
+                          MlirStringRef *methodNames,
+                          MlirStringRef *methodImpls) {
+  auto mod = unwrap(module);
+  OpBuilder builder(mod.getContext());
+  builder.setInsertionPointToEnd(mod.getBody());
+
+  llvm::SmallVector<Attribute> names, impls;
+  for (intptr_t i = 0; i < nMethods; i++) {
+    names.push_back(StringAttr::get(mod.getContext(),
+        llvm::StringRef(methodNames[i].data, methodNames[i].length)));
+    impls.push_back(FlatSymbolRefAttr::get(mod.getContext(),
+        llvm::StringRef(methodImpls[i].data, methodImpls[i].length)));
+  }
+
+  builder.create<cir::WitnessTableOp>(unwrap(loc),
+      StringAttr::get(mod.getContext(),
+          llvm::StringRef(tableName.data, tableName.length)),
+      StringAttr::get(mod.getContext(),
+          llvm::StringRef(protocolName.data, protocolName.length)),
+      TypeAttr::get(unwrap(conformingType)),
+      ArrayAttr::get(mod.getContext(), names),
+      ArrayAttr::get(mod.getContext(), impls));
+}
+
+MlirValue cirBuildTraitCall(MlirBlock block, MlirLocation loc,
+                            MlirStringRef protocolName,
+                            MlirStringRef methodName,
+                            intptr_t nOperands, MlirValue *operands,
+                            MlirType resultType) {
+  auto b = builderAtEnd(block, loc);
+  llvm::SmallVector<Value> opVals;
+  for (intptr_t i = 0; i < nOperands; i++)
+    opVals.push_back(unwrap(operands[i]));
+
+  llvm::SmallVector<Type> resultTypes;
+  auto rt = unwrap(resultType);
+  if (rt)
+    resultTypes.push_back(rt);
+
+  auto op = b.create<cir::TraitCallOp>(unwrap(loc),
+      resultTypes,
+      StringAttr::get(b.getContext(),
+          llvm::StringRef(protocolName.data, protocolName.length)),
+      StringAttr::get(b.getContext(),
+          llvm::StringRef(methodName.data, methodName.length)),
+      opVals);
+  if (!resultTypes.empty())
+    return wrap(op.getResult());
+  return {nullptr};
+}
+
+MlirValue cirBuildMethodCall(MlirBlock block, MlirLocation loc,
+                             MlirStringRef methodName,
+                             intptr_t nOperands, MlirValue *operands,
+                             MlirType resultType) {
+  auto b = builderAtEnd(block, loc);
+  llvm::SmallVector<Value> opVals;
+  for (intptr_t i = 0; i < nOperands; i++)
+    opVals.push_back(unwrap(operands[i]));
+
+  llvm::SmallVector<Type> resultTypes;
+  auto rt = unwrap(resultType);
+  if (rt)
+    resultTypes.push_back(rt);
+
+  auto op = b.create<cir::MethodCallOp>(unwrap(loc),
+      resultTypes,
+      StringAttr::get(b.getContext(),
+          llvm::StringRef(methodName.data, methodName.length)),
+      opVals);
+  if (!resultTypes.empty())
+    return wrap(op.getResult());
+  return {nullptr};
 }

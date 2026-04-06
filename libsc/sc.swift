@@ -28,6 +28,7 @@ enum TokenKind: Equatable {
     case kwStruct, kwEnum, kwCase, kwSwitch, kwDefault, kwBreak, kwContinue
     case kwFor, kwIn
     case kwThrows, kwThrow, kwTry, kwDo, kwCatch
+    case kwProtocol, kwExtension
 
     // Range operators
     case halfOpenRange   // ..<
@@ -316,6 +317,8 @@ private func keywordKind(_ s: String) -> TokenKind {
     case "try":      return .kwTry
     case "do":       return .kwDo
     case "catch":    return .kwCatch
+    case "protocol": return .kwProtocol
+    case "extension": return .kwExtension
     case "true":     return .boolLiteral(true)
     case "false":    return .boolLiteral(false)
     case "nil":      return .nilLiteral
@@ -391,10 +394,12 @@ struct FuncParam {
 
 enum Decl {
     case funcDecl(String, [FuncParam], SwiftType?, Bool, [Stmt])  // name, params, retType, throws, body
-    case genericFuncDecl(String, [String], [FuncParam], SwiftType?, Bool, [Stmt])  // name, typeParams, params, retType, throws, body
+    case genericFuncDecl(String, [String], [String: String], [FuncParam], SwiftType?, Bool, [Stmt])  // name, typeParams, typeParamBounds, params, retType, throws, body
     case structDecl(String, [(String, SwiftType)])
     case enumDecl(String, [(String, Int64?)])
     case taggedUnionDecl(String, [(String, SwiftType?)])          // enum with associated values
+    case protocolDecl(String, [(String, [FuncParam], SwiftType?)]) // name, methods(name, params, retType)
+    case extensionDecl(String, String, [Decl])                    // typeName, protocolName, method decls
 }
 
 // =============================================================================
@@ -457,10 +462,12 @@ struct Parser {
 
     mutating func parseDecl() -> Decl? {
         switch peek() {
-        case .kwFunc:   return parseFuncDecl()
-        case .kwStruct: return parseStructDecl()
-        case .kwEnum:   return parseEnumDecl()
-        default:        return nil
+        case .kwFunc:      return parseFuncDecl()
+        case .kwStruct:    return parseStructDecl()
+        case .kwEnum:      return parseEnumDecl()
+        case .kwProtocol:  return parseProtocolDecl()
+        case .kwExtension: return parseExtensionDecl()
+        default:           return nil
         }
     }
 
@@ -471,14 +478,23 @@ struct Parser {
         _ = advance() // func
         guard let name = expectIdentifier() else { return nil }
 
-        // Parse optional type parameters: <T> or <T, U>
+        // Parse optional type parameters: <T> or <T, U> or <T: Protocol>
         var typeParams: [String] = []
+        var typeParamBounds: [String: String] = [:]
         if tokenMatches(peek(), .lt) {
             _ = advance() // <
             while !tokenMatches(peek(), .gt) && !isEof() {
                 if case .identifier(let tp) = peek() {
                     _ = advance()
                     typeParams.append(tp)
+                    // Optional trait bound: T: ProtocolName
+                    if tokenMatches(peek(), .colon) {
+                        _ = advance() // :
+                        if case .identifier(let bound) = peek() {
+                            _ = advance()
+                            typeParamBounds[tp] = bound
+                        }
+                    }
                     if !tokenMatches(peek(), .gt) {
                         _ = expect(.comma)
                     }
@@ -540,7 +556,7 @@ struct Parser {
         _ = expect(.rBrace)
 
         if !typeParams.isEmpty {
-            return .genericFuncDecl(name, typeParams, params, retType, doesThrow, body)
+            return .genericFuncDecl(name, typeParams, typeParamBounds, params, retType, doesThrow, body)
         }
         return .funcDecl(name, params, retType, doesThrow, body)
     }
@@ -624,6 +640,77 @@ struct Parser {
             return .taggedUnionDecl(name, taggedVariants)
         }
         return .enumDecl(name, simpleVariants)
+    }
+
+    // protocol Name { func method(params) -> RetType }
+    // Reference: Swift protocol declarations
+    mutating func parseProtocolDecl() -> Decl? {
+        _ = advance() // protocol
+        guard let name = expectIdentifier() else { return nil }
+        guard expect(.lBrace) else { return nil }
+
+        var methods: [(String, [FuncParam], SwiftType?)] = []
+        while !tokenMatches(peek(), .rBrace) && !isEof() {
+            guard expect(.kwFunc) else {
+                _ = advance() // skip unknown
+                continue
+            }
+            guard let methodName = expectIdentifier() else { continue }
+            guard expect(.lParen) else { continue }
+
+            var params: [FuncParam] = []
+            while !tokenMatches(peek(), .rParen) && !isEof() {
+                // Parse param: _ name: Type
+                if case .identifier(let s) = peek() {
+                    _ = advance()
+                    var paramName = s
+                    // External label then actual name
+                    if case .identifier(let actualName) = peek() {
+                        _ = advance()
+                        paramName = actualName
+                    }
+                    guard expect(.colon) else { break }
+                    guard let ptype = parseType() else { break }
+                    params.append(FuncParam(name: paramName, type: ptype))
+                    if !tokenMatches(peek(), .rParen) {
+                        _ = expect(.comma)
+                    }
+                } else {
+                    break
+                }
+            }
+            _ = expect(.rParen)
+
+            var retType: SwiftType? = nil
+            if tokenMatches(peek(), .arrow) {
+                _ = advance()
+                retType = parseType()
+            }
+            methods.append((methodName, params, retType))
+        }
+        _ = expect(.rBrace)
+        return .protocolDecl(name, methods)
+    }
+
+    // extension TypeName: ProtocolName { func method(params) -> RetType { body } }
+    // Reference: Swift extension conformance declarations
+    mutating func parseExtensionDecl() -> Decl? {
+        _ = advance() // extension
+        guard let typeName = expectIdentifier() else { return nil }
+        guard expect(.colon) else { return nil }
+        guard let protocolName = expectIdentifier() else { return nil }
+        guard expect(.lBrace) else { return nil }
+
+        var methods: [Decl] = []
+        while !tokenMatches(peek(), .rBrace) && !isEof() {
+            if let decl = parseFuncDecl() {
+                methods.append(decl)
+            } else {
+                _ = advance() // skip unknown
+            }
+        }
+        _ = expect(.rBrace)
+        return .extensionDecl(typeName, protocolName, methods)
     }
 
     mutating func parseType() -> SwiftType? {
@@ -1313,9 +1400,14 @@ final class Gen {
     // Current generic type parameters (for resolving T → !cir.type_param<"T">)
     // Reference: ac frontend currentTypeParams_ pattern (libac/codegen.cpp)
     var currentTypeParams: [String] = []
+    // Trait bounds for current generic function (T → "Summable")
+    // Reference: ac frontend currentTraitBounds_ pattern
+    var currentTraitBounds: [String: String] = [:]
     // Generic function registry — to detect generic calls at call sites
     var genericFuncNames: [String] = []
     var genericFuncTypeParams: [[String]] = []
+    // Protocol declarations (stores method signatures for reference)
+    var protocolNames: [String] = []
 
     init(filename: String) {
         self.filename = filename
@@ -1528,12 +1620,14 @@ final class Gen {
         switch decl {
         case .funcDecl(let name, let params, let retType, let doesThrow, let body):
             mapFuncDecl(name: name, params: params, retType: retType, doesThrow: doesThrow, body: body)
-        case .genericFuncDecl(let name, let typeParams, let params, let retType, let doesThrow, let body):
+        case .genericFuncDecl(let name, let typeParams, let bounds, let params, let retType, let doesThrow, let body):
             // Emit generic function with !cir.type_param types.
             // The GenericSpecializer pass in libcot handles monomorphization.
             // Reference: ac frontend currentTypeParams_ pattern (libac/codegen.cpp)
             let savedTypeParams = currentTypeParams
+            let savedTraitBounds = currentTraitBounds
             currentTypeParams = typeParams
+            currentTraitBounds = bounds
             // Register as generic for call-site detection
             genericFuncNames.append(name)
             genericFuncTypeParams.append(typeParams)
@@ -1558,12 +1652,85 @@ final class Gen {
                 }
             }
             currentTypeParams = savedTypeParams
+            currentTraitBounds = savedTraitBounds
+        case .protocolDecl(let name, _):
+            // Store protocol name for reference. No CIR emitted.
+            protocolNames.append(name)
+        case .extensionDecl(let typeName, let protocolName, let methods):
+            mapExtensionDecl(typeName: typeName, protocolName: protocolName, methods: methods)
         case .structDecl(let name, let fields):
             mapStructDecl(name: name, fields: fields)
         case .enumDecl(let name, let variants):
             mapEnumDecl(name: name, variants: variants)
         case .taggedUnionDecl(let name, let variants):
             mapTaggedUnionDecl(name: name, variants: variants)
+        }
+    }
+
+    // Emit impl block: concrete methods + witness table.
+    // Reference: ac frontend emitImplDecl pattern
+    func mapExtensionDecl(typeName: String, protocolName: String, methods: [Decl]) {
+        var methodNames: [String] = []
+        var methodFnNames: [String] = []
+
+        for method in methods {
+            guard case .funcDecl(let mname, let params, let retType, let doesThrow, let body) = method else { continue }
+
+            let mangledName = "\(typeName)_\(protocolName)_\(mname)"
+
+            // In Swift, self is implicit. Inject it as first parameter.
+            var resolvedParams: [FuncParam] = [FuncParam(name: "self", type: .named(typeName))]
+            resolvedParams.append(contentsOf: params)
+
+            mapFuncDecl(name: mangledName, params: resolvedParams,
+                        retType: retType, doesThrow: doesThrow, body: body)
+
+            methodNames.append(mname)
+            methodFnNames.append(mangledName)
+        }
+
+        // Find the conforming type
+        guard let structInfo = structs.first(where: { $0.name == typeName }) else {
+            return // type not found
+        }
+
+        // Emit witness table
+        // Use stable C strings (avoid Swift lifetime issues with withCString closures)
+        let tableName = "\(typeName)_\(protocolName)"
+        let tableNameData = Array(tableName.utf8) + [0]
+        let protoNameData = Array(protocolName.utf8) + [0]
+
+        var methodNameDatas: [[UInt8]] = methodNames.map { Array($0.utf8) + [0] }
+        var methodImplDatas: [[UInt8]] = methodFnNames.map { Array($0.utf8) + [0] }
+
+        tableNameData.withUnsafeBufferPointer { tableNameBuf in
+            protoNameData.withUnsafeBufferPointer { protoNameBuf in
+                let tableRef = MlirStringRef(data: UnsafeRawPointer(tableNameBuf.baseAddress!).assumingMemoryBound(to: CChar.self), length: tableName.utf8.count)
+                let protoRef = MlirStringRef(data: UnsafeRawPointer(protoNameBuf.baseAddress!).assumingMemoryBound(to: CChar.self), length: protocolName.utf8.count)
+
+                var nameRefs: [MlirStringRef] = []
+                var implRefs: [MlirStringRef] = []
+                for i in 0..<methodNames.count {
+                    methodNameDatas[i].withUnsafeBufferPointer { buf in
+                        nameRefs.append(MlirStringRef(data: UnsafeRawPointer(buf.baseAddress!).assumingMemoryBound(to: CChar.self), length: methodNames[i].utf8.count))
+                    }
+                    methodImplDatas[i].withUnsafeBufferPointer { buf in
+                        implRefs.append(MlirStringRef(data: UnsafeRawPointer(buf.baseAddress!).assumingMemoryBound(to: CChar.self), length: methodFnNames[i].utf8.count))
+                    }
+                }
+
+                nameRefs.withUnsafeMutableBufferPointer { nameBuf in
+                    implRefs.withUnsafeMutableBufferPointer { implBuf in
+                        cirBuildWitnessTable(
+                            module, unknownLoc,
+                            tableRef, protoRef,
+                            structInfo.mlirType,
+                            Int(nameBuf.count),
+                            nameBuf.baseAddress,
+                            implBuf.baseAddress)
+                    }
+                }
+            }
         }
     }
 
@@ -2579,7 +2746,43 @@ final class Gen {
     func mapMethodCall(base: Expr, method: String, args: [Expr],
                        expectedType: MlirType) -> MlirValue {
         // Method call: p.distance() => call @distance(p)
-        let baseVal = mapExpr(base, expectedType: intType(32))
+        let baseVal = mapExpr(base, expectedType: expectedType)
+
+        // Phase 7b: Check if receiver is a type_param with a trait bound
+        // Reference: ac frontend trait_call emission pattern
+        let baseType = mlirValueGetType(baseVal)
+        if cirTypeIsTypeParam(baseType) {
+            // Find which type param this is and check for trait bound
+            for (tp, bound) in currentTraitBounds {
+                let tpType = tp.withCString { cstr in
+                    let ref = mlirStringRefCreateFromCString(cstr)
+                    return cirTypeParamGet(ctx, ref)
+                }
+                if mlirTypeEqual(baseType, tpType) {
+                    // Emit cir.trait_call instead of func.call
+                    var allArgs = [baseVal]
+                    for arg in args {
+                        allArgs.append(mapExpr(arg, expectedType: expectedType))
+                    }
+                    return allArgs.withUnsafeMutableBufferPointer { argBuf in
+                        return bound.withCString { boundC in
+                            return method.withCString { methodC in
+                                let boundRef = mlirStringRefCreateFromCString(boundC)
+                                let methodRef = mlirStringRefCreateFromCString(methodC)
+                                return cirBuildTraitCall(
+                                    currentBlock, unknownLoc,
+                                    boundRef, methodRef,
+                                    Int(argBuf.count),
+                                    argBuf.baseAddress,
+                                    expectedType)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Normal method call path
         var allArgs = [baseVal]
         for arg in args {
             allArgs.append(mapExpr(arg, expectedType: intType(32)))

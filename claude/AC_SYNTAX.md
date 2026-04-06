@@ -2,7 +2,7 @@
 
 **ac = agentic cot** — syntax designed by AI agents
 
-**Version:** 0.1 (Phase 1)
+**Version:** 0.7 (Phase 7b — Generics + Traits + Structural Dispatch)
 **Updated as features are implemented. Each section lists the feature number from FEATURES.md.**
 
 ---
@@ -242,27 +242,57 @@ match color {
 }
 ```
 
-## Generics (#055-#059)
+## Generics (#055)
 
 ```ac
-fn max[T](a: T, b: T) -> T {
-    if a > b { a } else { b }
+fn identity[T](x: T) -> T {         // generic function with type param
+    return x
 }
+
+let r = identity[i32](42)            // explicit type arg at call site
 ```
 
-## Traits (#057-#060)
+- `[T]` after function name declares type parameters
+- Call site: `func[ConcreteType](args)` — type argument in brackets
+- CIR: emits `!cir.type_param<"T">` + `cir.generic_apply`
+- GenericSpecializer monomorphizes before lowering
+
+## Traits (#057-#059)
 
 ```ac
-trait Hashable {
-    fn hash(self) -> u64
+trait Summable {                      // (✓ #057) trait declaration
+    fn sum(self) -> i32               // method signature — self is receiver
 }
 
-impl Hashable for Point {
-    fn hash(self) -> u64 {
-        // ...
+impl Summable for Point {             // (✓ #058) trait conformance
+    fn sum(self) -> i32 {             // concrete implementation
+        return self.x + self.y
     }
 }
+
+fn apply[T: Summable](val: T) -> i32 { // (✓ #059) trait-bounded generic
+    return val.sum()                    // → cir.trait_call (named dispatch)
+}
 ```
+
+- `trait Name { fn method(self) -> Type }` — declares protocol with method signatures
+- `impl Trait for Type { fn method(self) -> Type { body } }` — conformance
+- `[T: Trait]` — generic with trait bound
+- `self` in trait methods: bare keyword (no type annotation in trait/impl)
+- `self: Type` in standalone functions: explicit type annotation
+- Emits `cir.witness_table` + `cir.trait_call` (resolved by specializer)
+
+## Structural Dispatch (Duck Typing)
+
+```ac
+fn apply[T](val: T) -> i32 {         // generic WITHOUT trait bound
+    return val.sum()                   // → cir.method_call (duck dispatch)
+}
+```
+
+- When T has no trait bound, method calls use structural dispatch
+- CIR: emits `cir.method_call "sum"` — resolved by name lookup on concrete type
+- Reference: Zig comptime duck typing, Go structural interfaces
 
 ## Memory (ARC) (#061-#065)
 

@@ -83,6 +83,20 @@ struct ShrOpLowering : public OpConversionPattern<cir::ShrOp> {
   }
 };
 
+/// cir.shr_s → llvm.ashr (arithmetic/signed shift right)
+/// Reference: MLIR Arith ShRSIOp → LLVM AShrOp
+struct ShrSOpLowering : public OpConversionPattern<cir::ShrSOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(cir::ShrSOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    auto type = getTypeConverter()->convertType(op.getType());
+    if (!type) return rewriter.notifyMatchFailure(op, "type conversion failed");
+    rewriter.replaceOpWithNewOp<LLVM::AShrOp>(op, type,
+        adaptor.getLhs(), adaptor.getRhs());
+    return success();
+  }
+};
+
 } // namespace
 
 void cot::populateBitwisePatterns(
@@ -91,6 +105,6 @@ void cot::populateBitwisePatterns(
   MLIRContext *ctx = patterns.getContext();
   patterns.add<
       BitAndOpLowering, BitOrOpLowering, BitXorOpLowering,
-      BitNotOpLowering, ShlOpLowering, ShrOpLowering
+      BitNotOpLowering, ShlOpLowering, ShrOpLowering, ShrSOpLowering
   >(converter, ctx);
 }

@@ -1,0 +1,58 @@
+// RUN: %cot emit-cir %s | %FileCheck %s
+
+// Feature #057-058: Trait declarations + conformances
+// Frontend emits: impl method functions, cir.witness_table, cir.trait_call.
+// GenericSpecializer resolves trait_call to direct call via witness table lookup.
+
+struct Point {
+    x: i32
+    y: i32
+}
+
+trait Summable {
+    fn sum(self) -> i32
+}
+
+impl Summable for Point {
+    fn sum(self) -> i32 {
+        return self.x + self.y
+    }
+}
+
+fn apply_sum[T: Summable](val: T) -> i32 {
+    return val.sum()
+}
+
+fn make_point(a: i32, b: i32) -> Point {
+    return Point { x: a, y: b }
+}
+
+fn main() -> i32 {
+    let p: Point = make_point(10, 20)
+    return apply_sum[Point](p)
+}
+
+// Impl method emitted with mangled name
+// CHECK-LABEL: func.func @Point_Summable_sum
+// CHECK-SAME: !cir.struct<"Point", x: i32, y: i32>
+// CHECK: cir.field_val
+// CHECK: cir.field_val
+// CHECK: cir.add
+// CHECK: return
+
+// Witness table emitted
+// CHECK: cir.witness_table "Point_Summable"
+// CHECK-SAME: protocol("Summable")
+// CHECK-SAME: type(!cir.struct<"Point", x: i32, y: i32>)
+// CHECK-SAME: methods(["sum"] = [@Point_Summable_sum])
+
+// main calls specialized apply_sum
+// CHECK-LABEL: func.func @main
+// CHECK: call @make_point
+// CHECK: call @
+// CHECK: return
+
+// Specialized function — trait_call resolved to direct call via witness table
+// CHECK: func.func @
+// CHECK: call @Point_Summable_sum
+// CHECK: return

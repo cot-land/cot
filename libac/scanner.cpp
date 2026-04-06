@@ -45,6 +45,7 @@ static const std::unordered_map<std::string_view, Tag> keywords = {
     {"null", Tag::kw_null},
     {"self", Tag::kw_self},       {"type", Tag::kw_type},
     {"test", Tag::kw_test},       {"assert", Tag::kw_assert},
+    {"trait", Tag::kw_trait},     {"impl", Tag::kw_impl},
     // Type keywords
     {"i8", Tag::kw_i8},     {"i16", Tag::kw_i16},
     {"i32", Tag::kw_i32},   {"i64", Tag::kw_i64},

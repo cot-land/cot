@@ -1,6 +1,6 @@
 # Handoff — COT Compiler Toolkit
 
-**Date:** 2026-04-06 (Phase 7a COMPLETE — CIR-level generics with GenericSpecializer. 4 frontends.)
+**Date:** 2026-04-06 (Phase 7b COMPLETE + Round 9 audit fixes. 65 ops, 10 types, 198 tests.)
 
 ---
 
@@ -28,11 +28,11 @@ make test         # Run all test layers (lit, gate, inline, build)
 ./cot test file.ac          # Run inline test blocks
 ```
 
-**Total: 158 lit + 27 inline files + 1 gate + 4 build = 190 test targets, all passing.**
+**Total: 164 lit + 29 inline files + 1 gate + 4 build = 198 test targets, all passing.**
 
 ---
 
-## CIR Ops (61 ops, 10 custom types)
+## CIR Ops (65 ops, 10 custom types)
 
 | Op | Description | LLVM Lowering |
 |----|-------------|---------------|
@@ -123,13 +123,16 @@ claude/          Internal docs
 
 1. **CLAUDE.md** — Rules + 12-step feature checklist. READ THIS FIRST.
 2. **claude/ADVANCED_ARCHITECTURE.md** — Phase 7+ plan: generics, classes, closures, ARC, async.
-2b. **claude/PHASE6_DESIGN.md** — Phase 6 design (complete): enums, tagged unions, match/switch.
-2c. **claude/PHASE5_DESIGN.md** — Phase 5 design (complete): optionals, error unions, exceptions.
-3. **claude/ARCHITECTURE.md** — Design, CIR ops, Sema pass, Swift type philosophy, pass pipeline.
-4. **claude/REFERENCES.md** — Which reference to study for each component.
-5. **claude/FEATURES.md** — 80 features with Zig syntax column. Implementation order.
-6. **claude/DISTRIBUTION_DESIGN.md** — CMake super-build, C API, pass plugin design (Phase A+B done).
-7. **claude/AUDIT.md** — Round 6 compliance findings, open issues.
+3. **claude/PHASE7_WITNESS_DESIGN.md** — Active design: witness tables, trait/method dispatch.
+4. **claude/ARCHITECTURE.md** — Design, CIR ops, Sema pass, Swift type philosophy, pass pipeline.
+5. **claude/REFERENCES.md** — Which reference to study for each component.
+6. **claude/FEATURES.md** — ~120 features with implementation status.
+7. **claude/AUDIT.md** — Round 9 compliance findings, all issues.
+8. **claude/AC_SYNTAX.md** — ac language syntax reference (v0.7).
+9. **claude/DEVELOPER_EXPERIENCE.md** — Error messages, diagnostics, debugging.
+10. **claude/DISTRIBUTION_DESIGN.md** — CMake super-build, C API, pass plugins.
+
+**Archived** (complete phases): `claude/archive/PHASE4_DESIGN.md`, `PHASE5_DESIGN.md`, `PHASE6_DESIGN.md`, `PHASE7_DESIGN.md`.
 
 ---
 
@@ -203,15 +206,36 @@ claude/          Internal docs
 - Two-pass block cloning handles multi-block functions correctly
 - Pipeline: Specializer runs BEFORE Sema (resolves types first)
 
-**Next: Phase 7b-d (Witness Tables — the hard part)**
+**Phase 7b COMPLETE — Trait declarations + conformances:**
+- ✓ #057 Trait declaration — `trait Name { fn method(self) -> T }` parsed, stored as metadata
+- ✓ #058 Trait implementation — `impl Trait for Type { fn method(self) -> T { ... } }` emits concrete methods
+- ✓ #059 Trait bounds — `fn apply[T: Trait](val: T)` emits `cir.trait_call`, resolved by GenericSpecializer
+- ✓ `cir.witness_table` op — PWT declaration (protocol name + conforming type + method entries)
+- ✓ `cir.trait_call` op — trait method dispatch, resolved to direct call via witness table lookup
+- ✓ Lowering: `cir.witness_table` → `llvm.mlir.global constant` struct of function pointers
+- ✓ GenericSpecializer extended: resolves `cir.trait_call` to `func.call @ConcreteImpl`
+- ✓ Tests: ac lit test + lowering test + 3 inline runtime tests
+
+**Next: Phase 7c-d (Dynamic dispatch + Value witness tables)**
 Read `claude/PHASE7_WITNESS_DESIGN.md` for the full plan.
 - #056 Generic struct
-- #057-058 Trait/protocol declarations + conformances
-- #059 Protocol witness tables (PWT) + `cir.witness_method`
 - #060 Value witness tables (VWT) — the ARC bridge (size, align, copy, destroy)
+- Protocol dispatch: `cir.witness_method` for dynamic dispatch through PWT function pointers
+- Existentials: `cir.init_existential` / `cir.open_existential` for `dyn Trait`
+- TS/Swift frontends now emit `cir.trait_call` for trait-bounded generic calls
+- TS `interface` + `<T extends Interface>` → CIR-level trait call
+- Swift `protocol` + `<T: Protocol>` + `extension Type: Protocol` → witness table + trait call
+- ✓ `cir.method_call` op — structural/duck dispatch (Zig field_call / Go OCALLINTER pattern)
+- Zig `val.method()` on comptime type → `cir.method_call` (not plain func.call)
+- ac unbounded generics `fn f[T](val: T) { val.m() }` → `cir.method_call`
+- Specializer resolves `cir.method_call` by name lookup on concrete type (Zig fieldCallBind pattern)
+- Tests: ac + Zig lit tests + inline runtime test for duck dispatch
 
 **Key architectural decisions made this session:**
 - No frontend monomorphization — CIR-level generics only
+- ALL 4 frontends now use CIR-level generics for traits/protocols (not frontend monomorphization)
+- Two distinct dispatch ops: `cir.trait_call` (named protocol, Swift/Rust) + `cir.method_call` (structural, Zig/Go)
+- Design audited against Zig Sema, Go itab, Swift witness_method, Rust InstanceKind references
 - Swift-first witness table design (both PWT and VWT)
 - VWT required for ARC to work with generic types
 - Specializer is an optimization pass, not the only path

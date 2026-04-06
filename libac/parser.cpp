@@ -251,7 +251,7 @@ class Parser {
       return e;
     }
 
-    if (tok.tag == Tag::identifier) {
+    if (tok.tag == Tag::identifier || tok.tag == Tag::kw_self) {
       auto name = tokenText(tok);
       size_t p = tok.start;
       advance();
@@ -862,21 +862,45 @@ class Parser {
     fn.pos = peek().start;
     fn.name = tokenText(expect(Tag::identifier));
 
-    // Optional type parameters: fn max[T, U](...)
+    // Optional type parameters: fn max[T, U](...) or fn apply[T: Summable](...)
     if (match(Tag::l_bracket)) {
       fn.typeParams.push_back(tokenText(expect(Tag::identifier)));
-      while (match(Tag::comma))
+      // Optional trait bound: T: TraitName
+      if (match(Tag::colon))
+        fn.typeParamBounds.push_back(tokenText(expect(Tag::identifier)));
+      else
+        fn.typeParamBounds.push_back("");
+      while (match(Tag::comma)) {
         fn.typeParams.push_back(tokenText(expect(Tag::identifier)));
+        if (match(Tag::colon))
+          fn.typeParamBounds.push_back(tokenText(expect(Tag::identifier)));
+        else
+          fn.typeParamBounds.push_back("");
+      }
       expect(Tag::r_bracket);
     }
 
     expect(Tag::l_paren);
     if (!check(Tag::r_paren)) {
-      Param p;
-      p.name = tokenText(expect(Tag::identifier));
-      expect(Tag::colon);
-      p.type = parseType();
-      fn.params.push_back(p);
+      // Handle self parameter — bare (in impl) or with type annotation (standalone)
+      if (check(Tag::kw_self)) {
+        Param p;
+        p.name = tokenText(advance());
+        if (match(Tag::colon)) {
+          // self: Type — standalone function with explicit type
+          p.type = parseType();
+        } else {
+          // bare self — in impl block, type resolved from impl context
+          p.type = TypeRef{"self"};
+        }
+        fn.params.push_back(p);
+      } else {
+        Param p;
+        p.name = tokenText(expect(Tag::identifier));
+        expect(Tag::colon);
+        p.type = parseType();
+        fn.params.push_back(p);
+      }
       while (match(Tag::comma)) {
         Param p2;
         p2.name = tokenText(expect(Tag::identifier));
@@ -982,6 +1006,79 @@ class Parser {
     return ud;
   }
 
+  // ---- Trait declaration ----
+  // trait Summable { fn sum(self) -> i32 }
+  TraitDecl parseTraitDecl() {
+    expect(Tag::kw_trait);
+    TraitDecl td;
+    td.pos = peek().start;
+    td.name = tokenText(expect(Tag::identifier));
+
+    expect(Tag::l_brace);
+    skipSemis();
+    while (!check(Tag::r_brace) && !check(Tag::eof)) {
+      // Parse method signature: fn name(params) -> type
+      expect(Tag::kw_fn);
+      TraitMethodSig sig;
+      sig.name = tokenText(expect(Tag::identifier));
+      expect(Tag::l_paren);
+      if (!check(Tag::r_paren)) {
+        // First param might be `self`
+        if (check(Tag::kw_self)) {
+          advance();
+          sig.hasSelf = true;
+        } else {
+          Param p;
+          p.name = tokenText(expect(Tag::identifier));
+          expect(Tag::colon);
+          p.type = parseType();
+          sig.params.push_back(p);
+        }
+        while (match(Tag::comma)) {
+          Param p;
+          p.name = tokenText(expect(Tag::identifier));
+          expect(Tag::colon);
+          p.type = parseType();
+          sig.params.push_back(p);
+        }
+      }
+      expect(Tag::r_paren);
+      if (match(Tag::arrow)) {
+        sig.returnType = parseType();
+      } else {
+        sig.returnType = TypeRef{"void"};
+      }
+      td.methods.push_back(sig);
+      skipSemis();
+    }
+    expect(Tag::r_brace);
+    match(Tag::semicolon);
+    return td;
+  }
+
+  // ---- Impl declaration ----
+  // impl Summable for Point { fn sum(self) -> i32 { ... } }
+  ImplDecl parseImplDecl() {
+    expect(Tag::kw_impl);
+    ImplDecl id;
+    id.pos = peek().start;
+    id.traitName = tokenText(expect(Tag::identifier));
+
+    // "for" keyword — reuse kw_for from loop syntax
+    expect(Tag::kw_for);
+    id.typeName = tokenText(expect(Tag::identifier));
+
+    expect(Tag::l_brace);
+    skipSemis();
+    while (!check(Tag::r_brace) && !check(Tag::eof)) {
+      id.methods.push_back(parseFnDecl());
+      skipSemis();
+    }
+    expect(Tag::r_brace);
+    match(Tag::semicolon);
+    return id;
+  }
+
   // ---- Test declaration (Zig pattern: test "name" { body }) ----
   TestDecl parseTestDecl() {
     expect(Tag::kw_test);
@@ -1027,6 +1124,10 @@ public:
         mod.enums.push_back(parseEnumDecl());
       } else if (check(Tag::kw_union)) {
         mod.unions.push_back(parseUnionDecl());
+      } else if (check(Tag::kw_trait)) {
+        mod.traits.push_back(parseTraitDecl());
+      } else if (check(Tag::kw_impl)) {
+        mod.impls.push_back(parseImplDecl());
       } else {
         llvm::errs() << "error: unexpected '" << tokenText(peek()) << "' at top level\n";
         advance();

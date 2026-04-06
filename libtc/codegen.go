@@ -84,6 +84,16 @@ type Gen struct {
 	// Try/catch state: pending catch block for exception unwinding
 	pendingCatchBlock MlirBlock
 	pendingCatchVar   string
+
+	// Generic function registry (Phase 7a-b)
+	currentTypeParams  []string
+	currentTraitBounds map[string]string // T → "Interface"
+	genericFuncNames   []string
+	genericFuncTypeParams [][]string
+
+	// Protocol/interface registry for trait support
+	protocolNames   []string
+	protocolMethods [][]string // method names per protocol
 }
 
 // NewGen creates a new code generator with MLIR context and module.
@@ -254,6 +264,32 @@ func (g *Gen) mapFuncDecl(node *ast.Node) {
 	fd := node.AsFunctionDeclaration()
 	name := fd.Name().AsIdentifier().Text
 
+	// Phase 7a-b: Parse type parameters <T> or <T extends Interface>
+	savedTypeParams := g.currentTypeParams
+	savedTraitBounds := g.currentTraitBounds
+	g.currentTypeParams = nil
+	g.currentTraitBounds = make(map[string]string)
+
+	if fd.TypeParameters != nil {
+		for _, tp := range fd.TypeParameters.Nodes {
+			tpd := tp.AsTypeParameter()
+			tpName := tpd.Name().AsIdentifier().Text
+			g.currentTypeParams = append(g.currentTypeParams, tpName)
+			// Check for constraint: T extends Interface
+			if tpd.Constraint != nil {
+				// Extract the interface name directly from the type reference
+				if tpd.Constraint.Kind == ast.KindTypeReference {
+					tr := tpd.Constraint.AsTypeReference()
+					if tr.TypeName != nil && tr.TypeName.Kind == ast.KindIdentifier {
+						g.currentTraitBounds[tpName] = tr.TypeName.AsIdentifier().Text
+					}
+				}
+			}
+		}
+		g.genericFuncNames = append(g.genericFuncNames, name)
+		g.genericFuncTypeParams = append(g.genericFuncTypeParams, g.currentTypeParams)
+	}
+
 	var paramTypes []MlirType
 	var pNames []string
 	if fd.Parameters != nil {
@@ -298,6 +334,14 @@ func (g *Gen) mapFuncDecl(node *ast.Node) {
 	if !g.hasTerminator {
 		g.b.Emit(g.currentBlock, "func.return", nil, nil, nil)
 	}
+
+	// Phase 7a: Add cir.generic_params attribute for specializer
+	if len(g.currentTypeParams) > 0 {
+		g.b.SetGenericParamsAttr(funcOp, g.currentTypeParams)
+	}
+
+	g.currentTypeParams = savedTypeParams
+	g.currentTraitBounds = savedTraitBounds
 }
 
 // ============================================================
@@ -983,6 +1027,25 @@ func (g *Gen) mapCallExpr(block MlirBlock, node *ast.Node, resultType MlirType) 
 		calleeName = pa.Name().AsIdentifier().Text
 		// Emit receiver as first argument
 		receiver := g.mapExpr(block, pa.Expression, resultType)
+
+		// Phase 7b: Check if receiver is type_param with trait bound → cir.trait_call
+		receiverType := MlirValueGetType(receiver)
+		if CirTypeIsTypeParam(receiverType) {
+			for tp, bound := range g.currentTraitBounds {
+				tpType := CirTypeParamGet(g.ctx, tp)
+				if MlirTypeEqual(receiverType, tpType) {
+					// Emit cir.trait_call
+					traitArgs := []MlirValue{receiver}
+					if ce.Arguments != nil {
+						for _, arg := range ce.Arguments.Nodes {
+							traitArgs = append(traitArgs, g.mapExpr(block, arg, resultType))
+						}
+					}
+					return CirBuildTraitCall(block, g.b.loc, bound, calleeName, traitArgs, resultType)
+				}
+			}
+		}
+
 		args = append(args, receiver)
 	} else if ce.Expression.Kind == ast.KindIdentifier {
 		calleeName = ce.Expression.AsIdentifier().Text
@@ -991,6 +1054,21 @@ func (g *Gen) mapCallExpr(block MlirBlock, node *ast.Node, resultType MlirType) 
 	if ce.Arguments != nil {
 		for _, arg := range ce.Arguments.Nodes {
 			args = append(args, g.mapExpr(block, arg, resultType))
+		}
+	}
+
+	// Phase 7a: Check if callee is a generic function → cir.generic_apply
+	for i, gfn := range g.genericFuncNames {
+		if gfn == calleeName {
+			typeParams := g.genericFuncTypeParams[i]
+			// Infer type arguments from the result type
+			subsKeys := typeParams
+			subsTypes := make([]MlirType, len(typeParams))
+			for j := range subsTypes {
+				subsTypes[j] = resultType // infer from expected result type
+			}
+			return CirBuildGenericApply(block, g.b.loc, calleeName,
+				args, resultType, subsKeys, subsTypes)
 		}
 	}
 
@@ -1180,6 +1258,12 @@ func (g *Gen) resolveType(node *ast.Node) MlirType {
 		tr := node.AsTypeReference()
 		if tr.TypeName != nil && tr.TypeName.Kind == ast.KindIdentifier {
 			name := tr.TypeName.AsIdentifier().Text
+			// Phase 7a: Check if this is a generic type parameter (T → !cir.type_param<"T">)
+			for _, tp := range g.currentTypeParams {
+				if tp == name {
+					return CirTypeParamGet(g.ctx, name)
+				}
+			}
 			// Check type aliases first (e.g. Result → !cir.error_union<i32>)
 			for i, an := range g.typeAliasNames {
 				if an == name {

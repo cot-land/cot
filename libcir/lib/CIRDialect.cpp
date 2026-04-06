@@ -923,6 +923,221 @@ bool TruncFOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
 }
 
 //===----------------------------------------------------------------------===//
+// cir.witness_table — custom parse/print/verify
+// Reference: Swift SILWitnessTable.h — protocol witness table
+//===----------------------------------------------------------------------===//
+
+/// Parse: cir.witness_table "Name" protocol("P") type(T)
+///        methods(["m1", "m2"] = [@fn1, @fn2])
+ParseResult WitnessTableOp::parse(OpAsmParser &parser, OperationState &result) {
+  StringAttr tableName;
+  if (parser.parseAttribute(tableName))
+    return failure();
+  result.addAttribute("table_name", tableName);
+
+  // protocol("name")
+  if (parser.parseKeyword("protocol") || parser.parseLParen())
+    return failure();
+  StringAttr protocolName;
+  if (parser.parseAttribute(protocolName))
+    return failure();
+  result.addAttribute("protocol_name", protocolName);
+  if (parser.parseRParen())
+    return failure();
+
+  // type(!cir.struct<...>)
+  if (parser.parseKeyword("type") || parser.parseLParen())
+    return failure();
+  Type conformingType;
+  if (parser.parseType(conformingType))
+    return failure();
+  result.addAttribute("conforming_type", TypeAttr::get(conformingType));
+  if (parser.parseRParen())
+    return failure();
+
+  // methods(["name1", "name2"] = [@fn1, @fn2])
+  if (parser.parseKeyword("methods") || parser.parseLParen())
+    return failure();
+
+  // Parse method names: ["name1", "name2"]
+  llvm::SmallVector<Attribute> methodNames;
+  if (parser.parseLSquare())
+    return failure();
+  if (failed(parser.parseOptionalRSquare())) {
+    do {
+      StringAttr name;
+      if (parser.parseAttribute(name))
+        return failure();
+      methodNames.push_back(name);
+    } while (succeeded(parser.parseOptionalComma()));
+    if (parser.parseRSquare())
+      return failure();
+  }
+  result.addAttribute("method_names",
+      ArrayAttr::get(parser.getContext(), methodNames));
+
+  if (parser.parseEqual())
+    return failure();
+
+  // Parse method impls: [@fn1, @fn2]
+  llvm::SmallVector<Attribute> methodImpls;
+  if (parser.parseLSquare())
+    return failure();
+  if (failed(parser.parseOptionalRSquare())) {
+    do {
+      FlatSymbolRefAttr ref;
+      if (parser.parseAttribute(ref))
+        return failure();
+      methodImpls.push_back(ref);
+    } while (succeeded(parser.parseOptionalComma()));
+    if (parser.parseRSquare())
+      return failure();
+  }
+  result.addAttribute("method_impls",
+      ArrayAttr::get(parser.getContext(), methodImpls));
+
+  if (parser.parseRParen())
+    return failure();
+
+  return success();
+}
+
+void WitnessTableOp::print(OpAsmPrinter &p) {
+  p << " \"" << getTableName() << "\"";
+  p << " protocol(\"" << getProtocolName() << "\")";
+  p << " type(" << getConformingType() << ")";
+  p << " methods([";
+  auto names = getMethodNames();
+  for (size_t i = 0; i < names.size(); i++) {
+    if (i) p << ", ";
+    p << "\"" << llvm::cast<StringAttr>(names[i]).getValue() << "\"";
+  }
+  p << "] = [";
+  auto impls = getMethodImpls();
+  for (size_t i = 0; i < impls.size(); i++) {
+    if (i) p << ", ";
+    p.printAttribute(impls[i]);
+  }
+  p << "])";
+}
+
+LogicalResult WitnessTableOp::verify() {
+  if (getMethodNames().size() != getMethodImpls().size())
+    return emitOpError("method names count (")
+        << getMethodNames().size() << ") must match method impls count ("
+        << getMethodImpls().size() << ")";
+  for (auto name : getMethodNames()) {
+    if (!llvm::isa<StringAttr>(name))
+      return emitOpError("method names must be strings");
+  }
+  for (auto impl : getMethodImpls()) {
+    if (!llvm::isa<FlatSymbolRefAttr>(impl))
+      return emitOpError("method impls must be symbol references");
+  }
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// cir.trait_call — custom parse/print
+// Reference: Swift SIL witness_method + apply
+//===----------------------------------------------------------------------===//
+
+/// Parse: cir.trait_call "Protocol", "method"(%arg) : (types) -> result
+ParseResult TraitCallOp::parse(OpAsmParser &parser, OperationState &result) {
+  // Parse protocol name and method name
+  StringAttr protocolName, methodName;
+  if (parser.parseAttribute(protocolName))
+    return failure();
+  result.addAttribute("protocol_name", protocolName);
+  if (parser.parseComma() || parser.parseAttribute(methodName))
+    return failure();
+  result.addAttribute("method_name", methodName);
+
+  // Parse operands in parens
+  llvm::SmallVector<OpAsmParser::UnresolvedOperand> operands;
+  if (parser.parseLParen())
+    return failure();
+  if (failed(parser.parseOptionalRParen())) {
+    do {
+      OpAsmParser::UnresolvedOperand operand;
+      if (parser.parseOperand(operand))
+        return failure();
+      operands.push_back(operand);
+    } while (succeeded(parser.parseOptionalComma()));
+    if (parser.parseRParen())
+      return failure();
+  }
+
+  // Parse functional type: (input types) -> result type
+  FunctionType fnType;
+  if (parser.parseColonType(fnType))
+    return failure();
+
+  // Resolve operands
+  if (parser.resolveOperands(operands, fnType.getInputs(),
+                              parser.getNameLoc(), result.operands))
+    return failure();
+
+  // Add result types
+  result.addTypes(fnType.getResults());
+
+  return success();
+}
+
+void TraitCallOp::print(OpAsmPrinter &p) {
+  p << " \"" << getProtocolName() << "\", \"" << getMethodName() << "\"(";
+  p.printOperands(getOperands());
+  p << ") : ";
+  // Print as functional type
+  p.printFunctionalType(getOperandTypes(), getResultTypes());
+}
+
+//===----------------------------------------------------------------------===//
+// cir.method_call — custom parse/print
+// Reference: Zig ZIR field_call — structural method dispatch
+//===----------------------------------------------------------------------===//
+
+/// Parse: cir.method_call "method"(%arg) : (types) -> result
+ParseResult MethodCallOp::parse(OpAsmParser &parser, OperationState &result) {
+  StringAttr methodName;
+  if (parser.parseAttribute(methodName))
+    return failure();
+  result.addAttribute("method_name", methodName);
+
+  llvm::SmallVector<OpAsmParser::UnresolvedOperand> operands;
+  if (parser.parseLParen())
+    return failure();
+  if (failed(parser.parseOptionalRParen())) {
+    do {
+      OpAsmParser::UnresolvedOperand operand;
+      if (parser.parseOperand(operand))
+        return failure();
+      operands.push_back(operand);
+    } while (succeeded(parser.parseOptionalComma()));
+    if (parser.parseRParen())
+      return failure();
+  }
+
+  FunctionType fnType;
+  if (parser.parseColonType(fnType))
+    return failure();
+
+  if (parser.resolveOperands(operands, fnType.getInputs(),
+                              parser.getNameLoc(), result.operands))
+    return failure();
+
+  result.addTypes(fnType.getResults());
+  return success();
+}
+
+void MethodCallOp::print(OpAsmPrinter &p) {
+  p << " \"" << getMethodName() << "\"(";
+  p.printOperands(getOperands());
+  p << ") : ";
+  p.printFunctionalType(getOperandTypes(), getResultTypes());
+}
+
+//===----------------------------------------------------------------------===//
 // TableGen-generated op definitions
 //===----------------------------------------------------------------------===//
 

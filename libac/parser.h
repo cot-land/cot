@@ -112,6 +112,7 @@ struct UnionDecl {
 struct FnDecl {
   std::string_view name;
   std::vector<std::string_view> typeParams; // Generic type parameters: [T, U]
+  std::vector<std::string_view> typeParamBounds; // Parallel: trait bounds ["Summable", ""]
   std::vector<Param> params;
   TypeRef returnType;
   std::vector<StmtPtr> body;
@@ -124,12 +125,37 @@ struct TestDecl {
   size_t pos;
 };
 
+/// Trait method signature (no body — just the requirement).
+struct TraitMethodSig {
+  std::string_view name;
+  std::vector<Param> params;   // includes self if present
+  TypeRef returnType;
+  bool hasSelf = false;
+};
+
+/// trait Summable { fn sum(self) -> i32 }
+struct TraitDecl {
+  std::string_view name;
+  std::vector<TraitMethodSig> methods;
+  size_t pos;
+};
+
+/// impl Summable for Point { fn sum(self) -> i32 { ... } }
+struct ImplDecl {
+  std::string_view traitName;
+  std::string_view typeName;
+  std::vector<FnDecl> methods;
+  size_t pos;
+};
+
 struct Module {
   std::vector<FnDecl> functions;
   std::vector<TestDecl> tests;
   std::vector<StructDecl> structs;
   std::vector<EnumDecl> enums;
   std::vector<UnionDecl> unions;
+  std::vector<TraitDecl> traits;
+  std::vector<ImplDecl> impls;
 };
 
 Module parse(std::string_view source, const std::vector<Token> &tokens);

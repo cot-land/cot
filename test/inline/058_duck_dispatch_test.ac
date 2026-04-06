@@ -1,0 +1,28 @@
+// Feature: cir.method_call — structural/duck dispatch runtime verification
+
+struct Point {
+    x: i32
+    y: i32
+}
+
+fn sum(self: Point) -> i32 {
+    return self.x + self.y
+}
+
+fn apply[T](val: T) -> i32 {
+    return val.sum()
+}
+
+fn make_point(a: i32, b: i32) -> Point {
+    return Point { x: a, y: b }
+}
+
+test "duck dispatch resolves method by name" {
+    let p: Point = make_point(10, 20)
+    assert(apply[Point](p) == 30)
+}
+
+test "duck dispatch with different values" {
+    let p: Point = make_point(100, 200)
+    assert(apply[Point](p) == 300)
+}

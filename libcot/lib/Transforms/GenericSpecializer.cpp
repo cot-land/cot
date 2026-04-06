@@ -69,15 +69,51 @@ static Type substituteType(Type type,
 }
 
 /// Build a mangled name for a specialized function.
+/// Sanitize type strings to produce valid C/LLVM symbol names.
+/// Reference: Rust uses hash-based mangling; we use name-based for readability.
 static std::string mangleName(StringRef baseName,
                                const llvm::DenseMap<StringRef, Type> &subs) {
   std::string mangled(baseName);
   for (auto &[key, type] : subs) {
     mangled += "_";
-    llvm::raw_string_ostream os(mangled);
+    // Print type to string, then sanitize for symbol name
+    std::string typeStr;
+    llvm::raw_string_ostream os(typeStr);
     type.print(os);
+    // Replace invalid symbol characters with underscores
+    for (char c : typeStr) {
+      if (std::isalnum(c) || c == '_')
+        mangled += c;
+      else
+        mangled += '_';
+    }
   }
   return mangled;
+}
+
+/// Look up a witness table for the given (conforming type, protocol) pair.
+/// Scans the module for cir.witness_table ops matching both.
+/// Returns the method symbol for the given method name, or empty string.
+static StringRef lookupWitnessMethod(
+    ModuleOp module, Type conformingType,
+    StringRef protocolName, StringRef methodName) {
+  StringRef result;
+  module.walk([&](cir::WitnessTableOp wt) {
+    if (wt.getProtocolName() == protocolName &&
+        wt.getConformingType() == conformingType) {
+      auto names = wt.getMethodNames();
+      auto impls = wt.getMethodImpls();
+      for (size_t i = 0; i < names.size(); i++) {
+        auto name = llvm::cast<StringAttr>(names[i]).getValue();
+        if (name == methodName) {
+          result = llvm::cast<FlatSymbolRefAttr>(impls[i]).getValue();
+          return WalkResult::interrupt();
+        }
+      }
+    }
+    return WalkResult::advance();
+  });
+  return result;
 }
 
 /// Clone a generic function with type substitutions applied.
@@ -149,6 +185,97 @@ static func::FuncOp specializeFunction(
   }
 
   module.push_back(specializedFn);
+
+  // Phase 7b: Resolve cir.trait_call ops in the specialized function.
+  // For each trait_call, look up the witness table for the concrete type
+  // and replace with a direct func.call to the concrete implementation.
+  llvm::SmallVector<cir::TraitCallOp> traitCalls;
+  specializedFn.walk([&](cir::TraitCallOp tc) {
+    traitCalls.push_back(tc);
+  });
+
+  for (auto tc : traitCalls) {
+    // The receiver's type tells us the concrete type
+    // (it was already substituted from type_param to concrete)
+    auto receiverType = tc.getOperands()[0].getType();
+    auto implName = lookupWitnessMethod(
+        module, receiverType, tc.getProtocolName(), tc.getMethodName());
+    if (implName.empty()) {
+      tc.emitError("cannot resolve trait method '")
+          << tc.getMethodName() << "' on protocol '"
+          << tc.getProtocolName() << "' for type " << receiverType;
+      continue;
+    }
+
+    OpBuilder tcBuilder(tc);
+    auto directCall = tcBuilder.create<func::CallOp>(
+        tc.getLoc(), implName,
+        tc.getResultTypes(),
+        tc.getOperands());
+    if (tc.getResult())
+      tc.getResult().replaceAllUsesWith(directCall.getResult(0));
+    tc.erase();
+  }
+
+  // Phase 7b+: Resolve cir.method_call ops (structural/duck dispatch).
+  // For each method_call, search the module for a function with matching name
+  // that accepts the concrete receiver type as its first parameter.
+  // Reference: Zig Sema fieldCallBind() — name lookup on concrete type.
+  llvm::SmallVector<cir::MethodCallOp> methodCalls;
+  specializedFn.walk([&](cir::MethodCallOp mc) {
+    methodCalls.push_back(mc);
+  });
+
+  for (auto mc : methodCalls) {
+    auto receiverType = mc.getOperands()[0].getType();
+    auto methodName = mc.getMethodName();
+    StringRef resolvedName;
+
+    // Strategy 1: Look for function with exact name matching first param type
+    module.walk([&](func::FuncOp fn) {
+      if (fn.getName() == methodName &&
+          fn.getNumArguments() > 0 &&
+          fn.getArgumentTypes()[0] == receiverType) {
+        resolvedName = fn.getName();
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+
+    // Strategy 2: Search witness tables for any protocol mapping this method
+    if (resolvedName.empty()) {
+      module.walk([&](cir::WitnessTableOp wt) {
+        if (wt.getConformingType() == receiverType) {
+          auto names = wt.getMethodNames();
+          auto impls = wt.getMethodImpls();
+          for (size_t i = 0; i < names.size(); i++) {
+            if (llvm::cast<StringAttr>(names[i]).getValue() == methodName) {
+              resolvedName = llvm::cast<FlatSymbolRefAttr>(impls[i]).getValue();
+              return WalkResult::interrupt();
+            }
+          }
+        }
+        return WalkResult::advance();
+      });
+    }
+
+    if (resolvedName.empty()) {
+      mc.emitError("cannot resolve method '")
+          << mc.getMethodName() << "' for type " << receiverType
+          << " (no matching function or witness table entry found)";
+      continue;
+    }
+
+    OpBuilder mcBuilder(mc);
+    auto directCall = mcBuilder.create<func::CallOp>(
+        mc.getLoc(), resolvedName,
+        mc.getResultTypes(),
+        mc.getOperands());
+    if (mc.getResult())
+      mc.getResult().replaceAllUsesWith(directCall.getResult(0));
+    mc.erase();
+  }
+
   return specializedFn;
 }
 

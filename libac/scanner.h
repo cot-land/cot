@@ -68,6 +68,8 @@ enum class Tag {
   kw_type,
   kw_test,
   kw_assert,
+  kw_trait,
+  kw_impl,
 
   // Types (built-in type keywords)
   kw_i8, kw_i16, kw_i32, kw_i64,

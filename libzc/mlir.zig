@@ -247,6 +247,7 @@ pub extern "c" fn cirBuildSwitch(block: Block, loc: Location, value: Value, nCas
 pub extern "c" fn cirTypeParamGet(ctx: Context, name: StringRef) callconv(.c) Type;
 pub extern "c" fn cirTypeIsTypeParam(ty: Type) callconv(.c) bool;
 pub extern "c" fn cirBuildGenericApply(block: Block, loc: Location, callee: StringRef, nOperands: isize, operands: [*]const Value, resultType: Type, nSubs: isize, subsKeys: [*]const StringRef, subsTypes: [*]const Type) callconv(.c) Value;
+pub extern "c" fn cirBuildMethodCall(block: Block, loc: Location, methodName: StringRef, nOperands: isize, operands: [*]const Value, resultType: Type) callconv(.c) Value;
 
 // ============================================================
 // Convenience API (ported from cot-failed/libzc/mlir.zig)

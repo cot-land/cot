@@ -38,6 +38,9 @@ void populateMemoryPatterns(
 void populateControlFlowPatterns(
     const mlir::LLVMTypeConverter &converter,
     mlir::RewritePatternSet &patterns);
+void populateWitnessTablePatterns(
+    const mlir::LLVMTypeConverter &converter,
+    mlir::RewritePatternSet &patterns);
 
 //--- CIR → CIR transformation passes ---
 

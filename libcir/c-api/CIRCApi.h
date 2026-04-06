@@ -159,12 +159,15 @@ MlirValue cirBuildShl(MlirBlock block, MlirLocation loc,
                       MlirType type, MlirValue lhs, MlirValue rhs);
 MlirValue cirBuildShr(MlirBlock block, MlirLocation loc,
                       MlirType type, MlirValue lhs, MlirValue rhs);
+MlirValue cirBuildShrS(MlirBlock block, MlirLocation loc,
+                       MlirType type, MlirValue lhs, MlirValue rhs);
 
 //===----------------------------------------------------------------------===//
 // Comparison
 //===----------------------------------------------------------------------===//
 
 /// CIR comparison predicates (matches CIR_CmpIPredicate enum values).
+/// Values match LLVM::ICmpPredicate exactly — direct cast in lowering.
 enum CirCmpPredicate {
   CIR_CMP_EQ  = 0,
   CIR_CMP_NE  = 1,
@@ -172,6 +175,10 @@ enum CirCmpPredicate {
   CIR_CMP_SLE = 3,
   CIR_CMP_SGT = 4,
   CIR_CMP_SGE = 5,
+  CIR_CMP_ULT = 6,
+  CIR_CMP_ULE = 7,
+  CIR_CMP_UGT = 8,
+  CIR_CMP_UGE = 9,
 };
 
 /// Create cir.cmp with predicate. Returns i1.
@@ -480,6 +487,38 @@ MlirValue cirBuildInvoke(MlirBlock block, MlirLocation loc,
 
 /// Create cir.landingpad (catch exception value).
 MlirValue cirBuildLandingPad(MlirBlock block, MlirLocation loc,
+                             MlirType resultType);
+
+//===----------------------------------------------------------------------===//
+// Protocol Witness Tables + Trait Calls
+// Reference: Swift SILWitnessTable — protocol witness tables
+//===----------------------------------------------------------------------===//
+
+/// Create cir.witness_table (protocol witness table declaration).
+/// method_names and method_impls must be parallel arrays of size nMethods.
+/// method_impls[i] is the symbol name of the concrete function for method_names[i].
+void cirBuildWitnessTable(MlirModule module, MlirLocation loc,
+                          MlirStringRef tableName,
+                          MlirStringRef protocolName,
+                          MlirType conformingType,
+                          intptr_t nMethods,
+                          MlirStringRef *methodNames,
+                          MlirStringRef *methodImpls);
+
+/// Create cir.trait_call (call trait method, resolved by specializer).
+/// operands[0] is the receiver.
+MlirValue cirBuildTraitCall(MlirBlock block, MlirLocation loc,
+                            MlirStringRef protocolName,
+                            MlirStringRef methodName,
+                            intptr_t nOperands, MlirValue *operands,
+                            MlirType resultType);
+
+/// Create cir.method_call (structural method dispatch, resolved by specializer).
+/// Duck-typed dispatch — no protocol required. Zig field_call / Go OCALLINTER pattern.
+/// operands[0] is the receiver.
+MlirValue cirBuildMethodCall(MlirBlock block, MlirLocation loc,
+                             MlirStringRef methodName,
+                             intptr_t nOperands, MlirValue *operands,
                              MlirType resultType);
 
 #ifdef __cplusplus

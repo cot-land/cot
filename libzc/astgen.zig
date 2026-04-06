@@ -1608,6 +1608,8 @@ const Gen = struct {
 
         // Method call: p.distance() — callee is a field_access node
         // Reference: Zig AstGen — methods desugar to function call with receiver as first arg
+        // Phase 7b+: If receiver is type_param, emit cir.method_call (structural dispatch)
+        // Reference: Zig ZIR field_call — resolved by Sema's fieldCallBind()
         if (fn_expr_tag == .field_access) {
             const d = tree.nodeData(call.ast.fn_expr).node_and_token;
             const obj_node = d[0];
@@ -1622,6 +1624,14 @@ const Gen = struct {
             for (call.ast.params, 0..) |param_node, i| {
                 args[i + 1] = self.mapExpr(block, param_node, result_type);
             }
+
+            // Check if receiver is a type_param — use cir.method_call for structural dispatch
+            // Reference: Zig ZIR field_call → Sema fieldCallBind() name lookup
+            const receiver_type = mlir.mlirValueGetType(receiver);
+            if (mlir.cirTypeIsTypeParam(receiver_type)) {
+                return mlir.cirBuildMethodCall(block, self.b.loc, mlir.StringRef.fromSlice(method_name), @intCast(n_params + 1), args.ptr, result_type);
+            }
+
             return self.b.emit(block, "func.call", &.{result_type}, args, &.{
                 self.b.attr("callee", mlir.mlirFlatSymbolRefAttrGet(self.ctx, mlir.StringRef.fromSlice(method_name))),
             });

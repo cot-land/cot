@@ -95,8 +95,9 @@ def CIR_BitNotOp : CIR_IntUnaryOp<"bit_not">   { let summary = "bitwise NOT"; }
 // Reference: ArithToLLVM ShLI/ShRUI lowering patterns
 //===----------------------------------------------------------------------===//
 
-def CIR_ShlOp : CIR_IntBinaryOp<"shl"> { let summary = "shift left"; }
-def CIR_ShrOp : CIR_IntBinaryOp<"shr"> { let summary = "logical shift right"; }
+def CIR_ShlOp  : CIR_IntBinaryOp<"shl">   { let summary = "shift left"; }
+def CIR_ShrOp  : CIR_IntBinaryOp<"shr">   { let summary = "logical (unsigned) shift right"; }
+def CIR_ShrSOp : CIR_IntBinaryOp<"shr_s"> { let summary = "arithmetic (signed) shift right"; }
 
 //===----------------------------------------------------------------------===//
 // Type casts — separate ops per direction (Arith dialect pattern)
@@ -259,12 +260,20 @@ def CIR_CmpIPredicate_slt : I64EnumAttrCase<"slt", 2>;
 def CIR_CmpIPredicate_sle : I64EnumAttrCase<"sle", 3>;
 def CIR_CmpIPredicate_sgt : I64EnumAttrCase<"sgt", 4>;
 def CIR_CmpIPredicate_sge : I64EnumAttrCase<"sge", 5>;
+// Unsigned predicates — required for u8/u16/u32/u64 comparisons
+// Reference: MLIR Arith CmpIPredicate (ult/ule/ugt/uge)
+def CIR_CmpIPredicate_ult : I64EnumAttrCase<"ult", 6>;
+def CIR_CmpIPredicate_ule : I64EnumAttrCase<"ule", 7>;
+def CIR_CmpIPredicate_ugt : I64EnumAttrCase<"ugt", 8>;
+def CIR_CmpIPredicate_uge : I64EnumAttrCase<"uge", 9>;
 
 def CIR_CmpIPredicateAttr : I64EnumAttr<
     "CmpIPredicate", "integer comparison predicate",
     [CIR_CmpIPredicate_eq, CIR_CmpIPredicate_ne,
      CIR_CmpIPredicate_slt, CIR_CmpIPredicate_sle,
-     CIR_CmpIPredicate_sgt, CIR_CmpIPredicate_sge]> {
+     CIR_CmpIPredicate_sgt, CIR_CmpIPredicate_sge,
+     CIR_CmpIPredicate_ult, CIR_CmpIPredicate_ule,
+     CIR_CmpIPredicate_ugt, CIR_CmpIPredicate_uge]> {
   let cppNamespace = "::cir";
 }
 
@@ -714,6 +723,112 @@ def CIR_GenericApplyOp : CIR_Op<"generic_apply", []> {
     `:` functional-type($operands, results)
   }];
   let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Protocol witness table — Swift SIL pattern
+// Reference: ~/claude/references/swift/include/swift/SIL/SILWitnessTable.h
+// One witness table per (Type, Protocol) conformance pair.
+// Contains function pointers mapping protocol requirements to implementations.
+//===----------------------------------------------------------------------===//
+
+def CIR_WitnessTableOp : CIR_Op<"witness_table", []> {
+  let summary = "protocol witness table (one per type-protocol conformance)";
+  let description = [{
+    Declares a protocol witness table mapping protocol method requirements to
+    concrete implementations for a specific conforming type. One PWT exists per
+    (Type, Protocol) conformance pair.
+
+    The specializer reads these tables to resolve cir.trait_call ops.
+    The lowering emits them as LLVM global constant structs of function pointers,
+    ready for Phase 7c dynamic dispatch.
+
+    Reference: Swift SILWitnessTable — maps protocol requirements to concrete
+    implementations. Entries are MethodWitness { requirement, witness_function }.
+
+    Example:
+      cir.witness_table "Point_Summable"
+          protocol("Summable")
+          type(!cir.struct<"Point", x: i32, y: i32>)
+          methods(["sum"] = [@Point_Summable_sum])
+  }];
+  let arguments = (ins
+    StrAttr:$table_name,
+    StrAttr:$protocol_name,
+    TypeAttr:$conforming_type,
+    ArrayAttr:$method_names,
+    ArrayAttr:$method_impls
+  );
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Trait method call — resolved by GenericSpecializer to direct call
+// Reference: Swift SIL witness_method + apply
+//===----------------------------------------------------------------------===//
+
+def CIR_TraitCallOp : CIR_Op<"trait_call", []> {
+  let summary = "call a trait method (resolved by specializer to direct call)";
+  let description = [{
+    Calls a method required by a protocol/trait on a value whose concrete type
+    is not yet known (it is a !cir.type_param). The GenericSpecializer pass
+    resolves this to a direct func.call by looking up the corresponding
+    cir.witness_table entry.
+
+    Must not reach CIR→LLVM lowering — the specializer must resolve it first.
+    In Phase 7c, unresolved trait_call ops will lower to indirect calls through
+    witness table function pointers (dynamic dispatch for existentials).
+
+    Reference: Swift SIL witness_method instruction — looks up method in PWT.
+    Combined with apply, equivalent to our trait_call.
+
+    Example:
+      %r = cir.trait_call "Summable", "sum"(%val)
+          : (!cir.type_param<"T">) -> i32
+  }];
+  let arguments = (ins
+    StrAttr:$protocol_name,
+    StrAttr:$method_name,
+    Variadic<AnyType>:$operands
+  );
+  let results = (outs Optional<AnyType>:$result);
+  let hasCustomAssemblyFormat = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Structural method dispatch — Zig field_call / Go OCALLINTER pattern
+// Reference: ~/claude/references/zig/lib/std/zig/Zir.zig FieldCall
+//            ~/claude/references/go/src/cmd/compile/internal/ir/ OCALLINTER
+//===----------------------------------------------------------------------===//
+
+def CIR_MethodCallOp : CIR_Op<"method_call", []> {
+  let summary = "structural method dispatch (resolved by specializer via name lookup)";
+  let description = [{
+    Calls a method by name on a value whose concrete type is not yet known
+    (it is a !cir.type_param). No protocol is specified — resolution is
+    structural (duck-typed). The GenericSpecializer resolves this to a direct
+    func.call by searching for a function with the matching name that accepts
+    the concrete type as its first parameter.
+
+    This is Zig's comptime duck typing and Go's structural interface dispatch
+    at the CIR level. Any duck-typed language frontend can emit this op.
+
+    Must not reach CIR→LLVM lowering — the specializer must resolve it first.
+
+    Reference: Zig ZIR field_call { obj_ptr, field_name } — resolved by Sema's
+    fieldCallBind() which looks up the method by name on the concrete type.
+    Go OCALLINTER — calls method on interface value via itab lookup.
+
+    Example:
+      %r = cir.method_call "sum"(%val) : (!cir.type_param<"T">) -> i32
+  }];
+  let arguments = (ins
+    StrAttr:$method_name,
+    Variadic<AnyType>:$operands
+  );
+  let results = (outs Optional<AnyType>:$result);
+  let hasCustomAssemblyFormat = 1;
 }
 
 //===----------------------------------------------------------------------===//

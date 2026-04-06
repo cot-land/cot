@@ -1,0 +1,39 @@
+// Feature #057-058: Trait declarations, conformances, and witness table dispatch
+
+struct Point {
+    x: i32
+    y: i32
+}
+
+trait Summable {
+    fn sum(self) -> i32
+}
+
+impl Summable for Point {
+    fn sum(self) -> i32 {
+        return self.x + self.y
+    }
+}
+
+fn apply_sum[T: Summable](val: T) -> i32 {
+    return val.sum()
+}
+
+fn make_point(a: i32, b: i32) -> Point {
+    return Point { x: a, y: b }
+}
+
+test "trait method via impl" {
+    let p: Point = make_point(10, 20)
+    assert(Point_Summable_sum(p) == 30)
+}
+
+test "trait dispatch through generic" {
+    let p: Point = make_point(3, 4)
+    assert(apply_sum[Point](p) == 7)
+}
+
+test "trait dispatch with different values" {
+    let p: Point = make_point(100, 200)
+    assert(apply_sum[Point](p) == 300)
+}

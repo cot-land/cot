@@ -70,6 +70,12 @@ class CodeGen {
   // Current generic type parameters (for resolving T → !cir.type_param<"T">)
   std::vector<std::string_view> currentTypeParams_;
 
+  // Trait bounds for current generic function (T → "Summable")
+  std::unordered_map<std::string_view, std::string_view> currentTraitBounds_;
+
+  // Trait declarations (protocol name → method signatures)
+  std::unordered_map<std::string_view, const TraitDecl *> traitDecls_;
+
   mlir::Type resolveType(const TypeRef &t) {
     // Check if this is a generic type parameter (T → !cir.type_param<"T">)
     for (auto &tp : currentTypeParams_) {
@@ -466,29 +472,71 @@ class CodeGen {
       // Desugar to function call with object as first argument.
       // Auto-deref: if receiver is !cir.ref<T>, deref to match callee param type.
       // Reference: Zig AstGen — methods are functions, receiver is first param.
-      std::string callee(e.name);
-      auto funcOp = module_.lookupSymbol<mlir::func::FuncOp>(callee);
-      mlir::Type selfType = funcOp ? funcOp.getArgumentTypes()[0] : resultType;
-      auto self = emitExpr(*e.lhs, selfType);
-      // Auto-deref receiver if needed
-      if (auto refType = llvm::dyn_cast<cir::RefType>(self.getType())) {
-        if (selfType != self.getType()) {
-          self = b.create<cir::DerefOp>(loc, refType.getPointeeType(), self);
+
+      // Phase 7b: If the receiver is a type_param with a trait bound,
+      // emit cir.trait_call instead of func.call.
+      {
+        // First, emit the receiver with its natural type
+        auto self = emitExpr(*e.lhs, resultType);
+
+        // Check if receiver type is a type_param
+        if (auto tpType = llvm::dyn_cast<cir::TypeParamType>(self.getType())) {
+          auto methodName = std::string(e.name);
+          llvm::SmallVector<mlir::Value> args;
+          args.push_back(self);
+          for (size_t i = 0; i < e.args.size(); i++)
+            args.push_back(emitExpr(*e.args[i], resultType));
+
+          llvm::SmallVector<mlir::Type> resultTypes;
+          if (resultType && !resultType.isSignlessInteger(0))
+            resultTypes.push_back(resultType);
+
+          auto it = currentTraitBounds_.find(tpType.getName());
+          if (it != currentTraitBounds_.end() && !it->second.empty()) {
+            // Named protocol dispatch — emit cir.trait_call
+            auto op = b.create<cir::TraitCallOp>(loc,
+                resultTypes,
+                b.getStringAttr(std::string(it->second)),
+                b.getStringAttr(methodName),
+                args);
+            return resultTypes.empty() ? mlir::Value() : op.getResult();
+          }
+          // Structural dispatch (duck typing) — emit cir.method_call
+          // Reference: Zig ZIR field_call pattern
+          auto op = b.create<cir::MethodCallOp>(loc,
+              resultTypes,
+              b.getStringAttr(methodName),
+              args);
+          return resultTypes.empty() ? mlir::Value() : op.getResult();
         }
+
+        // Normal method call path
+        std::string callee(e.name);
+        auto funcOp = module_.lookupSymbol<mlir::func::FuncOp>(callee);
+        mlir::Type selfType = funcOp ? funcOp.getArgumentTypes()[0] : resultType;
+        // Re-emit self with correct type if needed
+        if (funcOp && self.getType() != selfType)
+          self = emitExpr(*e.lhs, selfType);
+        // Auto-deref receiver if needed
+        if (auto refType = llvm::dyn_cast<cir::RefType>(self.getType())) {
+          if (selfType != self.getType()) {
+            self = b.create<cir::DerefOp>(loc, refType.getPointeeType(), self);
+          }
+        }
+        llvm::SmallVector<mlir::Value> args;
+        args.push_back(self);
+        // Emit remaining arguments
+        for (size_t i = 0; i < e.args.size(); i++) {
+          mlir::Type argType = (funcOp && i + 1 < funcOp.getNumArguments())
+              ? funcOp.getArgumentTypes()[i + 1] : resultType;
+          args.push_back(emitExpr(*e.args[i], argType));
+        }
+        mlir::Type callResultType = (funcOp && funcOp.getNumResults() > 0)
+            ? funcOp.getResultTypes()[0] : resultType;
+        auto call = b.create<mlir::func::CallOp>(loc, callee,
+            mlir::TypeRange{callResultType}, mlir::ValueRange(args));
+        return call.getResult(0);
       }
-      llvm::SmallVector<mlir::Value> args;
-      args.push_back(self);
-      // Emit remaining arguments
-      for (size_t i = 0; i < e.args.size(); i++) {
-        mlir::Type argType = (funcOp && i + 1 < funcOp.getNumArguments())
-            ? funcOp.getArgumentTypes()[i + 1] : resultType;
-        args.push_back(emitExpr(*e.args[i], argType));
-      }
-      mlir::Type callResultType = (funcOp && funcOp.getNumResults() > 0)
-          ? funcOp.getResultTypes()[0] : resultType;
-      auto call = b.create<mlir::func::CallOp>(loc, callee,
-          mlir::TypeRange{callResultType}, mlir::ValueRange(args));
-      return call.getResult(0);
     }
 
     case ExprKind::MatchExpr: {
@@ -1230,9 +1278,14 @@ class CodeGen {
   void emitFn(mlir::ModuleOp module, const FnDecl &fn) {
     // Set generic type params for resolveType
     auto savedTypeParams = currentTypeParams_;
+    auto savedTraitBounds = currentTraitBounds_;
     currentTypeParams_.clear();
-    for (auto &tp : fn.typeParams)
-      currentTypeParams_.push_back(tp);
+    currentTraitBounds_.clear();
+    for (size_t i = 0; i < fn.typeParams.size(); i++) {
+      currentTypeParams_.push_back(fn.typeParams[i]);
+      if (i < fn.typeParamBounds.size() && !fn.typeParamBounds[i].empty())
+        currentTraitBounds_[fn.typeParams[i]] = fn.typeParamBounds[i];
+    }
 
     llvm::SmallVector<mlir::Type> paramTypes;
     for (auto &p : fn.params) paramTypes.push_back(resolveType(p.type));
@@ -1272,6 +1325,7 @@ class CodeGen {
 
     module.push_back(funcOp);
     currentTypeParams_ = savedTypeParams;
+    currentTraitBounds_ = savedTraitBounds;
   }
 
   // Zig pattern: test blocks become parameterless void functions.
@@ -1384,6 +1438,95 @@ public:
         llvm::StringRef(filename_), 1, 1);
   }
 
+  /// Register trait declaration metadata (no CIR emitted — just stores sigs).
+  void emitTraitDecl(const TraitDecl &td) {
+    traitDecls_[td.name] = &td;
+  }
+
+  /// Emit impl block: concrete methods + witness table.
+  /// Emits each method as a function, resolving "self" to the concrete type.
+  void emitImplDecl(mlir::ModuleOp module, const ImplDecl &id) {
+    std::vector<std::string> methodNames;
+    std::vector<std::string> methodFnNames;
+
+    for (const auto &method : id.methods) {
+      // Mangle name: TypeName_TraitName_methodName
+      std::string mangledName = std::string(id.typeName) + "_" +
+          std::string(id.traitName) + "_" + std::string(method.name);
+
+      // Emit the method as a regular function with mangled name.
+      // We can't copy FnDecl (has unique_ptrs), so we emit directly.
+      auto savedTypeParams = currentTypeParams_;
+      auto savedTraitBounds = currentTraitBounds_;
+      currentTypeParams_.clear();
+      currentTraitBounds_.clear();
+
+      llvm::SmallVector<mlir::Type> paramTypes;
+      for (auto &p : method.params) {
+        if (p.name == "self")
+          paramTypes.push_back(structTypes[id.typeName]);
+        else
+          paramTypes.push_back(resolveType(p.type));
+      }
+      llvm::SmallVector<mlir::Type> resultTypes;
+      if (method.returnType.name != "void")
+        resultTypes.push_back(resolveType(method.returnType));
+
+      auto funcType = b.getFunctionType(paramTypes, resultTypes);
+      auto funcOp = mlir::func::FuncOp::create(loc, mangledName, funcType);
+      auto *entry = funcOp.addEntryBlock();
+
+      mlir::OpBuilder::InsertionGuard guard(b);
+      b.setInsertionPointToStart(entry);
+
+      namedValues.clear();
+      localAddrs.clear();
+      for (size_t i = 0; i < method.params.size(); i++)
+        namedValues[method.params[i].name] = entry->getArgument(i);
+
+      mlir::Type retType = resultTypes.empty() ? b.getNoneType() : resultTypes[0];
+      for (auto &stmt : method.body) {
+        if (blockTerminated()) break;
+        emitStmt(*stmt, retType, funcOp);
+      }
+
+      module.push_back(funcOp);
+      currentTypeParams_ = savedTypeParams;
+      currentTraitBounds_ = savedTraitBounds;
+
+      methodNames.push_back(std::string(method.name));
+      methodFnNames.push_back(mangledName);
+    }
+
+    // Emit witness table
+    auto conformingType = structTypes[id.typeName];
+    if (!conformingType) {
+      llvm::errs() << "error: type '" << id.typeName
+                   << "' not found for impl\n";
+      hasError_ = true;
+      return;
+    }
+
+    std::string tableName = std::string(id.typeName) + "_" +
+        std::string(id.traitName);
+
+    llvm::SmallVector<mlir::Attribute> nameAttrs, implAttrs;
+    for (auto &mn : methodNames)
+      nameAttrs.push_back(mlir::StringAttr::get(b.getContext(), mn));
+    for (auto &fn : methodFnNames)
+      implAttrs.push_back(mlir::FlatSymbolRefAttr::get(b.getContext(), fn));
+
+    mlir::OpBuilder::InsertionGuard guard(b);
+    b.setInsertionPointToEnd(module.getBody());
+    b.create<cir::WitnessTableOp>(loc,
+        mlir::StringAttr::get(b.getContext(), tableName),
+        mlir::StringAttr::get(b.getContext(), llvm::StringRef(
+            id.traitName.data(), id.traitName.size())),
+        mlir::TypeAttr::get(conformingType),
+        mlir::ArrayAttr::get(b.getContext(), nameAttrs),
+        mlir::ArrayAttr::get(b.getContext(), implAttrs));
+  }
+
   mlir::OwningOpRef<mlir::ModuleOp> emit(const Module &mod, bool testMode) {
     auto module = mlir::ModuleOp::create(loc);
     module_ = module;
@@ -1391,6 +1534,10 @@ public:
     for (auto &sd : mod.structs) emitStructDecl(sd);
     for (auto &ed : mod.enums) emitEnumDecl(ed);
     for (auto &ud : mod.unions) emitUnionDecl(ud);
+    // Register traits before impls
+    for (auto &td : mod.traits) emitTraitDecl(td);
+    // Emit impls (methods + witness tables) — after types and traits
+    for (auto &id : mod.impls) emitImplDecl(module, id);
     for (auto &fn : mod.functions) emitFn(module, fn);
     if (testMode && !mod.tests.empty()) {
       for (size_t i = 0; i < mod.tests.size(); i++)

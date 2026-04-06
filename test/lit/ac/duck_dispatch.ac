@@ -1,0 +1,37 @@
+// RUN: %cot emit-cir %s | %FileCheck %s
+
+// Feature: cir.method_call — structural/duck dispatch (no protocol needed)
+// When T has no trait bound, method calls on type_param emit cir.method_call.
+// Reference: Zig ZIR field_call, Go OCALLINTER
+// The GenericSpecializer resolves by name lookup on the concrete type.
+
+struct Point {
+    x: i32
+    y: i32
+}
+
+fn sum(self: Point) -> i32 {
+    return self.x + self.y
+}
+
+fn apply[T](val: T) -> i32 {
+    return val.sum()
+}
+
+fn make_point(a: i32, b: i32) -> Point {
+    return Point { x: a, y: b }
+}
+
+fn main() -> i32 {
+    let p: Point = make_point(3, 4)
+    return apply[Point](p)
+}
+
+// After specialization: method_call resolved to direct call @sum
+// Generic template removed. Specialized version calls @sum directly.
+// CHECK: func.func @sum
+// CHECK: cir.add
+
+// Specialized apply — duck dispatch resolved to direct @sum call
+// CHECK: call @sum
+// CHECK: return

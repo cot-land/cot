@@ -1,0 +1,32 @@
+// RUN: %cot emit-llvm %s | %FileCheck %s
+
+// Lowering test: cir.witness_table → llvm.mlir.global constant
+
+struct Point {
+    x: i32
+    y: i32
+}
+
+trait Summable {
+    fn sum(self) -> i32
+}
+
+impl Summable for Point {
+    fn sum(self) -> i32 {
+        return self.x + self.y
+    }
+}
+
+fn main() -> i32 {
+    return 42
+}
+
+// Witness table lowers to LLVM global constant struct of function pointers
+// CHECK: llvm.mlir.global internal constant @Point_Summable()
+// CHECK-SAME: !llvm.struct<(ptr)>
+// CHECK: llvm.mlir.addressof @Point_Summable_sum
+// CHECK: llvm.return
+
+// Impl method lowers normally (CHECK-LABEL matches before the global)
+// CHECK: llvm.func @main
+// CHECK: llvm.return

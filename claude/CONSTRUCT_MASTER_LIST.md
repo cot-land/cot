@@ -17,7 +17,7 @@ New constructs from this audit added to FEATURES.md as #054a-c, #060a-f, #065a-g
 
 | Metric | Count |
 |--------|-------|
-| CIR ops implemented | 55 |
+| CIR ops implemented | 65 |
 | CIR custom types | 8 |
 | Zig AST constructs handled | ~50 of 147 (34%) |
 | TypeScript AST constructs handled | ~40 of 356 (11%) |

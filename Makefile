@@ -14,15 +14,23 @@ PREFIX ?= /usr/local
 MLIR_DIR ?= /opt/homebrew/Cellar/llvm@20/20.1.8/lib/cmake/mlir
 LLVM_DIR ?= /opt/homebrew/Cellar/llvm@20/20.1.8/lib/cmake/llvm
 
-.PHONY: all configure libcir libzc libtc libsc cot test test-lit test-gate test-inline test-build install clean
+.PHONY: all configure configure-debug libcir libzc libtc libsc cot debug test test-lit test-gate test-inline test-build install clean
 
 all: cot
 
-# Step 1: Configure cmake (creates build/)
+# Step 1: Configure cmake (creates build/), ensure Release mode
 configure:
 	@cmake -B build -DCMAKE_BUILD_TYPE=Release \
 		-DMLIR_DIR=$(MLIR_DIR) -DLLVM_DIR=$(LLVM_DIR) \
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 2>&1 | tail -3
+	@sed -i '' 's/CMAKE_BUILD_TYPE:STRING=Debug/CMAKE_BUILD_TYPE:STRING=Release/' build/CMakeCache.txt 2>/dev/null || true
+
+# Debug build: -g -O0 for lldb stepping through pipeline
+# Force reconfigure by patching cache (cmake --fresh unreliable)
+configure-debug:
+	@cmake -B build -DMLIR_DIR=$(MLIR_DIR) -DLLVM_DIR=$(LLVM_DIR) \
+		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 2>&1 | tail -3
+	@sed -i '' 's/CMAKE_BUILD_TYPE:STRING=Release/CMAKE_BUILD_TYPE:STRING=Debug/' build/CMakeCache.txt
 
 # Step 2: Build libcir first (libzc/libtc link against it)
 libcir: configure
@@ -44,6 +52,12 @@ libsc: libcir
 
 # Step 4: Build everything (libcot + cot driver link against libzc/libtc/libsc)
 cot: libzc libtc libsc
+	@cmake --build build --parallel
+
+# Debug build: -g -O0 for lldb/CodeLLDB stepping
+# Flips to Debug, rebuilds C++ (Zig/Go/Swift unaffected), leaves binary with symbols
+debug:
+	@sed -i '' 's/CMAKE_BUILD_TYPE:STRING=Release/CMAKE_BUILD_TYPE:STRING=Debug/' build/CMakeCache.txt 2>/dev/null || true
 	@cmake --build build --parallel
 
 # Tests

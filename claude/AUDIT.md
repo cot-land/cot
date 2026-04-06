@@ -1,6 +1,6 @@
 # CIR Audit — MLIR/LLVM Standards Compliance
 
-**Last audit:** 2026-04-05 Round 8 (Phase 6 in progress — 56 CIR ops, 8 types, 142 test targets, 3 frontends)
+**Last audit:** 2026-04-06 Round 9 (Phase 7b complete — 64 CIR ops, 10 types, 198 test targets, 4 frontends)
 **Reference compilers:** Flang FIR, MLIR Arith/SCF, ArithToLLVM, Go parser, Zig AstGen, TypeScript-Go
 
 ---
@@ -107,6 +107,40 @@ CIR is audited against production MLIR references:
 | E1 | `std::string_view` → `llvm::StringRef` | LOW | Throughout libac. |
 | E2 | `std::unordered_map` → `llvm::StringMap` | LOW | codegen.cpp namedValues. |
 | E3 | Generated pass from .td | LOW | Manual PassWrapper. |
+
+### Round 9 — Phase 7b Audit (2026-04-06)
+
+Full audit of all 64 CIR ops, 10 types, 4 passes against MLIR Arith, Flang FIR,
+ArithToLLVM, Swift SIL, Rust monomorphization, and Zig Sema references.
+
+**Overall Grade: A-. Architecture faithful to references. 5 issues found.**
+
+| # | Issue | Severity | Status | Details |
+|---|-------|----------|--------|---------|
+| R9-1 | **Missing unsigned comparison predicates** | HIGH | **FIXED** | Added ult, ule, ugt, uge to CIR_CmpIPredicateAttr. Values 6-9 match LLVM::ICmpPredicate. |
+| R9-2 | **witness_table has wrong Pure trait** | MEDIUM | **FIXED** | Changed `[Pure]` to `[]`. Pure is semantically wrong for a global declaration. |
+| R9-3 | **GenericSpecializer name mangling produces invalid symbols** | MEDIUM | **FIXED** | mangleName() now sanitizes type.print() output, replacing !<>" and spaces with underscores. |
+| R9-4 | **Silent failures in GenericSpecializer dispatch resolution** | MEDIUM | **FIXED** | emitError() now reported when trait_call or method_call can't be resolved. |
+| R9-5 | **Missing signed shift right (cir.shr_s)** | MEDIUM | **FIXED** | Added cir.shr_s op (CIR_IntBinaryOp) lowering to llvm.ashr. C API: cirBuildShrS. |
+
+**What passed audit (faithful to references):**
+- Arithmetic/bitwise ops: traits, base classes, lowering all match MLIR Arith
+- Cast ops: CastOpInterface on all 7, directional base classes, width verifiers
+- Memory ops: MemAlloc/MemWrite/MemRead effects correct
+- Control flow: BranchOpInterface on all branching ops
+- Type system: all 10 types with converters, matches FIR pattern
+- Lowering: 60 ConversionPatterns, OpAdaptor used correctly in 54/60
+- Pipeline: progressive lowering matches MLIR standard
+- Phase 7 generics: cir.type_param + generic_apply + GenericSpecializer match Swift SIL
+- Phase 7 traits: cir.witness_table + trait_call match Swift SILWitnessTable
+- Phase 7 duck dispatch: cir.method_call matches Zig ZIR field_call + Sema fieldCallBind
+
+**Deferred (not needed yet):**
+- Constant folders (hasFolder=1) — add when optimization passes exist
+- Canonicalizers (hasCanonicalizer=1) — add when optimization passes exist
+- Heap allocation op — add in Phase 8 ARC
+- Extern function declarations — add when cross-module linking is implemented
+- 11 lowering patterns missing notifyMatchFailure — low risk, add incrementally
 
 ### Closed Since Last Audit (Round 8)
 

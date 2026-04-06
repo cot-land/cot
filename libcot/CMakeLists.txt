@@ -24,6 +24,7 @@ add_library(COT STATIC
   lib/BitwisePatterns.cpp
   lib/MemoryPatterns.cpp
   lib/ControlFlowPatterns.cpp
+  lib/WitnessTablePatterns.cpp
 )
 
 # Include directories
