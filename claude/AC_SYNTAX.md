@@ -242,15 +242,28 @@ match color {
 }
 ```
 
-## Generics (#055)
+## Generics (#055-#056)
 
 ```ac
-fn identity[T](x: T) -> T {         // generic function with type param
+fn identity[T](x: T) -> T {         // (✓ #055) generic function with type param
     return x
 }
 
 let r = identity[i32](42)            // explicit type arg at call site
+
+struct Pair[T] {                     // (✓ #056) generic struct
+    a: T
+    b: T
+}
+
+let p: Pair[i32] = Pair[i32] { a: 1, b: 2 }  // concrete instantiation
+let x = p.a                                    // field access on specialized struct
 ```
+
+- `struct Name[T] { ... }` — generic struct with type parameters in fields
+- `Pair[i32]` as type — resolves to `!cir.struct<"Pair_i32", a: i32, b: i32>`
+- `Pair[T]` in generic function — stays generic until specialization
+- Specializer substitutes struct field types and mangles name (Swift BoundGenericStructType pattern)
 
 - `[T]` after function name declares type parameters
 - Call site: `func[ConcreteType](args)` — type argument in brackets

@@ -1,6 +1,6 @@
 # Handoff — COT Compiler Toolkit
 
-**Date:** 2026-04-06 (Phase 7b COMPLETE + Round 9 audit fixes. 65 ops, 10 types, 198 tests.)
+**Date:** 2026-04-06 (Phase 7b + #056 generic struct COMPLETE. 65 ops, 10 types, 199 tests.)
 
 ---
 
@@ -28,7 +28,7 @@ make test         # Run all test layers (lit, gate, inline, build)
 ./cot test file.ac          # Run inline test blocks
 ```
 
-**Total: 164 lit + 29 inline files + 1 gate + 4 build = 198 test targets, all passing.**
+**Total: 165 lit + 30 inline files + 1 gate + 4 build = 200 test targets, all passing.**
 
 ---
 
@@ -216,9 +216,17 @@ claude/          Internal docs
 - ✓ GenericSpecializer extended: resolves `cir.trait_call` to `func.call @ConcreteImpl`
 - ✓ Tests: ac lit test + lowering test + 3 inline runtime tests
 
+**#056 Generic struct COMPLETE:**
+- ✓ `struct Pair[T] { a: T, b: T }` — ac parser + codegen
+- ✓ `substituteType()` extended to recurse into struct field types
+- ✓ Struct name mangling: `Pair` → `Pair_i32` (matches between frontend and specializer)
+- ✓ Generic struct in function params/returns: stays generic until specialization
+- ✓ Concrete struct init: `Pair[i32] { a: 1, b: 2 }` resolves at frontend
+- ✓ Design audited against Swift BoundGenericStructType, Rust AdtDef, Zig InternPool
+- ✓ ARC-ready: generic fields use type_param before specialization (VWT path for Phase 8)
+
 **Next: Phase 7c-d (Dynamic dispatch + Value witness tables)**
 Read `claude/PHASE7_WITNESS_DESIGN.md` for the full plan.
-- #056 Generic struct
 - #060 Value witness tables (VWT) — the ARC bridge (size, align, copy, destroy)
 - Protocol dispatch: `cir.witness_method` for dynamic dispatch through PWT function pointers
 - Existentials: `cir.init_existential` / `cir.open_existential` for `dyn Trait`

@@ -1,0 +1,33 @@
+// Feature #056: Generic struct — runtime verification
+
+struct Pair[T] {
+    a: T
+    b: T
+}
+
+fn make_pair[T](a: T, b: T) -> Pair[T] {
+    return Pair[T] { a: a, b: b }
+}
+
+fn first[T](p: Pair[T]) -> T {
+    return p.a
+}
+
+fn second[T](p: Pair[T]) -> T {
+    return p.b
+}
+
+fn sum_pair[T](p: Pair[T]) -> T {
+    return p.a + p.b
+}
+
+test "generic struct construction and field access" {
+    let p: Pair[i32] = make_pair[i32](10, 20)
+    assert(first[i32](p) == 10)
+    assert(second[i32](p) == 20)
+}
+
+test "generic struct arithmetic on fields" {
+    let p: Pair[i32] = make_pair[i32](100, 200)
+    assert(sum_pair[i32](p) == 300)
+}

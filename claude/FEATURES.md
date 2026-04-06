@@ -3,7 +3,7 @@
 **Date:** 2026-04-06
 **Rule:** Each feature adds CIR ops + ac syntax + Zig syntax + TypeScript syntax + lowering + test. All four frontends must stay in sync. Nothing ships without a test.
 
-**Progress: ~59 of ~120 features implemented (49%). 65 CIR ops, 10 types, 198 tests.**
+**Progress: ~60 of ~120 features implemented (50%). 65 CIR ops, 10 types, 199 tests.**
 **4 frontends:** ac, Zig, TypeScript, Swift. All emit CIR-level generics (not frontend monomorphization).
 Cross-referenced with `claude/CONSTRUCT_MASTER_LIST.md` for language coverage.
 
@@ -133,7 +133,7 @@ Status: `-` not started, `~` in progress, `✓` done.
 | # | Feature | CIR Op(s) | ac Syntax | Zig Syntax | LLVM Lowering | Status |
 |---|---------|-----------|-----------|------------|---------------|--------|
 | 055 | Generic function | `cir.func` + type params | `fn max[T](a: T, b: T) -> T` | `fn max(comptime T: type, a: T, b: T) T` | Monomorphize | - |
-| 056 | Generic struct | `cir.struct_type` + params | `struct Pair[T] { a: T, b: T }` | `fn Pair(comptime T: type) type { return struct { a: T, b: T }; }` | Monomorphize | - |
+| 056 | Generic struct | `!cir.struct` with `type_param` fields | `struct Pair[T] { a: T, b: T }` | `fn Pair(comptime T: type) type { return struct { a: T, b: T }; }` | Specializer substitutes field types | ✓ |
 | 057 | Trait declaration | `cir.witness_table` | `trait Hashable { fn hash(self) -> u64 }` | (no Zig equivalent — use `anytype`) | Witness table | ✓ |
 | 058 | Trait implementation | `cir.witness_table` + `cir.trait_call` | `impl Hashable for Point { }` | (no Zig equivalent — duck typing via `anytype`) | Generate witness | ✓ |
 | 059 | Trait bounds | `cir.trait_call` (resolved by specializer) | `fn foo[T: Hashable](x: T)` | `fn foo(x: anytype) ...` | Monomorphize | ✓ |

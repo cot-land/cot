@@ -65,6 +65,48 @@ static Type substituteType(Type type,
   if (auto sliceType = llvm::dyn_cast<cir::SliceType>(type))
     return cir::SliceType::get(type.getContext(),
         substituteType(sliceType.getElementType(), subs));
+  // Generic struct: substitute field types recursively.
+  // Reference: Swift BoundGenericStructType substitution, Rust AdtDef with GenericArgsRef.
+  // A generic struct like !cir.struct<"Pair", a: !cir.type_param<"T">, b: !cir.type_param<"T">>
+  // becomes !cir.struct<"Pair_i32", a: i32, b: i32> after substitution.
+  if (auto structType = llvm::dyn_cast<cir::StructType>(type)) {
+    bool hasGenericField = false;
+    for (auto ft : structType.getFieldTypes()) {
+      if (substituteType(ft, subs) != ft) {
+        hasGenericField = true;
+        break;
+      }
+    }
+    if (hasGenericField) {
+      auto ctx = type.getContext();
+      llvm::SmallVector<Type> newFieldTypes;
+      for (auto ft : structType.getFieldTypes())
+        newFieldTypes.push_back(substituteType(ft, subs));
+      // Mangle struct name: append sanitized concrete type for each substituted field.
+      // Must match the frontend's mangling (name_typeName).
+      std::string newName(structType.getName());
+      llvm::SmallPtrSet<const void *, 4> seenTypes;
+      for (auto ft : structType.getFieldTypes()) {
+        if (auto tp = llvm::dyn_cast<cir::TypeParamType>(ft)) {
+          auto it = subs.find(tp.getName());
+          if (it != subs.end() && seenTypes.insert(it->second.getAsOpaquePointer()).second) {
+            newName += "_";
+            std::string typeStr;
+            llvm::raw_string_ostream os(typeStr);
+            it->second.print(os);
+            for (char c : typeStr) {
+              if (std::isalnum(c) || c == '_')
+                newName += c;
+              else
+                newName += '_';
+            }
+          }
+        }
+      }
+      return cir::StructType::get(ctx, newName,
+          structType.getFieldNames(), newFieldTypes);
+    }
+  }
   return type; // non-generic type — return as-is
 }
 
@@ -176,10 +218,22 @@ static func::FuncOp specializeFunction(
           newOp->getResult(i).setType(newType);
       }
 
-      // Update operand types for type-carrying ops (alloca elem_type, etc.)
+      // Update type-carrying attributes (alloca/field_ptr/elem_ptr elem_type)
       if (auto allocaOp = llvm::dyn_cast<cir::AllocaOp>(newOp)) {
         auto elemType = substituteType(allocaOp.getElemType(), subs);
         allocaOp.setElemTypeAttr(TypeAttr::get(elemType));
+      }
+      if (auto fpOp = llvm::dyn_cast<cir::FieldPtrOp>(newOp)) {
+        auto elemType = substituteType(fpOp.getElemType(), subs);
+        fpOp.setElemTypeAttr(TypeAttr::get(elemType));
+      }
+      if (auto epOp = llvm::dyn_cast<cir::ElemPtrOp>(newOp)) {
+        auto elemType = substituteType(epOp.getElemType(), subs);
+        epOp.setElemTypeAttr(TypeAttr::get(elemType));
+      }
+      if (auto atsOp = llvm::dyn_cast<cir::ArrayToSliceOp>(newOp)) {
+        auto elemType = substituteType(atsOp.getElemType(), subs);
+        atsOp.setElemTypeAttr(TypeAttr::get(elemType));
       }
     }
   }

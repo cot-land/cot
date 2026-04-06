@@ -136,7 +136,17 @@ class Parser {
       return t;
     }
     auto &tok = advance();
-    return TypeRef{tokenText(tok)};
+    TypeRef t;
+    t.name = tokenText(tok);
+    // Check for generic type arguments: Pair[i32] or Pair[T, U]
+    if (check(Tag::l_bracket)) {
+      advance(); // consume '['
+      t.typeArgs.push_back(parseType());
+      while (match(Tag::comma))
+        t.typeArgs.push_back(parseType());
+      expect(Tag::r_bracket);
+    }
+    return t;
   }
 
   // ---- Expressions: Go's precedence climbing ----
@@ -289,6 +299,26 @@ class Parser {
                   e->args.push_back(parseExpr());
               }
               expect(Tag::r_paren);
+              return e;
+            }
+            // Generic struct init: Pair[i32] { a: 1, b: 2 }
+            if (check(Tag::l_brace) && isStructInitLookahead()) {
+              advance(); // consume '{'
+              skipSemis();
+              auto e = std::make_unique<Expr>();
+              e->kind = ExprKind::StructInit;
+              e->name = name;
+              e->pos = p;
+              e->typeArgs = std::move(typeArgs);
+              while (!check(Tag::r_brace) && !check(Tag::eof)) {
+                auto fieldName = tokenText(expect(Tag::identifier));
+                expect(Tag::colon);
+                e->fieldNames.push_back(fieldName);
+                e->args.push_back(parseExpr());
+                match(Tag::comma);
+                skipSemis();
+              }
+              expect(Tag::r_brace);
               return e;
             }
           }
@@ -935,6 +965,13 @@ class Parser {
     StructDecl sd;
     sd.pos = peek().start;
     sd.name = tokenText(expect(Tag::identifier));
+    // Optional type parameters: struct Pair[T, U] { ... }
+    if (match(Tag::l_bracket)) {
+      sd.typeParams.push_back(tokenText(expect(Tag::identifier)));
+      while (match(Tag::comma))
+        sd.typeParams.push_back(tokenText(expect(Tag::identifier)));
+      expect(Tag::r_bracket);
+    }
     expect(Tag::l_brace);
     skipSemis();
     while (!check(Tag::r_brace) && !check(Tag::eof)) {

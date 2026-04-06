@@ -1,0 +1,36 @@
+// RUN: %cot emit-cir %s | %FileCheck %s
+
+// Feature #056: Generic struct — ac syntax
+// struct Pair[T] { a: T, b: T } → !cir.struct with type_param fields
+// Specializer substitutes field types and mangles struct name.
+
+struct Pair[T] {
+    a: T
+    b: T
+}
+
+fn make_pair[T](a: T, b: T) -> Pair[T] {
+    return Pair[T] { a: a, b: b }
+}
+
+fn first[T](p: Pair[T]) -> T {
+    return p.a
+}
+
+fn main() -> i32 {
+    let p: Pair[i32] = make_pair[i32](10, 20)
+    return first[i32](p)
+}
+
+// Specialized struct type: Pair_i32 with concrete fields
+// CHECK: func.func @make_pair_i32
+// CHECK-SAME: i32
+// CHECK: cir.struct_init
+// CHECK-SAME: !cir.struct<"Pair_i32", a: i32, b: i32>
+// CHECK: return
+
+// Field access on specialized struct
+// CHECK: func.func @first_i32
+// CHECK: cir.field_val
+// CHECK-SAME: !cir.struct<"Pair_i32", a: i32, b: i32>
+// CHECK: return

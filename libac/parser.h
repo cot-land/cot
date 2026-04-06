@@ -26,6 +26,7 @@ struct TypeRef {
   bool isSlice = false; // true for slice types: []T
   bool isOptional = false; // true for optional types: ?T
   bool isErrorUnion = false; // true for error union types: !T
+  std::vector<TypeRef> typeArgs; // Generic: Pair[i32] → [{name:"i32"}]
 };
 
 struct Param {
@@ -82,6 +83,7 @@ struct StructField {
 
 struct StructDecl {
   std::string_view name;
+  std::vector<std::string_view> typeParams; // Generic: [T, U]
   std::vector<StructField> fields;
   size_t pos;
 };

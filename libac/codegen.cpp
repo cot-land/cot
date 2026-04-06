@@ -125,9 +125,55 @@ class CodeGen {
     // String type → !cir.slice<i8>
     if (t.name == "string")
       return cir::SliceType::get(b.getContext(), b.getIntegerType(8));
-    // Struct types
+    // Struct types — with optional generic type args: Pair[i32]
     auto sit = structTypes.find(t.name);
-    if (sit != structTypes.end()) return sit->second;
+    if (sit != structTypes.end()) {
+      auto baseType = llvm::cast<cir::StructType>(sit->second);
+      if (!t.typeArgs.empty()) {
+        // Specialize generic struct: substitute type_param fields with concrete args.
+        // If ALL type args resolve to type_params (still generic), return generic struct
+        // with the resolved param types — the specializer will handle final substitution.
+        auto fieldTypes = baseType.getFieldTypes();
+        llvm::SmallVector<mlir::Type> newFieldTypes;
+        // Build substitution: match struct's type_param fields to provided args
+        llvm::DenseMap<llvm::StringRef, mlir::Type> subs;
+        unsigned argIdx = 0;
+        for (auto ft : fieldTypes) {
+          if (auto tp = llvm::dyn_cast<cir::TypeParamType>(ft)) {
+            if (subs.find(tp.getName()) == subs.end() && argIdx < t.typeArgs.size()) {
+              subs[tp.getName()] = resolveType(t.typeArgs[argIdx++]);
+            }
+          }
+        }
+        bool allConcrete = true;
+        for (auto ft : fieldTypes) {
+          if (auto tp = llvm::dyn_cast<cir::TypeParamType>(ft)) {
+            auto it = subs.find(tp.getName());
+            auto resolved = it != subs.end() ? it->second : ft;
+            newFieldTypes.push_back(resolved);
+            if (llvm::isa<cir::TypeParamType>(resolved))
+              allConcrete = false;
+          } else {
+            newFieldTypes.push_back(ft);
+          }
+        }
+        if (allConcrete) {
+          // Fully concrete: mangle name with concrete type names
+          std::string newName(t.name);
+          for (auto &ta : t.typeArgs) {
+            newName += "_";
+            newName += std::string(ta.name);
+          }
+          return cir::StructType::get(b.getContext(), newName,
+              baseType.getFieldNames(), newFieldTypes);
+        }
+        // Still generic: keep base name, just update field types
+        return cir::StructType::get(b.getContext(),
+            std::string(baseType.getName()),
+            baseType.getFieldNames(), newFieldTypes);
+      }
+      return sit->second;
+    }
     // Enum types
     auto eit = enumTypes.find(t.name);
     if (eit != enumTypes.end()) return eit->second;
@@ -704,14 +750,18 @@ class CodeGen {
     }
 
     case ExprKind::StructInit: {
-      // Struct construction: Point { x: 1, y: 2 }
+      // Struct construction: Point { x: 1, y: 2 } or Pair[i32] { a: 1, b: 2 }
       // Look up struct type, emit field values, create cir.struct_init.
-      auto sit = structTypes.find(e.name);
-      if (sit == structTypes.end()) {
+      // For generic structs, resolve type args to concrete struct type.
+      TypeRef structTypeRef;
+      structTypeRef.name = e.name;
+      structTypeRef.typeArgs = e.typeArgs;
+      auto resolvedTy = resolveType(structTypeRef);
+      if (!resolvedTy || !llvm::isa<cir::StructType>(resolvedTy)) {
         llvm::errs() << "error: unknown struct '" << e.name << "'\n";
         return {};
       }
-      auto structTy = llvm::cast<cir::StructType>(sit->second);
+      auto structTy = llvm::cast<cir::StructType>(resolvedTy);
       auto fieldTypes = structTy.getFieldTypes();
       // Emit field values in struct field order (match by name)
       llvm::SmallVector<mlir::Value> fieldVals(fieldTypes.size());
@@ -1380,6 +1430,12 @@ class CodeGen {
   /// Register a struct type from a parsed struct declaration.
   /// Creates !cir.struct<"Name", field1: type1, ...> in the MLIR context.
   void emitStructDecl(const StructDecl &sd) {
+    // For generic structs: set type params so resolveType maps T → !cir.type_param<"T">
+    auto savedTypeParams = currentTypeParams_;
+    currentTypeParams_.clear();
+    for (auto &tp : sd.typeParams)
+      currentTypeParams_.push_back(tp);
+
     llvm::SmallVector<mlir::StringAttr> fieldNames;
     llvm::SmallVector<mlir::Type> fieldTypes;
     for (auto &f : sd.fields) {
@@ -1390,6 +1446,7 @@ class CodeGen {
     auto structTy = cir::StructType::get(
         b.getContext(), std::string(sd.name), fieldNames, fieldTypes);
     structTypes[sd.name] = structTy;
+    currentTypeParams_ = savedTypeParams;
   }
 
   /// Register an enum type from a parsed enum declaration.
